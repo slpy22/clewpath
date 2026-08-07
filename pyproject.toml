@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "clewpath-host"
-version = "0.3.10"
+version = "0.3.11"
 description = "ClewPath Host — 내 PC의 클로드 코드 세션으로 돌아가는 길. 폰·웹에서 이어쓰기."
 license = "MIT"
 license-files = ["LICENSE"]
@@ -27,6 +27,9 @@ dependencies = [
     # 배포처가 한 번 뚫릴 때 전 사용자 PC 가 같이 넘어간다. 그 대가로는 싸다.
     "pyjwt>=2.8.0",
     "cryptography>=42.0.0",
+    # 회사 프록시(TLS 인터셉션) 대응 — httpx 가 OS(Windows) 인증서 저장소를 쓰게 한다.
+    # 순수 파이썬, 빌드 없음. 없으면 certifi 기본(일반 PC 는 무영향), 있으면 사내 CA 신뢰.
+    "truststore>=0.9.0",
 ]
 
 [project.optional-dependencies]

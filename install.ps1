@@ -80,6 +80,11 @@ Set-Location $Root
 # 원인을 알 수 없다. PS7 에선 이 줄이 그냥 무해한 no-op 이다.
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
 
+# 회사 프록시(HTTPS 가로채기) 환경 대응. uv 는 기본으로 자체 번들 인증서만 믿어서
+# 사내 루트 CA 로 재서명된 PyPI 응답을 'invalid peer certificate' 로 거부한다(실측).
+# 이 env 를 켜면 uv 가 OS(Windows) 인증서 저장소를 쓴다 — 일반 PC 에도 무해.
+if (-not $env:UV_SYSTEM_CERTS) { $env:UV_SYSTEM_CERTS = "1" }
+
 function Say  ($m) { Write-Host $m }
 
 $script:LastNativeOut = @()

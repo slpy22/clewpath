@@ -1042,6 +1042,9 @@ def main():
 
     import uvicorn
 
+    from session_manager import systls
+    systls.use_system_trust()   # 회사 TLS 인터셉션 대응 — httpx 가 OS 인증서를 쓰게(멱등)
+
     # 설정 파일을 env 로 펼친다. 반드시 앱을 만들기 전에 — BASE_PATH 등이 여기서 정해진다.
     filled = appconfig.apply_env()
     if filled:

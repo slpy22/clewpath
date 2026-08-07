@@ -551,7 +551,8 @@ async def _amain():
 def main():
     # 커넥터를 따로 띄우는 경우(clewpath-connector)에도 설정 파일이 먹어야 한다.
     # 006 서버에 내장돼 돌 때는 server.main() 이 이미 적용한 뒤라 여기선 no-op.
-    from session_manager import appconfig
+    from session_manager import appconfig, systls
+    systls.use_system_trust()   # 회사 TLS 인터셉션 대응 — httpx(JWT 조달)가 OS 인증서를 쓰게(멱등)
     appconfig.apply_env()
     try:
         asyncio.run(_amain())
