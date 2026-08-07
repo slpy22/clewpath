@@ -82,15 +82,25 @@ try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::S
 
 function Say  ($m) { Write-Host $m }
 
+$script:LastNativeOut = @()
 function Invoke-Native([scriptblock]$sb) {
     # 네이티브 명령(uv/winget) 전용 래퍼. PS 5.1 은 EAP=Stop 상태에서 2>&1 로
     # 받은 stderr 를 ErrorRecord 로 승격시켜 **정상 진행 로그 한 줄에도 죽는다**
     # (uv 는 진행 상황을 stderr 로 쓴다 — 실측으로 uv sync 에서 터졌다).
     # 성공/실패 판단은 밖에서 $LASTEXITCODE 로만 한다.
+    # 출력은 Verbose 로 숨기되 $script:LastNativeOut 에 담아둔다 — 실패 시
+    # 호출부가 이 버퍼를 찍어 **진짜 uv 오류를 사용자에게 보여줄 수 있게** 한다.
     $old = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
-    try { & $sb 2>&1 | ForEach-Object { Write-Verbose ("{0}" -f $_) } }
+    try { $script:LastNativeOut = @(& $sb 2>&1 | ForEach-Object { Write-Verbose ("{0}" -f $_); "$_" }) }
     finally { $ErrorActionPreference = $old }
+}
+function Show-LastNative($title) {
+    if ($script:LastNativeOut -and $script:LastNativeOut.Count) {
+        Say "  -- $title --"
+        $script:LastNativeOut | Select-Object -Last 25 |
+            ForEach-Object { Write-Host "  $_" -ForegroundColor DarkGray }
+    }
 }
 function Ok   ($m) { Write-Host "  [OK]   $m" -ForegroundColor Green }
 function Warn ($m) { Write-Host "  [WARN] $m" -ForegroundColor Yellow }
@@ -389,7 +399,15 @@ if ($DryRun -or -not $uv) {
     }
     if (-not $installed) {
         Invoke-Native { & $uv pip install --python $venvPy -e . }
-        if ($LASTEXITCODE -ne 0) { Fail "의존성 설치 실패"; exit 1 }
+        if ($LASTEXITCODE -ne 0) {
+            Fail "의존성 설치 실패"
+            Show-LastNative "uv 오류(마지막 25줄)"
+            Say "  대개 원인:"
+            Say "   1) 이전 설치의 .venv 손상 → 아래로 지우고 다시 설치하세요:"
+            Say "      Remove-Item -Recurse -Force `"`$env:LOCALAPPDATA\ClewPath\app\.venv`"; irm https://clewpath.pyongso.com/get | iex"
+            Say "   2) PyPI(pypi.org) 연결 차단(사내 프록시/방화벽) → 네트워크·프록시 확인."
+            exit 1
+        }
         Ok "의존성 설치 완료"
     }
 }
