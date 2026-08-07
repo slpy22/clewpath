@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ClewPath Host — 세션</title>
+<style>
+  :root {
+    --bg:#1a1b1e; --panel:#25262b; --panel2:#2c2e33; --border:#3a3c42;
+    --text:#e4e6eb; --muted:#9aa0a6; --accent:#7c9cff; --accent2:#5b7fff;
+    --danger:#ff6b6b; --ok:#5ad19a; --warn:#ffcf6b;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+    font-family:"Segoe UI",system-ui,sans-serif; font-size:14px; }
+  header { padding:14px 24px; background:var(--panel); border-bottom:1px solid var(--border);
+    display:flex; align-items:center; gap:18px; position:sticky; top:0; z-index:10; flex-wrap:wrap; }
+  header h1 { font-size:16px; margin:0; font-weight:600; }
+  .stats { display:flex; gap:18px; color:var(--muted); font-size:13px; }
+  .stats b { color:var(--text); }
+  .toolbar { margin-left:auto; display:flex; gap:8px; align-items:center; }
+  input[type=text], input[type=search] {
+    background:var(--panel2); border:1px solid var(--border); color:var(--text);
+    padding:6px 10px; border-radius:6px; font-size:13px; }
+  button { background:var(--panel2); color:var(--text); border:1px solid var(--border);
+    padding:6px 11px; border-radius:6px; cursor:pointer; font-size:13px; }
+  button:hover { background:var(--border); }
+  button.primary { background:var(--accent2); border-color:var(--accent2); color:#fff; }
+  button.danger { color:var(--danger); border-color:var(--danger); }
+  button.danger:hover { background:var(--danger); color:#fff; }
+  button.sm { padding:3px 8px; font-size:12px; }
+  main { padding:16px 24px; max-width:1500px; margin:0 auto; }
+  .project { background:var(--panel); border:1px solid var(--border); border-radius:8px;
+    margin-bottom:12px; overflow:hidden; }
+  .project-head { padding:11px 16px; display:flex; align-items:center; gap:12px;
+    cursor:pointer; user-select:none; }
+  .project-head:hover { background:var(--panel2); }
+  .caret { color:var(--muted); transition:transform .15s; width:12px; }
+  .project.collapsed .caret { transform:rotate(-90deg); }
+  .project-title { font-weight:600; }
+  .project-cwd { color:var(--accent); font-size:12px; font-family:ui-monospace,monospace; }
+  .project-meta { color:var(--muted); font-size:12px; display:flex; gap:14px; margin-left:auto; }
+  /* 필터 바 */
+  .filterbar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:16px; }
+  .filterbar .flabel { color:var(--muted); font-size:12px; }
+  .fchip { background:var(--panel2); border:1px solid var(--border); color:var(--muted);
+    border-radius:14px; padding:3px 11px; font-size:12px; cursor:pointer; }
+  .fchip:hover { border-color:var(--accent); color:var(--text); }
+  .fchip.active { background:var(--accent2); border-color:var(--accent2); color:#fff; }
+  .fchip .cnt { opacity:.7; margin-left:5px; font-size:11px; }
+  .sortwrap { margin-left:auto; color:var(--muted); font-size:12px; display:flex; align-items:center; gap:6px; }
+  select { background:var(--panel2); border:1px solid var(--border); color:var(--text);
+    padding:5px 8px; border-radius:6px; font-size:12px; }
+  /* 세션 리스트 */
+  .sessions { display:none; padding:4px 8px 8px; }
+  .project:not(.collapsed) .sessions { display:block; }
+  .srow { display:flex; align-items:center; gap:14px; padding:11px 12px; border-radius:8px;
+    border-top:1px solid var(--border); }
+  .sessions .srow:first-child { border-top:0; }
+  .srow:hover { background:var(--panel2); }
+  .smain { min-width:0; flex:1 1 auto; }
+  .stitle { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .dot { width:7px; height:7px; border-radius:50%; background:var(--accent); flex:0 0 auto; }
+  .name { font-weight:600; font-size:14px; }
+  .name.custom { color:var(--ok); }
+  .name .shortid { color:var(--muted); font-weight:400; font-size:12px; font-family:ui-monospace,monospace; }
+  .ssub { color:var(--muted); font-size:12px; margin-top:3px; overflow:hidden;
+    text-overflow:ellipsis; white-space:nowrap; font-family:ui-monospace,monospace; }
+  .smeta { display:flex; flex-direction:column; align-items:flex-end; gap:2px;
+    flex:0 0 auto; color:var(--muted); font-size:12px; white-space:nowrap; }
+  .smeta .ago { color:var(--text); font-weight:600; }
+  .sact { display:flex; gap:6px; flex:0 0 auto; align-items:center; }
+  .lchip { background:rgba(124,156,255,.15); border:1px solid var(--accent); color:var(--accent);
+    border-radius:10px; padding:0 8px; font-size:11px; line-height:18px; cursor:pointer; }
+  .lchip:hover { background:rgba(124,156,255,.32); }
+  /* overflow 메뉴 */
+  #ctxmenu { position:absolute; z-index:150; background:var(--panel); border:1px solid var(--border);
+    border-radius:8px; padding:5px; min-width:152px; box-shadow:0 8px 24px rgba(0,0,0,.45); display:none; }
+  #ctxmenu.show { display:block; }
+  #ctxmenu button { display:block; width:100%; text-align:left; border:0; background:transparent;
+    padding:8px 10px; border-radius:5px; font-size:13px; color:var(--text); }
+  #ctxmenu button:hover { background:var(--panel2); }
+  #ctxmenu button.danger { color:var(--danger); }
+  .empty,.loading { padding:40px; text-align:center; color:var(--muted); }
+  .badge { background:var(--panel2); border:1px solid var(--border); border-radius:10px;
+    padding:1px 8px; font-size:11px; color:var(--muted); }
+  /* modal */
+  .overlay { position:fixed; inset:0; background:rgba(0,0,0,.6); display:none;
+    align-items:center; justify-content:center; z-index:100; }
+  .overlay.show { display:flex; }
+  .modal { background:var(--panel); border:1px solid var(--border); border-radius:10px;
+    width:min(900px,92vw); max-height:88vh; display:flex; flex-direction:column; }
+  .modal-head { padding:14px 18px; border-bottom:1px solid var(--border);
+    display:flex; align-items:center; gap:12px; }
+  .modal-head h2 { margin:0; font-size:15px; }
+  .modal-head .x { margin-left:auto; cursor:pointer; color:var(--muted); font-size:20px; }
+  .modal-body { padding:16px 18px; overflow:auto; }
+  .modal-foot { padding:12px 18px; border-top:1px solid var(--border); display:flex; gap:8px; justify-content:flex-end; }
+  .msg { border-bottom:1px solid var(--border); padding:8px 0; }
+  .msg .role { font-size:11px; color:var(--muted); margin-bottom:4px; }
+  .msg.user .role { color:var(--accent); }
+  .msg.assistant .role { color:var(--ok); }
+  .msg .text { white-space:pre-wrap; word-break:break-word; font-size:13px; line-height:1.5; }
+  .field { margin-bottom:12px; }
+  .field label { display:block; color:var(--muted); font-size:12px; margin-bottom:4px; }
+  .field input { width:100%; }
+  .field textarea, .field select { width:100%; background:var(--panel2); border:1px solid var(--border);
+    color:var(--text); padding:7px 10px; border-radius:6px; font-size:13px; font-family:inherit; }
+  .field input[style*="48%"], .field input[style*="width:48"] { display:inline-block; }
+  .kv { display:grid; grid-template-columns:auto 1fr; gap:6px 16px; font-size:13px; }
+  .kv .k { color:var(--muted); }
+  .note { color:var(--warn); font-size:12px; margin-top:8px; }
+  table.ut { width:100%; border-collapse:collapse; font-size:12px; }
+  table.ut th { text-align:left; color:var(--muted); font-weight:500; padding:5px 8px; border-bottom:1px solid var(--border); }
+  table.ut td { padding:5px 8px; border-bottom:1px solid var(--border); }
+  table.ut tr:hover td { background:var(--panel2); }
+  .chk { display:flex; align-items:center; gap:8px; font-size:13px; cursor:pointer;
+    background:var(--panel2); border:1px solid var(--border); border-radius:8px; padding:9px 11px; }
+  .chk code { background:var(--bg); border:1px solid var(--border); border-radius:5px;
+    padding:1px 6px; font-size:12px; color:var(--accent); }
+  pre.cmd { background:var(--bg); border:1px solid var(--border); padding:10px; border-radius:6px;
+    font-size:12px; overflow:auto; white-space:pre-wrap; word-break:break-all; }
+  .toast { position:fixed; bottom:20px; right:20px; background:var(--panel); border:1px solid var(--border);
+    padding:12px 16px; border-radius:8px; z-index:200; max-width:400px; font-size:13px; }
+  .toast.ok { border-color:var(--ok); }
+  .toast.err { border-color:var(--danger); }
+  label.chk { display:flex; align-items:center; gap:6px; color:var(--muted); font-size:13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🧭 ClewPath <span id="appver" style="font-size:11px;color:var(--muted);font-weight:400"></span></h1>
+  <div class="stats" id="stats"></div>
+  <div class="toolbar">
+    <input type="search" id="searchBox" placeholder="키워드 검색…" onkeydown="if(event.key==='Enter')doSearch()">
+    <button onclick="doSearch()">🔍 검색</button>
+    <button onclick="showUsage()">📈 API 사용량</button>
+    <button onclick="load()">↻ 새로고침</button>
+    <button onclick="openImport()">⬆ Import</button>
+    <button onclick="toggleAll()">⊟ 접기</button>
+  </div>
+</header>
+<main><div id="content"><div class="loading">불러오는 중…</div></div></main>
+<div id="ctxmenu"></div>
+
+<!-- 공용 모달 -->
+<div class="overlay" id="overlay" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <div class="modal-head"><h2 id="mTitle"></h2><span class="x" onclick="closeModal()">×</span></div>
+    <div class="modal-body" id="mBody"></div>
+    <div class="modal-foot" id="mFoot"></div>
+  </div>
+</div>
+
+<script>
+// 현재 페이지 URL에서 서브경로 prefix 자동 계산.
+// 로컬 "/" → "" , nginx "/session_mgr/" → "/session_mgr" (SM_BASE_PATH 없어도 동작)
+const BASE=location.pathname.replace(/\/+$/,"");
+// 버전 표기 — 하드코딩 금지(v2.2 로 방치돼 있던 전례). 진단 API 가 단일 출처.
+fetch(BASE+"/api/owner/diagnostics").then(r=>r.ok?r.json():null)
+  .then(d=>{ if(d&&d.version) document.getElementById("appver").textContent="v"+d.version; })
+  .catch(()=>{});
+let allCollapsed=false;
+let CACHE={};  // session_id -> meta
+
+function fmtSize(b){ if(b<1024)return b+" B"; if(b<1048576)return (b/1024).toFixed(1)+" KB"; return (b/1048576).toFixed(2)+" MB"; }
+function fmtDate(iso){ if(!iso)return"—"; try{return new Date(iso).toLocaleString("ko-KR",{year:"2-digit",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"});}catch{return iso;} }
+function fmtRelative(iso, epochSec){
+  let t = iso ? Date.parse(iso) : (epochSec ? epochSec*1000 : NaN);
+  if(isNaN(t)) return "—";
+  const diff = Date.now() - t;
+  if(diff < 60000) return "방금";
+  const min=Math.floor(diff/60000);
+  if(min < 60) return min+"분 전";
+  const hr=Math.floor(min/60);
+  if(hr < 24) return hr+"시간 전";
+  const day=Math.floor(hr/24);
+  if(day < 7) return day+"일 전";
+  if(day < 30) return Math.floor(day/7)+"주 전";
+  if(day < 365) return Math.floor(day/30)+"개월 전";
+  return Math.floor(day/365)+"년 전";
+}
+function esc(s){ if(s==null)return""; return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c])); }
+function toast(msg,kind){ const t=document.createElement("div"); t.className="toast "+(kind||""); t.textContent=msg; document.body.appendChild(t); setTimeout(()=>t.remove(),4000); }
+
+let DATA=null, FILTER_LABEL=null, SORT="recent";
+
+async function fetchSessions(){
+  // 1차: 계산된 BASE 로. 실패(404 등)하면 루트(/api/sessions)로 폴백해서
+  //     BASE 불일치(예: 로컬에서 /session_mgr 경로로 접근)에도 견디게 한다.
+  let r=await fetch(BASE+"/api/sessions");
+  if((r.ok===false || !(r.headers.get("content-type")||"").includes("json")) && BASE!==""){
+    try{ const r2=await fetch("/api/sessions"); if(r2.ok) r=r2; }catch(_){}
+  }
+  const d=await r.json();
+  if(!d || !Array.isArray(d.projects))
+    throw new Error("세션 목록 응답이 올바르지 않습니다 (HTTP "+r.status+"). 새로고침(Ctrl+Shift+R) 해보세요.");
+  return d;
+}
+async function load(){
+  const c=document.getElementById("content");
+  c.innerHTML='<div class="loading">불러오는 중…</div>';
+  try{ DATA=await fetchSessions(); render(); }
+  catch(e){ c.innerHTML='<div class="empty">불러오기 실패: '+esc(e.message)+'</div>'; }
+}
+
+function sessionName(s){
+  // 이름 = 네이티브 custom-title(Ctrl+R) 단일 소스 → AI제목 → slug → id
+  if(s.custom_title) return `<span class="name custom">${esc(s.custom_title)}</span>`;
+  const auto = s.ai_title || s.slug;
+  if(auto) return `<span class="name">${esc(auto)}</span>`;
+  return `<span class="name"><span class="shortid">${esc(s.session_id.slice(0,8))}</span></span>`;
+}
+function sortSessions(items){
+  const c=items.slice();
+  if(SORT==="name") c.sort((a,b)=>(a.title||a.slug||a.session_id).localeCompare(b.title||b.slug||b.session_id));
+  else if(SORT==="msgs") c.sort((a,b)=>b.message_count-a.message_count);
+  else c.sort((a,b)=>b.mtime-a.mtime);
+  return c;
+}
+function toggleLabelFilter(l){ FILTER_LABEL=(l===null||FILTER_LABEL===l)?null:l; render(); }
+function setSort(v){ SORT=v; render(); }
+
+function render(){
+  if(!DATA) return;
+  document.getElementById("stats").innerHTML=
+    `프로젝트 <b>${DATA.total_projects}</b> · 세션 <b>${DATA.total_sessions}</b> · 총 <b>${fmtSize(DATA.total_size_bytes)}</b>`;
+  CACHE={};
+  // 라벨 카운트 → 필터 칩
+  const lc={};
+  for(const p of DATA.projects) for(const s of p.sessions) for(const l of (s.labels||[])) lc[l]=(lc[l]||0)+1;
+  const chipsHtml=Object.entries(lc).sort((a,b)=>b[1]-a[1]).map(([l,n])=>
+    `<button class="fchip ${FILTER_LABEL===l?'active':''}" onclick="toggleLabelFilter('${esc(l).replace(/'/g,"\\'")}')">#${esc(l)}<span class="cnt">${n}</span></button>`).join("");
+  let bar=`<div class="filterbar"><span class="flabel">라벨</span>${chipsHtml||'<span class="flabel">(없음)</span>'}`;
+  if(FILTER_LABEL) bar+=`<button class="fchip active" onclick="toggleLabelFilter(null)">✕ 해제</button>`;
+  bar+=`<span class="sortwrap">정렬 <select onchange="setSort(this.value)">
+      <option value="recent" ${SORT==="recent"?"selected":""}>최근순</option>
+      <option value="name" ${SORT==="name"?"selected":""}>이름순</option>
+      <option value="msgs" ${SORT==="msgs"?"selected":""}>메시지순</option>
+    </select></span></div>`;
+
+  if(!DATA.projects.length){ document.getElementById("content").innerHTML=bar+'<div class="empty">세션이 없습니다.</div>'; return; }
+  let html="";
+  for(const p of DATA.projects){
+    let items=p.sessions.slice();
+    if(FILTER_LABEL) items=items.filter(s=>(s.labels||[]).includes(FILTER_LABEL));
+    if(!items.length) continue;
+    items=sortSessions(items);
+    const cwd=p.cwd_samples.length?esc(p.cwd_samples[0])+(p.cwd_samples.length>1?` <span class="badge">+${p.cwd_samples.length-1}</span>`:""):"(경로 미상)";
+    html+=`<div class="project ${allCollapsed?'collapsed':''}">
+      <div class="project-head" onclick="this.parentElement.classList.toggle('collapsed')">
+        <span class="caret">▼</span><span class="project-title">${esc(p.project_folder)}</span>
+        <span class="project-cwd">${cwd}</span>
+        <span class="project-meta"><span>세션 ${items.length}${FILTER_LABEL?'/'+p.session_count:''}</span><span>${fmtSize(p.total_size_bytes)}</span><span title="가장 최근 사용">🕒 ${fmtRelative(null, p.latest_mtime)}</span></span>
+      </div><div class="sessions">`;
+    for(const s of items){
+      CACHE[s.session_id]=s;
+      const chips=(s.labels||[]).map(l=>`<span class="lchip" onclick="event.stopPropagation();toggleLabelFilter('${esc(l).replace(/'/g,"\\'")}')">#${esc(l)}</span>`).join("");
+      html+=`<div class="srow">
+        <div class="smain">
+          <div class="stitle"><span class="dot"></span>${sessionName(s)}${chips}</div>
+          <div class="ssub" title="${esc(s.cwd||"")}">${esc(s.cwd||"경로 미상")}${s.git_branch?" · "+esc(s.git_branch):""}</div>
+        </div>
+        <div class="smeta">
+          <span class="ago" title="${esc(fmtDate(s.ended_at))}">${fmtRelative(s.ended_at, s.mtime)}</span>
+          <span>${s.message_count} msg · ${fmtSize(s.size_bytes)}</span>
+        </div>
+        <div class="sact">
+          <button class="primary sm" onclick="resumeSession('${s.session_id}')">▶ 재개</button>
+          <button class="sm" onclick="renameNative('${s.session_id}')">✎ 이름</button>
+          <button class="sm" onclick="editLabels('${s.session_id}')">🏷 태그</button>
+          <button class="sm" onclick="toggleMenu(event,'${s.session_id}')">⋯</button>
+        </div>
+      </div>`;
+    }
+    html+=`</div></div>`;
+  }
+  document.getElementById("content").innerHTML=bar+html;
+}
+
+function toggleAll(){ allCollapsed=!allCollapsed; document.querySelectorAll(".project").forEach(el=>el.classList.toggle("collapsed",allCollapsed)); }
+
+// ---- overflow(⋯) 메뉴 ----
+function toggleMenu(ev, id){
+  ev.stopPropagation();
+  const m=document.getElementById("ctxmenu");
+  if(m.classList.contains("show") && m.dataset.for===id){ closeMenu(); return; }
+  m.dataset.for=id;
+  m.innerHTML=`
+    <button onclick="closeMenu();viewSession('${id}')">🔎 뷰어</button>
+    <button onclick="closeMenu();showStats('${id}')">📊 통계</button>
+    <button onclick="closeMenu();editProfile('${id}')">🛡 API 정책</button>
+    <button onclick="closeMenu();changeCwd('${id}')">📁 폴더 변경</button>
+    <button onclick="closeMenu();exportSession('${id}')">⬇ export</button>
+    <button class="danger" onclick="closeMenu();deleteSession('${id}')">🗑 삭제</button>`;
+  const r=ev.currentTarget.getBoundingClientRect();
+  m.style.top=(r.bottom+4+window.scrollY)+"px";
+  m.style.left=(r.right-154+window.scrollX)+"px";
+  m.classList.add("show");
+}
+function closeMenu(){ document.getElementById("ctxmenu").classList.remove("show"); }
+document.addEventListener("click", closeMenu);
+window.addEventListener("scroll", closeMenu, true);
+
+// ---- 모달 헬퍼 ----
+function openModal(title,bodyHtml,footHtml){
+  document.getElementById("mTitle").innerHTML=title;
+  document.getElementById("mBody").innerHTML=bodyHtml;
+  document.getElementById("mFoot").innerHTML=footHtml||'<button onclick="closeModal()">닫기</button>';
+  document.getElementById("overlay").classList.add("show");
+}
+function closeModal(){ document.getElementById("overlay").classList.remove("show"); }
+
+// ---- 뷰어 ----
+async function viewSession(id){
+  openModal("세션 뷰어 — "+id.slice(0,8),'<div class="loading">메시지 불러오는 중…</div>');
+  try{
+    const d=await (await fetch(`${BASE}/api/sessions/${id}/messages?limit=300`)).json();
+    let h=`<div class="kv" style="margin-bottom:12px">
+      <div class="k">cwd</div><div class="mono">${esc(d.meta.cwd||"—")}</div>
+      <div class="k">메시지</div><div>${d.total_messages} (앞 ${d.messages.length}개 표시)</div></div>`;
+    for(const m of d.messages){
+      const role=esc(m.role||m.type||"?");
+      h+=`<div class="msg ${esc(m.role||'')}"><div class="role">${role}${m.is_sidechain?' · sidechain':''} · ${esc(fmtDate(m.timestamp))}</div>
+        <div class="text">${esc((m.text||"").slice(0,4000))}</div></div>`;
+    }
+    document.getElementById("mBody").innerHTML=h;
+  }catch(e){ document.getElementById("mBody").innerHTML='실패: '+esc(e.message); }
+}
+
+// ---- 통계 ----
+async function showStats(id){
+  openModal("통계 — "+id.slice(0,8),'<div class="loading">집계 중…</div>');
+  try{
+    const s=await (await fetch(`${BASE}/api/sessions/${id}/stats`)).json();
+    const t=s.tokens;
+    document.getElementById("mBody").innerHTML=`<div class="kv">
+      <div class="k">크기</div><div>${fmtSize(s.size_bytes)}</div>
+      <div class="k">메시지 수</div><div>${s.message_count}</div>
+      <div class="k">user / assistant</div><div>${s.by_role.user} / ${s.by_role.assistant}</div>
+      <div class="k">입력 토큰</div><div>${(t.input_tokens||0).toLocaleString()}</div>
+      <div class="k">출력 토큰</div><div>${(t.output_tokens||0).toLocaleString()}</div>
+      <div class="k">캐시 생성/읽기</div><div>${(t.cache_creation_input_tokens||0).toLocaleString()} / ${(t.cache_read_input_tokens||0).toLocaleString()}</div>
+      <div class="k">총 토큰(in+out)</div><div><b>${(s.total_tokens||0).toLocaleString()}</b></div>
+      <div class="k">모델</div><div>${esc(s.model||"—")}</div>
+      <div class="k">추정 비용</div><div><b>$${(s.est_cost_usd||0).toFixed(4)}</b> <span class="slug" title="구독 계정은 실제 청구가 아니라 API 요율 환산 참고치">환산(실청구 아님)</span></div></div>`;
+  }catch(e){ document.getElementById("mBody").innerHTML='실패: '+esc(e.message); }
+}
+
+// ---- 삭제 (dry-run 먼저) ----
+async function deleteSession(id){
+  openModal("세션 삭제 — "+id.slice(0,8),'<div class="loading">삭제 대상 확인 중…</div>');
+  const r=await (await fetch(`${BASE}/api/sessions/${id}/delete`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({dry_run:true})})).json();
+  let h=`<p>아래 파일들이 삭제됩니다 (총 ${fmtSize(r.total_bytes||0)}):</p><pre class="cmd">`;
+  for(const t of r.would_delete){ h+=`[${t.type}] ${esc(t.path)}  (${fmtSize(t.size_bytes)})\n`; }
+  h+=`</pre><div class="note">⚠ 되돌릴 수 없습니다. 원본 jsonl이 완전히 삭제됩니다.</div>`;
+  openModal("세션 삭제 — "+id.slice(0,8),h,
+    `<button onclick="closeModal()">취소</button><button class="danger" onclick="confirmDelete('${id}')">영구 삭제</button>`);
+}
+async function confirmDelete(id){
+  const r=await (await fetch(`${BASE}/api/sessions/${id}/delete`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({dry_run:false})})).json();
+  closeModal();
+  if(r.errors&&r.errors.length) toast("일부 삭제 실패: "+r.errors.join(", "),"err");
+  else toast(`삭제 완료 (${r.deleted.length}개 항목)`,"ok");
+  load();
+}
+
+// ---- 네이티브 이름 변경 (Ctrl+R custom-title, JSONL append) ----
+async function renameNative(id){
+  const s=CACHE[id]||{};
+  const cur=s.custom_title||s.title||s.slug||"";
+  const name=prompt("세션 이름:", cur);
+  if(name==null) return;
+  const t=name.trim(); if(!t){ toast("이름이 비어있음","err"); return; }
+  const post=(force)=>fetch(`${BASE}/api/sessions/${id}/title`,{method:"POST",
+    headers:{"Content-Type":"application/json"},body:JSON.stringify({title:t,force})});
+  let res=await post(false);
+  if(res.status===409){
+    if(!confirm("실행 중(busy) 세션입니다. 동시 쓰기 위험이 있습니다. 그래도 강제 변경할까요?")) return;
+    res=await post(true);
+  }
+  if(res.ok){ toast("이름 변경됨 (네이티브 반영)","ok"); load(); }
+  else { let r={}; try{r=await res.json();}catch(e){} toast("실패: "+(r.error||res.status),"err"); }
+}
+
+// ---- 폴더(cwd) 변경 ----
+function changeCwd(id){
+  const s=CACHE[id];
+  openModal("작업폴더(cwd) 변경 — "+id.slice(0,8),
+    `<div class="field"><label>현재 cwd</label><input type="text" value="${esc(s.cwd||'')}" disabled></div>
+     <div class="field"><label>새 cwd (절대경로)</label><input type="text" id="newCwd" value="${esc(s.cwd||'')}"></div>
+     <div class="note">jsonl 내 모든 cwd 값을 치환합니다. 원본은 .bak으로 백업됩니다.</div>`,
+    `<button onclick="closeModal()">취소</button><button class="primary" onclick="confirmCwd('${id}')">변경 적용</button>`);
+}
+async function confirmCwd(id){
+  const nc=document.getElementById("newCwd").value.trim();
+  if(!nc){ toast("새 경로를 입력하세요","err"); return; }
+  const r=await (await fetch(`${BASE}/api/sessions/${id}/change-cwd`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({new_cwd:nc,dry_run:false})})).json();
+  closeModal();
+  if(r.error) toast(r.error,"err"); else toast(`cwd 변경 완료 (${r.lines_changed}줄, 백업 생성됨)`,"ok");
+  load();
+}
+
+// ---- export ----
+function exportSession(id){
+  openModal("Export — "+id.slice(0,8),
+    `<label class="chk"><input type="checkbox" id="incWork"> 작업폴더도 함께 번들 (.gitignore 존중, node_modules 등 제외)</label>
+     <div class="note">세션 + manifest를 .zip으로 내려받습니다. 작업폴더 포함 시 용량이 커질 수 있습니다.</div>`,
+    `<button onclick="closeModal()">취소</button><button class="primary" onclick="doExport('${id}')">다운로드</button>`);
+}
+function doExport(id){
+  const inc=document.getElementById("incWork").checked;
+  closeModal();
+  window.location.href=`${BASE}/api/sessions/${id}/export?include_workdir=${inc}`;
+  toast("export 시작 (다운로드 폴더 확인)","ok");
+}
+
+// ---- import ----
+function openImport(){
+  openModal("Import — 세션 복원",
+    `<div class="field"><label>export .zip 파일</label><input type="file" id="impFile" accept=".zip"></div>
+     <div class="field"><label>새 작업경로(cwd) — 비우면 원본 경로 유지</label><input type="text" id="impCwd" placeholder="D:\\새\\작업폴더"></div>
+     <label class="chk"><input type="checkbox" id="impWork"> 번들된 작업폴더도 새 경로로 복원</label>
+     <label class="chk"><input type="checkbox" id="impOver"> 이미 존재 시 덮어쓰기</label>
+     <div class="note">다른 PC의 export를 이 PC로 복원합니다. cwd가 새 경로로 재지정됩니다.</div>`,
+    `<button onclick="closeModal()">취소</button><button class="primary" onclick="doImport()">복원</button>`);
+}
+async function doImport(){
+  const f=document.getElementById("impFile").files[0];
+  if(!f){ toast("zip 파일을 선택하세요","err"); return; }
+  const fd=new FormData();
+  fd.append("file",f);
+  const cwd=document.getElementById("impCwd").value.trim();
+  if(cwd) fd.append("new_cwd",cwd);
+  fd.append("restore_workdir",document.getElementById("impWork").checked);
+  fd.append("overwrite",document.getElementById("impOver").checked);
+  const r=await (await fetch(BASE+"/api/import",{method:"POST",body:fd})).json();
+  closeModal();
+  if(r.error) toast("import 실패: "+r.error,"err");
+  else toast(`import 완료 → ${r.target_folder} (cwd ${r.cwd_lines_rewritten}줄 재지정)`,"ok");
+  load();
+}
+
+// ---- 재개 ----
+let _resume=null;  // {id, cwd}
+async function resumeSession(id){
+  const r=await (await fetch(`${BASE}/api/sessions/${id}/resume-command`)).json();
+  if(r.error){ toast(r.error,"err"); return; }
+  _resume={id, cwd:r.cwd||""};
+  openModal("세션 재개 — "+id.slice(0,8),
+    `<label class="chk"><input type="checkbox" id="skipPerm" checked onchange="renderResumeCmd()">
+       권한 확인 건너뛰기 <code>--dangerously-skip-permissions</code></label>
+     <p style="margin:6px 0">아래 명령으로 이 세션을 이어서 시작합니다:</p>
+     <pre class="cmd" id="resumeCmd"></pre>
+     <div class="note">${esc(r.note)}</div>`,
+    `<button onclick="closeModal()">닫기</button>
+     <button onclick="copyResumeCmd()">명령 복사</button>
+     <button onclick="launchResume()">새 cmd 창에서 실행</button>
+     <button onclick="openForkTerminal()" title="원본은 그대로 두고 일회용 복제본에서 작업">🔱 포크 재개</button>
+     <button class="primary" onclick="openWebTerminal()">🌐 브라우저에서 재개</button>`);
+  renderResumeCmd();
+}
+function _skip(){ const el=document.getElementById("skipPerm"); return el?el.checked:true; }
+function _resumeCmd(){
+  const flag=_skip()?" --dangerously-skip-permissions":"";
+  const cmd=`claude --resume ${_resume.id}${flag}`;
+  return _resume.cwd?`cd /d "${_resume.cwd}" && ${cmd}`:cmd;
+}
+function renderResumeCmd(){ const p=document.getElementById("resumeCmd"); if(p) p.textContent=_resumeCmd(); }
+function copyResumeCmd(){ navigator.clipboard.writeText(_resumeCmd()); toast("복사됨","ok"); }
+function openWebTerminal(){
+  closeModal();
+  window.open(`${BASE}/terminal?id=${encodeURIComponent(_resume.id)}&skip=${_skip()?1:0}`, "_blank");
+}
+function openForkTerminal(){
+  closeModal();
+  const fork=(crypto.randomUUID?crypto.randomUUID():("f"+Date.now()+Math.random().toString(16).slice(2)));
+  window.open(`${BASE}/terminal?id=${encodeURIComponent(_resume.id)}&skip=${_skip()?1:0}&fork=${fork}`, "_blank");
+}
+async function launchResume(){
+  const r=await (await fetch(`${BASE}/api/sessions/${_resume.id}/resume-launch?skip=${_skip()?1:0}`,{method:"POST"})).json();
+  if(r.launched){ closeModal(); toast("새 터미널에서 재개 실행됨","ok"); }
+  else toast(r.error||"자동 실행 불가 — 명령을 직접 실행하세요","err");
+}
+
+// ---- 태그(라벨) — 세션 '이름'은 ✎ 이름 변경(네이티브 custom-title)으로 관리 ----
+function editLabels(id){
+  const s=CACHE[id]||{};
+  const cur=(s.labels||[]).join(", ");
+  openModal("태그 편집 — "+id.slice(0,8),
+    `<div class="field"><label>태그 (쉼표로 구분)</label>
+       <input id="lblTags" value="${esc(cur)}" placeholder="예: 작업, 북한법, 중요"></div>
+     <div class="note">태그는 필터용이며 별도 파일에 저장됩니다.<br>
+       세션 <b>이름</b>은 ⋯ 메뉴의 <b>✎ 이름 변경(네이티브)</b>에서 설정하세요 —
+       Claude <code>--resume</code> 피커와 동기화됩니다.</div>`,
+    `<button onclick="closeModal()">취소</button>
+     <button class="primary" onclick="saveLabels('${id}')">저장</button>`);
+}
+async function saveLabels(id){
+  const tags=document.getElementById("lblTags").value.split(",").map(x=>x.trim()).filter(Boolean);
+  const r=await fetch(`${BASE}/api/sessions/${id}/labels`,{method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({labels:tags})});
+  if(!r.ok){ toast("태그 저장 실패","err"); return; }
+  const rec=(await r.json()).record||{};
+  if(DATA) for(const p of DATA.projects) for(const s of p.sessions){
+    if(s.session_id===id){ s.labels=rec.labels||[]; }
+  }
+  closeModal(); toast("태그 저장됨","ok"); render();
+}
+
+// ---- API 사용량 대시보드 ----
+async function showUsage(){
+  openModal("📈 API 사용량 / 비용",'<div class="loading">집계 중…</div>');
+  try{
+    const u=await (await fetch(`${BASE}/api/usage`)).json();
+    const money=v=>"$"+(v||0).toFixed(4);
+    const rows=(arr,cols)=>arr.length?arr.map(r=>`<tr>${cols.map(c=>`<td>${c(r)}</td>`).join("")}</tr>`).join(""):`<tr><td colspan="${cols.length}" class="slug">없음</td></tr>`;
+    const capUsd=u.caps.daily_usd, capCalls=u.caps.daily_calls;
+    const tokRows=rows(u.today_by_token,[
+      r=>`<span class="mono">${esc(r.token)}</span>`,
+      r=>`${r.calls} / ${capCalls}`,
+      r=>`${money(r.usd)} / $${capUsd}`]);
+    const sesRows=rows(u.by_session.slice(0,20),[
+      r=>`<span class="mono">${esc((r.session||'').slice(0,8))}</span>`,
+      r=>r.calls, r=>money(r.usd)]);
+    const dayRows=rows(u.by_day.slice(0,14),[r=>r.day, r=>r.calls, r=>money(r.usd)]);
+    document.getElementById("mBody").innerHTML=`
+      <div class="kv" style="margin-bottom:14px">
+        <div class="k">누적 호출 / 비용(환산)</div><div><b>${u.total_calls}회 · ${money(u.total_cost_usd)}</b>
+          <span class="slug" title="구독 계정은 실제 청구 아님">환산치</span></div></div>
+      <h3 style="font-size:13px;margin:6px 0">오늘(${u.today}) 토큰별 · 일일한도 대비</h3>
+      <table class="ut"><thead><tr><th>API 토큰</th><th>호출</th><th>비용</th></tr></thead><tbody>${tokRows}</tbody></table>
+      <h3 style="font-size:13px;margin:14px 0 6px">세션별 (상위 20)</h3>
+      <table class="ut"><thead><tr><th>세션</th><th>호출</th><th>비용</th></tr></thead><tbody>${sesRows}</tbody></table>
+      <h3 style="font-size:13px;margin:14px 0 6px">일자별</h3>
+      <table class="ut"><thead><tr><th>날짜</th><th>호출</th><th>비용</th></tr></thead><tbody>${dayRows}</tbody></table>`;
+  }catch(e){ document.getElementById("mBody").innerHTML='실패: '+esc(e.message); }
+}
+
+// ---- API 가드레일 프로파일 ----
+async function editProfile(id){
+  let p={};
+  try{ p=(await (await fetch(`${BASE}/api/sessions/${id}/profile`)).json()).profile||{}; }catch(e){}
+  const csv=a=>(a||[]).join(", ");
+  openModal("🛡 API 가드레일 정책 — "+id.slice(0,8),
+    `<div class="note">외부 API로 이 세션을 fork 할 때 <b>추가로 조이는</b> 정책입니다(전역정책과 교집합).</div>
+     <div class="field"><label>권한 모드</label>
+       <select id="pfMode">
+         <option value="">(전역 기본)</option>
+         <option value="plan" ${p.permission_mode==='plan'?'selected':''}>plan (읽기전용)</option>
+         <option value="default" ${p.permission_mode==='default'?'selected':''}>default</option>
+       </select></div>
+     <div class="field"><label>허용 도구 화이트리스트 (쉼표, 비우면 미적용)</label>
+       <input id="pfAllow" value="${esc(csv(p.allowed_tools))}" placeholder="예: Read, Grep, Glob"></div>
+     <div class="field"><label>추가 차단 도구 (쉼표)</label>
+       <input id="pfDeny" value="${esc(csv(p.denied_tools))}" placeholder="예: WebFetch"></div>
+     <div class="field"><label>모델 고정 / 호출당 비용 상한($)</label>
+       <input id="pfModel" value="${esc(p.model||'')}" placeholder="예: fable" style="width:48%">
+       <input id="pfBudget" type="number" step="0.1" value="${p.max_budget_usd??''}" placeholder="$0.5" style="width:48%"></div>
+     <div class="field"><label>시스템 프롬프트 추가 (행동/주제 제약)</label>
+       <textarea id="pfSys" rows="2" style="width:100%">${esc(p.system_prompt||'')}</textarea></div>
+     <div class="field"><label>금지 정규식 (한 줄에 하나) — 프롬프트/응답 차단</label>
+       <textarea id="pfPat" rows="2" style="width:100%" placeholder="(?i)password">${esc((p.deny_patterns||[]).join("\\n"))}</textarea></div>
+     <div class="field"><label>프롬프트 최대 / 응답 최대 글자수</label>
+       <input id="pfMaxIn" type="number" value="${p.max_prompt_chars??''}" placeholder="입력 제한" style="width:48%">
+       <input id="pfMaxOut" type="number" value="${p.max_output_chars??''}" placeholder="출력 제한" style="width:48%"></div>`,
+    `<button onclick="closeModal()">취소</button>
+     <button class="danger" onclick="clearProfile('${id}')">정책 해제</button>
+     <button class="primary" onclick="saveProfile('${id}')">저장</button>`);
+}
+function _csv(v){ return v.split(",").map(x=>x.trim()).filter(Boolean); }
+async function saveProfile(id){
+  const g=x=>document.getElementById(x).value.trim();
+  const num=x=>{ const v=document.getElementById(x).value.trim(); return v===""?null:Number(v); };
+  const body={
+    permission_mode:g("pfMode")||null,
+    allowed_tools:_csv(g("pfAllow")),
+    denied_tools:_csv(g("pfDeny")),
+    model:g("pfModel")||null,
+    max_budget_usd:num("pfBudget"),
+    system_prompt:g("pfSys")||null,
+    deny_patterns:g("pfPat").split(/\n+/).map(x=>x.trim()).filter(Boolean),
+    max_prompt_chars:num("pfMaxIn"),
+    max_output_chars:num("pfMaxOut"),
+  };
+  const r=await fetch(`${BASE}/api/sessions/${id}/profile`,{method:"POST",
+    headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  if(r.ok){ closeModal(); toast("정책 저장됨","ok"); } else toast("정책 저장 실패","err");
+}
+async function clearProfile(id){
+  const r=await fetch(`${BASE}/api/sessions/${id}/profile`,{method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({permission_mode:null,allowed_tools:[],denied_tools:[],model:null,
+      max_budget_usd:null,system_prompt:null,deny_patterns:[],max_prompt_chars:null,max_output_chars:null})});
+  if(r.ok){ closeModal(); toast("정책 해제됨","ok"); } else toast("실패","err");
+}
+
+// ---- 검색 ----
+async function doSearch(){
+  const q=document.getElementById("searchBox").value.trim();
+  if(!q){ load(); return; }
+  const c=document.getElementById("content");
+  c.innerHTML='<div class="loading">검색 중…</div>';
+  const d=await (await fetch(`${BASE}/api/search?q=${encodeURIComponent(q)}`)).json();
+  let h=`<div class="filterbar"><span class="flabel">🔍 "${esc(q)}" 검색 결과 ${d.match_count}건</span>
+    <button class="fchip" onclick="load()">✕ 목록으로</button></div>
+    <div class="project"><div class="sessions" style="display:block">`;
+  for(const s of d.results){
+    CACHE[s.session_id]=s;
+    const snip=(s.snippets||[]).map(x=>esc(x)).join(" … ");
+    h+=`<div class="srow">
+      <div class="smain">
+        <div class="stitle"><span class="dot"></span>${sessionName(s)}</div>
+        <div class="ssub" title="${esc(s.cwd||'')}">${esc(s.cwd||"경로 미상")}</div>
+        ${snip?`<div class="ssub" style="font-family:inherit;white-space:normal;margin-top:4px">${snip}</div>`:""}
+      </div>
+      <div class="sact">
+        <button class="primary sm" onclick="resumeSession('${s.session_id}')">▶ 재개</button>
+        <button class="sm" onclick="editLabels('${s.session_id}')">🏷 태그</button>
+        <button class="sm" onclick="toggleMenu(event,'${s.session_id}')">⋯</button>
+      </div></div>`;
+  }
+  h+=`</div></div>`;
+  c.innerHTML=h;
+}
+
+load();
+</script>
+</body>
+</html>

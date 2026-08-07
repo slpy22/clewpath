@@ -1,0 +1,1741 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b8f94">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="세션">
+<title>ClewPath</title>
+<link rel="manifest" href='data:application/json,{"name":"ClewPath","short_name":"ClewPath","display":"standalone","background_color":"%230e1116","theme_color":"%230b8f94","icons":[]}'>
+<style>
+  :root{
+    --bg:#0e1116; --surface:#161b22; --surface2:#1b222b; --line:#262d37; --line2:#333c48;
+    --ink:#e7ebf1; --ink2:#b2bbc7; --muted:#8a94a1;
+    --accent:#36cbcf; --accent2:#0b8f94; --accent-wash:#123033;
+    --good:#4fb47e; --warn:#d69b44; --crit:#e0776d;
+    --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI","Apple SD Gothic Neo","Malgun Gothic",sans-serif;
+    --safe-t:env(safe-area-inset-top,0px); --safe-b:env(safe-area-inset-bottom,0px);
+  }
+  @media (prefers-color-scheme:light){
+    :root{--bg:#f7f8fa;--surface:#fff;--surface2:#f1f3f6;--line:#e2e6ec;--line2:#d3d9e1;
+      --ink:#12161c;--ink2:#454e5b;--muted:#6b7480;--accent:#0b8f94;--accent2:#0a7a7f;--accent-wash:#e5f4f4;}
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%}
+  body{background:var(--bg);color:var(--ink);font-family:var(--sans);
+    font-size:16px;line-height:1.5;overflow:hidden;}
+  button{font-family:inherit;font-size:inherit;cursor:pointer;border:none;background:none;color:inherit}
+  input,textarea{font-family:inherit;font-size:16px}
+  .mono{font-family:var(--mono)}
+  .hidden{display:none!important}
+
+  /* ---- 페어링 ---- */
+  #pair{position:fixed;inset:0;display:flex;flex-direction:column;justify-content:center;
+    gap:16px;padding:28px;max-width:440px;margin:0 auto}
+  #pair h1{font-size:1.5rem;margin:0 0 4px;letter-spacing:-.02em}
+  #pair p{color:var(--muted);margin:0 0 12px;font-size:.9rem}
+  #pair label{font-size:.8rem;color:var(--ink2);font-family:var(--mono);
+    text-transform:uppercase;letter-spacing:.08em}
+  #pair input{width:100%;margin-top:6px;padding:13px 14px;border-radius:11px;
+    background:var(--surface);border:1px solid var(--line2);color:var(--ink);outline:none}
+  #pair input:focus{border-color:var(--accent)}
+  .btn{display:flex;align-items:center;justify-content:center;gap:8px;padding:14px;
+    border-radius:12px;background:var(--accent2);color:#fff;font-weight:650}
+  .btn:active{opacity:.85}
+  .btn.ghost{background:var(--surface);color:var(--ink);border:1px solid var(--line2)}
+  .err{color:var(--crit);font-size:.85rem;min-height:1.2em}
+
+  /* ---- 앱 셸 ---- */
+  #app{display:flex;flex-direction:column;height:100%}
+  header{display:flex;align-items:center;gap:10px;padding:calc(10px + var(--safe-t)) 16px 10px;
+    background:var(--surface);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
+  header .title{font-weight:700;letter-spacing:-.01em;flex:1;display:flex;align-items:center;gap:8px}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--muted);flex:none}
+  .dot.on{background:var(--good)} .dot.off{background:var(--crit)}
+  header button.icon{width:38px;height:38px;border-radius:10px;font-size:1.1rem;color:var(--ink2)}
+  header button.icon:active{background:var(--surface2)}
+  #main{flex:1;min-height:0;overflow:hidden}
+  #paneList,#paneDetail{height:100%;overflow-y:auto;-webkit-overflow-scrolling:touch;
+    padding-bottom:calc(16px + var(--safe-b))}
+  #resizer{display:none}   /* 모바일: 구분선 리사이저 숨김 */
+  /* 모바일: 한 화면씩(목록↔상세 전환) */
+  #app[data-view=detail] #paneList{display:none}
+  #app[data-view=list] #paneDetail{display:none}
+  .detail-empty{display:none}
+
+  /* ---- 목록 ---- */
+  .search{position:sticky;top:0;z-index:2;padding:12px 14px;background:var(--bg)}
+  .search input{width:100%;padding:12px 14px;border-radius:11px;background:var(--surface);
+    border:1px solid var(--line);color:var(--ink);outline:none}
+  .search input:focus{border-color:var(--accent)}
+  /* 라벨 필터 칩 */
+  .chips{display:flex;gap:8px;overflow-x:auto;padding:0 14px 12px;scrollbar-width:none}
+  .chips::-webkit-scrollbar{display:none}
+  .fchip{flex:none;padding:7px 13px;border-radius:999px;background:var(--surface);
+    border:1px solid var(--line2);color:var(--ink2);font-size:.82rem;white-space:nowrap}
+  .fchip.on{background:var(--accent2);color:#fff;border-color:transparent;font-weight:600}
+  .fchip:active{opacity:.8}
+  /* 세션 행 — 폴더보다 들여쓰기 + 큰 터치 버튼 */
+  .glist{padding-left:14px;background:var(--surface)}
+  .srow{display:flex;align-items:stretch;background:var(--surface);
+    border-bottom:1px solid var(--line);border-left:2px solid var(--line2)}
+  .srow:last-child{border-bottom:none}
+  .sinfo{flex:1;min-width:0;padding:12px 8px 12px 14px;text-align:left;background:transparent}
+  .sinfo:active{background:var(--surface2)}
+  .sr1{display:flex;align-items:center;gap:6px;min-width:0}
+  .sname{font-weight:620;font-size:.95rem;flex:1;min-width:0;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .schip{flex:none;font-size:.66rem;padding:1px 7px;border-radius:999px;
+    background:var(--accent-wash);color:var(--accent);font-family:var(--mono);
+    border:1px solid color-mix(in srgb,var(--accent) 30%,transparent)}
+  .smeta2{font-size:.75rem;color:var(--muted);margin-top:4px;display:flex;gap:9px;flex-wrap:wrap}
+  .spath{font-family:var(--mono);font-size:.7rem;color:var(--muted);margin-top:3px;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sbtn{width:54px;flex:none;display:grid;place-items:center;font-size:1.3rem;
+    border-left:1px solid var(--line);background:transparent}
+  .sbtn:active{background:var(--surface2)}
+  .sbtn.resume{color:var(--accent)}
+  .sbtn.rename{color:var(--ink2)}
+  .chip{font-size:.68rem;padding:2px 7px;border-radius:999px;background:var(--accent-wash);
+    color:var(--accent);border:1px solid color-mix(in srgb,var(--accent) 30%,transparent);
+    font-family:var(--mono);white-space:nowrap}
+  .empty{padding:40px 20px;text-align:center;color:var(--muted)}
+  /* 폴더 그룹 헤더 — 강한 대비 */
+  .ghead{width:100%;display:flex;align-items:center;gap:10px;padding:14px 14px;
+    background:var(--surface2);border:none;border-top:1px solid var(--line);
+    border-bottom:1px solid var(--line);border-left:4px solid var(--accent2);text-align:left}
+  .ghead:active{filter:brightness(1.12)}
+  .ghead .chev{color:var(--accent);font-size:.72rem;width:14px;flex:none}
+  .ghead .gtext{flex:1;min-width:0}
+  .ghead .gbase{font-weight:750;font-size:1rem;color:var(--ink);
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ghead .gpath{font-family:var(--mono);font-size:.72rem;color:var(--muted);
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ghead .gcount{font-size:.78rem;font-weight:650;color:var(--accent);background:var(--accent-wash);flex:none;
+    border:1px solid color-mix(in srgb,var(--accent) 35%,transparent);
+    border-radius:999px;padding:3px 11px;font-variant-numeric:tabular-nums}
+
+  /* ---- 상세 ---- */
+  .detail{padding:16px}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:14px;
+    padding:16px;margin-bottom:12px}
+  .card h3{margin:0 0 10px;font-size:.8rem;font-family:var(--mono);text-transform:uppercase;
+    letter-spacing:.1em;color:var(--muted)}
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:.9rem}
+  .kv .k{color:var(--muted)} .kv .v{text-align:right;font-variant-numeric:tabular-nums}
+  .actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:4px}
+  .actions .btn{padding:15px}
+  .actions .btn.full{grid-column:1/-1}
+  /* 릴레이 접속 인증 모드 배지(로컬 전용). fallback 은 무음 실패 방지용으로 눈에 띄게. */
+  .connbadge{font-family:ui-monospace,monospace;font-size:.7rem;font-weight:700;
+    padding:3px 8px;border-radius:999px;border:1px solid;cursor:pointer;flex:none;white-space:nowrap}
+  .connbadge.jwt{color:var(--good);border-color:var(--good);background:color-mix(in srgb,var(--good) 12%,transparent)}
+  .connbadge.fallback{color:var(--warn);border-color:var(--warn);background:color-mix(in srgb,var(--warn) 14%,transparent)}
+  .connbadge.shared{color:var(--muted);border-color:var(--line2)}
+  /* 버전 표기. 업데이트가 있으면 accent 로 바뀌어 눈에 띈다(로컬만). */
+  .verbadge{font-family:ui-monospace,monospace;font-size:.68rem;color:var(--muted);
+    flex:none;white-space:nowrap;align-self:center}
+  .verbadge.upd{color:var(--accent);cursor:pointer;font-weight:700}
+  .firstrun{background:color-mix(in srgb,var(--accent) 10%,transparent);
+    border:1px solid color-mix(in srgb,var(--accent) 35%,transparent);
+    border-radius:12px;padding:14px 16px;margin:12px 0;font-size:.92rem;line-height:1.6}
+  .firstrun b{color:var(--accent)}
+  .devrow{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)}
+  .devrow>div:first-child{flex:1;min-width:0}
+  .devrow .devname{font-weight:600;font-size:.95rem}
+  .devrow .devmeta{font-size:.78rem;color:var(--muted);margin-top:2px}
+  .btn.sm{padding:7px 12px;font-size:.82rem;flex:none}
+  .btn.danger{background:transparent;border:1px solid color-mix(in srgb,var(--crit) 45%,transparent);color:var(--crit)}
+  .backbar{display:flex;align-items:center;gap:6px;padding:8px 10px;
+    position:sticky;top:0;z-index:4;background:var(--surface);border-bottom:1px solid var(--line)}
+  .backbar button{padding:10px 14px;border-radius:10px;color:var(--accent);font-weight:650;font-size:.95rem}
+  .backbar button:active{background:var(--surface2)}
+
+  /* ---- 뷰어 / 재개 스트림 ---- */
+  .stream{display:flex;flex-direction:column;gap:10px;padding:14px}
+  .msg{max-width:88%;padding:10px 13px;border-radius:14px;font-size:.92rem;white-space:pre-wrap;
+    word-break:break-word;overflow-wrap:anywhere}
+  .msg.user{align-self:flex-end;background:var(--accent2);color:#fff;border-bottom-right-radius:4px}
+  .msg.assistant{align-self:flex-start;background:var(--surface);border:1px solid var(--line);
+    border-bottom-left-radius:4px}
+  .msg pre{background:var(--bg);border:1px solid var(--line2);border-radius:8px;padding:9px 11px;
+    overflow-x:auto;font-family:var(--mono);font-size:.82rem;margin:6px 0;white-space:pre;line-height:1.45}
+  .msg code{background:var(--bg);border:1px solid var(--line2);border-radius:5px;padding:.05em .35em;
+    font-family:var(--mono);font-size:.86em}
+  .msg pre code{background:none;border:none;padding:0}
+  .msg.user pre,.msg.user code{background:rgba(0,0,0,.22);border-color:rgba(255,255,255,.25)}
+  .msg table{border-collapse:collapse;margin:8px 0;font-size:.82rem;display:block;
+    overflow-x:auto;max-width:100%;-webkit-overflow-scrolling:touch}
+  .msg th,.msg td{border:1px solid var(--line2);padding:6px 10px;text-align:left;white-space:nowrap}
+  .msg th{background:var(--surface2);font-weight:650}
+  .msg.user th{background:rgba(0,0,0,.25)}
+  .msg.user th,.msg.user td{border-color:rgba(255,255,255,.25)}
+  .msg.sys{align-self:center;background:transparent;color:var(--muted);font-size:.78rem;
+    font-family:var(--mono);max-width:100%;text-align:center;padding:2px}
+  .tool{align-self:flex-start;font-family:var(--mono);font-size:.78rem;color:var(--warn);
+    background:color-mix(in srgb,var(--warn) 12%,transparent);
+    border:1px solid color-mix(in srgb,var(--warn) 30%,transparent);
+    padding:6px 10px;border-radius:10px}
+  .result{align-self:center;font-size:.76rem;color:var(--muted);font-family:var(--mono);
+    border-top:1px dashed var(--line2);width:100%;text-align:center;padding-top:8px}
+  /* '작업 중…' 진행 표시기 */
+  .busy{align-self:flex-start;display:flex;align-items:center;gap:4px;
+    color:var(--muted);font-size:.85rem;padding:8px 12px;background:var(--surface);
+    border:1px solid var(--line);border-radius:14px;border-bottom-left-radius:4px}
+  .busy .bdot{width:6px;height:6px;border-radius:50%;background:var(--accent);animation:bd 1.2s infinite}
+  .busy .bdot:nth-child(2){animation-delay:.15s}
+  .busy .bdot:nth-child(3){animation-delay:.3s}
+  @keyframes bd{0%,70%,100%{opacity:.3;transform:translateY(0)}35%{opacity:1;transform:translateY(-3px)}}
+  .composer .send.working{background:var(--surface2);color:var(--muted)}
+  /* 승인 카드(향후 non-skip 모드에서 채워짐) */
+  .approve{align-self:stretch;background:var(--surface);border:1px solid var(--warn);
+    border-radius:14px;padding:14px}
+  .approve .q{font-weight:620;margin-bottom:10px}
+  .approve .row2{display:flex;gap:10px}
+  .approve .row2 .btn{flex:1;padding:12px}
+
+  .composer{position:sticky;bottom:0;display:flex;gap:8px;padding:10px 12px calc(10px + var(--safe-b));
+    background:var(--surface);border-top:1px solid var(--line)}
+  .composer textarea{flex:1;resize:none;max-height:120px;padding:11px 13px;border-radius:12px;
+    background:var(--bg);border:1px solid var(--line2);color:var(--ink);outline:none;line-height:1.4}
+  .composer textarea:focus{border-color:var(--accent)}
+  .composer .send{width:46px;height:46px;border-radius:12px;background:var(--accent2);color:#fff;
+    font-size:1.2rem;flex:none;align-self:flex-end}
+  .composer .send:disabled{opacity:.4}
+
+  .toast{position:fixed;left:50%;bottom:calc(24px + var(--safe-b));transform:translateX(-50%);
+    background:var(--ink);color:var(--bg);padding:10px 18px;border-radius:999px;font-size:.85rem;
+    z-index:20;opacity:0;transition:opacity .2s;pointer-events:none;max-width:90%}
+  .toast.show{opacity:.95}
+  .spin{width:22px;height:22px;border:2.5px solid var(--line2);border-top-color:var(--accent);
+    border-radius:50%;animation:sp .7s linear infinite;margin:30px auto;display:block}
+  @keyframes sp{to{transform:rotate(360deg)}}
+
+  /* ---- 웹터미널(재개) — 기존 terminal.html 을 iframe 으로 임베드 ---- */
+  /* grid(auto 1fr)로 [뒤로가기 바 · iframe] 배치. flex 대신 grid 인 이유:
+     iframe 은 intrinsic 150px 를 가진 replaced 요소라 flex:1 로는 세로가 안 늘어나는
+     브라우저가 있다. grid 1fr 트랙은 iframe 을 확실히 늘려 패널을 꽉 채운다. */
+  /* auto = 뒤로가기 바, minmax(0,1fr) = iframe. minmax(0,·) 가 핵심:
+     1fr 트랙의 기본 최소는 min-content 라 iframe(intrinsic 150px)이 컨테이너보다 커져
+     화면 밖으로 넘칠 수 있다. 최소를 0 으로 눌러 정확히 가용 공간에만 맞춘다. */
+  /* [뒤로가기 바(auto) · 터미널 영역(1fr)]. iframe 은 replaced 요소라 grid stretch 로도,
+     height:100%(컨테이너 전체 기준이라 바 높이만큼 넘침)로도 트랙에 못 맞춘다 — 둘 다 실측 확인.
+     그래서 iframe 을 div(.term-frame)로 감싼다: div 는 grid 트랙(1fr)에 정확히 stretch 되고,
+     iframe 은 그 div 를 position:absolute·inset:0 로 채워 항상 딱 맞는다. */
+  #paneDetail.term-mode{padding:0;overflow:hidden;display:grid;grid-template-rows:auto minmax(0,1fr);min-height:0}
+  #paneDetail.term-mode>.term-frame{position:relative;min-height:0;overflow:hidden;background:#0d1117}
+  #paneDetail.term-mode>.term-frame>iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
+  #paneDetail.term-mode>.backbar{min-width:0}
+  .term-note{padding:18px}
+
+  /* ---- 모달 (프로파일/폴더변경/사용량) ---- */
+  .overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;
+    align-items:center;justify-content:center;z-index:50;padding:14px}
+  .modal{background:var(--surface);border:1px solid var(--line);border-radius:16px;
+    width:min(680px,100%);max-height:88vh;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,.4)}
+  .modal-head{padding:14px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px}
+  .modal-head h3{margin:0;font-size:1rem;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .modal-head .x{width:34px;height:34px;border-radius:9px;font-size:1.1rem;color:var(--muted);flex:none}
+  .modal-head .x:active,.modal-head .x:hover{background:var(--surface2)}
+  .modal-body{padding:16px 18px;overflow-y:auto}
+  .modal-foot{padding:12px 18px;border-top:1px solid var(--line);display:flex;gap:10px;justify-content:flex-end}
+  .modal-foot .btn{padding:11px 20px;width:auto}
+  .field{margin-bottom:13px}
+  .field label{display:block;font-size:.76rem;color:var(--ink2);margin-bottom:5px;
+    font-family:var(--mono);text-transform:uppercase;letter-spacing:.04em}
+  .field input,.field textarea,.field select{width:100%;padding:10px 12px;border-radius:10px;
+    background:var(--bg);border:1px solid var(--line2);color:var(--ink);outline:none;font-size:15px}
+  .field input:focus,.field textarea:focus{border-color:var(--accent)}
+  .field textarea{resize:vertical;min-height:64px;font-family:var(--mono);font-size:13px}
+  .modal-body h3{font-size:.78rem;font-family:var(--mono);text-transform:uppercase;
+    letter-spacing:.08em;color:var(--muted);margin:16px 0 8px}
+  .utable{width:100%;border-collapse:collapse;font-size:.84rem}
+  .utable th,.utable td{text-align:left;padding:6px 9px;border-bottom:1px solid var(--line);
+    font-variant-numeric:tabular-nums}
+  .utable th{color:var(--muted);font-family:var(--mono);font-size:.7rem;text-transform:uppercase}
+  .qrbox{background:#fff;padding:12px;border-radius:12px;display:flex;justify-content:center;margin:8px 0 14px}
+  .qrbox img{width:210px;height:210px;image-rendering:pixelated}
+
+  /* ---- 데스크톱(≥880px): master-detail 2-pane ---- */
+  @media (min-width:880px){
+    body{background:var(--surface2)}
+    #app{max-width:1280px;margin:0 auto;background:var(--bg);
+      border-left:1px solid var(--line);border-right:1px solid var(--line)}
+    #pair{max-width:460px}
+    /* 좌(목록) + 우(상세) 동시 표시. 모바일용 한-화면 규칙은 무효화 */
+    #main{display:grid;grid-template-columns:var(--list-w,350px) 7px 1fr;grid-template-rows:minmax(0,1fr)}
+    /* 데스크톱 2단: 두 pane 을 항상 표시. 단 term-mode(터미널)는 grid 로 둬야 하므로 제외 —
+       이 !important 가 term-mode 의 display:grid 를 뭉개면 iframe 영역이 무너진다(실측 확인). */
+    #app[data-view] #paneList,
+    #app[data-view] #paneDetail:not(.term-mode){display:block!important}
+    #paneDetail{font-size:15px}
+    /* 드래그 구분선 */
+    #resizer{display:block;position:relative;cursor:col-resize;background:var(--surface);
+      border-left:1px solid var(--line);border-right:1px solid var(--line)}
+    #resizer::before{content:'';position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+      width:2px;height:26px;border-radius:2px;background:var(--line2);transition:background .12s}
+    #resizer:hover::before,#resizer.dragging::before{background:var(--accent);height:40px}
+    body.col-resizing{cursor:col-resize;user-select:none}
+    .backbar.tolist{display:none}              /* '목록' 뒤로가기 숨김(목록 항상 보임) */
+    .detail-empty{display:flex;height:100%;align-items:center;justify-content:center;
+      color:var(--muted);padding:40px;text-align:center}
+    .sbtn{width:56px;font-size:1.3rem}
+    .msg{max-width:80%}
+    /* 마우스 hover 피드백(터치엔 영향 없음) */
+    .srow:hover{background:var(--surface2)}
+    .srow.sel{background:var(--accent-wash)}
+    .srow.sel .sname{color:var(--accent)}
+    .ghead:hover{filter:brightness(1.08)}
+    .sbtn:hover{background:var(--surface2)}
+    .backbar button:hover{background:var(--surface2)}
+  }
+</style>
+</head>
+<body>
+
+<!-- ===== 페어링 ===== -->
+<div id="pair">
+  <div>
+    <h1>ClewPath</h1>
+    <p>내 PC에 연결합니다.<br>
+      PC의 로컬 웹(<span class="mono">127.0.0.1:5100</span>) → <b>📱</b> → <b>＋ 새 기기 추가</b> 에서
+      <b>QR을 스캔</b>하거나, 거기 표시된 <b>페어링 링크를 붙여넣으세요.</b></p>
+  </div>
+  <div id="p-pcs"></div>
+  <div id="p-linkbox">
+    <label>페어링 링크</label>
+    <input id="p-link" autocomplete="off" autocapitalize="off" spellcheck="false"
+           placeholder="https://…/relay/app?room=…&amp;cs=…">
+  </div>
+  <div class="err" id="p-err"></div>
+  <button class="btn" id="p-go">연결</button>
+  <details style="margin-top:14px">
+    <summary style="cursor:pointer;font-size:.85rem;color:var(--ink3)">직접 입력(고급)</summary>
+    <div style="margin-top:10px">
+      <label>ROOM</label>
+      <input id="p-room" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="rm_…">
+    </div>
+    <div style="margin-top:8px">
+      <label>CLIENT SECRET (또는 구 공유 토큰)</label>
+      <input id="p-token" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="cli_… / rly-cli-…">
+    </div>
+    <div style="margin-top:8px">
+      <label>CLIENT PUBLIC ID (cli_ 사용 시)</label>
+      <input id="p-cp" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="cpub_…">
+    </div>
+  </details>
+</div>
+
+<!-- ===== 앱 ===== -->
+<div id="app" class="hidden">
+  <header>
+    <span class="dot" id="status"></span>
+    <span class="title" id="head">세션</span>
+    <span class="verbadge hidden" id="ver"></span>
+    <button class="icon" id="btn-security" title="보안(2차 인증)">🔒</button>
+    <button class="icon hidden" id="btn-pcs" title="PC 전환">🖧</button>
+    <span class="connbadge hidden" id="conn-badge" title="릴레이 접속 인증 모드"></span>
+    <button class="icon hidden" id="btn-devices" title="외부 접속 기기 관리">📱</button>
+    <button class="icon" id="btn-import" title="세션 가져오기">📥</button>
+    <button class="icon" id="btn-usage" title="API 사용량">📈</button>
+    <button class="icon" id="btn-refresh" title="새로고침">⟳</button>
+    <button class="icon" id="btn-logout" title="연결해제">⏻</button>
+  </header>
+  <main id="main"><div id="paneList"></div><div id="resizer" title="드래그로 폭 조절 · 더블클릭 초기화"></div><div id="paneDetail"></div></main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+const $ = (s,r=document)=>r.querySelector(s);
+const el = (t,c,txt)=>{const e=document.createElement(t);if(c)e.className=c;if(txt!=null)e.textContent=txt;return e;};
+const LS = window.localStorage;
+
+// ---- 실행 모드: local(006 직접 fetch) vs relay(WS RPC). 서버가 주입, 없으면 경로로 추론 ----
+const SM_MODE_RAW="{{MODE}}", SM_BASE_RAW="{{BASE}}";
+const MODE=(SM_MODE_RAW.indexOf('{{')<0 && SM_MODE_RAW)?SM_MODE_RAW
+  :(location.pathname.indexOf('/relay/')>=0?'relay':'local');
+const APIBASE=(SM_BASE_RAW.indexOf('{{')<0)?SM_BASE_RAW:'';
+function qs(o){ if(!o)return''; const e=Object.entries(o).filter(([k,v])=>v!=null&&v!=='');
+  return e.length?'?'+e.map(([k,v])=>encodeURIComponent(k)+'='+encodeURIComponent(v)).join('&'):''; }
+
+// ---- WS URL 유도 (/app 옆의 /ws). 로컬/nginx 모두 자동 대응 ----
+function wsUrl(){
+  const base = location.pathname.replace(/\/(app|index\.html)\/?$/,'').replace(/\/$/,'');
+  const proto = location.protocol==='https:'?'wss':'ws';
+  return `${proto}://${location.host}${base}/ws`;
+}
+
+// ---- 여러 PC 지원: 페어링한 PC 들을 목록으로 보관하고 전환한다 ----
+// 저장 형태: sm_pcs = [{room, cs, cp, dev, name, added, last}]
+// 활성 PC 의 자격은 기존 키(sm_room/sm_cs/sm_cp/sm_devtoken)에 미러링해
+// 기존 접속 경로(clientJwt/conn)가 그대로 동작하게 한다.
+function pcsLoad(){ try{ const a=JSON.parse(LS.getItem('sm_pcs')||'[]'); return Array.isArray(a)?a:[]; }catch(e){ return []; } }
+function pcsSave(a){ LS.setItem('sm_pcs', JSON.stringify(a)); }
+function pcName(pc){ return pc.name || ('PC ' + String(pc.room).replace(/^rm_/,'').slice(0,6)); }
+function pcsUpsert(c){
+  if(!c||!c.room) return;
+  const a=pcsLoad(); const i=a.findIndex(x=>x.room===c.room);
+  const rec={room:c.room, cs:c.cs||'', cp:c.cp||'', dev:c.dev||'',
+             name:(i>=0?a[i].name:'')||c.name||'',
+             added:(i>=0?a[i].added:Date.now()), last:Date.now()};
+  if(i>=0) a[i]=rec; else a.push(rec);
+  pcsSave(a);
+}
+function pcsActivate(room){
+  const pc=pcsLoad().find(x=>x.room===room); if(!pc) return null;
+  LS.setItem('sm_room',pc.room);
+  if(pc.cs&&pc.cp){ LS.setItem('sm_cs',pc.cs); LS.setItem('sm_cp',pc.cp); }
+  else { LS.removeItem('sm_cs'); LS.removeItem('sm_cp'); }
+  if(pc.dev){ LS.setItem('sm_devtoken',pc.dev); conn.devToken=pc.dev; }
+  else { LS.removeItem('sm_devtoken'); conn.devToken=''; }
+  LS.removeItem('sm_cjwt');          // 자격이 바뀌었으니 캐시된 JWT 폐기(필수)
+  LS.removeItem('sm_grace');         // 2FA 신뢰도 PC 단위
+  pc.last=Date.now(); pcsUpsert(pc);
+  return pc;
+}
+function pcsRemove(room){ pcsSave(pcsLoad().filter(x=>x.room!==room)); }
+
+// ---- client JWT: 기기 전용 secret 을 단기 JWT 로 교환(캐시+사전갱신) ----
+function cpBase(){
+  // 릴레이가 /relay/ 로 서빙되면 CP 는 같은 호스트의 /cp/
+  const m=location.pathname.match(/^(.*)\/relay\//);
+  return (location.origin + ((m&&m[1])||'') + '/cp');
+}
+async function clientJwt(force){
+  const cs=LS.getItem('sm_cs'), cpid=LS.getItem('sm_cp');
+  if(!cs||!cpid) return null;                       // 구 방식(공유 토큰) 사용 중
+  if(!force){
+    try{ const c=JSON.parse(LS.getItem('sm_cjwt')||'null');
+      // 만료 5분 전부터는 미리 갱신 (폰이 끊긴 사이 만료되는 걸 줄임)
+      if(c&&c.token&&c.exp&&(c.exp-300)*1000>Date.now()) return c.token;
+    }catch(e){}
+  }
+  try{
+    const r=await fetch(cpBase()+'/client/token',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({public_id:cpid,secret:cs})});
+    if(!r.ok){ if(r.status===401){ toast('이 기기 인증이 해제되었습니다 — 재페어링 필요'); } return null; }
+    const j=await r.json();
+    LS.setItem('sm_cjwt',JSON.stringify({token:j.token,exp:j.expires_at}));
+    return j.token;
+  }catch(e){
+    // CP 불통: 캐시된 JWT 가 아직 유효하면 그걸로 버틴다
+    try{ const c=JSON.parse(LS.getItem('sm_cjwt')||'null');
+      if(c&&c.token&&c.exp*1000>Date.now()) return c.token; }catch(_){}
+    return null;
+  }
+}
+
+// ---- RPC over WebSocket ----
+class Conn{
+  constructor(){ this.ws=null; this.seq=0; this.waiters=new Map(); this.streams=new Map();
+    this.onstatus=()=>{}; this.peer=false;
+    this.devToken=LS.getItem('sm_devtoken')||''; this.authed=false; this.cid=null; this.onauth=null; }
+  _doAuth(){   // 기기 토큰이 있으면 릴레이 연결 직후 기기 인증
+    if(!this.devToken){ this.authed=false; return Promise.resolve(); }
+    return this.req('auth',{token:this.devToken}).then(r=>{
+      this.authed=!!(r&&r.ok);
+      // 접속한 PC(호스트)의 버전 — 원격 화면에선 이게 유일한 출처
+      if(this.authed && r.data && r.data.ver) showVer(r.data.ver, null);
+      if(this.onauth)this.onauth(this.authed, r&&r.error);
+    });
+  }
+  async connect(room,token){
+    this._room=room; this._token=token;           // 재접속에 사용
+    const cjwt=await clientJwt(false);            // 기기 전용 자격이 있으면 JWT 로
+    return new Promise((res,rej)=>{
+      let done=false;
+      let url=`${wsUrl()}?role=client&room=${encodeURIComponent(room)}&v=1`;
+      if(cjwt) url+=`&jwt=${encodeURIComponent(cjwt)}`;
+      else if(token) url+=`&token=${encodeURIComponent(token)}`;
+      const ws=new WebSocket(url); this.ws=ws;
+      ws.onopen=()=>{};
+      ws.onmessage=(ev)=>{
+        let m; try{m=JSON.parse(ev.data);}catch(e){return;}
+        if(m.type==='hello'){ this.peer=!!m.peer_present; this.cid=m.cid||null;
+          this.onstatus(true,this.peer);
+          if(!done){ if(this.devToken){ this._doAuth().finally(()=>{ if(!done){done=true;res(m);} }); }
+                     else { done=true; res(m); } }
+          return; }
+        if(m.type==='peer'){ if(m.event==='agent_online')this.peer=true;
+          if(m.event==='agent_offline')this.peer=false; this.onstatus(true,this.peer); return; }
+        if(m.type==='res'||m.type==='pong'){
+          if(m.error==='auth_required'&&this.onauth)this.onauth(false,'auth_required');
+          const w=this.waiters.get(m.id);
+          if(w){this.waiters.delete(m.id); w(m);} return; }
+        if(m.type==='stream'){ const h=this.streams.get(m.id); if(h)h(m); return; }
+      };
+      ws.onclose=(ev)=>{ this.onstatus(false,false);
+        if(!done){done=true;rej(new Error(this._closeMsg(ev&&ev.code)));}
+        for(const w of this.waiters.values())w({ok:false,error:'disconnected'});
+        this.waiters.clear();
+        this._scheduleReconnect(ev&&ev.code); };
+      ws.onerror=()=>{ if(!done){done=true;rej(new Error('연결 실패'));} };
+    });
+  }
+  req(method,params={}){
+    return new Promise((res)=>{
+      const id='c'+(++this.seq); this.waiters.set(id,res);
+      this.ws.send(JSON.stringify({v:1,type:'req',id,method,params}));
+    });
+  }
+  // 로컬 006 /api/* 제네릭 호출
+  async api(verb,path,{query,body}={}){
+    const r=await this.req('api',{verb,path,query,body});
+    if(!r.ok){
+      if(r.data&&r.data.status){ const e=new Error('HTTP '+r.data.status);
+        e.status=r.data.status; e.json=r.data.json; throw e; }
+      throw new Error(r.error||'api error');
+    }
+    if(r.data.status>=400){ const e=new Error('HTTP '+r.data.status);
+      e.status=r.data.status; e.json=r.data.json; throw e; }
+    return r.data.json;
+  }
+  startResume(sessionId,onFrame,inplace,cred){
+    const id='s'+(++this.seq); this.streams.set(id,onFrame);
+    this.ws.send(JSON.stringify({v:1,type:'req',id,method:'resume',
+      params:{session_id:sessionId,skip:true,inplace:!!inplace,
+        grace:(cred&&cred.grace)||'',otp:(cred&&cred.otp)||''}}));
+    return {
+      id,
+      input:(text)=>this.ws.send(JSON.stringify({v:1,type:'stream_in',id,
+        data:{type:'user',message:{role:'user',content:[{type:'text',text}]}}})),
+      close:()=>this.streams.delete(id),
+    };
+  }
+  // 웹터미널 스트림(원시 텍스트). onData(data,eof)
+  startTerminal(sessionId,onData,cred){
+    const id='t'+(++this.seq);
+    this.streams.set(id,(m)=>{ if(m.eof){onData(null,true,m.error);} else onData(m.data,false); });
+    this.ws.send(JSON.stringify({v:1,type:'req',id,method:'terminal',
+      params:{session_id:sessionId,skip:true,
+        grace:(cred&&cred.grace)||'',otp:(cred&&cred.otp)||''}}));
+    return { send:(obj)=>this.ws.send(JSON.stringify({v:1,type:'stream_in',id,data:obj})),
+             close:()=>this.streams.delete(id) };
+  }
+  _closeMsg(code){
+    if(code===4402) return '기기 자격이 만료·거부되었습니다(갱신 후 재시도)';
+    if(code===4403) return '이 room 이 더 이상 유효하지 않습니다 — 재페어링이 필요합니다';
+    if(code===4426) return '앱/커넥터 버전이 낮습니다 — 업데이트가 필요합니다';
+    if(code===4401) return '접속 자격이 올바르지 않습니다(토큰/room 확인)';
+    return '연결이 끊겼습니다';
+  }
+  _scheduleReconnect(code){
+    if(this._stopped) return;                       // 사용자가 로그아웃한 경우
+    if(code===4403||code===4426){                   // 재시도해도 소용없는 사유
+      toast(this._closeMsg(code)); return; }
+    if(this._retryTimer) return;
+    this._retry=Math.min((this._retry||0)+1,6);
+    const wait=Math.min(1000*Math.pow(2,this._retry-1),30000);
+    this._retryTimer=setTimeout(async()=>{
+      this._retryTimer=null;
+      if(code===4402) await clientJwt(true);        // 만료 추정 → JWT 강제 갱신
+      try{ await this.connect(this._room,this._token); this._retry=0; toast('다시 연결됨'); loadList(); }
+      catch(e){ this._scheduleReconnect(); }
+    },wait);
+  }
+  logout(){ this._stopped=true;
+    if(this._retryTimer){clearTimeout(this._retryTimer);this._retryTimer=null;}
+    try{this.ws&&this.ws.close();}catch(e){} }
+}
+
+const conn=new Conn();
+
+// ---- Transport 추상화: UI 는 T.* 만 호출. 로컬/릴레이 구현만 다르다 ----
+const relayT={
+  mode:'relay', needsPairing:true,
+  async list(p){ const r=await conn.req('list_sessions',p); if(!r.ok)throw new Error(r.error||'목록 실패'); return r.data; },
+  api:(v,p,o)=>conn.api(v,p,o),
+  resume:(id,cb,opts)=>conn.startResume(id,cb,opts&&opts.inplace,opts),
+  terminal:(id,cb,opts)=>conn.startTerminal(id,cb,opts),
+  async exportSession(id,wd){ const r=await conn.req('export',{session_id:id,include_workdir:!!wd});
+    if(!r.ok)throw new Error(r.error||'내보내기 실패'); return r.data; },
+  async importSession(file,opts){ const b64=await fileToB64(file);
+    const r=await conn.req('import',Object.assign({filename:file.name,b64},opts));
+    return r.data || {error:r.error||'가져오기 실패'}; },
+  grant(otp){ return conn.req('grant',{otp}).then(r=>{ if(!r.ok)throw new Error(r.error||'인증 실패'); return r.data; }); },
+  logout(){ showLogoutChoice(); },
+};
+const localT={
+  mode:'local', needsPairing:false,
+  async list(p){ const r=await fetch(APIBASE+'/api/v1/sessions'+qs(p));
+    if(!r.ok)throw new Error('HTTP '+r.status); return r.json(); },
+  async api(v,p,{query,body}={}){
+    const r=await fetch(APIBASE+p+qs(query),{method:v,
+      headers:body?{'Content-Type':'application/json'}:{},
+      body:body?JSON.stringify(body):undefined});
+    if(!r.ok){ const e=new Error('HTTP '+r.status); e.status=r.status;
+      try{e.json=await r.json();}catch(_){}
+      throw e; }
+    return r.json();
+  },
+  resume(id,cb,opts){
+    const proto=location.protocol==='https:'?'wss':'ws';
+    const ep=(opts&&opts.inplace)?'resume-inplace':'resume';
+    const ws=new WebSocket(`${proto}://${location.host}${APIBASE}/api/v1/${ep}/${id}?skip=1`);
+    ws.onmessage=(ev)=>{ let d; try{d=JSON.parse(ev.data);}catch(e){return;} cb({data:d}); };
+    ws.onclose=()=>cb({eof:true});
+    return { input:(text)=>ws.send(JSON.stringify(
+              {type:'user',message:{role:'user',content:[{type:'text',text}]}})),
+             close:()=>{try{ws.close();}catch(e){}} };
+  },
+  async importSession(file,opts){
+    const fd=new FormData(); fd.append('file',file);
+    if(opts.new_cwd)fd.append('new_cwd',opts.new_cwd);
+    fd.append('overwrite', opts.overwrite?'true':'false');
+    fd.append('restore_workdir', opts.restore_workdir?'true':'false');
+    const r=await fetch(APIBASE+'/api/import',{method:'POST',body:fd});
+    try{ return await r.json(); }catch(_){ return {error:'HTTP '+r.status}; }
+  },
+  grant(){ return Promise.resolve({}); },   // 로컬은 인증 불필요
+  logout(){ location.reload(); },
+};
+let T = MODE==='relay' ? relayT : localT;
+let SESSIONS=[];
+let SELECTED_ID=null;
+
+// ---- 2-pane 헬퍼 (모바일=한화면 전환, 데스크톱=좌목록+우상세 동시) ----
+const paneList=()=>$('#paneList'), paneDetail=()=>$('#paneDetail');
+function showListPane(){ $('#app').setAttribute('data-view','list'); }
+function showDetailPane(){ $('#app').setAttribute('data-view','detail'); }
+function detailPlaceholder(txt){ const p=paneDetail(); p.classList.remove('term-mode'); p.innerHTML='';
+  p.appendChild(el('div','detail-empty',txt||'왼쪽에서 세션을 선택하세요')); }
+function highlightSelected(){ document.querySelectorAll('.srow').forEach(r=>
+  r.classList.toggle('sel', r.dataset.sid===SELECTED_ID)); }
+
+// ---- UI helpers ----
+function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('show');
+  clearTimeout(toast._t); toast._t=setTimeout(()=>t.classList.remove('show'),2200); }
+function setStatus(on,peer){ const d=$('#status');
+  d.className='dot '+(on?(peer?'on':'off'):'off');
+  $('#head').firstChild&&(0); }
+// ---- 릴레이 접속 인증 모드 배지 (로컬 전용) ----
+const CONN_LABEL={jwt:'🔐 JWT', fallback:'⚠ 공유토큰', shared:'공유토큰'};
+async function refreshConnBadge(){
+  if(MODE!=='local') return;
+  const el=$('#conn-badge'); if(!el) return;
+  let st; try{ st=await T.api('GET','/api/owner/connection'); }catch(e){ el.classList.add('hidden'); return; }
+  const m=st.mode||'shared';
+  el.textContent=CONN_LABEL[m]||m;
+  el.className='connbadge '+m;
+  el.classList.remove('hidden');
+  el._st=st;
+  el.onclick=()=>showConnInfo(el._st);
+}
+function showConnInfo(st){
+  const body=el('div'); const line=(t)=>body.appendChild(el('div','cwd',t));
+  const m=st.mode||'shared';
+  line('릴레이 접속 인증 모드: '+(CONN_LABEL[m]||m));
+  if(m==='jwt') line('컨트롤플레인이 발급한 단기 JWT로 접속 중입니다(권장 상태).');
+  else if(m==='fallback') line('⚠ 컨트롤플레인에 닿지 못해 공유 토큰으로 접속 중입니다. 기능은 정상이지만 기기별 인증이 적용되지 않습니다.');
+  else line('컨트롤플레인이 설정되지 않아 공유 토큰으로 접속합니다(기존 방식).');
+  if(st.room_mismatch) line('⚠ CP가 발급한 room('+String(st.room_mismatch.cp_room).slice(0,14)+'…)과 현재 사용 room이 다릅니다. 기존 페어링을 지키려 이사하지 않았습니다. 이사하려면 SM_CP_ADOPT_ROOM=1 (기존 QR 재발급 필요).');
+  if(st.reason) line('사유: '+st.reason);
+  if(st.cp_url) line('CP: '+st.cp_url);
+  if(st.connector_id) line('커넥터: '+st.connector_id);
+  if(st.room_key||st.relay_room) line('room: '+(st.room_key||st.relay_room));
+  if(st.jwt_exp){ const left=Math.round(st.jwt_exp-Date.now()/1000);
+    line('JWT 만료: '+(left>0?left+'초 남음':'만료됨(다음 재접속 시 갱신)')); }
+  const again=el('button','btn ghost','⟳ 다시 확인'); again.style.marginTop='8px';
+  again.onclick=()=>{ closeModal(); refreshConnBadge(); };
+  body.appendChild(again);
+  openModal('릴레이 접속 인증', body);
+}
+// 절대 시각 표기(현지 시간). ISO 문자열 또는 epoch 초(mtime) 모두 허용.
+function absTime(v){
+  if(v===null||v===undefined||v==='') return '';
+  const d = (typeof v==='number') ? new Date(v*1000) : new Date(v);
+  if(isNaN(d.getTime())) return '';
+  const p=n=>String(n).padStart(2,'0');
+  const now=new Date(), sameYear=d.getFullYear()===now.getFullYear();
+  return (sameYear?'':d.getFullYear()+'-')
+       + p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes());
+}
+function relTime(iso){ if(!iso)return''; const t=new Date(iso); const s=(Date.now()-t)/1000;
+  if(isNaN(s))return''; if(s<3600)return Math.floor(s/60)+'분 전';
+  if(s<86400)return Math.floor(s/3600)+'시간 전'; return Math.floor(s/86400)+'일 전'; }
+// ended_at(없으면 mtime) 기준 상대시간
+function relFrom(s){ const t = s.ended_at ? Date.parse(s.ended_at) : (s.mtime? s.mtime*1000 : 0);
+  if(!t||isNaN(t)) return ''; const sec=Math.max(0,(Date.now()-t)/1000);
+  if(sec<3600)return Math.floor(sec/60)+'분 전';
+  if(sec<86400)return Math.floor(sec/3600)+'시간 전'; return Math.floor(sec/86400)+'일 전'; }
+function fmtBytes(b){ if(!b)return'0'; const u=['B','KB','MB','GB']; let i=0;
+  while(b>=1024&&i<3){b/=1024;i++;} return b.toFixed(b<10&&i>0?1:0)+u[i]; }
+
+// ---- 목록 ----
+let ACTIVE_LABEL='';  // 선택된 라벨 필터('' = 전체)
+async function loadList(q){
+  const main=paneList(); $('#head').textContent='세션';
+  main.innerHTML='';
+  const sb=el('div','search'); const inp=el('input');
+  inp.placeholder='검색 (경로·이름)'; inp.value=q||''; sb.appendChild(inp); main.appendChild(sb);
+  const chipsWrap=el('div','chips hidden'); main.appendChild(chipsWrap);
+  const listWrap=el('div'); main.appendChild(listWrap);
+  const spin=el('div','spin'); listWrap.appendChild(spin);
+  const rerender=()=>{ renderChips(chipsWrap,rerender); renderRows(listWrap,inp.value); };
+  inp.oninput=()=>{ clearTimeout(inp._t); inp._t=setTimeout(rerender,200); };
+  showListPane();
+  if(!SELECTED_ID) detailPlaceholder();   // 데스크톱: 우측 안내
+  try{
+    const data=await T.list({limit:0});
+    SESSIONS=data.sessions||[];
+    rerender();
+  }catch(e){ listWrap.innerHTML=''; listWrap.appendChild(el('div','empty','목록 실패: '+e.message)); }
+}
+function renderChips(wrap,rerender){
+  const counts=new Map();
+  for(const s of SESSIONS) for(const l of (s.labels||[])) counts.set(l,(counts.get(l)||0)+1);
+  wrap.innerHTML='';
+  if(!counts.size){ wrap.classList.add('hidden'); return; }
+  wrap.classList.remove('hidden');
+  const mk=(label,txt,active)=>{ const c=el('button','fchip'+(active?' on':''),txt);
+    c.onclick=()=>{ ACTIVE_LABEL=(ACTIVE_LABEL===label)?'':label; rerender(); }; return c; };
+  wrap.appendChild(mk('','전체',!ACTIVE_LABEL));
+  for(const [l,n] of [...counts.entries()].sort((a,b)=>b[1]-a[1]))
+    wrap.appendChild(mk(l,`${l} ${n}`,ACTIVE_LABEL===l));
+}
+const COLLAPSED=new Set();  // 접힌 그룹 키(project_folder)
+function baseName(p){ if(!p)return''; const parts=p.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length-1]||p; }
+function groupRepr(list){ // 대표 cwd: 가장 짧은(루트) 경로
+  const cwds=list.map(s=>s.cwd).filter(Boolean);
+  return cwds.length? cwds.sort((a,b)=>a.length-b.length)[0] : (list[0].project_folder||'(기타)'); }
+
+function renderRows(wrap,q){
+  q=(q||'').toLowerCase().trim();
+  const rows=SESSIONS.filter(s=>{
+    if(ACTIVE_LABEL && !(s.labels||[]).includes(ACTIVE_LABEL)) return false;
+    if(!q)return true;
+    return ((s.cwd||'')+(s.title||'')+(s.slug||'')+(s.label_name||'')+(s.project_folder||'')).toLowerCase().includes(q); });
+  wrap.innerHTML='';
+  if(!rows.length){ wrap.appendChild(el('div','empty',
+    (q||ACTIVE_LABEL)?'해당 세션 없음':'세션 없음')); return; }
+  // 폴더(project_folder)별 그룹핑
+  const groups=new Map();
+  for(const s of rows){ const k=s.project_folder||'(기타)';
+    if(!groups.has(k))groups.set(k,[]); groups.get(k).push(s); }
+  const arr=[...groups.entries()].map(([k,list])=>({k,list,
+    latest:list.reduce((m,s)=>Math.max(m,Date.parse(s.ended_at||'')||0),0)}));
+  arr.sort((a,b)=>b.latest-a.latest);
+
+  for(const g of arr){
+    const repr=groupRepr(g.list);
+    const collapsed = q ? false : COLLAPSED.has(g.k);  // 검색 중엔 항상 펼침
+    const gh=el('button','ghead');
+    gh.appendChild(el('span','chev',collapsed?'▶':'▼'));
+    const gt=el('div','gtext');
+    gt.appendChild(el('div','gbase','📁 '+baseName(repr)));
+    gt.appendChild(el('div','gpath',repr));
+    gh.appendChild(gt);
+    gh.appendChild(el('span','gcount',g.list.length+''));
+    gh.onclick=()=>{ if(COLLAPSED.has(g.k))COLLAPSED.delete(g.k); else COLLAPSED.add(g.k);
+      renderRows(wrap,q); };
+    wrap.appendChild(gh);
+    if(collapsed) continue;
+    const glist=el('div','glist');
+    for(const s of g.list){
+      const srow=el('div','srow'); srow.dataset.sid=s.session_id;
+      if(s.session_id===SELECTED_ID) srow.classList.add('sel');
+      // 탭 영역(정보) → 상세
+      const info=el('button','sinfo');
+      const r1=el('div','sr1');
+      r1.appendChild(el('span','sname',s.title||s.label_name||s.slug||s.session_id.slice(0,8)));
+      if(s.labels&&s.labels.length)r1.appendChild(el('span','schip','#'+s.labels[0]));
+      info.appendChild(r1);
+      const meta=el('div','smeta2');
+      meta.appendChild(el('span',null,(s.message_count||0)+' msgs'));
+      meta.appendChild(el('span',null,fmtBytes(s.size_bytes)));
+      { const rt=relFrom(s); if(rt)meta.appendChild(el('span',null,rt)); }
+      info.appendChild(meta);
+      if(s.cwd&&s.cwd!==repr) info.appendChild(el('div','spath',s.cwd));
+      info.onclick=()=>loadDetail(s);
+      // 큰 터치 버튼: 재개 / 이름
+      const bR=el('button','sbtn resume','▶'); bR.title='재개'; bR.onclick=()=>loadResume(s);
+      const bN=el('button','sbtn rename','✎'); bN.title='이름 변경'; bN.onclick=()=>renameNative(s);
+      srow.appendChild(info); srow.appendChild(bR); srow.appendChild(bN);
+      glist.appendChild(srow);
+    }
+    wrap.appendChild(glist);
+  }
+}
+
+// ---- 상세 ----
+function backbar(label,onback,cls){ const b=el('div','backbar'+(cls?' '+cls:''));
+  const btn=el('button',null,'‹ '+label); btn.onclick=onback; b.appendChild(btn); return b; }
+
+async function loadDetail(s){
+  SELECTED_ID=s.session_id; highlightSelected();
+  const main=paneDetail(); main.classList.remove('term-mode'); main.innerHTML=''; $('#head').textContent='세션 상세';
+  main.appendChild(backbar('목록',()=>showListPane(),'tolist'));
+  showDetailPane();
+  const d=el('div','detail');
+  d.appendChild((()=>{ const c=el('div','card');
+    c.appendChild(el('h3',null,s.title||s.label_name||s.slug||'세션'));
+    const kv=el('div','kv');
+    const add=(k,v)=>{kv.appendChild(el('div','k',k));kv.appendChild(el('div','v',v));};
+    add('ID',s.session_id.slice(0,8)); add('폴더',s.project_folder||'-');
+    add('메시지',(s.message_count||0)+''); add('크기',fmtBytes(s.size_bytes));
+    { const ct=absTime(s.started_at); if(ct)add('생성',ct); }
+    { const rt=relFrom(s), at=absTime(s.ended_at)||absTime(s.mtime);
+      if(at)add('마지막', at+(rt?` (${rt})`:'')); else if(rt)add('마지막',rt); }
+    c.appendChild(kv);
+    const cwd=el('div','cwd',s.cwd||''); cwd.style.marginTop='10px'; c.appendChild(cwd);
+    return c; })());
+  const statCard=el('div','card'); statCard.appendChild(el('h3',null,'통계 / 비용'));
+  const statBody=el('div'); statBody.appendChild(el('div','spin')); statCard.appendChild(statBody);
+  d.appendChild(statCard);
+  const act=el('div','actions');
+  const bResume=el('button','btn','▶ 채팅 재개'); bResume.onclick=()=>loadResume(s,true);   // in-place
+  const bTerm=el('button','btn','🖥 터미널 재개'); bTerm.onclick=()=>loadTerminal(s);          // in-place
+  const bFork=el('button','btn ghost','🔱 포크로 재개'); bFork.onclick=()=>loadResume(s,false);
+  const bRename=el('button','btn ghost','✎ 이름'); bRename.onclick=()=>renameNative(s);
+  const bView=el('button','btn ghost','💬 뷰어'); bView.onclick=()=>loadViewer(s);
+  const bProf=el('button','btn ghost','🛡 API 정책'); bProf.onclick=()=>editProfile(s);
+  const bCwd=el('button','btn ghost','📁 폴더 변경'); bCwd.onclick=()=>changeCwd(s);
+  const bExport=el('button','btn ghost','📤 내보내기'); bExport.onclick=()=>exportSession(s);
+  const bDel=el('button','btn danger full','🗑 삭제'); bDel.onclick=()=>doDelete(s);
+  act.appendChild(bResume); act.appendChild(bTerm);
+  act.appendChild(bFork); act.appendChild(bRename);
+  act.appendChild(bView); act.appendChild(bProf);
+  act.appendChild(bCwd); act.appendChild(bExport);
+  act.appendChild(bDel);
+  d.appendChild(act);
+  main.appendChild(d);
+  // 통계 로드
+  try{
+    const st=await T.api('GET',`/api/sessions/${s.session_id}/stats`);
+    statBody.innerHTML=''; const kv=el('div','kv');
+    const add=(k,v)=>{kv.appendChild(el('div','k',k));kv.appendChild(el('div','v',v));};
+    const t=st.tokens||{};
+    add('모델',st.model||'-');
+    add('입력토큰',(t.input_tokens||0).toLocaleString());
+    add('출력토큰',(t.output_tokens||0).toLocaleString());
+    add('캐시read',(t.cache_read_input_tokens||0).toLocaleString());
+    add('환산비용','$'+(st.est_cost_usd||0));
+    statBody.appendChild(kv);
+    statBody.appendChild(el('div','cwd','※ 환산치(실청구 아님)'));
+  }catch(e){ statBody.innerHTML=''; statBody.appendChild(el('div','cwd','통계 실패: '+e.message)); }
+}
+
+// ---- 터미널 재개 (로컬=iframe terminal.html, 외부=내장 xterm+릴레이 스트림) ----
+let _term=null;   // 활성 외부 터미널 정리 핸들
+let _xtermP=null;
+function loadXterm(){
+  if(_xtermP) return _xtermP;
+  const base = MODE==='relay'
+    ? location.pathname.replace(/\/(app|index\.html)\/?$/,'').replace(/\/$/,'')+'/vendor'
+    : APIBASE+'/static/vendor';
+  _xtermP=new Promise((res,rej)=>{
+    const css=document.createElement('link'); css.rel='stylesheet'; css.href=base+'/xterm.min.css';
+    document.head.appendChild(css);
+    const s1=document.createElement('script'); s1.src=base+'/xterm.min.js';
+    s1.onload=()=>{ const s2=document.createElement('script'); s2.src=base+'/addon-fit.min.js';
+      s2.onload=()=>res(); s2.onerror=()=>rej(new Error('addon-fit')); document.head.appendChild(s2); };
+    s1.onerror=()=>rej(new Error('xterm.js')); document.head.appendChild(s1);
+  });
+  return _xtermP;
+}
+// 모바일: 터치 슬라이드 → xterm 뷰포트를 직접 스크롤(과거 이력 보기).
+// capture 단계로 xterm 내부 핸들러보다 먼저 가로채고, 뷰포트 scrollTop 을 직접 이동.
+function attachTouchScroll(host, term){
+  const vp=()=>host.querySelector('.xterm-viewport');
+  let ty=null, startTop=0;
+  host.addEventListener('touchstart',e=>{
+    if(e.touches.length===1){ ty=e.touches[0].clientY; const v=vp(); startTop=v?v.scrollTop:0; }
+  }, {passive:true, capture:true});
+  host.addEventListener('touchmove',e=>{
+    if(ty==null||e.touches.length!==1) return;
+    const v=vp(); if(!v) return;
+    v.scrollTop = startTop + (ty - e.touches[0].clientY);
+    e.preventDefault(); e.stopPropagation();
+  }, {passive:false, capture:true});
+  host.addEventListener('touchend',()=>{ ty=null; }, {passive:true, capture:true});
+}
+async function loadTerminal(s){
+  let cred={};
+  if(MODE==='relay'){ cred=await ensurePriv(); if(cred===null) return; }   // 외부 터미널 → grace/2차 인증
+  const main=paneDetail(); main.classList.remove('term-mode'); main.innerHTML='';
+  $('#head').textContent='터미널 재개';
+  const bar=backbar('상세',()=>{ if(_term){_term.close();_term=null;} loadDetail(s); });
+  const hist=el('button',null,'📖 이력'); hist.title='과거 대화를 뷰어로 보기';
+  hist.style.cssText='margin-left:auto;color:var(--accent);padding:10px 14px;font-weight:650';
+  hist.onclick=()=>{ if(_term){_term.close();_term=null;} loadViewer(s); };
+  bar.appendChild(hist);
+  main.appendChild(bar);
+  showDetailPane();
+  main.classList.add('term-mode');
+  if(MODE==='local'){
+    // 로컬: 기존 웹터미널 페이지를 iframe 재사용. iframe 은 grid 트랙에 직접 안 늘어나므로
+    // div(.term-frame)로 감싸고 그 안에서 absolute 로 채운다(위 CSS 참고).
+    const wrap=el('div','term-frame');
+    const frame=document.createElement('iframe');
+    frame.src=`${APIBASE}/terminal?id=${encodeURIComponent(s.session_id)}&skip=1`;
+    frame.setAttribute('allow','clipboard-read; clipboard-write');
+    wrap.appendChild(frame); main.appendChild(wrap); return;
+  }
+  // 외부(릴레이): 내장 xterm 을 띄우고 릴레이 terminal 스트림에 연결(in-place)
+  const host=el('div'); host.style.cssText='flex:1;min-height:0'; main.appendChild(host);
+  try{ await loadXterm(); }catch(e){
+    main.classList.remove('term-mode'); main.innerHTML='';
+    main.appendChild(el('div','term-note','xterm 로드 실패: '+e.message)); return; }
+  const term=new Terminal({fontSize:13,cursorBlink:true,scrollback:10000,
+    fontFamily:'ui-monospace,"Cascadia Code",Consolas,monospace',
+    theme:{background:'#0d1117',foreground:'#e6edf3',cursor:'#58a6ff'}});
+  const fit=new FitAddon.FitAddon(); term.loadAddon(fit); term.open(host);
+  attachTouchScroll(host, term);
+  const tc=T.terminal(s.session_id,(data,eof,err)=>{
+    if(eof){ if(err==='2fa_invalid'||err==='2fa_required') clearGrace();
+      term.write('\r\n\x1b[91m── '+(err?otpErrMsg(err):'연결 종료')+' ──\x1b[0m\r\n'); }
+    else term.write(data); }, cred);
+  // 크기가 실제로 바뀔 때만 통지(ResizeObserver 가 자주 불려도 과다 전송 방지)
+  let _lastDim='';
+  const doResize=()=>{ try{ fit.fit();
+    const dim=term.cols+'x'+term.rows; if(dim!==_lastDim){ _lastDim=dim; tc.send({type:'resize',cols:term.cols,rows:term.rows}); }
+  }catch(e){} };
+  const onWin=()=>doResize(); window.addEventListener('resize',onWin);
+  // 컨테이너가 실제 크기를 얻거나 바뀔 때마다 채운다 — 초기 레이아웃/창 리사이즈 모두.
+  let ro=null;
+  if(window.ResizeObserver){ ro=new ResizeObserver(doResize); ro.observe(host); }
+  if(document.fonts&&document.fonts.ready) document.fonts.ready.then(doResize);
+  _term={ close:()=>{ try{tc.close();}catch(e){} window.removeEventListener('resize',onWin); if(ro)ro.disconnect(); } };
+  term.onData(d=>tc.send({type:'input',data:d}));
+  setTimeout(doResize,80); setTimeout(doResize,300); term.focus();
+}
+
+async function loadViewer(s){
+  const main=paneDetail(); main.classList.remove('term-mode'); main.innerHTML=''; $('#head').textContent='뷰어';
+  main.appendChild(backbar('상세',()=>loadDetail(s)));
+  showDetailPane();
+  const wrap=el('div','stream'); wrap.appendChild(el('div','spin')); main.appendChild(wrap);
+  try{
+    const msgs=await fetchRecentMessages(s.session_id,300);
+    wrap.innerHTML='';
+    if(!msgs.length){wrap.appendChild(el('div','empty','표시할 대화 없음'));return;}
+    for(const m of msgs) renderHistoryMsg(wrap,m);
+    main.scrollTop=main.scrollHeight;
+  }catch(e){ wrap.innerHTML=''; wrap.appendChild(el('div','empty','뷰어 실패: '+e.message)); }
+}
+
+// 서버가 깔끔한 대화만(메타/도구인자/thinking 제외) 최근 limit개 준다.
+async function fetchRecentMessages(sid,limit=200){
+  const r=await T.api('GET',`/api/sessions/${sid}/conversation`,{query:{limit}});
+  return r.messages||[];
+}
+
+// 깔끔 렌더: user=플레인, assistant=마크다운 + 사용도구 칩
+function renderHistoryMsg(wrap,m){
+  const text=(m.text||'').trim();
+  if(m.role==='user'){ if(text){ const d=el('div','msg user'); d.textContent=text; wrap.appendChild(d); } return; }
+  if(m.role==='assistant'){
+    if(text){ const d=el('div','msg assistant'); d.innerHTML=mdToHtml(text); wrap.appendChild(d); }
+    if(m.tools&&m.tools.length){ wrap.appendChild(el('div','tool','🔧 '+[...new Set(m.tools)].join(', '))); }
+  }
+}
+
+// 최소 마크다운 → HTML. XSS 안전: 먼저 이스케이프하고 내가 넣는 태그만 허용.
+function mdToHtml(src){
+  const esc=s=>s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+  const inl=s=>{ s=esc(s);
+    s=s.replace(/`([^`\n]+)`/g,(m,c)=>'<code>'+c+'</code>');
+    s=s.replace(/\*\*([^*\n]+)\*\*/g,'<strong>$1</strong>');
+    return s; };
+  const fences=[];
+  src=String(src).replace(/```[^\n]*\n?([\s\S]*?)```/g,(m,code)=>{
+    fences.push(code); return '\uE010'+(fences.length-1)+'\uE011'; });
+  const lines=src.split('\n'); const out=[]; let i=0;
+  const hasPipe=l=>l.indexOf('|')>=0;
+  const isSep=l=>/^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/.test(l);
+  const cells=l=>{ let x=l.trim(); if(x[0]==='|')x=x.slice(1); if(x[x.length-1]==='|')x=x.slice(0,-1);
+    return x.split('|').map(c=>c.trim()); };
+  while(i<lines.length){
+    const l=lines[i];
+    if(hasPipe(l) && i+1<lines.length && isSep(lines[i+1])){
+      const head=cells(l); i+=2; const body=[];
+      while(i<lines.length && hasPipe(lines[i]) && lines[i].trim()){ body.push(cells(lines[i])); i++; }
+      let tb='<table><thead><tr>'+head.map(c=>'<th>'+inl(c)+'</th>').join('')+'</tr></thead>';
+      if(body.length) tb+='<tbody>'+body.map(r=>'<tr>'+r.map(c=>'<td>'+inl(c)+'</td>').join('')+'</tr>').join('')+'</tbody>';
+      out.push(tb+'</table>'); continue;
+    }
+    let h=l.match(/^#{1,6}\s+(.+)$/); if(h){ out.push('<strong>'+inl(h[1])+'</strong>'); i++; continue; }
+    let b=l.match(/^\s*[-*]\s+(.+)$/); if(b){ out.push('\u2022 '+inl(b[1])); i++; continue; }
+    out.push(inl(l)); i++;
+  }
+  let html=out.join('\n');
+  html=html.replace(/\uE010(\d+)\uE011/g,(m,k)=>'<pre>'+esc(fences[+k])+'</pre>');
+  return html;
+}
+
+// ---- 재개(스트리밍 + 입력) ----
+async function loadResume(s, inplace){
+  const isIn = inplace!==false;   // 기본 in-place(실제 세션)
+  let cred={};
+  if(isIn){ cred=await ensurePriv(); if(cred===null) return; }   // 외부 in-place → grace/2차 인증
+  const main=paneDetail(); main.classList.remove('term-mode'); main.innerHTML='';
+  $('#head').textContent='재개';
+  main.appendChild(backbar('상세',()=>{sess&&sess.close();loadDetail(s);}));
+  showDetailPane();
+  const stream=el('div','stream'); main.appendChild(stream);
+  stream.appendChild(el('div','result', isIn
+    ? '⚠ 실제 세션을 그대로 이어갑니다 (in-place)'
+    : '🔱 복제본에서 진행 — 원본은 보존됩니다'));
+  // composer (상세 pane 하단 고정)
+  const comp=el('div','composer');
+  const ta=el('textarea'); ta.rows=1; ta.placeholder='메시지 입력…';
+  ta.oninput=()=>{ta.style.height='auto';ta.style.height=Math.min(ta.scrollHeight,120)+'px';};
+  const send=el('button','send','↑');
+  comp.appendChild(ta); comp.appendChild(send);
+  main.appendChild(comp);
+  let sess=null, busy=false, busyEl=null;
+  const cleanup=()=>{ comp.remove(); };
+  // back 시 composer 제거
+  const obs=new MutationObserver(()=>{ if(!document.contains(stream)){cleanup();obs.disconnect();} });
+  obs.observe(main,{childList:true});
+  // busyEl 이 있으면 그 위에 삽입(진행표시기는 항상 맨 아래 유지)
+  const push=(cls,txt)=>{ const d=el('div',cls); if(txt!=null)d.textContent=txt;
+    if(busyEl) stream.insertBefore(d,busyEl); else stream.appendChild(d);
+    main.scrollTop=main.scrollHeight; return d; };
+  const setBusy=(on)=>{ busy=on; send.disabled=on;
+    send.classList.toggle('working',on); send.textContent=on?'…':'↑';
+    if(on){ if(!busyEl){ busyEl=el('div','busy');
+      busyEl.innerHTML='<span class="bdot"></span><span class="bdot"></span><span class="bdot"></span>'
+        +'<span style="margin-left:6px">작업 중…</span>';
+      stream.appendChild(busyEl); main.scrollTop=main.scrollHeight; } }
+    else if(busyEl){ busyEl.remove(); busyEl=null; } };
+  // 과거 이력 먼저 표시(끝부분)
+  const loading=push('msg sys','과거 대화 불러오는 중…');
+  try{ const hist=await fetchRecentMessages(s.session_id,120); loading.remove();
+    for(const m of hist) renderHistoryMsg(stream,m);
+    if(hist.length) stream.appendChild(el('div','result','── 여기서 이어서 대화 ──'));
+  }catch(e){ loading.textContent='(과거 이력 로드 실패)'; }
+  main.scrollTop=main.scrollHeight;
+  sess=T.resume(s.session_id,(f)=>{
+    if(f.eof){ setBusy(false);
+      if(f.error==='2fa_invalid'||f.error==='2fa_required') clearGrace();  // 만료 → 재인증
+      push('result', f.error?('종료: '+otpErrMsg(f.error)):'— 세션 종료 —'); return; }
+    const ev=f.data||{};
+    if(ev.type==='system'){ if(ev.subtype==='init')push('msg sys','● 세션 시작'); return; }
+    if(ev.type==='assistant'){ const c=ev.message&&ev.message.content;
+      if(Array.isArray(c))for(const x of c){
+        if(x.type==='text'){ const d=push('msg assistant',''); d.innerHTML=mdToHtml(x.text); }
+        else if(x.type==='tool_use'){ const d=push('tool','🔧 '+x.name+' 실행 중…'); d.dataset.tool='1'; }
+      } return; }
+    if(ev.type==='result'){ setBusy(false);
+      const cost=ev.total_cost_usd!=null?(' · $'+ev.total_cost_usd):'';
+      push('result','완료'+cost); return; }
+    if(ev.type==='user'){ return; } // tool_result 에코 생략
+  },Object.assign({inplace:isIn},cred));
+  const doSend=()=>{ const t=ta.value.trim(); if(!t||busy)return;
+    push('msg user',t); ta.value=''; ta.style.height='auto';
+    setBusy(true); sess.input(t); };
+  send.onclick=doSend;
+  ta.onkeydown=(e)=>{ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();doSend();} };
+}
+
+async function renameNative(s){
+  const cur = s.custom_title || s.title || '';
+  const name = prompt('세션 이름:', cur);
+  if(name==null) return;
+  const t=name.trim(); if(!t){ toast('이름이 비어있음'); return; }
+  try{
+    await T.api('POST',`/api/sessions/${s.session_id}/title`,{body:{title:t}});
+    s.custom_title=t; s.title=t;
+    const it=SESSIONS.find(x=>x.session_id===s.session_id);
+    if(it){ it.custom_title=t; it.title=t; }
+    // 좌측 목록의 해당 행 이름도 즉시 갱신(데스크톱 2-pane)
+    const nm=document.querySelector(`.srow[data-sid="${s.session_id}"] .sname`);
+    if(nm) nm.textContent=t;
+    toast('이름 변경됨 (네이티브 반영)');
+    loadDetail(s);
+  }catch(e){
+    if(e.status===409) toast('실행 중 세션이라 변경 불가');
+    else toast('실패: '+e.message);
+  }
+}
+async function doDelete(s){
+  if(!confirm('이 세션을 삭제할까요? 되돌릴 수 없습니다.'))return;
+  try{ await T.api('POST',`/api/sessions/${s.session_id}/delete`,{body:{dry_run:false}});
+    toast('삭제됨'); if(SELECTED_ID===s.session_id){SELECTED_ID=null; detailPlaceholder('삭제됨');}
+    loadList();
+  }catch(e){ toast('삭제 실패: '+e.message); }
+}
+
+// ---- export / import ----
+function b64toBlob(b64,type){ const bin=atob(b64); const n=bin.length; const arr=new Uint8Array(n);
+  for(let i=0;i<n;i++)arr[i]=bin.charCodeAt(i); return new Blob([arr],{type:type||'application/zip'}); }
+function fileToB64(file){ return new Promise((res,rej)=>{ const r=new FileReader();
+  r.onload=()=>{ const s=String(r.result); const i=s.indexOf(','); res(i>=0?s.slice(i+1):s); };
+  r.onerror=()=>rej(new Error('파일 읽기 실패')); r.readAsDataURL(file); }); }
+function chk(label){ const wrap=el('label'); wrap.style.cssText='display:flex;align-items:center;gap:8px;margin:10px 0;font-size:.9rem;cursor:pointer';
+  const input=document.createElement('input'); input.type='checkbox'; wrap.appendChild(input);
+  wrap.appendChild(document.createTextNode(' '+label)); return {wrap,input}; }
+function dlBlob(blob,filename){ const url=URL.createObjectURL(blob); const a=document.createElement('a');
+  a.href=url; a.download=filename; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url),4000); }
+
+function exportSession(s){
+  const body=el('div');
+  body.appendChild(el('div','cwd','세션 대화(JSONL) + 메모리/todos 사이드파일을 zip 으로 내보냅니다.'));
+  const wd=chk('작업 폴더도 포함(.gitignore 존중, 용량 커질 수 있음)'); body.appendChild(wd.wrap);
+  const go=el('button','btn','📤 내보내기');
+  go.onclick=()=>{ closeModal(); doExport(s, wd.input.checked); };
+  openModal('📤 세션 내보내기 — '+s.session_id.slice(0,8), body, [go]);
+}
+async function doExport(s, wd){
+  const fname='session_'+s.session_id.slice(0,8)+'.zip';
+  if(MODE!=='relay'){
+    // 로컬: 브라우저 직접 다운로드(바이너리 그대로)
+    const a=document.createElement('a');
+    a.href=APIBASE+`/api/sessions/${s.session_id}/export?include_workdir=${wd?'true':'false'}`;
+    a.download=fname; document.body.appendChild(a); a.click(); a.remove();
+    toast('다운로드 시작');
+    return;
+  }
+  // 릴레이: 커넥터가 zip 을 base64 로 터널링 → 브라우저에서 Blob 복원
+  toast(wd?'내보내는 중… (작업폴더 포함, 시간 걸릴 수 있음)':'내보내는 중…');
+  try{
+    const r=await T.exportSession(s.session_id, wd);   // {b64, filename}
+    dlBlob(b64toBlob(r.b64), r.filename||fname);
+    toast('내보내기 완료');
+  }catch(e){ toast('내보내기 실패: '+e.message); }
+}
+
+function importSession(){
+  const body=el('div');
+  const file=document.createElement('input'); file.type='file'; file.accept='.zip,application/zip';
+  body.appendChild(field('세션 zip 파일', file));
+  const cwd=inputEl(''); cwd.placeholder='비우면 원본 경로 그대로';
+  body.appendChild(field('새 작업 폴더(선택)', cwd));
+  const ow=chk('같은 ID 세션이 있으면 덮어쓰기'); body.appendChild(ow.wrap);
+  const rw=chk('작업 폴더 파일도 복원(zip 에 포함된 경우)'); body.appendChild(rw.wrap);
+  const go=el('button','btn','📥 가져오기');
+  go.onclick=async()=>{
+    const f=file.files&&file.files[0];
+    if(!f){ toast('zip 파일을 선택하세요'); return; }
+    go.disabled=true; const orig=go.textContent; go.textContent='가져오는 중…';
+    try{
+      const r=await T.importSession(f,{ new_cwd:cwd.value.trim()||null,
+        overwrite:ow.input.checked, restore_workdir:rw.input.checked });
+      if(r && r.error){ toast('실패: '+r.error); go.disabled=false; go.textContent=orig; return; }
+      const sid=(r&&(r.session_id||r.imported))||'';
+      toast('가져오기 완료'+(sid?(' ('+String(sid).slice(0,8)+')'):'')); closeModal(); loadList();
+    }catch(e){ toast('실패: '+e.message); go.disabled=false; go.textContent=orig; }
+  };
+  openModal('📥 세션 가져오기', body, [go]);
+}
+
+// ---- 모달 시스템 ----
+function closeModal(){ const o=$('#overlay'); if(o)o.remove(); }
+function openModal(title, bodyEl, footChildren){
+  closeModal();
+  const ov=el('div','overlay'); ov.id='overlay';
+  const m=el('div','modal');
+  const h=el('div','modal-head'); h.appendChild(el('h3',null,title));
+  const x=el('button','x','✕'); x.onclick=closeModal; h.appendChild(x);
+  m.appendChild(h);
+  const b=el('div','modal-body'); if(bodyEl)b.appendChild(bodyEl); m.appendChild(b);
+  if(footChildren&&footChildren.length){ const f=el('div','modal-foot');
+    footChildren.forEach(c=>f.appendChild(c)); m.appendChild(f); }
+  ov.appendChild(m);
+  ov.onclick=(e)=>{ if(e.target===ov)closeModal(); };
+  document.body.appendChild(ov);
+}
+function field(label,inp){ const f=el('div','field'); f.appendChild(el('label',null,label)); f.appendChild(inp); return f; }
+function inputEl(val){ const i=el('input'); i.value=(val==null?'':val); return i; }
+function askOtp(){ const c=prompt('2차 인증 코드 (인증앱 6자리):'); if(c==null)return null; return (c||'').trim(); }
+// 특권(in-place/터미널) 자격 확보: 유효 grace 있으면 코드 없이, 없으면 OTP 1회 → grace 캐시.
+// 반환 {grace} / {} (로컬) / null(취소·실패)
+async function ensurePriv(){
+  if(MODE!=='relay') return {};
+  let st; try{ st=await T.api('GET','/api/owner/2fa/status'); }catch(e){ st={required:false}; }
+  if(!st.required) return {};   // 2FA 꺼짐 → 코드 불필요
+  let g=null; try{ g=JSON.parse(LS.getItem('sm_grace')||'null'); }catch(e){}
+  if(g&&g.exp&&g.exp*1000>Date.now()+5000) return {grace:g.grace};
+  const otp=askOtp(); if(otp==null) return null;
+  try{ const r=await T.grant(otp); if(r&&r.grace)LS.setItem('sm_grace',JSON.stringify(r));
+    return {grace:r&&r.grace}; }
+  catch(e){ toast('인증 실패: '+otpErrMsg(e.message)); return null; }
+}
+function clearGrace(){ LS.removeItem('sm_grace'); }
+function otpErrMsg(err){ return err==='2fa_invalid'?'2차 인증 실패(코드 불일치/만료)'
+  :err==='2fa_required'?'2차 인증 미설정 — PC에서 🔒 보안에서 먼저 설정하세요':(err||''); }
+
+// ---- 보안(2차 인증) 켜기/끄기/설정 ----
+async function showSecurity(){
+  let st; try{ st=await T.api('GET','/api/owner/2fa/status'); }catch(e){ st={required:false,has_secret:false}; }
+  const body=el('div');
+  const line=(t)=>body.appendChild(el('div','cwd',t));
+  line('2차 인증(TOTP): '+(st.required?'켜짐 ✅':'꺼짐 ⚠'));
+  line(st.required
+    ? '외부에서 in-place 재개·터미널(실제 세션 조작)에 인증앱 6자리 코드가 필요합니다. 한 번 인증하면 일정 시간 이 기기를 신뢰합니다.'
+    : '외부에서 in-place 재개·터미널이 코드 없이 릴레이 토큰만으로 가능합니다(보안 약함). 켜는 것을 권장합니다.');
+  // grace(기기 신뢰) 상태 + 해제
+  let gr=null; try{ gr=JSON.parse(LS.getItem('sm_grace')||'null'); }catch(e){}
+  if(st.required && gr&&gr.exp&&gr.exp*1000>Date.now()){
+    const mins=Math.round((gr.exp*1000-Date.now())/60000);
+    line('이 기기 인증 유지 중 — 약 '+(mins>=60?Math.round(mins/60)+'시간':mins+'분')+' 남음');
+    const unlock=el('button','btn ghost','🔓 이 기기 인증 해제'); unlock.style.marginTop='8px';
+    unlock.onclick=()=>{ clearGrace(); toast('인증 해제됨'); closeModal(); };
+    body.appendChild(unlock);
+  }
+  if(MODE!=='local'){
+    line('켜기/끄기·설정 변경은 이 PC(로컬 127.0.0.1)에서만 가능합니다.');
+    openModal('🔒 보안 · 2차 인증', body); return;
+  }
+  // ---- 로컬: 설정(QR) 표시 ----
+  const doProvision=async()=>{
+    try{
+      const r=await T.api('POST','/api/owner/2fa/provision',{body:{}});
+      body.innerHTML='';
+      body.appendChild(el('div','cwd','2차 인증이 켜졌습니다. 인증앱(Google Authenticator·Authy 등)으로 QR을 스캔하거나 비밀키를 입력하세요. 창을 닫으면 다시 볼 수 없습니다:'));
+      if(r.qr_svg){ const qb=el('div','qrbox'); const im=document.createElement('img');
+        im.src=r.qr_svg; im.alt='2FA QR'; qb.appendChild(im); body.appendChild(qb); }
+      body.appendChild(field('비밀키 (수동 입력용)', inputEl(r.secret)));
+      body.appendChild(field('otpauth URI', inputEl(r.otpauth)));
+    }catch(e){ toast('설정 실패: '+e.message); }
+  };
+  const toggle=async(on)=>{
+    try{ await T.api('POST','/api/owner/2fa/toggle',{body:{on}}); toast(on?'2FA 켜짐':'2FA 꺼짐'); showSecurity(); }
+    catch(e){ if(e.status===409){ doProvision(); } else toast('실패: '+e.message); }
+  };
+  const foot=[];
+  if(st.required){
+    const off=el('button','btn ghost','2FA 끄기'); off.onclick=()=>{
+      if(confirm('2차 인증을 끄면 외부에서 코드 없이 실제 세션 조작이 가능해집니다. 계속?')) toggle(false); };
+    const re=el('button','btn','QR 재설정'); re.onclick=doProvision;
+    foot.push(off, re);
+  }else if(st.has_secret){
+    const on=el('button','btn','2FA 켜기'); on.onclick=()=>toggle(true);
+    const re=el('button','btn ghost','새 QR로 설정'); re.onclick=doProvision;
+    foot.push(re, on);
+  }else{
+    const setup=el('button','btn','2FA 설정(켜기)'); setup.onclick=doProvision;
+    foot.push(setup);
+  }
+  openModal('🔒 보안 · 2차 인증', body, foot);
+}
+
+// ---- 외부 접속 기기(조회/등록/삭제) — 로컬 전용. 기기 인증은 항상 켜짐(끌 수 없음) ----
+function relTs(sec){ if(!sec)return '미접속';
+  const d=Date.now()/1000-sec; if(d<60)return '방금'; if(d<3600)return Math.floor(d/60)+'분 전';
+  if(d<86400)return Math.floor(d/3600)+'시간 전'; return Math.floor(d/86400)+'일 전'; }
+async function showDevices(){
+  let st; try{ st=await T.api('GET','/api/owner/devices'); }catch(e){ toast('기기 목록 실패: '+e.message); return; }
+  const body=el('div'); const line=(t)=>body.appendChild(el('div','cwd',t));
+  const blockAll = !st.active;   // 등록 기기 0 = 외부 전면 차단
+  line('외부(릴레이) 기기 인증: '+(blockAll?'🛑 전면 차단중(등록 기기 없음)':'항상 켜짐 ✅'));
+  line('등록된 기기만 외부에서 접속할 수 있습니다. 삭제하면 다음 요청부터 즉시 차단되며, 이미 열려 있던 연결도 끊깁니다.');
+  line('이 보호는 끌 수 없습니다 — 끄면 기기 삭제가 실효를 잃기 때문입니다. (이 PC 로컬 접속은 항상 가능)');
+  const list=el('div'); list.style.marginTop='8px';
+  (st.devices||[]).forEach(d=>{
+    const row=el('div','devrow'); const info=el('div');
+    info.appendChild(el('div','devname',(d.revoked?'🚫 ':'📱 ')+d.name));
+    const meta=[]; meta.push(d.last_seen?('최근 '+relTs(d.last_seen)):'미접속');
+    if(d.revoked)meta.push('폐기됨');
+    info.appendChild(el('div','devmeta',meta.join(' · ')));
+    row.appendChild(info);
+    if(!d.revoked){
+      const qr=el('button','btn ghost sm','🔄 QR');
+      qr.title='QR/링크 다시 만들기 (이전 QR 은 무효)';
+      qr.onclick=()=>reissueDevice(d);
+      row.appendChild(qr);
+    }
+    const del=el('button','btn ghost sm','🗑 삭제');
+    del.onclick=async()=>{
+      if(!confirm('"'+d.name+'" 기기를 삭제할까요?\n이 기기의 접속 토큰이 무효화되어, 다시 쓰려면 새로 페어링해야 합니다.'))return;
+      try{ await T.api('POST','/api/owner/devices/'+d.id+'/delete',{body:{}}); toast('삭제됨'); showDevices(); }
+      catch(e){ toast('실패: '+e.message); } };
+    row.appendChild(del);
+    list.appendChild(row);
+  });
+  if(!(st.devices||[]).length) list.appendChild(el('div','cwd','아직 등록된 기기가 없습니다.'));
+  body.appendChild(list);
+  const add=el('button','btn','＋ 새 기기 추가'); add.onclick=addDevice;
+  openModal('📱 외부 접속 기기', body, [add]);
+}
+async function copyText(t){
+  // 127.0.0.1/https 는 보안 컨텍스트라 clipboard API 사용 가능. 실패 시 구식 방법으로 폴백.
+  try{ await navigator.clipboard.writeText(t); return true; }
+  catch(e){
+    try{
+      const ta=document.createElement('textarea');
+      ta.value=t; ta.style.cssText='position:fixed;opacity:0';
+      document.body.appendChild(ta); ta.select();
+      const ok=document.execCommand('copy'); ta.remove(); return ok;
+    }catch(_){ return false; }
+  }
+}
+function fieldWithCopy(label, value){
+  const f=el('div','field');
+  f.appendChild(el('label',null,label));
+  const row=el('div'); row.style.cssText='display:flex;gap:6px;align-items:stretch';
+  const inp=inputEl(value); inp.readOnly=true; inp.style.flex='1';
+  inp.onclick=()=>inp.select();
+  const btn=el('button','btn ghost sm','📋 복사'); btn.style.flex='none';
+  btn.onclick=async()=>{
+    const ok=await copyText(value);
+    btn.textContent = ok ? '✓ 복사됨' : '복사 실패';
+    if(ok) toast('클립보드에 복사됨');
+    setTimeout(()=>{ btn.textContent='📋 복사'; }, 1800);
+  };
+  row.appendChild(inp); row.appendChild(btn);
+  f.appendChild(row);
+  return f;
+}
+function showPairResult(body, r, title){
+  body.innerHTML='';
+  body.appendChild(el('div','cwd','폰 카메라로 이 QR 을 스캔하면 앱이 열리며 자동 페어링됩니다. 창을 닫으면 다시 볼 수 없습니다(필요하면 🔄 QR 로 다시 만드세요):'));
+  if(r.qr_svg){ const qb=el('div','qrbox'); const im=document.createElement('img');
+    im.src=r.qr_svg; im.alt='pair QR'; qb.appendChild(im); body.appendChild(qb); }
+  if(r.pair_url){ body.appendChild(fieldWithCopy('페어링 링크(외부 PC 는 이걸 붙여넣기)', r.pair_url)); }
+  else { body.appendChild(el('div','cwd','⚠ 공개 앱 주소(SM_APP_URL) 미설정 → 링크 생성 불가. 앱에 아래 값을 수동 입력하세요:'));
+    body.appendChild(field('room', inputEl(r.room||'')));
+    body.appendChild(field('기기 토큰(dev)', inputEl(r.token))); }
+  if(r.client_scoped===false)
+    body.appendChild(el('div','cwd','⚠ 기기 전용 자격 발급에 실패해 공유 토큰 방식으로 만들어졌습니다(컨트롤플레인 확인 필요).'));
+}
+
+async function reissueDevice(d){
+  if(!confirm('"'+d.name+'" 의 QR/링크를 다시 만들까요? 이전 QR 은 즉시 무효가 되며, 그 기기는 새 QR 로 다시 페어링해야 합니다.'))return;
+  try{
+    const r=await T.api('POST','/api/owner/devices/'+d.id+'/reissue',{body:{}});
+    const body=el('div');
+    openModal('🔄 '+d.name+' — 새 QR', body);
+    showPairResult(body, r);
+  }catch(e){ toast('재발급 실패: '+e.message); }
+}
+
+async function addDevice(){
+  const body=el('div');
+  const nm=inputEl(''); nm.placeholder='예: 내 아이폰, 회사 노트북';
+  body.appendChild(field('기기 이름', nm));
+  const go=el('button','btn','＋ 등록 + QR 생성');
+  go.onclick=async()=>{
+    try{ const r=await T.api('POST','/api/owner/devices',{body:{name:nm.value.trim()}});
+      body.innerHTML='';
+      body.appendChild(el('div','cwd','폰 카메라로 이 QR을 스캔하면 앱이 열리며 자동 페어링됩니다. 창을 닫으면 토큰을 다시 볼 수 없습니다:'));
+      if(r.qr_svg){ const qb=el('div','qrbox'); const im=document.createElement('img');
+        im.src=r.qr_svg; im.alt='pair QR'; qb.appendChild(im); body.appendChild(qb); }
+      if(r.pair_url){ body.appendChild(fieldWithCopy('페어링 링크(수동 입력용)', r.pair_url)); }
+      else { body.appendChild(el('div','cwd','⚠ 공개 앱 주소(SM_APP_URL) 미설정 → 링크 생성 불가. 앱에 아래 값을 수동 입력하세요:'));
+        body.appendChild(field('room', inputEl(r.room||'')));
+        body.appendChild(field('기기 토큰(dev)', inputEl(r.token))); }
+    }catch(e){ toast('실패: '+e.message); }
+  };
+  openModal('＋ 새 기기 추가', body, [go]);
+}
+
+// ---- 프로파일(API 정책) 편집 ----
+async function editProfile(s){
+  let data; try{ data=await T.api('GET',`/api/sessions/${s.session_id}/profile`); }
+  catch(e){ toast('프로파일 로드 실패: '+e.message); return; }
+  const p=data.profile||{}, eff=data.effective||{};
+  const body=el('div');
+  const permSel=el('select');
+  ['','plan','acceptEdits','bypassPermissions','default'].forEach(v=>{
+    const o=el('option',null,v||'(기본)'); o.value=v; if((p.permission_mode||'')===v)o.selected=true; permSel.appendChild(o); });
+  const fModel=inputEl(p.model), fBudget=inputEl(p.max_budget_usd),
+        fDenied=inputEl((p.denied_tools||[]).join(', ')), fAllowed=inputEl((p.allowed_tools||[]).join(', ')),
+        fDeny=inputEl((p.deny_patterns||[]).join(' | ')), fPc=inputEl(p.max_prompt_chars), fOc=inputEl(p.max_output_chars);
+  const fSys=el('textarea'); fSys.value=p.system_prompt||'';
+  body.appendChild(field('권한 모드', permSel));
+  body.appendChild(field('모델', fModel));
+  body.appendChild(field('호출당 예산 $ (max budget)', fBudget));
+  body.appendChild(field('차단 도구 (쉼표)', fDenied));
+  body.appendChild(field('허용 도구 화이트리스트 (쉼표, 비우면 전체)', fAllowed));
+  body.appendChild(field('금지 정규식 ( | 로 구분)', fDeny));
+  body.appendChild(field('시스템 프롬프트 추가', fSys));
+  body.appendChild(field('입력 길이 제한', fPc));
+  body.appendChild(field('출력 길이 제한', fOc));
+  body.appendChild(el('div','cwd','실효(전역∩프로파일) 차단도구: '+((eff.denied_tools||[]).join(', ')||'-')));
+  const csv=v=>v.split(',').map(x=>x.trim()).filter(Boolean);
+  const num=v=>{ const n=parseFloat(v); return isNaN(n)?null:n; };
+  const int=v=>{ const n=parseInt(v); return isNaN(n)?null:n; };
+  const save=el('button','btn','저장');
+  save.onclick=async()=>{
+    const payload={ permission_mode:permSel.value||null, model:fModel.value.trim()||null,
+      max_budget_usd:num(fBudget.value), denied_tools:csv(fDenied.value), allowed_tools:csv(fAllowed.value),
+      deny_patterns:fDeny.value.split('|').map(x=>x.trim()).filter(Boolean),
+      system_prompt:fSys.value.trim()||null, max_prompt_chars:int(fPc.value), max_output_chars:int(fOc.value) };
+    try{ await T.api('POST',`/api/sessions/${s.session_id}/profile`,{body:payload});
+      toast('프로파일 저장됨'); closeModal(); }catch(e){ toast('저장 실패: '+e.message); }
+  };
+  const clr=el('button','btn ghost','초기화');
+  clr.onclick=async()=>{ try{ await T.api('POST',`/api/sessions/${s.session_id}/profile`,{body:{}});
+    toast('프로파일 초기화'); closeModal(); }catch(e){ toast('실패: '+e.message); } };
+  openModal('🛡 API 정책 (가드레일) — '+s.session_id.slice(0,8), body, [clr, save]);
+}
+
+// ---- 폴더(cwd) 변경 ----
+function changeCwd(s){
+  const body=el('div'); const inp=inputEl(s.cwd||'');
+  body.appendChild(field('새 작업 폴더 경로', inp));
+  body.appendChild(el('div','cwd','세션 JSONL 의 cwd 를 바꿉니다(원본 대화는 보존). 재개 시 이 경로에서 claude 가 실행됩니다.'));
+  const save=el('button','btn','변경');
+  save.onclick=async()=>{
+    const nc=inp.value.trim(); if(!nc){ toast('경로를 입력하세요'); return; }
+    try{ await T.api('POST',`/api/sessions/${s.session_id}/change-cwd`,{body:{new_cwd:nc,dry_run:false}});
+      toast('폴더 변경됨'); s.cwd=nc; closeModal(); loadList();
+    }catch(e){ toast('변경 실패: '+e.message); }
+  };
+  openModal('📁 폴더(cwd) 변경 — '+s.session_id.slice(0,8), body, [save]);
+}
+
+// ---- 사용량 대시보드 ----
+async function showUsage(){
+  let u; try{ u=await T.api('GET','/api/usage'); }catch(e){ toast('사용량 로드 실패: '+e.message); return; }
+  const money=v=>'$'+(v||0).toFixed(4);
+  const body=el('div');
+  body.appendChild(el('div','cwd',
+    `오늘 ${u.today} · 한도 일일 $${u.caps.daily_usd} / ${u.caps.daily_calls}콜 · 누적 ${u.total_calls}콜 ${money(u.total_cost_usd)}`));
+  const table=(title,rows,cols)=>{
+    body.appendChild(el('h3',null,title));
+    const t=el('table','utable'); const tr=el('tr'); cols.forEach(c=>tr.appendChild(el('th',null,c.h))); t.appendChild(tr);
+    if(!rows||!rows.length){ const r=el('tr'); const td=el('td',null,'없음'); td.colSpan=cols.length; r.appendChild(td); t.appendChild(r); }
+    else rows.forEach(row=>{ const r=el('tr'); cols.forEach(c=>r.appendChild(el('td',null,c.v(row)))); t.appendChild(r); });
+    body.appendChild(t);
+  };
+  table('오늘 토큰별', u.today_by_token, [{h:'토큰',v:r=>r.token},{h:'콜',v:r=>r.calls+''},{h:'비용',v:r=>money(r.usd)}]);
+  table('세션별', u.by_session, [{h:'세션',v:r=>(r.session||'').slice(0,8)},{h:'콜',v:r=>r.calls+''},{h:'비용',v:r=>money(r.usd)}]);
+  table('일자별', u.by_day, [{h:'날짜',v:r=>r.day},{h:'콜',v:r=>r.calls+''},{h:'비용',v:r=>money(r.usd)}]);
+  openModal('📈 API 사용량 / 비용', body);
+}
+
+// ---- 2패널 폭 드래그 조절(데스크톱) ----
+(function initResizer(){
+  const rz=$('#resizer'), main=$('#main'); if(!rz||!main)return;
+  const KEY='sm_listw', MINL=260, MIND=380;
+  const saved=LS.getItem(KEY); if(saved)main.style.setProperty('--list-w',saved);
+  let dragging=false;
+  function ptX(e){ return e.touches&&e.touches[0]?e.touches[0].clientX:e.clientX; }
+  function onMove(e){ if(!dragging)return;
+    const rect=main.getBoundingClientRect();
+    let w=ptX(e)-rect.left;
+    w=Math.max(MINL, Math.min(w, rect.width-MIND-7));   // 7px = 구분선 폭
+    main.style.setProperty('--list-w', Math.round(w)+'px');
+    e.preventDefault();
+  }
+  function stop(){ if(!dragging)return; dragging=false;
+    rz.classList.remove('dragging'); document.body.classList.remove('col-resizing');
+    const v=main.style.getPropertyValue('--list-w'); if(v)LS.setItem(KEY,v.trim());
+    window.removeEventListener('mousemove',onMove); window.removeEventListener('mouseup',stop);
+    window.removeEventListener('touchmove',onMove); window.removeEventListener('touchend',stop);
+  }
+  function start(e){ dragging=true; rz.classList.add('dragging');
+    document.body.classList.add('col-resizing');
+    window.addEventListener('mousemove',onMove); window.addEventListener('mouseup',stop);
+    window.addEventListener('touchmove',onMove,{passive:false}); window.addEventListener('touchend',stop);
+    e.preventDefault();
+  }
+  rz.addEventListener('mousedown',start);
+  rz.addEventListener('touchstart',start,{passive:false});
+  rz.addEventListener('dblclick',()=>{ main.style.removeProperty('--list-w'); LS.removeItem(KEY); });
+})();
+
+// ---- 이 기기의 접속 자격이 해제됐을 때: 놓칠 수 없는 안내 + 재페어링 유도 ----
+// (로컬 웹에서 기기를 삭제하거나 🔄 QR 로 재발급하면 이 기기의 자격이 즉시 무효가 된다)
+function showAuthLost(err){
+  if(window._authLost) return;          // 요청마다 반복해서 뜨지 않게
+  window._authLost=true;
+  try{ conn._stopped=true; conn.logout&&conn.logout(); }catch(e){}   // 무의미한 재접속 중단
+  const body=el('div');
+  const line=(t)=>body.appendChild(el('div','cwd',t));
+  line(err==='auth_invalid'
+    ? '이 기기의 접속 자격이 해제되었습니다.'
+    : '이 기기가 더 이상 등록되어 있지 않습니다.');
+  line('PC 의 로컬 웹에서 이 기기를 삭제했거나, 🔄 QR 로 자격을 다시 발급한 경우입니다. 이전 QR·링크는 무효가 됩니다.');
+  line('다시 쓰려면: PC 로컬 웹 → 📱 → 해당 기기의 🔄 QR (또는 ＋새 기기 추가) → 새 QR 스캔.');
+  const b=el('button','btn','🔗 새 QR/링크로 다시 연결');
+  b.style.marginTop='10px';
+  b.onclick=()=>{ clearPairing(false);   // 현재 PC 자격만 정리(다른 PC 목록은 보존)
+    closeModal(); location.reload(); };
+  body.appendChild(b);
+  const keep=pcsLoad().length>1;
+  if(keep) body.appendChild(el('div','cwd','다른 PC 는 목록에 그대로 남아 있어 계속 쓸 수 있습니다.'));
+  openModal('🔒 접속 자격 해제됨', body);
+}
+
+// ---- 페어링 화면의 '저장된 PC' 목록 ----
+// 연결 해제 후엔 앱 헤더(🖧)에 못 가므로, 여기서도 고를 수 있어야 한다.
+function renderPairPcs(){
+  const host=$('#p-pcs'); if(!host) return;
+  host.innerHTML='';
+  const list=pcsLoad().sort((a,b)=>(b.last||0)-(a.last||0));
+  if(!list.length) return;
+  host.appendChild(el('label',null,'저장된 PC'));
+  const wrap=el('div'); wrap.style.cssText='display:flex;flex-direction:column;gap:8px;margin:8px 0 18px';
+  list.forEach(pc=>{
+    const b=el('button','btn ghost','🖥 '+pcName(pc));
+    b.style.cssText='justify-content:space-between;text-align:left';
+    b.onclick=async()=>{
+      pcsActivate(pc.room);
+      $('#p-err').textContent=''; b.textContent='연결 중… '+pcName(pc);
+      conn._stopped=false; conn._retry=0;
+      try{ await conn.connect(pc.room, LS.getItem('sm_token')||'');
+           LS.setItem('sm_room',pc.room); T=relayT; enterApp(); refreshPcsBtn(); }
+      catch(e){ $('#p-err').textContent=e.message; b.textContent='🖥 '+pcName(pc); }
+    };
+    wrap.appendChild(b);
+  });
+  host.appendChild(wrap);
+  host.appendChild(el('div','cwd','새 PC 를 추가하려면 아래에 페어링 링크를 붙여넣거나 QR 을 스캔하세요.'));
+}
+
+// ---- 연결 해제 / 완전 로그아웃 ----
+// 주의: 어느 쪽도 PC 의 클로드 세션(~/.claude/projects)을 건드리지 않는다.
+//       브라우저에 저장된 '접속 자격'만 지운다.
+const PAIR_KEYS_ACTIVE=['sm_room','sm_token','sm_cs','sm_cp','sm_devtoken','sm_cjwt','sm_grace'];
+const PAIR_KEYS_ALL=PAIR_KEYS_ACTIVE.concat(['sm_pcs','sm_hint_done']);
+function clearPairing(all){
+  (all?PAIR_KEYS_ALL:PAIR_KEYS_ACTIVE).forEach(k=>LS.removeItem(k));
+  try{ conn.devToken=''; }catch(e){}
+}
+function showLogoutChoice(){
+  const n=pcsLoad().length;
+  const body=el('div');
+  const line=(t)=>body.appendChild(el('div','cwd',t));
+  line('PC 에 저장된 클로드 세션은 삭제되지 않습니다. 이 브라우저에 저장된 접속 정보만 지웁니다.');
+  const b1=el('button','btn','🔌 연결 해제');
+  b1.onclick=()=>{ clearPairing(false); closeModal();
+    toast('연결을 해제했습니다'); setTimeout(()=>location.reload(),400); };
+  const b1n=el('div','cwd','현재 PC 접속만 끊습니다. 페어링해 둔 PC 목록('+n+'대)은 남아 있어 다시 고르면 바로 연결됩니다.');
+  b1n.style.margin='6px 0 12px';
+  const b2=el('button','btn danger','🧹 이 기기에서 완전 로그아웃');
+  b2.onclick=()=>{
+    if(!confirm('이 브라우저에 저장된 모든 접속 자격과 PC 목록('+n+'대)을 지웁니다. 다시 쓰려면 QR 을 새로 스캔해야 합니다. 계속할까요?'))return;
+    clearPairing(true); closeModal();
+    toast('모두 지웠습니다'); setTimeout(()=>location.reload(),400); };
+  const b2n=el('div','cwd','폰을 양도·분실하거나 남의 기기에서 썼다면 이걸 쓰세요. 저장된 자격이 전부 사라집니다.');
+  b2n.style.margin='6px 0 0';
+  body.appendChild(b1); body.appendChild(b1n);
+  body.appendChild(b2); body.appendChild(b2n);
+  openModal('⏻ 연결 해제', body);
+}
+
+// ---- PC 전환 (여러 PC 를 페어링해 두고 골라 접속) ----
+function refreshPcsBtn(){
+  const b=$('#btn-pcs'); if(!b) return;
+  const list=pcsLoad();
+  if(MODE!=='relay'||list.length===0){ b.classList.add('hidden'); return; }
+  b.classList.remove('hidden');
+  const cur=list.find(x=>x.room===LS.getItem('sm_room'));
+  b.title='PC 전환'+(cur?(' — 현재: '+pcName(cur)):'')+` (${list.length}대)`;
+}
+function showPcs(){
+  const list=pcsLoad(), curRoom=LS.getItem('sm_room');
+  const body=el('div');
+  body.appendChild(el('div','cwd','페어링해 둔 PC 목록입니다. 선택하면 그 PC 로 전환합니다.'));
+  const wrap=el('div'); wrap.style.marginTop='8px';
+  list.sort((a,b)=>(b.last||0)-(a.last||0)).forEach(pc=>{
+    const row=el('div','devrow'); const info=el('div');
+    const isCur=pc.room===curRoom;
+    info.appendChild(el('div','devname',(isCur?'✅ ':'🖥 ')+pcName(pc)));
+    const meta=[pc.room.slice(0,14)+'…'];
+    if(pc.last) meta.push('최근 '+relTs(Math.floor(pc.last/1000)));
+    if(!(pc.cs&&pc.cp)) meta.push('구 방식(공유토큰)');
+    info.appendChild(el('div','devmeta',meta.join(' · ')));
+    row.appendChild(info);
+    if(!isCur){
+      const go=el('button','btn ghost sm','전환');
+      go.onclick=async()=>{
+        pcsActivate(pc.room); closeModal();
+        toast(pcName(pc)+' 로 전환 중…');
+        try{ conn.logout(); }catch(e){}
+        conn._stopped=false; conn._retry=0;
+        try{ await conn.connect(pc.room, LS.getItem('sm_token')||'');
+             T=relayT; enterApp(); refreshPcsBtn(); toast(pcName(pc)+' 연결됨'); }
+        catch(e){ toast('전환 실패: '+e.message); }
+      };
+      row.appendChild(go);
+    }
+    const rn=el('button','btn ghost sm','✎');
+    rn.title='이름 변경';
+    rn.onclick=()=>{ const n=prompt('이 PC 의 표시 이름', pcName(pc));
+      if(n!==null){ pc.name=n.trim(); pcsUpsert(pc); showPcs(); refreshPcsBtn(); } };
+    row.appendChild(rn);
+    const del=el('button','btn ghost sm','🗑');
+    del.title='목록에서 제거';
+    del.onclick=()=>{ if(!confirm('"'+pcName(pc)+'" 을 목록에서 제거할까요? (PC 자체는 그대로이며, 다시 페어링하면 됩니다)'))return;
+      pcsRemove(pc.room); showPcs(); refreshPcsBtn(); };
+    row.appendChild(del);
+    wrap.appendChild(row);
+  });
+  if(!list.length) wrap.appendChild(el('div','cwd','아직 페어링한 PC 가 없습니다.'));
+  body.appendChild(wrap);
+  body.appendChild(el('div','cwd','다른 PC 를 추가하려면 그 PC 의 로컬 웹에서 📱 → ＋새 기기 추가 로 QR 을 만들어 스캔하세요.'));
+  openModal('🖧 내 PC', body);
+}
+
+// ---- 첫 실행 안내: 등록 기기가 없으면 '폰 연결' 방법을 알려준다 ----
+async function maybeShowFirstRunHint(){
+  if(MODE!=='local') return;
+  if(LS.getItem('sm_hint_done')==='1') return;
+  let st; try{ st=await T.api('GET','/api/owner/devices'); }catch(e){ return; }
+  if((st.total||0)>0){ LS.setItem('sm_hint_done','1'); return; }
+  const b=el('div','firstrun');
+  b.innerHTML='<b>📱 폰에서도 쓰려면</b> 기기를 하나 등록하세요. '+
+              '아래 버튼을 누르면 QR이 나옵니다 — 폰 카메라로 스캔하면 끝(가입·토큰 입력 없음).';
+  const row=el('div'); row.style.cssText='display:flex;gap:8px;margin-top:10px;flex-wrap:wrap';
+  const go=el('button','btn','＋ 새 기기 추가');
+  go.style.flex='1'; go.onclick=()=>{ b.remove(); addDevice(); };
+  const later=el('button','btn ghost','나중에');
+  later.onclick=()=>{ LS.setItem('sm_hint_done','1'); b.remove(); };
+  row.appendChild(go); row.appendChild(later); b.appendChild(row);
+  const host=paneList(); if(host) host.insertBefore(b, host.firstChild);
+}
+
+// ---- 부팅 ----
+conn.onstatus=(on,peer)=>setStatus(on,peer);
+conn.onauth=(ok,err)=>{
+  if(ok){ window._authLost=false; return; }
+  if(err==='auth_required'||err==='auth_invalid') showAuthLost(err);
+};
+$('#btn-security').onclick=showSecurity;
+$('#btn-devices').onclick=showDevices;
+$('#btn-pcs').onclick=showPcs;
+$('#btn-import').onclick=importSession;
+$('#btn-usage').onclick=showUsage;
+$('#btn-refresh').onclick=()=>loadList();
+$('#btn-logout').onclick=()=>T.logout();
+function enterApp(){ $('#pair').classList.add('hidden'); $('#app').classList.remove('hidden');
+  $('#app').setAttribute('data-view','list'); loadList(); }
+$('#p-go').onclick=doPair;
+function doPair(){
+  // ① 페어링 링크를 붙여넣었으면 거기서 값을 뽑는다(권장 경로)
+  const link=($('#p-link')?$('#p-link').value:'').trim();
+  let room='', token='', cs='', cp='', dev='';
+  if(link){
+    let q=null;
+    try{ q=new URL(link).searchParams; }
+    catch(e){ try{ q=new URLSearchParams(link.replace(/^[^?]*\?/,'')); }catch(_){ q=null; } }
+    if(!q||!q.get('room')){ $('#p-err').textContent='페어링 링크를 인식하지 못했습니다. 전체 링크를 복사해 붙여넣으세요.'; return; }
+    room=q.get('room')||''; cs=q.get('cs')||''; cp=q.get('cp')||'';
+    dev=q.get('dev')||''; token=q.get('token')||'';
+  }else{
+    room=$('#p-room').value.trim();
+    token=$('#p-token').value.trim();
+    cp=($('#p-cp')?$('#p-cp').value.trim():'');
+    if(token.startsWith('cli_')){ cs=token; token=''; }
+  }
+  if(!room||!(cs||token)){ $('#p-err').textContent='페어링 링크를 붙여넣거나, 직접 입력을 채워주세요'; return; }
+  if(cs&&!cp){ $('#p-err').textContent='cli_ 자격을 쓰려면 CLIENT PUBLIC ID(cpub_…)도 필요합니다'; return; }
+
+  // 자격 저장 → connect() 가 cs 를 단기 JWT 로 교환해 사용한다
+  if(dev){ LS.setItem('sm_devtoken',dev); conn.devToken=dev; }
+  if(cs&&cp){ LS.setItem('sm_cs',cs); LS.setItem('sm_cp',cp); LS.removeItem('sm_cjwt'); }
+  else { LS.removeItem('sm_cs'); LS.removeItem('sm_cp'); LS.removeItem('sm_cjwt'); }
+
+  $('#p-err').textContent=''; $('#p-go').textContent='연결 중…';
+  conn.connect(room,token).then(()=>{
+    LS.setItem('sm_room',room);
+    if(token) LS.setItem('sm_token',token); else LS.removeItem('sm_token');
+    pcsUpsert({room, cs, cp, dev});
+    T=relayT; enterApp(); refreshPcsBtn();
+  }).catch(e=>{ $('#p-err').textContent=e.message; $('#p-go').textContent='연결'; });
+}
+
+// ---- 버전 표기 -------------------------------------------------------------
+// 로컬: 이 PC 설치본 버전 + 새 버전 여부(update/status). 원격: 접속한 PC 의 버전(auth 응답).
+function showVer(cur, latest){
+  const b=$('#ver'); if(!b||!cur) return;
+  b.classList.remove('hidden');
+  if(latest){
+    b.textContent=`v${cur} → ${latest}`;
+    b.classList.add('upd');
+    b.title='새 버전이 있습니다. 클릭하면 지금 업데이트.';
+    // 원격에선 적용이 불가(로컬 전용)하니 안내만, 로컬에선 실제 버튼.
+    b.onclick=()=> (MODE==='local' ? showUpdateApply(cur,latest) : showUpdateInfo(cur,latest));
+  } else {
+    b.textContent='v'+cur; b.classList.remove('upd'); b.title='ClewPath Host 버전'; b.onclick=null;
+  }
+}
+// 원격/폰: 적용은 로컬에서만 되므로 방법만 안내
+function showUpdateInfo(cur,latest){
+  const body=el('div');
+  body.appendChild(el('p',null,`새 버전 ${latest} 이 나왔습니다 (현재 v${cur}).`));
+  body.appendChild(el('p',null,'업데이트는 그 PC의 로컬 웹(127.0.0.1:5100)에서 "지금 업데이트"를 누르거나, PowerShell 에서 설치 명령을 다시 실행하면 됩니다.'));
+  const c=el('div','cwd','irm https://clewpath.pyongso.com/get | iex'); c.style.userSelect='all'; body.appendChild(c);
+  openModal('업데이트', body, []);
+}
+// 로컬: 실제 적용 버튼
+function showUpdateApply(cur,latest){
+  const body=el('div');
+  body.appendChild(el('p',null,`새 버전 ${latest} 이 나왔습니다 (현재 v${cur}).`));
+  body.appendChild(el('p',null,'서명·해시를 검증한 뒤 적용하고, 실패하면 자동으로 이전 버전으로 되돌립니다. 설정·기기·페어링은 그대로 유지됩니다.'));
+  const status=el('div'); status.style.cssText='margin-top:10px;color:var(--ink2)'; body.appendChild(status);
+  const go=el('button','btn full',`지금 v${latest} 로 업데이트`);
+  go.onclick=async()=>{
+    go.disabled=true; go.textContent='적용 중…'; status.textContent='서버가 새 버전을 받아 검증하고 있습니다…';
+    try{
+      const r=await fetch(`${APIBASE}/api/owner/update/apply`,{method:'POST'});
+      const j=await r.json().catch(()=>({}));
+      if(r.ok && j.applied){
+        status.innerHTML='적용을 시작했습니다. 서비스가 잠시 재기동됩니다 — <b>30초 뒤 자동으로 새로고침</b>됩니다.';
+        go.textContent='재기동 대기…';
+        setTimeout(()=>location.reload(), 30000);
+      } else {
+        go.disabled=false; go.textContent=`지금 v${latest} 로 업데이트`;
+        status.textContent='적용하지 못했습니다: '+(j.error||j.reason||'알 수 없는 오류');
+      }
+    }catch(e){
+      // apply 응답 직후 서버가 스스로 내려가면 fetch 가 끊길 수 있다 — 이것도 정상 진행 신호
+      status.innerHTML='요청을 보냈습니다. 서비스가 재기동 중일 수 있습니다 — <b>30초 뒤 새로고침</b>하세요.';
+      setTimeout(()=>location.reload(), 30000);
+    }
+  };
+  openModal('업데이트', body, [go]);
+}
+async function refreshVer(){
+  if(MODE!=='local') return;
+  try{
+    const r=await fetch(`${APIBASE}/api/owner/update/status`); if(!r.ok) return;
+    const s=await r.json();
+    showVer(s.current, (s.available&&s.latest)?s.latest:null);
+  }catch(e){}
+}
+
+// 모드별 부팅: local=페어링 없이 바로, relay=room/token 페어링
+if(MODE==='local'){
+  $('#btn-logout').classList.add('hidden');      // 로컬은 로그아웃 개념 없음
+  $('#btn-devices').classList.remove('hidden');  // 기기 관리는 로컬 전용 → 로컬에서만 노출
+  refreshConnBadge();                            // 접속 인증 모드 배지(JWT/fallback)
+  setInterval(refreshConnBadge, 60000);
+  refreshVer();                                  // 버전 + 새 버전 알림
+  setInterval(refreshVer, 6*3600*1000);
+  setStatus(true,true);
+  enterApp();
+  maybeShowFirstRunHint();
+}else{
+  // 원격(릴레이)에서는 2FA 패널을 숨긴다 — 설정 변경은 로컬 전용이라 상태 표시뿐이고,
+  // 유일한 실행 동작이던 'grace 해제'는 ⏻ 연결 해제가 sm_grace 를 지우므로 대체된다.
+  $('#btn-security').classList.add('hidden');
+  const p=new URLSearchParams(location.search);
+  // 페어링 딥링크(QR): ?room=&token=&dev= → 저장 후 주소창에서 비밀 제거
+  const dev=p.get('dev');
+  if(dev){ LS.setItem('sm_devtoken',dev); conn.devToken=dev; }
+  // 기기 전용 client 자격증명(공유 토큰 대체). 있으면 저장하고 JWT 로 교환해 쓴다.
+  const cs=p.get('cs'), cpid=p.get('cp');
+  if(cs&&cpid){ LS.setItem('sm_cs',cs); LS.setItem('sm_cp',cpid); LS.removeItem('sm_cjwt'); }
+  if(p.get('room')) pcsUpsert({room:p.get('room'), cs:cs||'', cp:cpid||'', dev:dev||''});
+  const room=p.get('room')||LS.getItem('sm_room')||'';
+  const token=p.get('token')||LS.getItem('sm_token')||'';
+  if(p.get('dev')||p.get('token')||p.get('cs')){   // 주소창에서 비밀 파라미터 제거(캐시/공유 방지)
+    try{ history.replaceState(null,'',location.pathname); }catch(e){}
+  }
+  $('#p-room').value=room; $('#p-token').value=token;
+  // 저장된 자격이 있으면 자동 접속(기기 자격 cs 또는 구 공유 토큰)
+  const hasCs=!!(LS.getItem('sm_cs')&&LS.getItem('sm_cp'));
+  renderPairPcs();                       // 저장된 PC 가 있으면 페어링 화면에서 바로 고를 수 있게
+  if(room&&(hasCs||token)){
+    $('#p-err').textContent=''; $('#p-go').textContent='연결 중…';
+    conn.connect(room,token).then(()=>{ LS.setItem('sm_room',room); T=relayT; enterApp(); refreshPcsBtn(); })
+      .catch(e=>{ $('#p-err').textContent=e.message; $('#p-go').textContent='연결'; });
+  }
+}
+</script>
+</body>
+</html>

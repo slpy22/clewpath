@@ -1,0 +1,27 @@
+# ── 절대 커밋하면 안 되는 것 ────────────────────────────────
+# 릴리스 서명 개인키. 이게 새면 모든 사용자 PC 에 임의 코드를 밀어넣을 수 있다.
+release-keys/
+*.pem
+
+# 운영자의 라이브 비밀이 들어있는 기동 스크립트
+start-public.ps1
+start-relay.ps1
+start-connector.ps1
+.env
+*.env
+
+# ── 산출물 ──────────────────────────────────────────────────
+.venv/
+dist/
+build/
+__pycache__/
+*.pyc
+*.log
+*.db
+.pytest_cache/
+
+# 빌드 메타데이터
+*.egg-info/
+
+# 서버(컨트롤플레인·릴레이)는 별도 private 저장소(clewpath-server, ../007_clewpath_server)
+# 로 분리됐다 — 이 저장소는 Host 전용이라 서버 파일 자체가 존재하지 않는다.

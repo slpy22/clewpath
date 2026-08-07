@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>세션 재개 (웹 터미널)</title>
+<link rel="stylesheet" href="static/vendor/xterm.min.css">
+<style>
+  :root { --bg:#0d1117; --bar:#161b22; --border:#30363d; --muted:#8b949e; --accent:#58a6ff; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:#e6edf3;
+    font-family:ui-sans-serif,system-ui,"Segoe UI","Malgun Gothic",sans-serif; }
+  body { display:flex; flex-direction:column; }
+  .bar { background:var(--bar); border-bottom:1px solid var(--border);
+    padding:8px 14px; display:flex; align-items:center; gap:12px; font-size:13px; flex:0 0 auto; }
+  .bar .dot { width:9px; height:9px; border-radius:50%; background:var(--muted); }
+  .bar .dot.on { background:#3fb950; }
+  .bar .dot.off { background:#f85149; }
+  .bar .title { font-weight:600; }
+  .bar .cwd { color:var(--muted); font-family:ui-monospace,monospace; font-size:12px;
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:50vw; }
+  .bar .sp { margin-left:auto; }
+  .bar button { background:#21262d; color:#e6edf3; border:1px solid var(--border);
+    border-radius:6px; padding:5px 10px; font-size:12px; cursor:pointer; }
+  .bar button:hover { border-color:var(--accent); }
+  #term { flex:1 1 auto; padding:6px 8px; overflow:hidden; }
+  .term-wrap { width:100%; height:100%; }
+</style>
+</head>
+<body>
+  <div class="bar">
+    <span class="dot" id="dot"></span>
+    <span class="title">세션 재개</span>
+    <span class="mono" id="sid" style="color:var(--accent);font-family:ui-monospace,monospace"></span>
+    <span class="cwd" id="cwd"></span>
+    <span class="sp"></span>
+    <span id="status" style="color:var(--muted)">연결 중…</span>
+    <button id="delfork" style="display:none;background:#5a1e1e;border-color:#f85149;color:#ffb4b4"
+            onclick="deleteFork()">🗑 포크 삭제 후 닫기</button>
+    <button onclick="location.reload()">재연결</button>
+  </div>
+  <div id="term"><div class="term-wrap" id="termwrap"></div></div>
+
+  <script src="static/vendor/xterm.min.js"></script>
+  <script src="static/vendor/addon-fit.min.js"></script>
+  <script>
+  // 현재 URL에서 prefix 자동 계산 ("/session_mgr/terminal" → "/session_mgr", "/terminal" → "")
+  const BASE = location.pathname.replace(/\/terminal\/?$/, "");
+  const qs = new URLSearchParams(location.search);
+  const id = qs.get("id") || "";
+  const skip = (qs.get("skip") ?? "1") === "1" ? "1" : "0";  // 기본 ON
+  const fork = qs.get("fork") || "";  // 있으면 일회용 fork 모드
+  document.getElementById("sid").textContent = id.slice(0,8);
+  document.title = (fork?"포크: ":"재개: ") + id.slice(0,8);
+  document.querySelector(".bar .title").textContent =
+    fork ? "🔱 일회용 포크" : (skip==="1" ? "세션 재개 (권한확인 skip)" : "세션 재개");
+  if(fork){
+    const b=document.getElementById("delfork");
+    if(b) b.style.display="";
+  }
+
+  const dot = document.getElementById("dot");
+  const statusEl = document.getElementById("status");
+
+  const term = new Terminal({
+    fontFamily: 'ui-monospace, "Cascadia Code", "D2Coding", Consolas, monospace',
+    fontSize: 13, cursorBlink: true, scrollback: 10000,
+    theme: { background:"#0d1117", foreground:"#e6edf3", cursor:"#58a6ff" },
+  });
+  const fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+  const termwrap = document.getElementById("termwrap");
+  term.open(termwrap);
+  // fit.fit() 을 여기서 한 번만 부르면 iframe 레이아웃이 아직 0높이라 작은 그리드로 굳는다.
+  // 컨테이너가 이미 최종 크기여도 xterm 이 처음에 작은 그리드로 잡히면 ResizeObserver 가
+  // 안 불릴 수 있으므로, 레이아웃 정착 시점을 여러 신호로 확실히 잡는다:
+  //  - double rAF: 다음 페인트까지 기다려 레이아웃이 확정된 뒤 fit
+  //  - window load: iframe 의 하위리소스·폰트까지 전부 로드된 뒤(가장 확실) 다시 fit
+  requestAnimationFrame(function(){ requestAnimationFrame(function(){ sendResize(); }); });
+  window.addEventListener("load", function(){ sendResize(); });
+
+  // 모바일: 터치 슬라이드 → xterm 뷰포트 직접 스크롤(과거 이력 보기)
+  (function(){
+    const vp=()=>termwrap.querySelector(".xterm-viewport");
+    let ty=null, startTop=0;
+    termwrap.addEventListener("touchstart", e=>{
+      if(e.touches.length===1){ ty=e.touches[0].clientY; const v=vp(); startTop=v?v.scrollTop:0; }
+    }, {passive:true, capture:true});
+    termwrap.addEventListener("touchmove", e=>{
+      if(ty==null||e.touches.length!==1) return;
+      const v=vp(); if(!v) return;
+      v.scrollTop = startTop + (ty - e.touches[0].clientY);
+      e.preventDefault(); e.stopPropagation();
+    }, {passive:false, capture:true});
+    termwrap.addEventListener("touchend", ()=>{ ty=null; }, {passive:true, capture:true});
+  })();
+
+  // cwd 표시(참고용)
+  fetch(`${BASE}/api/sessions/${id}/resume-command`).then(r=>r.json())
+    .then(d=>{ if(d.cwd) document.getElementById("cwd").textContent = d.cwd; })
+    .catch(()=>{});
+
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  const ws = new WebSocket(`${proto}://${location.host}${BASE}/ws/terminal/${id}?skip=${skip}`
+    + (fork ? "&fork=" + encodeURIComponent(fork) : ""));
+
+  async function deleteFork(){
+    if(!fork) return;
+    const b=document.getElementById("delfork"); if(b){ b.disabled=true; b.textContent="삭제 중…"; }
+    try{ ws.close(); }catch(_){}
+    await new Promise(r=>setTimeout(r,700));  // claude 프로세스 종료 대기(파일 잠금 해제)
+    try{
+      await fetch(`${BASE}/api/sessions/${encodeURIComponent(fork)}/delete`,
+        {method:"POST", headers:{"Content-Type":"application/json"},
+         body:JSON.stringify({dry_run:false})});
+      term.write("\r\n\x1b[33m── 포크가 삭제되었습니다. 원본은 그대로입니다. 이 탭을 닫으세요. ──\x1b[0m\r\n");
+    }catch(e){
+      term.write("\r\n\x1b[31m포크 삭제 실패: "+e.message+"\x1b[0m\r\n");
+    }
+    try{ window.close(); }catch(_){}
+  }
+  window.deleteFork = deleteFork;
+
+  let _lastFit = "";
+  function sendResize(){
+    try { fit.fit(); } catch(_) {}
+    // 크기가 실제로 바뀐 경우에만 백엔드에 통지(ResizeObserver 가 자주 불려도 과다 전송 방지)
+    const dim = term.cols + "x" + term.rows;
+    if (ws.readyState === 1 && dim !== _lastFit) {
+      _lastFit = dim;
+      ws.send(JSON.stringify({type:"resize", cols:term.cols, rows:term.rows}));
+    }
+  }
+
+  // 컨테이너가 실제 크기를 얻거나 바뀔 때마다 채운다 — iframe 삽입/패널 전환/창 리사이즈 모두 커버.
+  if (window.ResizeObserver) {
+    new ResizeObserver(() => sendResize()).observe(document.getElementById("term"));
+  }
+  // 웹폰트가 늦게 로드되면 셀 크기가 바뀌므로 준비 후 한 번 더.
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(sendResize);
+  // 초기 레이아웃 정착 보증(ResizeObserver 미지원 환경 대비).
+  setTimeout(sendResize, 60); setTimeout(sendResize, 300);
+
+  ws.onopen = () => {
+    dot.className = "dot on"; statusEl.textContent = "연결됨";
+    sendResize(); term.focus();
+  };
+  ws.onmessage = (e) => { term.write(e.data); };
+  ws.onclose = () => {
+    dot.className = "dot off"; statusEl.textContent = "연결 종료";
+    term.write("\r\n\x1b[90m── 연결이 종료되었습니다. '재연결' 또는 탭을 닫으세요. ──\x1b[0m\r\n");
+  };
+  ws.onerror = () => { dot.className = "dot off"; statusEl.textContent = "오류"; };
+
+  term.onData(d => { if (ws.readyState === 1) ws.send(JSON.stringify({type:"input", data:d})); });
+
+  let rz; window.addEventListener("resize", () => { clearTimeout(rz); rz=setTimeout(sendResize,120); });
+  </script>
+</body>
+</html>

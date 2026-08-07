@@ -1,0 +1,51 @@
+# 빌드 백엔드를 명시한다 — 안 쓰면 PEP 517 기본값(setuptools 레거시 경로)으로
+# 떨어져서 pip / uv 가 서로 다르게 해석할 수 있다. 설치 재현성을 위해 못 박는다.
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "clewpath-host"
+version = "0.3.10"
+description = "ClewPath Host — 내 PC의 클로드 코드 세션으로 돌아가는 길. 폰·웹에서 이어쓰기."
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+# 사용자 설치본(session_manager)이 실제로 import 하는 것만 둔다.
+# DB/암호 라이브러리는 서버(컨트롤플레인·릴레이) 전용이라 [server] 로 분리했다.
+# — 안 나누면 모든 사용자가 Postgres 드라이버까지 받는다(실측 63MB → 26MB).
+dependencies = [
+    "fastapi>=0.115.0",          # 로컬 웹 API
+    "uvicorn>=0.34.0",           # ASGI 서버
+    "python-multipart>=0.0.9",   # import/업로드 폼
+    "websockets>=13.0",          # 릴레이 아웃바운드
+    "httpx>=0.27.0",             # 컨트롤플레인 호출
+    "segno>=1.6.0",              # 페어링 QR
+    "pywinpty>=2.0.0 ; platform_system == 'Windows'",   # 웹터미널(ConPTY)
+    # 자동 업데이트의 릴리스 서명 검증(EdDSA). 실측 +10.9MB 인데 왜 코어에 두는가:
+    # 업데이트는 이 PC 에서 임의 코드를 실행시키는 통로다. 검증 없이 받으면
+    # 배포처가 한 번 뚫릴 때 전 사용자 PC 가 같이 넘어간다. 그 대가로는 싸다.
+    "pyjwt>=2.8.0",
+    "cryptography>=42.0.0",
+]
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.0.0"]
+dev = [
+    "pytest>=8.0.0",
+    "coverage>=7.0.0",
+]
+
+# 설치하면 아래 명령이 생긴다 (사용자 배포 서비스 진입점):
+#   clewpath-host       사용자 PC 본체(로컬 웹 + 커넥터). SM_RELAY_* 있으면 릴레이로 아웃바운드.
+#   clewpath-connector  커넥터만 별도 프로세스로 (분리 배포 시).
+# 서버(컨트롤플레인·릴레이) 진입점은 별도 private 저장소(clewpath-server)로 분리됐다.
+[project.scripts]
+clewpath-host = "session_manager.server:main"
+clewpath-connector = "session_manager.connector:main"
+
+[tool.setuptools.packages.find]
+include = ["session_manager*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
