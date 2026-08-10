@@ -813,9 +813,23 @@ def create_app() -> FastAPI:
                                     on_finish=_finish)
 
     # ---- 외부 API v1: 세션 목록 조회 (HTTP, 토큰 인증) ----
+    # ---- Claude 훅 이벤트 수신 (루프백 전용 - 인증 미들웨어가 로컬은 통과) ----
+    @app.post("/api/hooks/event")
+    async def hooks_event(request: Request):
+        from session_manager import hooks
+        try:
+            payload = await request.json()
+        except Exception:  # noqa: BLE001
+            return JSONResponse({"error": "bad_json"}, status_code=400)
+        if isinstance(payload, dict):
+            hooks.update_from_event(payload)
+        return {"ok": True}
+
     @app.get("/api/v1/sessions")
     def api_v1_sessions(q: str | None = None, label: str | None = None,
                         limit: int = 0):
+        from session_manager import hooks
+        runtime = hooks.status_map()   # 훅이 채운 세션별 '지금' 상태
         sessions = scanner.scan_all()
         recs = labels.all_records()  # 라벨 1회 로드
         out = []
@@ -847,6 +861,8 @@ def create_app() -> FastAPI:
                 "mtime": s.mtime,
                 "labels": rec.get("labels", []),
                 "label_name": rec.get("name"),
+                # 훅 기반 실시간 상태(없으면 None). 신선도 판정은 화면 쪽 책임.
+                "runtime": runtime.get(s.session_id),
             })
         out.sort(key=lambda x: x["ended_at"] or "", reverse=True)
         if limit and limit > 0:
@@ -1080,6 +1096,14 @@ def main():
         print("[auth] password gate OFF - local only. Set SM_PASSWORD before public exposure.")
     print(f"[serve] http://{host}:{port}")
     _write_runtime(host, port)
+    # Claude 훅 등록 - 세션 상태(권한대기/작업중/턴종료)를 구조화 이벤트로 받는다.
+    # 실패해도 기동은 계속(상태 뱃지만 없는 상태로 동작).
+    if appconfig.get_bool("hooks", "auto_register", True):
+        try:
+            from session_manager import hooks
+            hooks.ensure_registered(port)
+        except Exception as e:  # noqa: BLE001
+            print(f"[hooks] 등록 실패(기동은 계속): {e}", flush=True)
     # uvicorn.run() 대신 Server 를 직접 만든다 — 업데이트 적용 때 should_exit 로
     # 스스로 내려가려면 인스턴스를 붙잡고 있어야 한다.
     global _SERVER

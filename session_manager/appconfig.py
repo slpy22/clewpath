@@ -213,6 +213,12 @@ apply_on_restart = true
 # true 로 두면 재기동을 기다리지 않고 확인 즉시 설치·재시작합니다(주기 백그라운드).
 # 기본이 false 인 이유: 작업 도중 예고 없이 재기동되면 놀랄 수 있어서.
 auto_apply = false
+
+[hooks]
+# Claude Code 훅을 ~/.claude/settings.json 에 등록해 세션 상태(작업중/권한대기/
+# 턴종료)를 실시간으로 받습니다. 기존 훅은 보존하며 병합만 합니다.
+# false 로 두면 등록하지 않습니다(상태 뱃지·알림 기능이 꺼집니다).
+auto_register = true
 """
 
 
