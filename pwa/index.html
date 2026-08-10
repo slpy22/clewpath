@@ -262,8 +262,8 @@
   /* ---- 데스크톱(≥880px): master-detail 2-pane ---- */
   @media (min-width:880px){
     body{background:var(--surface2)}
-    #app{max-width:1280px;margin:0 auto;background:var(--bg);
-      border-left:1px solid var(--line);border-right:1px solid var(--line)}
+    /* 데스크톱: 클라이언트 영역 가로 전체 사용(좌우 여백 없음). */
+    #app{width:100%;background:var(--bg)}
     #pair{max-width:460px}
     /* 좌(목록) + 우(상세) 동시 표시. 모바일용 한-화면 규칙은 무효화 */
     #main{display:grid;grid-template-columns:var(--list-w,350px) 7px 1fr;grid-template-rows:minmax(0,1fr)}

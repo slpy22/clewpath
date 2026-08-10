@@ -10,6 +10,9 @@ start-connector.ps1
 .env
 *.env
 
+# 운영자 PC 전용 배포 런처(start-hidden.vbs 등) — 사용자 설치는 install.ps1 이 담당
+ops/deploy/
+
 # ── 산출물 ──────────────────────────────────────────────────
 .venv/
 dist/
