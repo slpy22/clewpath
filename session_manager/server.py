@@ -505,8 +505,15 @@ def create_app() -> FastAPI:
     # 확인은 누구나(로컬 UI), 적용은 **로컬 전용**이다. 폰에서 원격으로 코드 교체를
     # 시킬 수 있으면 기기 토큰 하나가 새는 순간 임의 코드 실행이 된다.
     @app.get("/api/owner/update/status")
-    def owner_update_status():
+    def owner_update_status(refresh: bool = False):
         from session_manager import updater
+        if refresh:
+            # 캐시(최근 백그라운드 체크, 기본 24h 주기) 대신 지금 확인 — 방금 게시된
+            # 새 버전도 화면 열자마자 감지. CP 불통이면 조용히 캐시로 폴백.
+            try:
+                updater.check(timeout=10)
+            except Exception:  # noqa: BLE001
+                pass
         st = updater.read_state()
         st["current"] = updater.current_version()
         st["signing_configured"] = bool(updater.RELEASE_KEYS)

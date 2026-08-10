@@ -449,8 +449,8 @@ class Conn{
     if(!this.devToken){ this.authed=false; return Promise.resolve(); }
     return this.req('auth',{token:this.devToken}).then(r=>{
       this.authed=!!(r&&r.ok);
-      // 접속한 PC(호스트)의 버전 — 원격 화면에선 이게 유일한 출처
-      if(this.authed && r.data && r.data.ver) showVer(r.data.ver, null);
+      // 접속한 PC(호스트)의 버전 — 우선 auth 응답값으로 표시, 이어서 최신 여부까지 확인.
+      if(this.authed && r.data && r.data.ver){ showVer(r.data.ver, null); refreshVer(); }
       if(this.onauth)this.onauth(this.authed, r&&r.error);
     });
   }
@@ -1736,13 +1736,12 @@ function showVer(cur, latest){
     b.textContent=`v${cur} → ${latest}`;
     b.classList.add('upd');
     b.title='새 버전이 있습니다. 클릭하면 지금 업데이트.';
-    // 원격에선 적용이 불가(로컬 전용)하니 안내만, 로컬에선 실제 버튼.
-    b.onclick=()=> (MODE==='local' ? showUpdateApply(cur,latest) : showUpdateInfo(cur,latest));
+    // 로컬=직접 적용, 릴레이=커넥터 프록시로 원격 PC 에 적용 — 둘 다 가능.
+    b.onclick=()=>showUpdateApply(cur,latest);
   } else {
     b.textContent='v'+cur; b.classList.remove('upd');
-    // 최신이어도 뱃지를 눌러 업데이트를 확인/재설치할 수 있게 — 발견성 확보.
-    if(MODE==='local'){ b.title='클릭하면 업데이트를 확인합니다'; b.onclick=()=>checkUpdateNow(cur); }
-    else { b.title='접속한 PC 의 ClewPath 버전'; b.onclick=()=>showUpdateInfo(cur,null); }
+    // 최신이어도 뱃지를 눌러 업데이트를 확인/재설치할 수 있게 — 발견성 확보(로컬·릴레이 공통).
+    b.title='클릭하면 업데이트를 확인합니다'; b.onclick=()=>checkUpdateNow(cur);
   }
 }
 // 로컬: 뱃지 클릭 → 지금 업데이트 확인. 있으면 적용 모달, 없으면 '최신' 안내.
@@ -1751,11 +1750,10 @@ async function checkUpdateNow(cur){
   const status=el('p',null,'업데이트 확인 중…'); body.appendChild(status);
   openModal('업데이트', body, []);
   try{
-    const r=await fetch(`${APIBASE}/api/owner/update/status`);
-    const s=await r.json();
-    if(s.dev){ status.textContent=`개발 소스에서 실행 중입니다 (v${s.current||cur}). 이 PC 는 git 으로 갱신하세요 — 자동 업데이트는 소스 트리 보호를 위해 막혀 있습니다.`; }
-    else if(s.available && s.latest){ closeModal(); showUpdateApply(s.current||cur, s.latest); }
-    else{ status.textContent=`현재 v${s.current||cur} — 최신 버전입니다.`; }
+    const s=await T.api('GET','/api/owner/update/status',{query:{refresh:1}});
+    if(s && s.dev){ status.textContent=`개발 소스에서 실행 중입니다 (v${s.current||cur}). 이 PC 는 git 으로 갱신하세요 — 자동 업데이트는 소스 트리 보호를 위해 막혀 있습니다.`; }
+    else if(s && s.available && s.latest){ closeModal(); showUpdateApply(s.current||cur, s.latest); }
+    else{ status.textContent=`현재 v${(s&&s.current)||cur} — 최신 버전입니다.`; }
   }catch(e){ status.textContent='업데이트 서버에 연결하지 못했습니다.'; }
 }
 // 원격/폰: 적용은 로컬에서만 되므로 방법만 안내
@@ -1777,29 +1775,34 @@ function showUpdateApply(cur,latest){
   go.onclick=async()=>{
     go.disabled=true; go.textContent='적용 중…'; status.textContent='서버가 새 버전을 받아 검증하고 있습니다…';
     try{
-      const r=await fetch(`${APIBASE}/api/owner/update/apply`,{method:'POST'});
-      const j=await r.json().catch(()=>({}));
-      if(r.ok && j.applied){
+      const j=await T.api('POST','/api/owner/update/apply');   // 로컬=직접, 릴레이=원격 PC 에 적용
+      if(j && j.applied){
         status.innerHTML='적용을 시작했습니다. 서비스가 잠시 재기동됩니다 — <b>30초 뒤 자동으로 새로고침</b>됩니다.';
         go.textContent='재기동 대기…';
         setTimeout(()=>location.reload(), 30000);
       } else {
         go.disabled=false; go.textContent=`지금 v${latest} 로 업데이트`;
-        status.textContent='적용하지 못했습니다: '+(j.error||j.reason||'알 수 없는 오류');
+        status.textContent='적용하지 못했습니다: '+((j&&(j.error||j.reason))||'알 수 없는 오류');
       }
     }catch(e){
-      // apply 응답 직후 서버가 스스로 내려가면 fetch 가 끊길 수 있다 — 이것도 정상 진행 신호
-      status.innerHTML='요청을 보냈습니다. 서비스가 재기동 중일 수 있습니다 — <b>30초 뒤 새로고침</b>하세요.';
-      setTimeout(()=>location.reload(), 30000);
+      if(e && e.json && (e.json.error||e.json.reason)){   // 서버가 명시적으로 거부(예: 개발 소스)
+        go.disabled=false; go.textContent=`지금 v${latest} 로 업데이트`;
+        status.textContent='적용하지 못했습니다: '+(e.json.error||e.json.reason);
+      } else {
+        // 응답 전에 (원격이면 커넥터가) 재기동하며 연결이 끊긴 경우 — 정상 진행 신호.
+        status.innerHTML='요청을 보냈습니다. 서비스가 재기동 중일 수 있습니다 — <b>30초 뒤 새로고침</b>하세요.';
+        setTimeout(()=>location.reload(), 30000);
+      }
     }
   };
   openModal('업데이트', body, [go]);
 }
 async function refreshVer(){
-  if(MODE!=='local') return;
   try{
-    const r=await fetch(`${APIBASE}/api/owner/update/status`); if(!r.ok) return;
-    const s=await r.json();
+    // 로컬=직접 fetch, 릴레이=커넥터 프록시(T.api). refresh=1 로 캐시 아닌 '지금' 확인 →
+    // 방금 게시된 새 버전도 화면 열자마자 감지. 원격 PC 도 동일하게 확인된다.
+    const s=await T.api('GET','/api/owner/update/status',{query:{refresh:1}});
+    if(!s) return;
     // 개발 소스면 자동적용이 막혀 있으므로 '업데이트 있음' 뱃지를 띄우지 않는다(눌러도 실패).
     showVer(s.current, (s.available&&s.latest&&!s.dev)?s.latest:null);
   }catch(e){}
