@@ -200,9 +200,12 @@ class Connector:
                         dev = {**dev, "tver": devices.token_version(dev["id"])}
                         self.authed[cid] = dev
                     devices.touch(dev["id"])
-                    # ver: 원격 화면이 "지금 붙은 PC 가 어떤 버전인지" 보여줄 유일한 통로
+                    # ver/hostname: 원격 화면이 "지금 붙은 PC 가 어떤 버전·어느 컴퓨터인지"
+                    # 보여줄 유일한 통로. (auth 응답만 커넥터가 직접 채워 보낸다)
+                    from session_manager import appconfig
                     await self._res(rid, True, data={"id": dev["id"], "name": dev["name"],
-                                                     "ver": CLIENT_VERSION})
+                                                     "ver": CLIENT_VERSION,
+                                                     "hostname": appconfig.machine_name()})
                 else:
                     await self._res(rid, False, error="auth_invalid")
                 return

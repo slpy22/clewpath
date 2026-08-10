@@ -72,6 +72,10 @@ function Sync-Deps($reason) {
     }
     try {
         $env:UV_PROJECT_ENVIRONMENT = Join-Path $InstallRoot ".venv"
+        # 회사 프록시(HTTPS 가로채기) PC 대응 — install.ps1 과 동일. 이게 없으면
+        # uv 가 사내 루트 CA 를 거부해 업데이트의 의존성 재설치가 실패하고,
+        # dist-info 가 안 갱신돼 "업데이트가 안 먹은 것처럼" 옛 버전에 머문다(실측).
+        if (-not $env:UV_SYSTEM_CERTS) { $env:UV_SYSTEM_CERTS = "1" }
         Push-Location $InstallRoot
         & $uv sync --frozen --no-dev 2>&1 | ForEach-Object { Log "  uv: $_" }
         if ($LASTEXITCODE -ne 0) {

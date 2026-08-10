@@ -56,6 +56,20 @@ _cache: dict[str, Any] | None = None
 _cache_path: Path | None = None
 
 
+def machine_name() -> str:
+    """이 PC 의 표시 이름(컴퓨터 이름). 원격/로컬 화면이 '지금 어느 PC 의 세션을
+    보고 있는지' 헤더에 보여줄 때 쓴다. Windows 는 COMPUTERNAME, 그 외는 hostname."""
+    import socket
+
+    name = os.environ.get("COMPUTERNAME") or ""
+    if not name:
+        try:
+            name = socket.gethostname().split(".")[0]
+        except Exception:
+            name = ""
+    return name or "PC"
+
+
 def config_path() -> Path:
     """설정 파일 위치. 데이터 폴더와 같은 곳 — 재설치/업데이트가 건드리지 않는다.
 

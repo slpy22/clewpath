@@ -52,7 +52,12 @@
   #app{display:flex;flex-direction:column;height:100%}
   header{display:flex;align-items:center;gap:10px;padding:calc(10px + var(--safe-t)) 16px 10px;
     background:var(--surface);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
-  header .title{font-weight:700;letter-spacing:-.01em;flex:1;display:flex;align-items:center;gap:8px}
+  header .title{font-weight:700;letter-spacing:-.01em;display:flex;align-items:center;gap:8px;flex:none}
+  header .grow{flex:1}
+  /* 지금 보고 있는 세션이 어느 PC 것인지 — 제목 옆 칩으로 상시 표시. */
+  header .pcname{font-size:.8rem;color:var(--ink2);background:var(--surface2);
+    padding:2px 9px;border-radius:999px;white-space:nowrap;overflow:hidden;
+    text-overflow:ellipsis;max-width:38vw;flex:none}
   .dot{width:9px;height:9px;border-radius:50%;background:var(--muted);flex:none}
   .dot.on{background:var(--good)} .dot.off{background:var(--crit)}
   header button.icon{width:38px;height:38px;border-radius:10px;font-size:1.1rem;color:var(--ink2)}
@@ -334,7 +339,9 @@
   <header>
     <span class="dot" id="status"></span>
     <span class="title" id="head">세션</span>
+    <span class="pcname hidden" id="pcname" title="지금 보고 있는 세션의 PC"></span>
     <span class="verbadge hidden" id="ver"></span>
+    <span class="grow"></span>
     <button class="icon" id="btn-security" title="보안(2차 인증)">🔒</button>
     <button class="icon hidden" id="btn-pcs" title="PC 전환">🖧</button>
     <span class="connbadge hidden" id="conn-badge" title="릴레이 접속 인증 모드"></span>
@@ -396,6 +403,7 @@ function pcsActivate(room){
   LS.removeItem('sm_cjwt');          // 자격이 바뀌었으니 캐시된 JWT 폐기(필수)
   LS.removeItem('sm_grace');         // 2FA 신뢰도 PC 단위
   pc.last=Date.now(); pcsUpsert(pc);
+  setPcName(pcName(pc));             // 우선 저장된 이름 표시(이후 auth 응답의 실제 hostname 이 덮음)
   return pc;
 }
 function pcsRemove(room){ pcsSave(pcsLoad().filter(x=>x.room!==room)); }
@@ -440,8 +448,9 @@ class Conn{
     if(!this.devToken){ this.authed=false; return Promise.resolve(); }
     return this.req('auth',{token:this.devToken}).then(r=>{
       this.authed=!!(r&&r.ok);
-      // 접속한 PC(호스트)의 버전 — 원격 화면에선 이게 유일한 출처
+      // 접속한 PC(호스트)의 버전·이름 — 원격 화면에선 이게 유일한 출처
       if(this.authed && r.data && r.data.ver) showVer(r.data.ver, null);
+      if(this.authed && r.data && r.data.hostname) setPcName(r.data.hostname);
       if(this.onauth)this.onauth(this.authed, r&&r.error);
     });
   }
@@ -620,6 +629,7 @@ async function refreshConnBadge(){
   if(MODE!=='local') return;
   const el=$('#conn-badge'); if(!el) return;
   let st; try{ st=await T.api('GET','/api/owner/connection'); }catch(e){ el.classList.add('hidden'); return; }
+  if(st.hostname) setPcName(st.hostname);          // 이 PC 이름을 헤더에 표시
   const m=st.mode||'shared';
   el.textContent=CONN_LABEL[m]||m;
   el.className='connbadge '+m;
@@ -1493,6 +1503,7 @@ const PAIR_KEYS_ALL=PAIR_KEYS_ACTIVE.concat(['sm_pcs','sm_hint_done']);
 function clearPairing(all){
   (all?PAIR_KEYS_ALL:PAIR_KEYS_ACTIVE).forEach(k=>LS.removeItem(k));
   try{ conn.devToken=''; }catch(e){}
+  setPcName('');   // 헤더의 PC 이름 지우기
 }
 function showLogoutChoice(){
   const n=pcsLoad().length;
@@ -1640,6 +1651,12 @@ function doPair(){
 
 // ---- 버전 표기 -------------------------------------------------------------
 // 로컬: 이 PC 설치본 버전 + 새 버전 여부(update/status). 원격: 접속한 PC 의 버전(auth 응답).
+// 헤더에 "지금 보고 있는 세션이 어느 PC 것인지" 표시(로컬=이 PC, 원격=접속한 PC).
+function setPcName(name){
+  const b=$('#pcname'); if(!b) return;
+  if(name){ b.textContent='🖥 '+name; b.classList.remove('hidden'); }
+  else { b.textContent=''; b.classList.add('hidden'); }
+}
 function showVer(cur, latest){
   const b=$('#ver'); if(!b||!cur) return;
   b.classList.remove('hidden');
@@ -1650,13 +1667,30 @@ function showVer(cur, latest){
     // 원격에선 적용이 불가(로컬 전용)하니 안내만, 로컬에선 실제 버튼.
     b.onclick=()=> (MODE==='local' ? showUpdateApply(cur,latest) : showUpdateInfo(cur,latest));
   } else {
-    b.textContent='v'+cur; b.classList.remove('upd'); b.title='ClewPath Host 버전'; b.onclick=null;
+    b.textContent='v'+cur; b.classList.remove('upd');
+    // 최신이어도 뱃지를 눌러 업데이트를 확인/재설치할 수 있게 — 발견성 확보.
+    if(MODE==='local'){ b.title='클릭하면 업데이트를 확인합니다'; b.onclick=()=>checkUpdateNow(cur); }
+    else { b.title='접속한 PC 의 ClewPath 버전'; b.onclick=()=>showUpdateInfo(cur,null); }
   }
+}
+// 로컬: 뱃지 클릭 → 지금 업데이트 확인. 있으면 적용 모달, 없으면 '최신' 안내.
+async function checkUpdateNow(cur){
+  const body=el('div');
+  const status=el('p',null,'업데이트 확인 중…'); body.appendChild(status);
+  openModal('업데이트', body, []);
+  try{
+    const r=await fetch(`${APIBASE}/api/owner/update/status`);
+    const s=await r.json();
+    if(s.dev){ status.textContent=`개발 소스에서 실행 중입니다 (v${s.current||cur}). 이 PC 는 git 으로 갱신하세요 — 자동 업데이트는 소스 트리 보호를 위해 막혀 있습니다.`; }
+    else if(s.available && s.latest){ closeModal(); showUpdateApply(s.current||cur, s.latest); }
+    else{ status.textContent=`현재 v${s.current||cur} — 최신 버전입니다.`; }
+  }catch(e){ status.textContent='업데이트 서버에 연결하지 못했습니다.'; }
 }
 // 원격/폰: 적용은 로컬에서만 되므로 방법만 안내
 function showUpdateInfo(cur,latest){
   const body=el('div');
-  body.appendChild(el('p',null,`새 버전 ${latest} 이 나왔습니다 (현재 v${cur}).`));
+  if(latest) body.appendChild(el('p',null,`새 버전 ${latest} 이 나왔습니다 (현재 v${cur}).`));
+  else body.appendChild(el('p',null,`접속한 PC 의 ClewPath 버전: v${cur} (최신 여부는 그 PC 로컬 웹에서 확인).`));
   body.appendChild(el('p',null,'업데이트는 그 PC의 로컬 웹(127.0.0.1:5100)에서 "지금 업데이트"를 누르거나, PowerShell 에서 설치 명령을 다시 실행하면 됩니다.'));
   const c=el('div','cwd','irm https://clewpath.pyongso.com/get | iex'); c.style.userSelect='all'; body.appendChild(c);
   openModal('업데이트', body, []);
@@ -1694,7 +1728,8 @@ async function refreshVer(){
   try{
     const r=await fetch(`${APIBASE}/api/owner/update/status`); if(!r.ok) return;
     const s=await r.json();
-    showVer(s.current, (s.available&&s.latest)?s.latest:null);
+    // 개발 소스면 자동적용이 막혀 있으므로 '업데이트 있음' 뱃지를 띄우지 않는다(눌러도 실패).
+    showVer(s.current, (s.available&&s.latest&&!s.dev)?s.latest:null);
   }catch(e){}
 }
 

@@ -457,6 +457,7 @@ def create_app() -> FastAPI:
             "relay_room": os.environ.get("SM_RELAY_ROOM"),   # 수동 지정값(레거시). 없으면 CP 발급
             "active_room": _active_room(),                   # 실제 접속/QR 에 쓰이는 room
             "room_mismatch": st.get("room_mismatch"),
+            "hostname": appconfig.machine_name(),            # 헤더에 표시할 이 PC 이름
         }
 
     # ---- 기기 페어링/폐기 (외부 릴레이 클라이언트의 기기별 인증) ----
@@ -507,6 +508,7 @@ def create_app() -> FastAPI:
         st = updater.read_state()
         st["current"] = updater.current_version()
         st["signing_configured"] = bool(updater.RELEASE_KEYS)
+        st["dev"] = updater.is_dev_checkout()   # 개발 소스면 자동적용 불가 → UI 가 안내만
         try:
             last = json.loads((updater.work_dir() / "last_apply.json")
                               .read_text(encoding="utf-8"))
