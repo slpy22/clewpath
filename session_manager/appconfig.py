@@ -219,6 +219,13 @@ auto_apply = false
 # 턴종료)를 실시간으로 받습니다. 기존 훅은 보존하며 병합만 합니다.
 # false 로 두면 등록하지 않습니다(상태 뱃지·알림 기능이 꺼집니다).
 auto_register = true
+
+[push]
+# 웹푸시 알림 토픽별 on/off. 발송은 이 PC 가 직접 합니다(릴레이 무경유,
+# Web Push 프로토콜 자체가 종단 암호화라 푸시 중계자도 내용을 못 봅니다).
+permission = true   # 권한 요청 시
+ready = true        # 턴(작업) 완료 시
+waiting = false     # 입력 대기 알림(수다스러워 기본 off)
 """
 
 

@@ -823,7 +823,43 @@ def create_app() -> FastAPI:
             return JSONResponse({"error": "bad_json"}, status_code=400)
         if isinstance(payload, dict):
             hooks.update_from_event(payload)
+            try:                       # 푸시는 부가 기능 - 실패해도 상태 반영은 유지
+                from session_manager import push
+                push.notify_from_event(payload)
+            except Exception as e:  # noqa: BLE001
+                print(f"[push] 알림 처리 실패: {e}", flush=True)
         return {"ok": True}
+
+    # ---- 웹푸시 구독 (로컬/원격 PWA 공용 - 원격은 커넥터 /api/ 프록시 경유) ----
+    @app.get("/api/owner/push/vapid")
+    def push_vapid():
+        from session_manager import push
+        return {"key": push.ensure_vapid()}
+
+    @app.post("/api/owner/push/subscribe")
+    async def push_subscribe(request: Request):
+        from session_manager import push
+        body = await request.json()
+        sub = body.get("subscription") if isinstance(body, dict) else None
+        if not isinstance(sub, dict):
+            return JSONResponse({"error": "subscription 필요"}, status_code=400)
+        try:
+            created = push.add_subscription(sub, str(body.get("name") or ""))
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+        return {"ok": True, "created": created}
+
+    @app.post("/api/owner/push/unsubscribe")
+    async def push_unsubscribe(request: Request):
+        from session_manager import push
+        body = await request.json()
+        ep = str((body or {}).get("endpoint") or "")
+        return {"ok": True, "removed": push.remove_subscription(ep)}
+
+    @app.get("/api/owner/push/subscriptions")
+    def push_subscriptions():
+        from session_manager import push
+        return {"subscriptions": push.list_subscriptions()}
 
     @app.get("/api/v1/sessions")
     def api_v1_sessions(q: str | None = None, label: str | None = None,
@@ -978,6 +1014,14 @@ def create_app() -> FastAPI:
     def favicon():
         # favicon 404 방지 (빈 응답)
         return JSONResponse({}, status_code=204)
+
+    @app.get("/sw.js")
+    def service_worker():
+        # 웹푸시용 서비스워커. SW 는 반드시 별도 파일이어야 한다(스코프 규칙).
+        f = Path(__file__).parent.parent / "pwa" / "sw.js"
+        if not f.is_file():
+            return JSONResponse({"error": "sw_missing"}, status_code=404)
+        return FileResponse(f, media_type="text/javascript", headers=_NO_CACHE)
 
     if STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

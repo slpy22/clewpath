@@ -30,6 +30,8 @@ dependencies = [
     # 회사 프록시(TLS 인터셉션) 대응 — httpx 가 OS(Windows) 인증서 저장소를 쓰게 한다.
     # 순수 파이썬, 빌드 없음. 없으면 certifi 기본(일반 PC 는 무영향), 있으면 사내 CA 신뢰.
     "truststore>=0.9.0",
+    # 웹푸시(권한요청·작업완료 알림) — Host 가 직접 발송해 릴레이가 본문을 못 본다.
+    "pywebpush>=2.0.0",
 ]
 
 [project.optional-dependencies]
