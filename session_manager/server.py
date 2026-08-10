@@ -458,6 +458,8 @@ def create_app() -> FastAPI:
             "active_room": _active_room(),                   # 실제 접속/QR 에 쓰이는 room
             "room_mismatch": st.get("room_mismatch"),
             "hostname": appconfig.machine_name(),            # 헤더에 표시할 이 PC 이름
+            "app_url": os.environ.get("SM_APP_URL")           # 릴레이 앱 주소(로컬→릴레이 이동용)
+                        or "https://clewpath.pyongso.com/relay/app",
         }
 
     # ---- 기기 페어링/폐기 (외부 릴레이 클라이언트의 기기별 인증) ----
