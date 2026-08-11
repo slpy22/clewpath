@@ -1,0 +1,11 @@
+{
+  "appId": "com.pyongso.clewpath",
+  "appName": "ClewPath",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https"
+  },
+  "android": {
+    "allowMixedContent": false
+  }
+}

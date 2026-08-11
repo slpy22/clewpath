@@ -1,0 +1,21 @@
+{
+  "name": "clewpath-app",
+  "private": true,
+  "version": "1.0.0",
+  "description": "ClewPath mobile app shell (Capacitor) - bundles ../pwa as local www",
+  "scripts": {
+    "bundle": "node scripts/copy-www.mjs",
+    "sync": "npm run bundle && npx cap sync",
+    "android": "npm run sync && npx cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.2.0",
+    "@capacitor/app": "^6.0.2",
+    "@capacitor/core": "^6.2.0",
+    "@capacitor/ios": "^6.2.0",
+    "@capacitor/preferences": "^6.0.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.2.0"
+  }
+}

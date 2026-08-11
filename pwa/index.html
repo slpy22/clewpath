@@ -400,6 +400,7 @@
 
 <div class="toast" id="toast"></div>
 
+<script src="native-bridge.js"></script>
 <script>
 "use strict";
 const $ = (s,r=document)=>r.querySelector(s);
@@ -407,15 +408,22 @@ const el = (t,c,txt)=>{const e=document.createElement(t);if(c)e.className=c;if(t
 const LS = window.localStorage;
 
 // ---- 실행 모드: local(006 직접 fetch) vs relay(WS RPC). 서버가 주입, 없으면 경로로 추론 ----
+// 앱(Capacitor)은 브리지가 'relay' 를 강제한다 — 로컬 번들이라 경로 추론이 어긋나기 때문.
 const SM_MODE_RAW="{{MODE}}", SM_BASE_RAW="{{BASE}}";
-const MODE=(SM_MODE_RAW.indexOf('{{')<0 && SM_MODE_RAW)?SM_MODE_RAW
-  :(location.pathname.indexOf('/relay/')>=0?'relay':'local');
+const MODE=(window.ClewBridge&&ClewBridge.modeOverride())
+  ||((SM_MODE_RAW.indexOf('{{')<0 && SM_MODE_RAW)?SM_MODE_RAW
+  :(location.pathname.indexOf('/relay/')>=0?'relay':'local'));
+// 프로토콜 버전(기획서 §12-8): 앱은 스토어 심사에 묶여 웹·Host 보다 늦게 갱신되므로,
+// auth 에서 서로 pv 를 교환해 불일치를 사용자에게 알린다.
+const PV=1;
 const APIBASE=(SM_BASE_RAW.indexOf('{{')<0)?SM_BASE_RAW:'';
 function qs(o){ if(!o)return''; const e=Object.entries(o).filter(([k,v])=>v!=null&&v!=='');
   return e.length?'?'+e.map(([k,v])=>encodeURIComponent(k)+'='+encodeURIComponent(v)).join('&'):''; }
 
 // ---- WS URL 유도 (/app 옆의 /ws). 로컬/nginx 모두 자동 대응 ----
 function wsUrl(){
+  const o=window.ClewBridge&&ClewBridge.wsBaseOverride();   // 앱: 페어링 링크에서 저장한 릴레이 주소
+  if(o) return o;
   const base = location.pathname.replace(/\/(app|index\.html)\/?$/,'').replace(/\/$/,'');
   const proto = location.protocol==='https:'?'wss':'ws';
   return `${proto}://${location.host}${base}/ws`;
@@ -514,10 +522,16 @@ class Conn{
   }
   _doAuth(){   // 기기 토큰이 있으면 릴레이 연결 직후 기기 인증
     if(!this.devToken){ this.authed=false; return Promise.resolve(); }
-    return this.req('auth',{token:this.devToken}).then(r=>{
+    return this.req('auth',{token:this.devToken,pv:PV}).then(r=>{
       this.authed=!!(r&&r.ok);
       // 접속한 PC(호스트)의 버전 — 우선 auth 응답값으로 표시, 이어서 최신 여부까지 확인.
       if(this.authed && r.data && r.data.ver){ showVer(r.data.ver, null); refreshVer(); }
+      // pv 핸드셰이크: Host 가 더 새 프로토콜이면(스토어 심사로 앱만 뒤처진 상황)
+      // 기능이 조용히 깨지기 전에 업데이트를 안내한다. 응답에 pv 가 없으면 구 Host(호환 유지).
+      if(this.authed && r.data && (r.data.pv|0)>PV && !this._pvWarned){
+        this._pvWarned=true;
+        toast('PC 프로그램이 더 새 통신 규약을 사용합니다 — 이 앱/화면을 업데이트해 주세요');
+      }
       if(this.onauth)this.onauth(this.authed, r&&r.error);
     });
   }
@@ -2353,7 +2367,10 @@ if(_pcexport){
     try{ new URLSearchParams(location.hash.slice(1)).forEach((v,k)=>p.set(k,v)); }catch(e){}
   }
   // E2EE 룸 키: 이 브라우저에만 저장(fragment 라 서버엔 안 감)
-  if(p.get('rk')&&p.get('room')){ LS.setItem('sm_e2ee_'+p.get('room'), p.get('rk')); }
+  if(p.get('rk')&&p.get('room')){ LS.setItem('sm_e2ee_'+p.get('room'), p.get('rk'));
+    // ⑤ 앱: 룸 키를 네이티브 저장소에도 미러(M3 에서 iOS NSE 알림 복호가 읽는다). 웹=no-op.
+    if(window.ClewBridge) ClewBridge.syncRoomKey(p.get('room'), p.get('rk'));
+  }
   const dev=p.get('dev');
   if(dev){ LS.setItem('sm_devtoken',dev); conn.devToken=dev; }
   // 기기 전용 client 자격증명(공유 토큰 대체). 있으면 저장하고 JWT 로 교환해 쓴다.

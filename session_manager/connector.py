@@ -50,6 +50,11 @@ def _client_version() -> str:
 
 CLIENT_VERSION = _client_version()
 
+# 프로토콜 버전(기획서 §12-8): 앱은 스토어 심사 때문에 웹·Host 보다 늦게 갱신된다.
+# auth 에서 서로 pv 를 교환해, 규약이 어긋나면 클라이언트가 업데이트 안내를 띄운다.
+# 규약을 깨는 변경(프레임 형식·봉투 등)을 할 때만 올린다.
+PROTOCOL_VERSION = 1
+
 
 def _log(msg: str) -> None:
     """콘솔 인코딩에 없는 글자로 로그가 프로세스를 죽이지 않게(T7 사고 대응).
@@ -215,8 +220,17 @@ class Connector:
                     # ver/hostname: 원격 화면이 "지금 붙은 PC 가 어떤 버전·어느 컴퓨터인지"
                     # 보여줄 유일한 통로. (auth 응답만 커넥터가 직접 채워 보낸다)
                     from session_manager import appconfig
+                    # pv: 클라이언트(앱/웹)가 Host 와 규약 일치를 확인하는 유일한 통로.
+                    # 클라이언트가 보낸 pv 가 더 높으면(=Host 가 구버전) 로그로 남긴다.
+                    try:
+                        client_pv = int(params.get("pv") or 0)
+                    except (TypeError, ValueError):
+                        client_pv = 0
+                    if client_pv > PROTOCOL_VERSION:
+                        _log(f"[pv] client pv={client_pv} > host pv={PROTOCOL_VERSION} - Host 업데이트 권장")
                     await self._res(rid, True, data={"id": dev["id"], "name": dev["name"],
                                                      "ver": CLIENT_VERSION,
+                                                     "pv": PROTOCOL_VERSION,
                                                      "hostname": appconfig.machine_name()})
                 else:
                     await self._res(rid, False, error="auth_invalid")

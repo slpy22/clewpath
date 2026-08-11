@@ -1058,6 +1058,15 @@ def create_app() -> FastAPI:
         # favicon 404 방지 (빈 응답)
         return JSONResponse({}, status_code=204)
 
+    @app.get("/native-bridge.js")
+    def native_bridge():
+        # 앱(Capacitor) 전용 브리지 - 웹에서는 전부 no-op 인 얇은 파일.
+        # index.html 이 무조건 로드하므로 로컬에서도 서빙(404 소음 방지).
+        f = Path(__file__).parent.parent / "pwa" / "native-bridge.js"
+        if not f.is_file():
+            return JSONResponse({"error": "bridge_missing"}, status_code=404)
+        return FileResponse(f, media_type="text/javascript", headers=_NO_CACHE)
+
     @app.get("/sw.js")
     def service_worker():
         # 웹푸시용 서비스워커. SW 는 반드시 별도 파일이어야 한다(스코프 규칙).
