@@ -98,10 +98,18 @@ def add_subscription(subscription: dict, name: str = "") -> bool:
         return True
 
 
-def remove_subscription(endpoint: str) -> bool:
+def _sub_id(endpoint: str) -> str:
+    import hashlib
+    return hashlib.sha256(endpoint.encode()).hexdigest()[:12]
+
+
+def remove_subscription(endpoint_or_id: str) -> bool:
+    """endpoint 전체 또는 목록의 id 로 구독 제거."""
     with _lock:
         subs = _load_subs()
-        kept = [s for s in subs if s.get("endpoint") != endpoint]
+        kept = [s for s in subs
+                if s.get("endpoint") != endpoint_or_id
+                and _sub_id(s.get("endpoint", "")) != endpoint_or_id]
         if len(kept) == len(subs):
             return False
         _save_subs(kept)
@@ -109,8 +117,10 @@ def remove_subscription(endpoint: str) -> bool:
 
 
 def list_subscriptions() -> list[dict]:
-    # endpoint 는 사실상 비밀(아는 사람은 푸시를 보낼 수 있음) - 앞부분만 노출
-    return [{"endpoint_hint": s.get("endpoint", "")[:60] + "...",
+    # endpoint 는 사실상 비밀(아는 사람은 푸시를 보낼 수 있음) - 앞부분만 노출.
+    # id 는 관리(삭제)용 안정 식별자.
+    return [{"id": _sub_id(s.get("endpoint", "")),
+             "endpoint_hint": s.get("endpoint", "")[:60] + "...",
              "name": s.get("name", ""), "added_at": s.get("added_at")}
             for s in _load_subs()]
 

@@ -853,7 +853,7 @@ def create_app() -> FastAPI:
     async def push_unsubscribe(request: Request):
         from session_manager import push
         body = await request.json()
-        ep = str((body or {}).get("endpoint") or "")
+        ep = str((body or {}).get("endpoint") or (body or {}).get("id") or "")
         return {"ok": True, "removed": push.remove_subscription(ep)}
 
     @app.get("/api/owner/push/subscriptions")
