@@ -499,7 +499,18 @@ def create_app() -> FastAPI:
             q["cs"] = client_cred["client_secret"]
         elif cli:
             q["token"] = cli
-        return f"{app_url}?{urlencode(q)}"
+        # E2EE 룸 키 - 릴레이가 대화 내용을 못 읽게 하는 종단 암호화 키.
+        try:
+            from session_manager import e2ee
+            rk = e2ee.room_key(room)
+            if rk:
+                q["rk"] = e2ee.b64u(rk)
+        except Exception:  # noqa: BLE001
+            pass
+        # fragment(#) 로 싣는다 - query 는 릴레이 HTTP 요청줄에 실려 접근로그에
+        # 남을 수 있지만 fragment 는 브라우저 밖으로 절대 안 나간다.
+        # (앱은 릴레이가 항상 최신을 서빙하므로 fragment 파서와 함께 배포된다)
+        return f"{app_url}#{urlencode(q)}"
 
     # ---- 자동 업데이트 ----
     # 확인은 누구나(로컬 UI), 적용은 **로컬 전용**이다. 폰에서 원격으로 코드 교체를

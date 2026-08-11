@@ -146,9 +146,21 @@ class Connector:
         self.stream_in: dict[str, asyncio.Queue] = {}  # id -> client 입력 큐
         self.req_cid: dict[str, str] = {}    # rid -> cid (응답을 요청 기기로 라우팅)
         self.authed: dict[str, dict] = {}    # cid -> 인증된 기기{id,name}
+        self.e2ee_key: bytes | None = None   # room E2EE 키(접속 시 로드)
+        self.enc_cids: set = set()           # 암호화 봉투로 말한 기기들(cid)
 
     # ---- 릴레이 송신 ----
     async def send(self, obj: dict) -> None:
+        if self.ws is None:
+            return
+        # E2EE: 암호화로 말을 건 기기에는 암호화로 답한다. 평문 기기는 평문(호환).
+        if self.e2ee_key is not None and obj.get("cid") in self.enc_cids:
+            from session_manager import e2ee
+            obj = e2ee.wrap_frame(self.e2ee_key, obj)
+        await self.ws.send(json.dumps(obj, ensure_ascii=False))
+
+    async def _plain_send(self, obj: dict) -> None:
+        """봉투 없이 그대로 전송(복호 실패 통지 등 - 내용 없는 제어 프레임 전용)."""
         if self.ws is not None:
             await self.ws.send(json.dumps(obj, ensure_ascii=False))
 
@@ -445,17 +457,44 @@ class Connector:
             frame = json.loads(raw)
         except Exception:  # noqa: BLE001
             return
+        # E2EE 봉투면 먼저 연다(릴레이가 겉에 주입한 cid 는 unwrap 이 반영).
+        from session_manager import e2ee
+        if e2ee.is_envelope(frame):
+            if self.e2ee_key is None:
+                return                      # 키 없는데 봉투 - 응답 불가, 무시
+            try:
+                inner = e2ee.unwrap_frame(self.e2ee_key, frame)
+            except ValueError:
+                # 키 불일치(기기 재페어링 필요). 내용 없는 평문 오류로만 알린다.
+                await self._plain_send({"v": 1, "type": "res", "id": None, "ok": False,
+                                        "error": "e2ee_key_mismatch",
+                                        **({"cid": frame["cid"]} if frame.get("cid") is not None else {})})
+                return
+            frame = inner
+            if frame.get("cid") is not None:
+                self.enc_cids.add(frame["cid"])
+        elif self.e2ee_key is not None:
+            # 평문 프레임: require 모드면 실질 요청(req/stream_in)을 거부한다.
+            from session_manager import appconfig
+            if (appconfig.get_bool("e2ee", "require", False)
+                    and frame.get("type") in ("req", "stream_in")):
+                await self._plain_send({"v": 1, "type": "res", "id": frame.get("id"),
+                                        "ok": False, "error": "e2ee_required",
+                                        **({"cid": frame["cid"]} if frame.get("cid") is not None else {})})
+                return
         t = frame.get("type")
         if t == "req":
             await self._handle_req(frame)
         elif t == "stream_in":
             await self._handle_stream_in(frame)
         elif t == "peer":
-            # 기기 연결 종료 → 인증 상태 정리
+            # 기기 연결 종료 → 인증/암호화 상태 정리
             if frame.get("event") == "client_offline":
                 self.authed.pop(frame.get("cid"), None)
+                self.enc_cids.discard(frame.get("cid"))
         elif t == "ping":
-            await self.send({"v": 1, "type": "pong", "id": frame.get("id")})
+            await self.send({"v": 1, "type": "pong", "id": frame.get("id"),
+                             **({"cid": frame["cid"]} if frame.get("cid") is not None else {})})
         # 그 외(hello 등)는 무시
 
     # ---- 접속 URI 구성 (CP 가 설정돼 있으면 단기 JWT 첨부) ----
@@ -523,11 +562,19 @@ class Connector:
                     continue
                 if mode == "fallback":
                     _log("[connector] [!] CP 불통 -> 공유토큰 fallback 으로 접속(기능 유지)")
+                # E2EE 키 로드(없으면 생성) - 페어링 QR 에 실려 기기로 전달된다.
+                try:
+                    from session_manager import e2ee
+                    self.e2ee_key = e2ee.room_key(self.room)
+                except Exception as e:  # noqa: BLE001
+                    self.e2ee_key = None
+                    _log(f"[connector] E2EE 키 로드 실패(평문 폴백): {type(e).__name__}")
                 async with connect(uri, max_size=None) as ws:
                     self.ws = ws
                     backoff = 1
+                    self.enc_cids.clear()   # 재접속 시 cid 는 전부 새로 발급된다
                     _log(f"[connector] relay 연결됨 room={self.room} mode={mode} "
-                         f"-> 로컬 {self.local_base}")
+                         f"e2ee={'on' if self.e2ee_key else 'off'} -> 로컬 {self.local_base}")
                     async for raw in ws:
                         await self._on_frame(raw)
             except Exception as e:  # noqa: BLE001

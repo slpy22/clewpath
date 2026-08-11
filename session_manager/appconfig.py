@@ -226,6 +226,12 @@ auto_register = true
 permission = true   # 권한 요청 시
 ready = true        # 턴(작업) 완료 시
 waiting = false     # 입력 대기 알림(수다스러워 기본 off)
+
+[e2ee]
+# 종단 암호화 강제. true 면 암호화하지 않는(구형 페어링) 기기의 요청을 거부합니다.
+# 모든 기기를 새 QR 로 재페어링한 뒤 켜는 것을 권장합니다.
+# (암호화 자체는 새 페어링 기기와 자동으로 항상 켜집니다 - 이 설정은 구형 수용 여부)
+require = false
 """
 
 

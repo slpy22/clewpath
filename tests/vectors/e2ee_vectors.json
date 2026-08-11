@@ -1,0 +1,35 @@
+{
+ "note": "E2EE 골든 벡터 - Python(cryptography)과 JS(WebCrypto)가 같은 바이트를 내는지 검증. 형식: 0x01|nonce12|ct+tag16 의 base64url",
+ "key_b64u": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+ "cases": [
+  {
+   "name": "ascii-frame",
+   "nonce_b64u": "AAECAwQFBgcICQoL",
+   "frame": {
+    "v": 1,
+    "type": "req",
+    "id": "r1",
+    "method": "list_sessions",
+    "params": {
+     "q": ""
+    }
+   },
+   "sealed": "AQABAgMEBQYHCAkKCzwgoDn_1O45-Tjn7pPTWh_mp6UY0hI7XgJFl7Q_RSLfZGTGk8vjKLoYzQyZ1_RNS50wD-Mp9I_4T_ZYeHWQ19SLHrdY6fMEHGG51f300dJBD9OJS6VrkW-E"
+  },
+  {
+   "name": "unicode-frame",
+   "nonce_b64u": "CwoJCAcGBQQDAgEA",
+   "frame": {
+    "v": 1,
+    "type": "res",
+    "id": "r2",
+    "ok": true,
+    "data": {
+     "title": "한글 제목 테스트",
+     "n": 3
+    }
+   },
+   "sealed": "AQsKCQgHBgUEAwIBAFvfLzAMWUG_i8fqHkH3BW_iaJCVMXTbliLZK1iH_xNEn3lrTXkSemISSHWBnQkjZc4VZgJsMSiAW7Jzibo_rHdwsSGjuMnkvsuTW1rU2EmZmb5JtYYe1505VDpBCviJzRLUJOAcWxdBDg"
+  }
+ ]
+}

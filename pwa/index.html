@@ -481,10 +481,34 @@ async function clientJwt(force){
 }
 
 // ---- RPC over WebSocket ----
+function u8ToB64u(u8){ let s=''; u8.forEach(b=>s+=String.fromCharCode(b));
+  return btoa(s).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,''); }
 class Conn{
   constructor(){ this.ws=null; this.seq=0; this.waiters=new Map(); this.streams=new Map();
     this.onstatus=()=>{}; this.peer=false;
-    this.devToken=LS.getItem('sm_devtoken')||''; this.authed=false; this.cid=null; this.onauth=null; }
+    this.devToken=LS.getItem('sm_devtoken')||''; this.authed=false; this.cid=null; this.onauth=null;
+    // E2EE: 페어링 때 받은 룸 키(sm_e2ee_<room>). 송수신을 각각 직렬화해
+    // WebCrypto 비동기 완료 순서가 프레임 순서를 깨지 않게 한다(터미널 입력 필수).
+    this.e2eeKey=null; this._txq=Promise.resolve(); this._rxq=Promise.resolve(); }
+  async _seal(obj){
+    const nonce=crypto.getRandomValues(new Uint8Array(12));
+    const pt=new TextEncoder().encode(JSON.stringify(obj));
+    const ct=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv:nonce},this.e2eeKey,pt));
+    const raw=new Uint8Array(13+ct.length); raw[0]=1; raw.set(nonce,1); raw.set(ct,13);
+    return {v:1,e:'a1',p:u8ToB64u(raw)};
+  }
+  async _openEnv(env){
+    const raw=b64uToU8(env.p);
+    if(raw[0]!==1) throw new Error('bad version');
+    const pt=new Uint8Array(await crypto.subtle.decrypt(
+      {name:'AES-GCM',iv:raw.subarray(1,13)},this.e2eeKey,raw.subarray(13)));
+    return JSON.parse(new TextDecoder().decode(pt));
+  }
+  _tx(obj){                              // 유일한 송신 경로(암호화 여부 일원화)
+    if(!this.e2eeKey){ try{this.ws.send(JSON.stringify(obj));}catch(e){} return; }
+    this._txq=this._txq.then(async()=>{ const env=await this._seal(obj);
+      this.ws.send(JSON.stringify(env)); }).catch(()=>{});
+  }
   _doAuth(){   // 기기 토큰이 있으면 릴레이 연결 직후 기기 인증
     if(!this.devToken){ this.authed=false; return Promise.resolve(); }
     return this.req('auth',{token:this.devToken}).then(r=>{
@@ -496,6 +520,13 @@ class Conn{
   }
   async connect(room,token){
     this._room=room; this._token=token;           // 재접속에 사용
+    // E2EE 키 로드(페어링 때 저장됨). 없으면 평문(구 페어링 호환).
+    this.e2eeKey=null;
+    const rk=LS.getItem('sm_e2ee_'+room);
+    if(rk && window.crypto && crypto.subtle){
+      try{ this.e2eeKey=await crypto.subtle.importKey('raw', b64uToU8(rk), 'AES-GCM',
+             false, ['encrypt','decrypt']); }catch(e){}
+    }
     const cjwt=await clientJwt(false);            // 기기 전용 자격이 있으면 JWT 로
     return new Promise((res,rej)=>{
       let done=false;
@@ -504,8 +535,21 @@ class Conn{
       else if(token) url+=`&token=${encodeURIComponent(token)}`;
       const ws=new WebSocket(url); this.ws=ws;
       ws.onopen=()=>{};
+      const dispatch=(m)=>{
+        if(m.type==='res'||m.type==='pong'){
+          if(m.error==='auth_required'&&this.onauth)this.onauth(false,'auth_required');
+          if((m.error==='e2ee_key_mismatch'||m.error==='e2ee_required')&&!this._e2eeWarned){
+            this._e2eeWarned=true;
+            toast(m.error==='e2ee_required'
+              ?'이 PC 가 종단 암호화를 요구합니다 - 새 QR 로 재페어링해 주세요'
+              :'암호화 키가 맞지 않습니다 - 이 기기를 다시 페어링해 주세요'); }
+          const w=this.waiters.get(m.id);
+          if(w){this.waiters.delete(m.id); w(m);} return; }
+        if(m.type==='stream'){ const h=this.streams.get(m.id); if(h)h(m); return; }
+      };
       ws.onmessage=(ev)=>{
         let m; try{m=JSON.parse(ev.data);}catch(e){return;}
+        // 릴레이가 직접 보내는 제어 프레임(암호화 대상 아님)
         if(m.type==='hello'){ this.peer=!!m.peer_present; this.cid=m.cid||null;
           this.onstatus(true,this.peer);
           if(!done){ if(this.devToken){ this._doAuth().finally(()=>{ if(!done){done=true;res(m);} }); }
@@ -513,11 +557,14 @@ class Conn{
           return; }
         if(m.type==='peer'){ if(m.event==='agent_online')this.peer=true;
           if(m.event==='agent_offline')this.peer=false; this.onstatus(true,this.peer); return; }
-        if(m.type==='res'||m.type==='pong'){
-          if(m.error==='auth_required'&&this.onauth)this.onauth(false,'auth_required');
-          const w=this.waiters.get(m.id);
-          if(w){this.waiters.delete(m.id); w(m);} return; }
-        if(m.type==='stream'){ const h=this.streams.get(m.id); if(h)h(m); return; }
+        // 나머지: 봉투면 복호(수신 직렬화로 순서 보존) 후 디스패치
+        this._rxq=this._rxq.then(async()=>{
+          if(m&&m.e==='a1'&&m.p){
+            if(!this.e2eeKey) return;      // 키 없이 온 봉투는 처리 불가
+            try{ m=await this._openEnv(m); }catch(e){ return; }
+          }
+          dispatch(m);
+        }).catch(()=>{});
       };
       ws.onclose=(ev)=>{ this.onstatus(false,false);
         if(!done){done=true;rej(new Error(this._closeMsg(ev&&ev.code)));}
@@ -530,7 +577,7 @@ class Conn{
   req(method,params={}){
     return new Promise((res)=>{
       const id='c'+(++this.seq); this.waiters.set(id,res);
-      this.ws.send(JSON.stringify({v:1,type:'req',id,method,params}));
+      this._tx({v:1,type:'req',id,method,params});
     });
   }
   // 로컬 006 /api/* 제네릭 호출
@@ -547,13 +594,13 @@ class Conn{
   }
   startResume(sessionId,onFrame,inplace,cred){
     const id='s'+(++this.seq); this.streams.set(id,onFrame);
-    this.ws.send(JSON.stringify({v:1,type:'req',id,method:'resume',
+    this._tx({v:1,type:'req',id,method:'resume',
       params:{session_id:sessionId,skip:!(cred&&cred.safe),inplace:!!inplace,
-        grace:(cred&&cred.grace)||'',otp:(cred&&cred.otp)||''}}));
+        grace:(cred&&cred.grace)||'',otp:(cred&&cred.otp)||''}});
     return {
       id,
-      input:(text)=>this.ws.send(JSON.stringify({v:1,type:'stream_in',id,
-        data:{type:'user',message:{role:'user',content:[{type:'text',text}]}}})),
+      input:(text)=>this._tx({v:1,type:'stream_in',id,
+        data:{type:'user',message:{role:'user',content:[{type:'text',text}]}}}),
       close:()=>this.streams.delete(id),
     };
   }
@@ -561,10 +608,10 @@ class Conn{
   startTerminal(sessionId,onData,cred){
     const id='t'+(++this.seq);
     this.streams.set(id,(m)=>{ if(m.eof){onData(null,true,m.error);} else onData(m.data,false); });
-    this.ws.send(JSON.stringify({v:1,type:'req',id,method:'terminal',
+    this._tx({v:1,type:'req',id,method:'terminal',
       params:{session_id:sessionId,skip:!(cred&&cred.safe),   // safe=권한확인 유지(원격 승인용)
-        grace:(cred&&cred.grace)||'',otp:(cred&&cred.otp)||''}}));
-    return { send:(obj)=>this.ws.send(JSON.stringify({v:1,type:'stream_in',id,data:obj})),
+        grace:(cred&&cred.grace)||'',otp:(cred&&cred.otp)||''}});
+    return { send:(obj)=>this._tx({v:1,type:'stream_in',id,data:obj}),
              close:()=>this.streams.delete(id) };
   }
   _closeMsg(code){
@@ -1962,6 +2009,9 @@ const PAIR_KEYS_ACTIVE=['sm_room','sm_token','sm_cs','sm_cp','sm_devtoken','sm_c
 const PAIR_KEYS_ALL=PAIR_KEYS_ACTIVE.concat(['sm_pcs','sm_hint_done']);
 function clearPairing(all){
   (all?PAIR_KEYS_ALL:PAIR_KEYS_ACTIVE).forEach(k=>LS.removeItem(k));
+  if(all){ // E2EE 룸 키도 함께(자격 완전 소거)
+    for(let i=LS.length-1;i>=0;i--){ const k=LS.key(i);
+      if(k&&k.indexOf('sm_e2ee_')===0) LS.removeItem(k); } }
   try{ conn.devToken=''; }catch(e){}
   setTitle(''); const sel=$('#pcname'); if(sel) sel.classList.add('hidden');   // 헤더 PC 표시 숨김
 }
@@ -2069,6 +2119,11 @@ function enterApp(){ $('#pair').classList.add('hidden'); $('#app').classList.rem
   const sel=$('#pcname'); if(sel && !sel.onchange) sel.onchange=onPcSelect;
   refreshPcSelect();
   refreshPushBtn();
+  // 릴레이 모드: E2EE 활성이면 자물쇠 배지(로컬은 refreshConnBadge 가 담당)
+  if(MODE==='relay'){ const b=$('#conn-badge');
+    if(b && conn.e2eeKey){ b.textContent='🔒 E2EE'; b.className='connbadge jwt';
+      b.classList.remove('hidden');
+      b.onclick=()=>toast('종단 암호화 활성 - 릴레이 서버도 대화 내용을 읽을 수 없습니다'); } }
   loadList(); }
 $('#p-go').onclick=doPair;
 function doPair(){
@@ -2288,8 +2343,14 @@ if(_pcexport){
   // 원격(릴레이)에서는 2FA 패널을 숨긴다 — 설정 변경은 로컬 전용이라 상태 표시뿐이고,
   // 유일한 실행 동작이던 'grace 해제'는 ⏻ 연결 해제가 sm_grace 를 지우므로 대체된다.
   $('#btn-security').classList.add('hidden');
+  // 페어링 파라미터: fragment(#) 우선 - query 는 릴레이 접근로그에 남을 수 있어
+  // 신형 링크는 전부 fragment 로 온다. 구형(query) 링크도 계속 수용.
   const p=new URLSearchParams(location.search);
-  // 페어링 딥링크(QR): ?room=&token=&dev= → 저장 후 주소창에서 비밀 제거
+  if(location.hash.length>1){
+    try{ new URLSearchParams(location.hash.slice(1)).forEach((v,k)=>p.set(k,v)); }catch(e){}
+  }
+  // E2EE 룸 키: 이 브라우저에만 저장(fragment 라 서버엔 안 감)
+  if(p.get('rk')&&p.get('room')){ LS.setItem('sm_e2ee_'+p.get('room'), p.get('rk')); }
   const dev=p.get('dev');
   if(dev){ LS.setItem('sm_devtoken',dev); conn.devToken=dev; }
   // 기기 전용 client 자격증명(공유 토큰 대체). 있으면 저장하고 JWT 로 교환해 쓴다.
@@ -2301,8 +2362,8 @@ if(_pcexport){
   if(swRoom){ const spc=pcsLoad().find(x=>x.room===swRoom); if(spc) pcsActivate(spc.room); }
   const room=p.get('room')||LS.getItem('sm_room')||'';
   const token=p.get('token')||LS.getItem('sm_token')||'';
-  if(p.get('dev')||p.get('token')||p.get('cs')||swRoom){   // 주소창에서 파라미터 제거(캐시/공유 방지)
-    try{ history.replaceState(null,'',location.pathname); }catch(e){}
+  if(p.get('dev')||p.get('token')||p.get('cs')||p.get('rk')||swRoom){   // 주소창에서 비밀 제거
+    try{ history.replaceState(null,'',location.pathname); }catch(e){}   // hash 도 함께 지워진다
   }
   $('#p-room').value=room; $('#p-token').value=token;
   // 저장된 자격이 있으면 자동 접속(기기 자격 cs 또는 구 공유 토큰)
