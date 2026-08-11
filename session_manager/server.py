@@ -892,7 +892,7 @@ def create_app() -> FastAPI:
     @app.get("/api/v1/sessions")
     def api_v1_sessions(q: str | None = None, label: str | None = None,
                         limit: int = 0):
-        from session_manager import hooks
+        from session_manager import hooks, webterm
         runtime = hooks.status_map()   # 훅이 채운 세션별 '지금' 상태
         sessions = scanner.scan_all()
         recs = labels.all_records()  # 라벨 1회 로드
@@ -927,6 +927,8 @@ def create_app() -> FastAPI:
                 "label_name": rec.get("name"),
                 # 훅 기반 실시간 상태(없으면 None). 신선도 판정은 화면 쪽 책임.
                 "runtime": runtime.get(s.session_id),
+                # 이 세션의 PTY 가 지금 살아있는가(화면 유무 무관 - 재접속 대상)
+                "live_terminal": webterm.has_terminal(s.session_id),
             })
         out.sort(key=lambda x: x["ended_at"] or "", reverse=True)
         if limit and limit > 0:

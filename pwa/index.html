@@ -727,8 +727,10 @@ setInterval(async()=>{
 // ---- 알림 클릭 -> 세션 열기 (푸시에서 sid 전달) ----
 let PENDING_OPEN_SID = (location.hash.match(/#open=([^&]+)/)||[])[1] || '';
 if(PENDING_OPEN_SID){ try{ history.replaceState(null,'',location.pathname); }catch(e){} }
+let CURRENT_TERM_SID=null;   // 지금 터미널 화면으로 보고 있는 세션(알림 클릭 시 화면 보존용)
 function openSessionById(sid){
   if(!sid) return;
+  if(CURRENT_TERM_SID===sid) return;   // 이미 그 세션 터미널을 보는 중 - 화면 갈아엎지 않음
   const s=(SESSIONS||[]).find(x=>x.session_id===sid || (x.session_id||'').startsWith(sid));
   if(s){ loadDetail(s); } else { PENDING_OPEN_SID=sid; }
 }
@@ -939,6 +941,7 @@ function backbar(label,onback,cls){ const b=el('div','backbar'+(cls?' '+cls:''))
 
 async function loadDetail(s){
   SELECTED_ID=s.session_id; highlightSelected();
+  CURRENT_TERM_SID=null;                   // 터미널 화면에서 벗어남
   const main=paneDetail(); main.classList.remove('term-mode'); main.innerHTML=''; $('#head').textContent='세션 상세';
   main.appendChild(backbar('목록',()=>showListPane(),'tolist'));
   showDetailPane();
@@ -960,7 +963,8 @@ async function loadDetail(s){
   d.appendChild(statCard);
   const act=el('div','actions');
   const bResume=el('button','btn','▶ 채팅 재개'); bResume.onclick=()=>loadResume(s,true);   // in-place
-  const bTerm=el('button','btn','🖥 터미널 재개'); bTerm.onclick=()=>loadTerminal(s);          // in-place
+  const bTerm=el('button','btn', s.live_terminal?'🖥 터미널로 돌아가기 (실행 중)':'🖥 터미널 재개');
+  bTerm.onclick=()=>loadTerminal(s);          // in-place (실행 중이면 재접속 - 새로 안 띄움)
   const bSafe=el('button','btn ghost','✋ 터미널(권한확인)');
   bSafe.title='권한확인을 유지한 채 재개 - 도구 실행마다 확인을 물으며, 밖에서도 폰으로 원격 승인할 수 있습니다';
   bSafe.onclick=()=>loadTerminal(s,true);
@@ -1033,6 +1037,7 @@ async function loadTerminal(s, safe){
   let cred={};
   if(MODE==='relay'){ cred=await ensurePriv(); if(cred===null) return; }   // 외부 터미널 → grace/2차 인증
   if(safe) cred={...cred, safe:true};      // 권한확인 유지 - 프롬프트가 뜨고 원격 승인 가능
+  CURRENT_TERM_SID=s.session_id;           // 알림 클릭이 이 화면을 갈아엎지 않게 표시
   const main=paneDetail(); main.classList.remove('term-mode'); main.innerHTML='';
   $('#head').textContent='터미널 재개'+(safe?' (권한확인)':'');
   const bar=backbar('상세',()=>{ if(_term){_term.close();_term=null;} loadDetail(s); });
