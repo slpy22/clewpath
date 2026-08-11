@@ -1066,6 +1066,26 @@ def create_app() -> FastAPI:
             return JSONResponse({"error": "sw_missing"}, status_code=404)
         return FileResponse(f, media_type="text/javascript", headers=_NO_CACHE)
 
+    @app.get("/app.webmanifest")
+    def web_manifest():
+        f = Path(__file__).parent.parent / "pwa" / "app.webmanifest"
+        if not f.is_file():
+            return JSONResponse({"error": "manifest_missing"}, status_code=404)
+        return FileResponse(f, media_type="application/manifest+json")
+
+    @app.get("/vendor/{fname}")
+    def vendor_file(fname: str):
+        # 아이콘 등 정적 자산(릴레이의 /vendor/* 와 동일 경로 계약 - PWA 가 상대경로로 참조)
+        if "/" in fname or "\\" in fname or ".." in fname:
+            return JSONResponse({"error": "bad_name"}, status_code=404)
+        f = Path(__file__).parent.parent / "pwa" / "vendor" / fname
+        if not f.is_file():
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        import mimetypes
+        mt = mimetypes.guess_type(fname)[0] or "application/octet-stream"
+        return FileResponse(f, media_type=mt,
+                            headers={"Cache-Control": "max-age=86400"})
+
     if STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 

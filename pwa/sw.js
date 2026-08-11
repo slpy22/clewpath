@@ -14,8 +14,8 @@ self.addEventListener("push", (e) => {
     body: p.body || "",
     tag: p.tag || undefined,          // 같은 (세션,종류)는 갱신 표시(중복 방지)
     renotify: false,
-    icon: "vendor/icon-192.png",      // 없으면 브라우저 기본 아이콘
-    badge: "vendor/icon-192.png",
+    icon: "vendor/icon-192.png",
+    badge: "vendor/badge-96.png",     // 안드로이드 상태바용 단색(흰/투명) 마크
     data: { sid: p.sid || "", kind: p.kind || "" },
   }));
 });

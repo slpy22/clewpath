@@ -28,3 +28,4 @@ __pycache__/
 
 # 서버(컨트롤플레인·릴레이)는 별도 private 저장소(clewpath-server, ../007_clewpath_server)
 # 로 분리됐다 — 이 저장소는 Host 전용이라 서버 파일 자체가 존재하지 않는다.
+icons/
