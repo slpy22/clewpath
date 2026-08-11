@@ -155,6 +155,19 @@
   @keyframes sdp{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.75)}}
   @media (prefers-reduced-motion:reduce){.sdot.pulse{animation:none}}
   .sstate{font-size:.72rem;font-weight:600;color:var(--c,#8b949e);flex:none}
+  /* 웹 재개: 선택지(AskUserQuestion)/플랜 승인 카드 - headless 라 TUI 가 못 뜨는
+     대화형 요소를 버튼으로 복원. 탭하면 답이 채팅으로 전송된다. */
+  .askcard{border:1px solid var(--line);border-radius:12px;padding:12px;margin:8px 0;background:var(--surface)}
+  .askq{font-weight:650;margin-bottom:4px}
+  .askdesc{font-size:.8rem;color:var(--muted);margin-bottom:8px}
+  .askopts{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+  .askopt{text-align:left;border:1px solid var(--line);border-radius:9px;padding:9px 12px;
+    background:var(--surface2);color:var(--ink);font-size:.88rem;cursor:pointer}
+  .askopt small{display:block;color:var(--muted);font-size:.76rem;margin-top:2px}
+  .askopt.on{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,var(--surface2))}
+  .askopt:disabled{opacity:.55;cursor:default}
+  .planbody{font-size:.85rem;border-left:3px solid var(--line);padding-left:10px;margin:8px 0;
+    max-height:40vh;overflow:auto;white-space:pre-wrap}
   .devrow{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)}
   .devrow>div:first-child{flex:1;min-width:0}
   .devrow .devname{font-weight:600;font-size:.95rem}
@@ -850,6 +863,64 @@ function sessionBadge(s){
   if(rt.phase==='ready'    &&fresh(rt.ready_at,60*M))       return {c:'#3fb950',pulse:false,text:'완료'};
   return null;
 }
+// ---- 웹 재개: 선택지/플랜 승인 카드 ----
+// headless 스트림에도 도구 호출 내용(질문+선택지)은 그대로 오므로, 버튼으로
+// 렌더하고 탭하면 답을 채팅 메시지로 보낸다. (도구 자체는 실패하지만 Claude 는
+// 이어지는 사용자 답을 받아 진행한다)
+function renderAskCard(container, input, sendText){
+  const qs=(input&&input.questions)||[];
+  if(!qs.length) return false;
+  qs.forEach(q=>{
+    const card=el('div','askcard');
+    card.appendChild(el('div','askq','❓ '+(q.question||'선택해 주세요')));
+    const wrap=el('div','askopts');
+    const multi=!!q.multiSelect, chosen=new Set();
+    (q.options||[]).forEach(o=>{
+      const b=el('button','askopt');
+      b.appendChild(document.createTextNode(o.label||''));
+      if(o.description){ const d=document.createElement('small'); d.textContent=o.description; b.appendChild(d); }
+      b.onclick=()=>{
+        if(card.dataset.done) return;
+        if(multi){ b.classList.toggle('on');
+          if(chosen.has(o.label)) chosen.delete(o.label); else chosen.add(o.label); return; }
+        card.dataset.done='1'; b.classList.add('on');
+        wrap.querySelectorAll('button').forEach(x=>x.disabled=true);
+        sendText((q.header?q.header+': ':'')+(o.label||''));
+      };
+      wrap.appendChild(b);
+    });
+    card.appendChild(wrap);
+    if(multi){
+      const ok=el('button','askopt on','선택 완료 →');
+      ok.style.marginTop='6px';
+      ok.onclick=()=>{ if(card.dataset.done||!chosen.size) return;
+        card.dataset.done='1';
+        wrap.querySelectorAll('button').forEach(x=>x.disabled=true); ok.disabled=true;
+        sendText((q.header?q.header+': ':'')+[...chosen].join(', ')); };
+      card.appendChild(ok);
+    }
+    container.appendChild(card);
+  });
+  return true;
+}
+function renderPlanCard(container, input, sendText, focusInput){
+  const card=el('div','askcard');
+  card.appendChild(el('div','askq','📋 실행 계획 승인 요청'));
+  const plan=el('div','planbody'); plan.innerHTML=mdToHtml(String((input&&input.plan)||''));
+  card.appendChild(plan);
+  const wrap=el('div','askopts');
+  const ok=el('button','askopt','✅ 계획대로 진행');
+  const no=el('button','askopt','✍ 수정 의견 직접 입력');
+  ok.onclick=()=>{ if(card.dataset.done) return; card.dataset.done='1';
+    ok.classList.add('on'); ok.disabled=no.disabled=true;
+    sendText('계획을 승인합니다. 그대로 진행해 주세요.'); };
+  no.onclick=()=>{ if(!card.dataset.done && focusInput) focusInput(); };
+  wrap.appendChild(ok); wrap.appendChild(no);
+  card.appendChild(wrap);
+  container.appendChild(card);
+  return true;
+}
+
 // ---- 재개 방식 선택 (웹/터미널 x YOLO/일반) - 기본: 웹+YOLO, 마지막 선택 기억 ----
 function showResumeChooser(s){
   if(s.live_terminal){ loadTerminal(s); return; }   // 이미 돌고 있으면 그냥 돌아간다
@@ -1244,6 +1315,9 @@ async function loadResume(s, inplace, safe){
     if(hist.length) stream.appendChild(el('div','result','── 여기서 이어서 대화 ──'));
   }catch(e){ loading.textContent='(과거 이력 로드 실패)'; }
   main.scrollTop=main.scrollHeight;
+  // 카드 버튼이 답을 보낼 때 쓰는 헬퍼(사용자 말풍선 + 전송). busy 여도 보낸다 -
+  // 도구 실패 직후 턴이 아직 도는 중일 수 있고, stream-json 입력은 큐잉된다.
+  const sendText=(t)=>{ push('msg user',t); setBusy(true); try{ sess.input(t); }catch(e){} };
   sess=T.resume(s.session_id,(f)=>{
     if(f.eof){ setBusy(false);
       if(f.error==='2fa_invalid'||f.error==='2fa_required') clearGrace();  // 만료 → 재인증
@@ -1253,7 +1327,13 @@ async function loadResume(s, inplace, safe){
     if(ev.type==='assistant'){ const c=ev.message&&ev.message.content;
       if(Array.isArray(c))for(const x of c){
         if(x.type==='text'){ const d=push('msg assistant',''); d.innerHTML=mdToHtml(x.text); }
-        else if(x.type==='tool_use'){ const d=push('tool','🔧 '+x.name+' 실행 중…'); d.dataset.tool='1'; }
+        else if(x.type==='tool_use'){
+          // 대화형 도구는 버튼 카드로 복원(선택지/플랜 승인), 나머지는 실행 표시
+          if(x.name==='AskUserQuestion' && renderAskCard(stream,x.input,sendText)){}
+          else if(x.name==='ExitPlanMode' && renderPlanCard(stream,x.input,sendText,()=>ta.focus())){}
+          else { const d=push('tool','🔧 '+x.name+' 실행 중…'); d.dataset.tool='1'; }
+          main.scrollTop=main.scrollHeight;
+        }
       } return; }
     if(ev.type==='result'){ setBusy(false);
       const cost=ev.total_cost_usd!=null?(' · $'+ev.total_cost_usd):'';
