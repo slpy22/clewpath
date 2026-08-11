@@ -861,6 +861,15 @@ def create_app() -> FastAPI:
         from session_manager import push
         return {"subscriptions": push.list_subscriptions()}
 
+    @app.post("/api/owner/push/test")
+    def push_test():
+        # 전달 경로(브라우저/OS 알림 설정 포함)를 사용자가 즉석 검증하는 용도.
+        # dedupe 를 안 타도록 매번 다른 세션키를 쓴다.
+        from session_manager import push
+        n = push.send(f"test-{int(time.time())}", "test",
+                      "ClewPath 알림 테스트", "이 알림이 보이면 정상입니다")
+        return {"ok": True, "sent": n}
+
     @app.get("/api/v1/sessions")
     def api_v1_sessions(q: str | None = None, label: str | None = None,
                         limit: int = 0):
@@ -903,7 +912,9 @@ def create_app() -> FastAPI:
         out.sort(key=lambda x: x["ended_at"] or "", reverse=True)
         if limit and limit > 0:
             out = out[:limit]
-        return {"total": len(out), "sessions": out}
+        # now: 클라이언트가 runtime 타임스탬프의 신선도를 판정할 때 서버 시계
+        # 기준으로 보정하게 한다(폰과 PC 시계가 어긋나도 뱃지가 안 깨지게).
+        return {"total": len(out), "sessions": out, "now": int(time.time())}
 
     # ---- 외부 API v1: 일회성 fork 질의 (원본 불변, fork 자동삭제) ----
     @app.post("/api/v1/sessions/{session_id}/ask")

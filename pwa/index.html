@@ -149,6 +149,12 @@
     border:1px solid color-mix(in srgb,var(--accent) 35%,transparent);
     border-radius:12px;padding:14px 16px;margin:12px 0;font-size:.92rem;line-height:1.6}
   .firstrun b{color:var(--accent)}
+  /* 세션 실시간 상태 점 - 작업중(파랑 펄스)/권한·입력대기(주황 펄스)/완료(초록) */
+  .sdot{width:8px;height:8px;border-radius:50%;display:inline-block;flex:none;background:var(--c,#8b949e)}
+  .sdot.pulse{animation:sdp 1.4s ease-in-out infinite}
+  @keyframes sdp{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.75)}}
+  @media (prefers-reduced-motion:reduce){.sdot.pulse{animation:none}}
+  .sstate{font-size:.72rem;font-weight:600;color:var(--c,#8b949e);flex:none}
   .devrow{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)}
   .devrow>div:first-child{flex:1;min-width:0}
   .devrow .devname{font-weight:600;font-size:.95rem}
@@ -696,10 +702,27 @@ async function loadList(q){
   try{
     const data=await T.list({limit:0});
     SESSIONS=data.sessions||[];
+    if(typeof data.now==='number') CLOCK_SKEW=data.now-Date.now()/1000;
     rerender();
     consumePendingOpen();          // 알림 클릭으로 진입한 경우 해당 세션 자동 열기
+    LIST_CTX={rerender};           // 자동 갱신(뱃지 실시간화)이 쓸 컨텍스트
   }catch(e){ listWrap.innerHTML=''; listWrap.appendChild(el('div','empty','목록 실패: '+e.message)); }
 }
+
+// ---- 목록 자동 갱신: 훅 상태 뱃지를 실시간처럼 (화면 보일 때만, 스크롤 보존) ----
+let LIST_CTX=null;
+setInterval(async()=>{
+  if(document.hidden||!LIST_CTX) return;
+  if($('#app').classList.contains('hidden')) return;
+  try{
+    const d=await T.list({limit:0});
+    SESSIONS=d.sessions||[];
+    if(typeof d.now==='number') CLOCK_SKEW=d.now-Date.now()/1000;
+    const pl=$('#paneList'); const st=pl?pl.scrollTop:0;
+    LIST_CTX.rerender();
+    if(pl) pl.scrollTop=st;
+  }catch(e){}
+}, 20000);
 
 // ---- 알림 클릭 -> 세션 열기 (푸시에서 sid 전달) ----
 let PENDING_OPEN_SID = (location.hash.match(/#open=([^&]+)/)||[])[1] || '';
@@ -738,14 +761,28 @@ async function refreshPushBtn(){
   b.textContent = sub ? '🔔' : '🔕';
   b.title = sub ? '알림 켜짐 - 클릭하면 끔' : '알림 꺼짐 - 클릭하면 켬 (권한 요청·작업 완료)';
 }
+async function pushSendTest(){
+  try{ const r=await T.api('POST','/api/owner/push/test');
+       toast(r.sent?`테스트 알림 발송 (기기 ${r.sent}대) - 잠시 후 도착합니다`:'등록된 기기가 없습니다'); }
+  catch(e){ toast('테스트 실패: '+e.message); }
+}
 async function togglePush(){
-  const b=$('#btn-push');
   try{
     const existing=await pushCurrentSub();
     if(existing){
-      await T.api('POST','/api/owner/push/unsubscribe',{body:{endpoint:existing.endpoint}}).catch(()=>{});
-      await existing.unsubscribe();
-      toast('알림을 껐습니다'); refreshPushBtn(); return;
+      // 이미 켜져 있으면: 테스트/끄기 선택 (전달 경로 자가진단용)
+      const body=el('div');
+      body.appendChild(el('p',null,'알림이 켜져 있습니다. 새로 시작한 Claude 세션의 권한 요청·작업 완료 시 알려드립니다.'));
+      const t=el('button','btn full','테스트 알림 보내기');
+      t.onclick=()=>{ closeModal(); pushSendTest(); };
+      const off=el('button','btn ghost full','이 기기 알림 끄기');
+      off.style.marginTop='8px';
+      off.onclick=async()=>{ closeModal();
+        await T.api('POST','/api/owner/push/unsubscribe',{body:{endpoint:existing.endpoint}}).catch(()=>{});
+        await existing.unsubscribe();
+        toast('알림을 껐습니다'); refreshPushBtn(); };
+      openModal('🔔 알림', body, [t, off]);
+      return;
     }
     const reg=await navigator.serviceWorker.register('sw.js');
     await navigator.serviceWorker.ready;
@@ -755,7 +792,8 @@ async function togglePush(){
     const sub=await reg.pushManager.subscribe({userVisibleOnly:true, applicationServerKey:b64uToU8(vap.key)});
     await T.api('POST','/api/owner/push/subscribe',
       {body:{subscription:sub.toJSON(), name:(navigator.userAgentData&&navigator.userAgentData.platform)||navigator.platform||''}});
-    toast('알림을 켰습니다 - 권한 요청·작업 완료 시 알려드립니다');
+    toast('알림을 켰습니다 - 테스트 알림을 보냅니다');
+    pushSendTest();                      // 켜자마자 전달 경로를 실제로 확인시켜 준다
   }catch(e){ toast('알림 설정 실패: '+e.message); }
   refreshPushBtn();
 }
@@ -779,6 +817,22 @@ function groupRepr(list){ // 대표 cwd: 가장 짧은(루트) 경로
   const cwds=list.map(s=>s.cwd).filter(Boolean);
   return cwds.length? cwds.sort((a,b)=>a.length-b.length)[0] : (list[0].project_folder||'(기타)'); }
 
+// ---- 훅 기반 실시간 상태 -> 뱃지 (신선도 게이트: 오래된 신호는 표시하지 않는다) ----
+// 서버-클라이언트 시계 오차 보정값(초). 목록 응답의 now 로 갱신.
+let CLOCK_SKEW=0;
+function sessionBadge(s){
+  const rt=s.runtime; if(!rt||!rt.phase) return null;
+  const now=Date.now()/1000+CLOCK_SKEW;
+  const fresh=(t,w)=>typeof t==='number'&&t>0&&(now-t)<w;
+  const M=60;
+  // permission/waiting 은 Stop(턴 종료)이 걷어가므로 게이트는 유령 방지용(호스트 재기동 등)
+  if(rt.phase==='permission'&&fresh(rt.permission_at,30*M)) return {c:'#e8a03c',pulse:true,text:'권한 대기'};
+  if(rt.phase==='waiting'  &&fresh(rt.waiting_at,30*M))     return {c:'#e8a03c',pulse:true,text:'입력 대기'};
+  // thinking 은 턴이 길 수 있어 창을 넉넉히(2h) - 정상 종료는 Stop 이 ready 로 바꾼다
+  if(rt.phase==='thinking' &&fresh(rt.thinking_at,120*M))   return {c:'#2f81f7',pulse:true,text:'작업 중'};
+  if(rt.phase==='ready'    &&fresh(rt.ready_at,60*M))       return {c:'#3fb950',pulse:false,text:'완료'};
+  return null;
+}
 function renderRows(wrap,q){
   q=(q||'').toLowerCase().trim();
   const rows=SESSIONS.filter(s=>{
@@ -817,7 +871,10 @@ function renderRows(wrap,q){
       // 탭 영역(정보) → 상세
       const info=el('button','sinfo');
       const r1=el('div','sr1');
+      const bd=sessionBadge(s);
+      if(bd){ const d=el('span','sdot'+(bd.pulse?' pulse':'')); d.style.setProperty('--c',bd.c); r1.appendChild(d); }
       r1.appendChild(el('span','sname',s.title||s.label_name||s.slug||s.session_id.slice(0,8)));
+      if(bd){ const t=el('span','sstate',bd.text); t.style.setProperty('--c',bd.c); r1.appendChild(t); }
       if(s.labels&&s.labels.length)r1.appendChild(el('span','schip','#'+s.labels[0]));
       info.appendChild(r1);
       const meta=el('div','smeta2');
