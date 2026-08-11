@@ -171,6 +171,23 @@
   /* 웹 재개: 작업 중 보낸 메시지의 대기/실패 칩 */
   .qchip{font-size:.72rem;color:var(--muted);margin-top:4px;font-style:italic}
   .qchip.fail{color:#f85149}
+  /* 구조화 도구 카드 (웹 재개 스트림 + 뷰어 공용). 기본은 접힘 - 헤더 탭으로 펼침 */
+  .tcard{border:1px solid var(--line);border-radius:10px;margin:6px 0;background:var(--surface);overflow:hidden;max-width:100%}
+  .tchead{display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:8px 11px;
+    background:none;border:0;color:var(--ink);font-size:.84rem;cursor:pointer}
+  .tchead .ttitle{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+  .tchead .tmeta{margin-left:auto;font-size:.72rem;color:var(--muted);flex:none}
+  .tchead .tmeta.ok{color:#3fb950} .tchead .tmeta.err{color:#f85149}
+  .tcbody{border-top:1px solid var(--line);padding:8px 11px;font-size:.8rem;overflow-x:auto}
+  .tcbody pre{margin:0;white-space:pre-wrap;word-break:break-all;font-family:ui-monospace,Consolas,monospace;font-size:.76rem}
+  .tdiff{font-family:ui-monospace,Consolas,monospace;font-size:.76rem;white-space:pre-wrap;word-break:break-all}
+  .tdiff .dl{padding:0 4px;border-radius:3px}
+  .tdiff .add{background:rgba(63,185,80,.14);color:#2ea043}
+  .tdiff .del{background:rgba(248,81,73,.12);color:#d1453b}
+  .tmini{font-size:.76rem;color:var(--muted);padding:2px 4px}
+  .todorow{display:flex;gap:8px;align-items:flex-start;padding:3px 0;font-size:.84rem}
+  .todorow.done{color:var(--muted);text-decoration:line-through}
+  .todorow.now{color:var(--accent);font-weight:600}
   .devrow{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)}
   .devrow>div:first-child{flex:1;min-width:0}
   .devrow .devname{font-weight:600;font-size:.95rem}
@@ -866,6 +883,112 @@ function sessionBadge(s){
   if(rt.phase==='ready'    &&fresh(rt.ready_at,60*M))       return {c:'#3fb950',pulse:false,text:'완료'};
   return null;
 }
+// ---- 구조화 도구 카드 (웹 재개 스트림 + 뷰어 공용) ----
+// 도구 호출(input)은 즉시 카드로, 결과는 tool_use_id 로 짝을 맞춰 나중에 채운다.
+function _base(p){ p=String(p||''); const i=Math.max(p.lastIndexOf('/'),p.lastIndexOf('\\')); return i>=0?p.slice(i+1):p; }
+function _tcard(container, icon, title, metaText){
+  const card=el('div','tcard');
+  const head=el('button','tchead');
+  head.appendChild(el('span',null,icon));
+  head.appendChild(el('span','ttitle',title));
+  const meta=el('span','tmeta',metaText||''); head.appendChild(meta);
+  const body=el('div','tcbody hidden');
+  head.onclick=()=>body.classList.toggle('hidden');
+  card.appendChild(head); card.appendChild(body);
+  container.appendChild(card);
+  return {card,head,body,meta};
+}
+function _diffEl(oldS,newS){
+  const w=el('div','tdiff');
+  String(oldS||'').split('\n').forEach(l=>w.appendChild(el('div','dl del','- '+l)));
+  String(newS||'').split('\n').forEach(l=>w.appendChild(el('div','dl add','+ '+l)));
+  return w;
+}
+function _resultText(c){
+  if(typeof c==='string') return c;
+  if(Array.isArray(c)) return c.filter(y=>y&&y.type==='text').map(y=>y.text||'').join('\n');
+  return '';
+}
+function renderToolUse(container, call, pend){
+  const name=call.name||'?', inp=call.input||{};
+  const onResult=(h)=>{ if(call.id&&pend) pend[call.id]=h; };
+  if(name==='Edit'||name==='MultiEdit'){
+    const edits = name==='Edit' ? [inp] : (inp.edits||[]);
+    let add=0,del=0;
+    edits.forEach(e=>{ add+=String(e.new_string||'').split('\n').length;
+                       del+=String(e.old_string||'').split('\n').length; });
+    const c=_tcard(container,'📝', _base(inp.file_path)||'파일 수정', `+${add} −${del}`);
+    edits.forEach(e=>c.body.appendChild(_diffEl(e.old_string,e.new_string)));
+    onResult(r=>{ c.meta.classList.add(r.is_error?'err':'ok'); if(r.is_error)c.meta.textContent='실패'; });
+    return;
+  }
+  if(name==='Write'){
+    const n=String(inp.content||'').split('\n').length;
+    const c=_tcard(container,'📄',(_base(inp.file_path)||'파일')+' 작성',n+'줄');
+    c.body.appendChild(el('pre',null,String(inp.content||'').split('\n').slice(0,300).join('\n')));
+    onResult(r=>{ c.meta.classList.add(r.is_error?'err':'ok'); if(r.is_error)c.meta.textContent='실패'; });
+    return;
+  }
+  if(name==='Bash'){
+    const cmd=String(inp.command||'');
+    const c=_tcard(container,'💲',cmd.length>90?cmd.slice(0,90)+'…':cmd,'실행 중…');
+    if(inp.description) c.body.appendChild(el('div','tmini',inp.description));
+    const out=el('pre'); c.body.appendChild(out);
+    onResult(r=>{ c.meta.textContent=r.is_error?'오류':'완료'; c.meta.classList.add(r.is_error?'err':'ok');
+      out.textContent=String(r.text||'').split('\n').slice(-200).join('\n');
+      if(r.is_error) c.body.classList.remove('hidden'); });   // 실패는 바로 펼쳐 보여줌
+    return;
+  }
+  if(name==='TodoWrite'){
+    const card=el('div','tcard'); const body=el('div','tcbody');   // 진행판이라 항상 펼침
+    (inp.todos||[]).forEach(td=>{
+      const st=td.status;
+      const row=el('div','todorow'+(st==='completed'?' done':st==='in_progress'?' now':''));
+      row.appendChild(el('span',null, st==='completed'?'☑':st==='in_progress'?'▶':'☐'));
+      row.appendChild(el('span',null, st==='in_progress'?(td.activeForm||td.content||''):(td.content||'')));
+      body.appendChild(row);
+    });
+    card.appendChild(body); container.appendChild(card);
+    return;
+  }
+  if(name==='Read'||name==='Grep'||name==='Glob'||name==='LS'){
+    const icon={Read:'📖',Grep:'🔎',Glob:'🗂',LS:'📁'}[name];
+    const label=name==='Read'?_base(inp.file_path)
+      : name==='Grep'?'"'+(inp.pattern||'')+'"'
+      : (inp.pattern||inp.path||'');
+    const row=el('div','tmini',icon+' '+name+' · '+label);
+    container.appendChild(row);
+    onResult(r=>{ row.textContent+= r.is_error?' · 실패':(' · '+String(r.text||'').split('\n').length+'줄'); });
+    return;
+  }
+  if(name==='Task'){
+    const c=_tcard(container,'🤖',String(inp.description||'서브 작업'),'실행 중…');
+    if(inp.prompt) c.body.appendChild(el('pre',null,String(inp.prompt).slice(0,2000)));
+    onResult(r=>{ c.meta.textContent=r.is_error?'오류':'완료'; c.meta.classList.add(r.is_error?'err':'ok');
+      const d=el('div'); d.innerHTML=mdToHtml(String(r.text||'').slice(0,4000)); c.body.appendChild(d); });
+    return;
+  }
+  if(name==='AskUserQuestion'){          // 뷰어(정적)용 - 스트림은 버튼 카드가 먼저 가로챔
+    (inp.questions||[]).forEach(q=>{
+      const c=_tcard(container,'❓',q.question||'질문','');
+      (q.options||[]).forEach(o=>c.body.appendChild(el('div','tmini','· '+(o.label||''))));
+    });
+    return;
+  }
+  if(name==='ExitPlanMode'){
+    const c=_tcard(container,'📋','실행 계획','');
+    const d=el('div'); d.innerHTML=mdToHtml(String(inp.plan||'')); c.body.appendChild(d);
+    return;
+  }
+  const row=el('div','tmini','🔧 '+name);   // 알 수 없는 도구
+  container.appendChild(row);
+  onResult(r=>{ row.textContent='🔧 '+name+(r.is_error?' · 실패':' · 완료'); });
+}
+function feedToolResults(items, pend){
+  (items||[]).forEach(r=>{ const h=pend&&pend[r.tool_use_id];
+    if(h){ try{h(r);}catch(e){} delete pend[r.tool_use_id]; } });
+}
+
 // ---- 웹 재개: 선택지/플랜 승인 카드 ----
 // headless 스트림에도 도구 호출 내용(질문+선택지)은 그대로 오므로, 버튼으로
 // 렌더하고 탭하면 답을 채팅 메시지로 보낸다. (도구 자체는 실패하지만 Claude 는
@@ -1220,7 +1343,8 @@ async function loadViewer(s){
     const msgs=await fetchRecentMessages(s.session_id,300);
     wrap.innerHTML='';
     if(!msgs.length){wrap.appendChild(el('div','empty','표시할 대화 없음'));return;}
-    for(const m of msgs) renderHistoryMsg(wrap,m);
+    const pend={};
+    for(const m of msgs) renderHistoryMsg(wrap,m,pend);
     main.scrollTop=main.scrollHeight;
   }catch(e){ wrap.innerHTML=''; wrap.appendChild(el('div','empty','뷰어 실패: '+e.message)); }
 }
@@ -1232,12 +1356,21 @@ async function fetchRecentMessages(sid,limit=200){
 }
 
 // 깔끔 렌더: user=플레인, assistant=마크다운 + 사용도구 칩
-function renderHistoryMsg(wrap,m){
+function renderHistoryMsg(wrap,m,pend){
   const text=(m.text||'').trim();
-  if(m.role==='user'){ if(text){ const d=el('div','msg user'); d.textContent=text; wrap.appendChild(d); } return; }
+  if(m.role==='user'){
+    // 도구 결과 레코드면 해당 카드에 결과를 채운다(말풍선 아님)
+    if(m.tool_results&&m.tool_results.length) feedToolResults(m.tool_results,pend||{});
+    if(text){ const d=el('div','msg user'); d.textContent=text; wrap.appendChild(d); }
+    return;
+  }
   if(m.role==='assistant'){
     if(text){ const d=el('div','msg assistant'); d.innerHTML=mdToHtml(text); wrap.appendChild(d); }
-    if(m.tools&&m.tools.length){ wrap.appendChild(el('div','tool','🔧 '+[...new Set(m.tools)].join(', '))); }
+    if(m.tool_calls&&m.tool_calls.length){
+      m.tool_calls.forEach(tc=>renderToolUse(wrap,tc,pend||{}));
+    } else if(m.tools&&m.tools.length){   // 구버전 서버 호환(이름만 올 때)
+      wrap.appendChild(el('div','tool','🔧 '+[...new Set(m.tools)].join(', ')));
+    }
   }
 }
 
@@ -1314,13 +1447,15 @@ async function loadResume(s, inplace, safe){
   // 과거 이력 먼저 표시(끝부분)
   const loading=push('msg sys','과거 대화 불러오는 중…');
   try{ const hist=await fetchRecentMessages(s.session_id,120); loading.remove();
-    for(const m of hist) renderHistoryMsg(stream,m);
+    const hpend={};
+    for(const m of hist) renderHistoryMsg(stream,m,hpend);
     if(hist.length) stream.appendChild(el('div','result','── 여기서 이어서 대화 ──'));
   }catch(e){ loading.textContent='(과거 이력 로드 실패)'; }
   main.scrollTop=main.scrollHeight;
   // 카드 버튼이 답을 보낼 때 쓰는 헬퍼(사용자 말풍선 + 전송). busy 여도 보낸다 -
   // 도구 실패 직후 턴이 아직 도는 중일 수 있고, stream-json 입력은 큐잉된다.
   const sendText=(t)=>{ push('msg user',t); setBusy(true); try{ sess.input(t); }catch(e){} };
+  const toolPend={};   // tool_use id -> 결과 핸들러 (구조화 카드 짝맞춤)
   sess=T.resume(s.session_id,(f)=>{
     if(f.eof){ setBusy(false);
       if(f.error==='2fa_invalid'||f.error==='2fa_required') clearGrace();  // 만료 → 재인증
@@ -1333,10 +1468,10 @@ async function loadResume(s, inplace, safe){
       if(Array.isArray(c))for(const x of c){
         if(x.type==='text'){ const d=push('msg assistant',''); d.innerHTML=mdToHtml(x.text); }
         else if(x.type==='tool_use'){
-          // 대화형 도구는 버튼 카드로 복원(선택지/플랜 승인), 나머지는 실행 표시
+          // 대화형 도구는 버튼 카드(선택지/플랜 승인), 나머지는 구조화 카드
           if(x.name==='AskUserQuestion' && renderAskCard(stream,x.input,sendText)){}
           else if(x.name==='ExitPlanMode' && renderPlanCard(stream,x.input,sendText,()=>ta.focus())){}
-          else { const d=push('tool','🔧 '+x.name+' 실행 중…'); d.dataset.tool='1'; }
+          else renderToolUse(stream,{id:x.id,name:x.name,input:x.input},toolPend);
           main.scrollTop=main.scrollHeight;
         }
       } return; }
@@ -1345,7 +1480,13 @@ async function loadResume(s, inplace, safe){
       push('result','완료'+cost);
       drainPend();                       // 대기 중이던 메시지를 이어서 전송
       return; }
-    if(ev.type==='user'){ return; } // tool_result 에코 생략
+    if(ev.type==='user'){            // tool_result 를 카드에 짝 맞춰 채운다
+      const c=ev.message&&ev.message.content;
+      if(Array.isArray(c)) feedToolResults(
+        c.filter(x=>x&&x.type==='tool_result')
+         .map(x=>({tool_use_id:x.tool_use_id,is_error:!!x.is_error,text:_resultText(x.content)})),
+        toolPend);
+      return; }
   },Object.assign({inplace:isIn},cred));
   // 작업 중에도 입력을 받는다: busy 면 큐에 쌓고(대기 칩 표시) 턴이 끝나면 자동 전송.
   const pend=[];   // {t, chip}

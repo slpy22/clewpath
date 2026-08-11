@@ -61,6 +61,50 @@ def _tool_names(content) -> list[str]:
             if isinstance(b, dict) and b.get("type") == "tool_use"]
 
 
+def _cap_val(v, cap: int = 3000, depth: int = 0):
+    """카드 렌더용 입력 절삭 - 거대한 파일 내용이 응답을 폭파시키지 않게."""
+    if depth > 4:
+        return "…"
+    if isinstance(v, str):
+        return v if len(v) <= cap else v[:cap] + "\n…(생략)"
+    if isinstance(v, list):
+        return [_cap_val(x, cap, depth + 1) for x in v[:50]]
+    if isinstance(v, dict):
+        return {k: _cap_val(x, cap, depth + 1) for k, x in list(v.items())[:40]}
+    return v
+
+
+def _tool_calls(content) -> list[dict]:
+    """구조화 카드용: 도구 호출의 id/name/input(절삭)."""
+    if not isinstance(content, list):
+        return []
+    return [{"id": b.get("id"), "name": b.get("name", "?"),
+             "input": _cap_val(b.get("input") or {})}
+            for b in content if isinstance(b, dict) and b.get("type") == "tool_use"]
+
+
+def _tool_results(content) -> list[dict]:
+    """구조화 카드용: 도구 결과(tool_use_id 로 호출과 짝을 맞춘다)."""
+    if not isinstance(content, list):
+        return []
+    out = []
+    for b in content:
+        if not (isinstance(b, dict) and b.get("type") == "tool_result"):
+            continue
+        c = b.get("content")
+        if isinstance(c, str):
+            txt = c
+        elif isinstance(c, list):
+            txt = "\n".join(x.get("text", "") for x in c
+                            if isinstance(x, dict) and x.get("type") == "text")
+        else:
+            txt = ""
+        out.append({"tool_use_id": b.get("tool_use_id"),
+                    "is_error": bool(b.get("is_error")),
+                    "text": txt[:4000] + ("\n…(생략)" if len(txt) > 4000 else "")})
+    return out
+
+
 def read_conversation(session_id: str, limit: int = 200) -> dict | None:
     """대화만 깔끔하게 추출(Claude 표시용). user/assistant 의 text + 사용도구만.
 
@@ -89,9 +133,12 @@ def read_conversation(session_id: str, limit: int = 200) -> dict | None:
             content = msg.get("content")
             text = _text_blocks(content).strip()
             tools = _tool_names(content)
-            if not text and not tools:
-                continue  # 순수 tool_result 등은 제외
+            calls = _tool_calls(content)
+            results = _tool_results(content)
+            if not text and not tools and not results:
+                continue  # 빈 메타 레코드 제외
             conv.append({"role": role, "text": text, "tools": tools,
+                         "tool_calls": calls, "tool_results": results,
                          "timestamp": obj.get("timestamp")})
 
     total = len(conv)
