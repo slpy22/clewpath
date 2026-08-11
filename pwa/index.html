@@ -515,7 +515,7 @@ class Conn{
   startResume(sessionId,onFrame,inplace,cred){
     const id='s'+(++this.seq); this.streams.set(id,onFrame);
     this.ws.send(JSON.stringify({v:1,type:'req',id,method:'resume',
-      params:{session_id:sessionId,skip:true,inplace:!!inplace,
+      params:{session_id:sessionId,skip:!(cred&&cred.safe),inplace:!!inplace,
         grace:(cred&&cred.grace)||'',otp:(cred&&cred.otp)||''}}));
     return {
       id,
@@ -593,7 +593,7 @@ const localT={
   resume(id,cb,opts){
     const proto=location.protocol==='https:'?'wss':'ws';
     const ep=(opts&&opts.inplace)?'resume-inplace':'resume';
-    const ws=new WebSocket(`${proto}://${location.host}${APIBASE}/api/v1/${ep}/${id}?skip=1`);
+    const ws=new WebSocket(`${proto}://${location.host}${APIBASE}/api/v1/${ep}/${id}?skip=${(opts&&opts.safe)?0:1}`);
     ws.onmessage=(ev)=>{ let d; try{d=JSON.parse(ev.data);}catch(e){return;} cb({data:d}); };
     ws.onclose=()=>cb({eof:true});
     return { input:(text)=>ws.send(JSON.stringify(
@@ -850,6 +850,42 @@ function sessionBadge(s){
   if(rt.phase==='ready'    &&fresh(rt.ready_at,60*M))       return {c:'#3fb950',pulse:false,text:'완료'};
   return null;
 }
+// ---- 재개 방식 선택 (웹/터미널 x YOLO/일반) - 기본: 웹+YOLO, 마지막 선택 기억 ----
+function showResumeChooser(s){
+  if(s.live_terminal){ loadTerminal(s); return; }   // 이미 돌고 있으면 그냥 돌아간다
+  let pref={how:'web', yolo:true};
+  try{ pref={...pref, ...JSON.parse(LS.getItem('sm_resume_pref')||'{}')}; }catch(e){}
+  const body=el('div');
+  const grid=el('div'); body.appendChild(grid);
+  const CAPTION={
+    'web|true'  :'채팅 화면에서 이어쓰기 · 도구 자동 허용',
+    'web|false' :'⚠ 웹 화면은 확인을 물을 수 없어, 도구 실행이 필요한 작업은 거부됩니다 (조회·질문용)',
+    'term|true' :'터미널 화면 그대로 · 도구 자동 허용',
+    'term|false':'터미널에서 확인을 물으며, 자리를 비워도 폰 알림으로 원격 승인할 수 있습니다',
+  };
+  const render=()=>{
+    grid.innerHTML='';
+    const seg=(label,opts,cur,onSel)=>{
+      grid.appendChild(el('label',null,label));
+      const w=el('div'); w.style.cssText='display:flex;gap:8px;margin:6px 0 12px';
+      opts.forEach(o=>{ const b=el('button','btn'+(o.v===cur?'':' ghost'),o.t);
+        b.style.flex='1'; b.onclick=()=>{onSel(o.v);render();}; w.appendChild(b); });
+      grid.appendChild(w);
+    };
+    seg('화면',[{v:'web',t:'🌐 웹 (채팅)'},{v:'term',t:'🖥 터미널'}],pref.how,v=>pref.how=v);
+    seg('권한',[{v:true,t:'⚡ YOLO (자동 허용)'},{v:false,t:'✋ 일반 (권한 확인)'}],pref.yolo,v=>pref.yolo=v);
+    grid.appendChild(el('div','cwd',CAPTION[pref.how+'|'+pref.yolo]));
+  };
+  render();
+  const go=el('button','btn full','▶ 재개');
+  go.onclick=()=>{
+    LS.setItem('sm_resume_pref',JSON.stringify(pref)); closeModal();
+    if(pref.how==='term') loadTerminal(s, !pref.yolo);
+    else loadResume(s, true, !pref.yolo);
+  };
+  openModal('재개', body, [go]);
+}
+
 // ---- 원격 권한 승인 (권한 대기 세션 -> PTY 키 주입) ----
 const _approveBusy=new Set();
 function showApprove(s){
@@ -941,7 +977,9 @@ function renderRows(wrap,q){
         bA.style.color='#e8a03c'; bA.onclick=()=>showApprove(s);
         srow.appendChild(info); srow.appendChild(bA);
       } else { srow.appendChild(info); }
-      const bR=el('button','sbtn resume','▶'); bR.title='재개'; bR.onclick=()=>loadResume(s);
+      const bR=el('button','sbtn resume', s.live_terminal?'🖥':'▶');
+      bR.title=s.live_terminal?'실행 중 - 터미널로 돌아가기':'재개 (웹/터미널 선택)';
+      bR.onclick=()=>showResumeChooser(s);
       const bN=el('button','sbtn rename','✎'); bN.title='이름 변경'; bN.onclick=()=>renameNative(s);
       srow.appendChild(bR); srow.appendChild(bN);
       glist.appendChild(srow);
@@ -977,12 +1015,11 @@ async function loadDetail(s){
   const statBody=el('div'); statBody.appendChild(el('div','spin')); statCard.appendChild(statBody);
   d.appendChild(statCard);
   const act=el('div','actions');
-  const bResume=el('button','btn','▶ 채팅 재개'); bResume.onclick=()=>loadResume(s,true);   // in-place
-  const bTerm=el('button','btn', s.live_terminal?'🖥 터미널로 돌아가기 (실행 중)':'🖥 터미널 재개');
-  bTerm.onclick=()=>loadTerminal(s);          // in-place (실행 중이면 재접속 - 새로 안 띄움)
-  const bSafe=el('button','btn ghost','✋ 터미널(권한확인)');
-  bSafe.title='권한확인을 유지한 채 재개 - 도구 실행마다 확인을 물으며, 밖에서도 폰으로 원격 승인할 수 있습니다';
-  bSafe.onclick=()=>loadTerminal(s,true);
+  // 재개는 버튼 하나 - 방식(웹/터미널 x YOLO/일반)은 모달에서 선택(기본 웹+YOLO).
+  // 이미 돌고 있는 세션이면 선택 없이 바로 그 터미널로 복귀.
+  const bResume=el('button','btn',
+    s.live_terminal?'🖥 터미널로 돌아가기 (실행 중)':'▶ 재개');
+  bResume.onclick=()=>showResumeChooser(s);
   const bFork=el('button','btn ghost','🔱 포크로 재개'); bFork.onclick=()=>loadResume(s,false);
   const bRename=el('button','btn ghost','✎ 이름'); bRename.onclick=()=>renameNative(s);
   const bView=el('button','btn ghost','💬 뷰어'); bView.onclick=()=>loadViewer(s);
@@ -990,8 +1027,7 @@ async function loadDetail(s){
   const bCwd=el('button','btn ghost','📁 폴더 변경'); bCwd.onclick=()=>changeCwd(s);
   const bExport=el('button','btn ghost','📤 내보내기'); bExport.onclick=()=>exportSession(s);
   const bDel=el('button','btn danger full','🗑 삭제'); bDel.onclick=()=>doDelete(s);
-  act.appendChild(bResume); act.appendChild(bTerm);
-  act.appendChild(bSafe);
+  act.appendChild(bResume);
   act.appendChild(bFork); act.appendChild(bRename);
   act.appendChild(bView); act.appendChild(bProf);
   act.appendChild(bCwd); act.appendChild(bExport);
@@ -1165,12 +1201,13 @@ function mdToHtml(src){
 }
 
 // ---- 재개(스트리밍 + 입력) ----
-async function loadResume(s, inplace){
+async function loadResume(s, inplace, safe){
   const isIn = inplace!==false;   // 기본 in-place(실제 세션)
   let cred={};
   if(isIn){ cred=await ensurePriv(); if(cred===null) return; }   // 외부 in-place → grace/2차 인증
+  if(safe) cred={...cred, safe:true};   // 일반 모드: 도구 자동허용 없이(웹은 물을 수 없어 거부됨)
   const main=paneDetail(); main.classList.remove('term-mode'); main.innerHTML='';
-  $('#head').textContent='재개';
+  $('#head').textContent='재개'+(safe?' (일반)':'');
   main.appendChild(backbar('상세',()=>{sess&&sess.close();loadDetail(s);}));
   showDetailPane();
   const stream=el('div','stream'); main.appendChild(stream);
