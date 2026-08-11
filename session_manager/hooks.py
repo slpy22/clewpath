@@ -8,8 +8,10 @@ Claude Code 는 ~/.claude/settings.json 의 hooks 로 세션 생명주기 이벤
 
 구성:
   1) ensure_registered(port): settings.json 에 우리 훅을 병합 등록(멱등,
-     기존 훅 보존). settings 의 명령은 데이터 폴더의 clewpath-hook.cmd 하나.
-     포트가 바뀌면 cmd 파일만 다시 쓰면 되고 settings.json 은 불변.
+     기존 훅 보존). 명령은 **인라인 curl 한 줄** - Claude 는 Windows 에서도
+     훅을 bash(Git Bash)로 실행하므로(실측: .cmd 파일 경로는 백슬래시가
+     이스케이프로 먹혀 'command not found'), 파일 경유 없이 bash/cmd 양쪽에서
+     똑같이 도는 명령이어야 한다. 포트가 바뀌면 등록을 갱신한다.
   2) update_from_event(payload): 이벤트를 세션별 메모리 상태로 접는다.
   3) status_map(): 세션 목록 API 가 세션별로 조인해 내려줄 스냅샷.
      신선도(stale) 판정은 소비자(PWA) 몫 - 여기선 관측 시각만 기록한다.
@@ -51,36 +53,37 @@ def hook_cmd_path() -> Path:
 
 # ---------------------------------------------------------------- 등록(멱등)
 
-def _write_hook_cmd(port: int) -> None:
-    """stdin(JSON)을 로컬 Host 로 그대로 넘기는 한 줄짜리 명령을 쓴다.
+def hook_command(port: int) -> str:
+    """stdin(JSON)을 로컬 Host 로 넘기는 셸 불문 한 줄.
 
-    curl.exe 는 Windows 10+ 기본 탑재. -m 3 으로 Host 다운 시에도 훅이
-    Claude 를 붙잡지 않게 하고, exit /b 0 으로 항상 성공 처리한다
-    (훅의 비정상 종료코드는 Claude 에 경고로 뜬다 - 우리 문제로 사용자
-    세션을 시끄럽게 만들지 않는다).
+    - curl.exe: Windows 10+ 기본 탑재, bash(Git Bash)에서도 PATH 로 찾는다
+    - 리다이렉션 없음(>nul 은 bash, /dev/null 은 cmd 에서 깨진다)
+    - `|| exit 0`: bash/cmd 공통 문법 - Host 가 꺼져 있어도 훅 실패 경고로
+      사용자 세션을 시끄럽게 하지 않는다
+    - -m 3: Host 다운 시에도 Claude 를 3초 이상 붙잡지 않는다
     """
-    p = hook_cmd_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(
-        "@curl.exe -s -m 3 -H \"Content-Type: application/json\" "
-        f"--data-binary @- \"http://127.0.0.1:{port}/api/hooks/event\" >nul 2>&1\r\n"
-        "@exit /b 0\r\n",
-        encoding="ascii",
-    )
+    return ("curl.exe -s -m 3 -H \"Content-Type: application/json\" "
+            f"--data-binary @- http://127.0.0.1:{port}/api/hooks/event || exit 0")
 
 
 def _is_ours(entry: dict) -> bool:
-    return HOOK_CMD_NAME in str(entry.get("command", ""))
+    cmd = str(entry.get("command", ""))
+    # 신형(인라인 curl) + 구형(.cmd 파일, bash 에서 안 돌아 교체 대상) 둘 다 우리 것
+    return "/api/hooks/event" in cmd or HOOK_CMD_NAME in cmd
 
 
 def ensure_registered(port: int) -> bool:
     """settings.json 에 훅을 병합 등록한다. 반환: 파일을 고쳤는가.
 
     - 다른 훅/설정은 절대 건드리지 않는다(병합만).
-    - 멱등: 이미 등록돼 있으면 no-op.
+    - 멱등: 이미 같은 명령(같은 포트)이면 no-op. 포트가 바뀌면 갱신.
     - 첫 수정 전에 settings.json.bak-clewpath 백업을 한 번 남긴다.
     """
-    _write_hook_cmd(port)
+    # 구형 .cmd 파일은 더 이상 안 쓴다(bash 실행 불가) - 남아 있으면 정리
+    try:
+        hook_cmd_path().unlink(missing_ok=True)
+    except Exception:  # noqa: BLE001
+        pass
 
     sp = settings_path()
     try:
@@ -94,7 +97,7 @@ def ensure_registered(port: int) -> bool:
         print(f"[hooks] settings.json 읽기 실패, 등록 건너뜀: {e}", flush=True)
         return False
 
-    cmd = str(hook_cmd_path())
+    cmd = hook_command(port)
     hooks_obj = settings.setdefault("hooks", {})
     if not isinstance(hooks_obj, dict):
         print("[hooks] settings.hooks 형식이 예상과 다름, 등록 건너뜀", flush=True)
@@ -108,7 +111,7 @@ def ensure_registered(port: int) -> bool:
         ours = [h for g in groups if isinstance(g, dict)
                 for h in (g.get("hooks") or []) if _is_ours(h)]
         if ours:
-            # 경로(포트 아님 - 포트는 cmd 파일 안)에 변화가 없으면 그대로 둔다
+            # 같은 명령(같은 포트)이면 그대로. 포트 변경/구형(.cmd)이면 교체.
             if all(h.get("command") == cmd for h in ours):
                 continue
             for h in ours:

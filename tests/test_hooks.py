@@ -33,10 +33,13 @@ def test_register_fresh(home):
     st = json.loads(hooks.settings_path().read_text(encoding="utf-8"))
     for ev in hooks.EVENTS:
         cmds = [h["command"] for g in st["hooks"][ev] for h in g["hooks"]]
-        assert any(hooks.HOOK_CMD_NAME in c for c in cmds), ev
-    cmd = hooks.hook_cmd_path().read_text(encoding="ascii")
+        assert any("/api/hooks/event" in c for c in cmds), ev
+    cmd = hooks.hook_command(5100)
     assert "127.0.0.1:5100/api/hooks/event" in cmd
-    assert "exit /b 0" in cmd                      # 실패해도 Claude 를 방해 안 함
+    # Claude 는 Windows 에서도 훅을 bash 로 실행한다(실측) - 셸 불문 조건:
+    assert "\\" not in cmd                          # 백슬래시 경로 금지(bash 가 삼킴)
+    assert ">" not in cmd                           # 리다이렉션 금지(셸별 문법 다름)
+    assert cmd.endswith("|| exit 0")                # 실패해도 Claude 를 방해 안 함
 
 
 def test_register_is_idempotent(home):
@@ -45,8 +48,24 @@ def test_register_is_idempotent(home):
     st = json.loads(hooks.settings_path().read_text(encoding="utf-8"))
     for ev in hooks.EVENTS:
         ours = [h for g in st["hooks"][ev] for h in g["hooks"]
-                if hooks.HOOK_CMD_NAME in h["command"]]
+                if "/api/hooks/event" in h["command"]]
         assert len(ours) == 1, f"{ev} 중복 등록"
+
+
+def test_register_migrates_legacy_cmd_file_entry(home):
+    """구형(.cmd 파일 경로) 등록은 bash 에서 안 돌았다 - 인라인 명령으로 교체."""
+    hooks.settings_path().parent.mkdir(parents=True, exist_ok=True)
+    legacy = str(hooks.hook_cmd_path())
+    hooks.settings_path().write_text(json.dumps({
+        "hooks": {"Stop": [{"hooks": [{"type": "command", "command": legacy}]}]},
+    }), encoding="utf-8")
+    assert hooks.ensure_registered(5100) is True
+    st = json.loads(hooks.settings_path().read_text(encoding="utf-8"))
+    cmds = [h["command"] for g in st["hooks"]["Stop"] for h in g["hooks"]]
+    assert all(hooks.HOOK_CMD_NAME not in c for c in cmds)   # 구형 제거
+    assert any("/api/hooks/event" in c for c in cmds)         # 신형 교체
+    ours = [c for c in cmds if "/api/hooks/event" in c]
+    assert len(ours) == 1, "교체이지 추가가 아니어야"
 
 
 def test_register_preserves_existing(home):
@@ -61,7 +80,7 @@ def test_register_preserves_existing(home):
     assert st["model"] == "opus"
     stop_cmds = [h["command"] for g in st["hooks"]["Stop"] for h in g["hooks"]]
     assert "user-thing.exe" in stop_cmds            # 사용자 훅 보존
-    assert any(hooks.HOOK_CMD_NAME in c for c in stop_cmds)  # 우리 것 추가
+    assert any("/api/hooks/event" in c for c in stop_cmds)   # 우리 것 추가
     # 백업이 남는다
     assert hooks.settings_path().with_name("settings.json.bak-clewpath").is_file()
 
@@ -74,12 +93,13 @@ def test_register_skips_broken_settings(home):
     assert hooks.settings_path().read_text(encoding="utf-8") == "{ broken"
 
 
-def test_register_port_change_rewrites_cmd_only(home):
+def test_register_port_change_updates_command(home):
     hooks.ensure_registered(5100)
-    before = hooks.settings_path().read_text(encoding="utf-8")
-    assert hooks.ensure_registered(5101) is False   # settings 불변
-    assert hooks.settings_path().read_text(encoding="utf-8") == before
-    assert "5101" in hooks.hook_cmd_path().read_text(encoding="ascii")
+    assert hooks.ensure_registered(5101) is True    # 포트 변경 -> 명령 갱신
+    st = json.loads(hooks.settings_path().read_text(encoding="utf-8"))
+    cmds = [h["command"] for g in st["hooks"]["Stop"] for h in g["hooks"]]
+    assert any("127.0.0.1:5101" in c for c in cmds)
+    assert all("127.0.0.1:5100" not in c for c in cmds)
 
 
 def test_register_reads_bom_settings(home):
