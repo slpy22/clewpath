@@ -529,7 +529,7 @@ class Conn{
     const id='t'+(++this.seq);
     this.streams.set(id,(m)=>{ if(m.eof){onData(null,true,m.error);} else onData(m.data,false); });
     this.ws.send(JSON.stringify({v:1,type:'req',id,method:'terminal',
-      params:{session_id:sessionId,skip:true,
+      params:{session_id:sessionId,skip:!(cred&&cred.safe),   // safe=권한확인 유지(원격 승인용)
         grace:(cred&&cred.grace)||'',otp:(cred&&cred.otp)||''}}));
     return { send:(obj)=>this.ws.send(JSON.stringify({v:1,type:'stream_in',id,data:obj})),
              close:()=>this.streams.delete(id) };
@@ -833,6 +833,38 @@ function sessionBadge(s){
   if(rt.phase==='ready'    &&fresh(rt.ready_at,60*M))       return {c:'#3fb950',pulse:false,text:'완료'};
   return null;
 }
+// ---- 원격 권한 승인 (권한 대기 세션 -> PTY 키 주입) ----
+const _approveBusy=new Set();
+function showApprove(s){
+  const rt=s.runtime||{};
+  const body=el('div');
+  body.appendChild(el('p',null,'세션이 도구 실행 권한을 기다리고 있습니다.'));
+  if(rt.note) body.appendChild(el('div','cwd',rt.note));
+  const status=el('div'); status.style.cssText='margin-top:8px;color:var(--ink2)';
+  const act=async(action,label)=>{
+    if(_approveBusy.has(s.session_id)) return;      // 이중 주입 방지
+    _approveBusy.add(s.session_id);
+    status.textContent=label+' 전송 중…';
+    try{
+      await T.api('POST',`/api/owner/sessions/${encodeURIComponent(s.session_id)}/respond`,{body:{action}});
+      closeModal(); toast(label+' 했습니다');
+      if(LIST_CTX) setTimeout(()=>LIST_CTX.rerender(), 400);
+    }catch(e){
+      if(e&&e.json&&e.json.error==='no_terminal')
+        status.textContent='이 세션은 ClewPath 터미널(권한확인 유지)로 실행 중이 아니라 원격 승인이 안 됩니다. PC 화면에서 응답해 주세요.';
+      else status.textContent='실패: '+e.message;
+    }finally{ _approveBusy.delete(s.session_id); }
+  };
+  const b1=el('button','btn full','✅ 허용');
+  b1.onclick=()=>act('allow','허용');
+  const b2=el('button','btn ghost full','이 세션에서 계속 허용');
+  b2.style.marginTop='8px'; b2.onclick=()=>act('allow_session','계속 허용');
+  const b3=el('button','btn ghost full','❌ 거부');
+  b3.style.cssText='margin-top:8px;color:#f85149';
+  b3.onclick=()=>act('deny','거부');
+  body.appendChild(status);
+  openModal('✋ 권한 승인', body, [b1,b2,b3]);
+}
 function renderRows(wrap,q){
   q=(q||'').toLowerCase().trim();
   const rows=SESSIONS.filter(s=>{
@@ -874,7 +906,9 @@ function renderRows(wrap,q){
       const bd=sessionBadge(s);
       if(bd){ const d=el('span','sdot'+(bd.pulse?' pulse':'')); d.style.setProperty('--c',bd.c); r1.appendChild(d); }
       r1.appendChild(el('span','sname',s.title||s.label_name||s.slug||s.session_id.slice(0,8)));
-      if(bd){ const t=el('span','sstate',bd.text); t.style.setProperty('--c',bd.c); r1.appendChild(t); }
+      if(bd){ const t=el('span','sstate',bd.text); t.style.setProperty('--c',bd.c);
+        if(bd.text==='권한 대기'){ t.style.cursor='pointer'; t.onclick=(e)=>{e.stopPropagation();showApprove(s);}; }
+        r1.appendChild(t); }
       if(s.labels&&s.labels.length)r1.appendChild(el('span','schip','#'+s.labels[0]));
       info.appendChild(r1);
       const meta=el('div','smeta2');
@@ -884,10 +918,15 @@ function renderRows(wrap,q){
       info.appendChild(meta);
       if(s.cwd&&s.cwd!==repr) info.appendChild(el('div','spath',s.cwd));
       info.onclick=()=>loadDetail(s);
-      // 큰 터치 버튼: 재개 / 이름
+      // 큰 터치 버튼: (권한대기면 승인) / 재개 / 이름
+      if(bd&&bd.text==='권한 대기'){
+        const bA=el('button','sbtn resume','✋'); bA.title='원격 승인';
+        bA.style.color='#e8a03c'; bA.onclick=()=>showApprove(s);
+        srow.appendChild(info); srow.appendChild(bA);
+      } else { srow.appendChild(info); }
       const bR=el('button','sbtn resume','▶'); bR.title='재개'; bR.onclick=()=>loadResume(s);
       const bN=el('button','sbtn rename','✎'); bN.title='이름 변경'; bN.onclick=()=>renameNative(s);
-      srow.appendChild(info); srow.appendChild(bR); srow.appendChild(bN);
+      srow.appendChild(bR); srow.appendChild(bN);
       glist.appendChild(srow);
     }
     wrap.appendChild(glist);
@@ -922,6 +961,9 @@ async function loadDetail(s){
   const act=el('div','actions');
   const bResume=el('button','btn','▶ 채팅 재개'); bResume.onclick=()=>loadResume(s,true);   // in-place
   const bTerm=el('button','btn','🖥 터미널 재개'); bTerm.onclick=()=>loadTerminal(s);          // in-place
+  const bSafe=el('button','btn ghost','✋ 터미널(권한확인)');
+  bSafe.title='권한확인을 유지한 채 재개 - 도구 실행마다 확인을 물으며, 밖에서도 폰으로 원격 승인할 수 있습니다';
+  bSafe.onclick=()=>loadTerminal(s,true);
   const bFork=el('button','btn ghost','🔱 포크로 재개'); bFork.onclick=()=>loadResume(s,false);
   const bRename=el('button','btn ghost','✎ 이름'); bRename.onclick=()=>renameNative(s);
   const bView=el('button','btn ghost','💬 뷰어'); bView.onclick=()=>loadViewer(s);
@@ -930,6 +972,7 @@ async function loadDetail(s){
   const bExport=el('button','btn ghost','📤 내보내기'); bExport.onclick=()=>exportSession(s);
   const bDel=el('button','btn danger full','🗑 삭제'); bDel.onclick=()=>doDelete(s);
   act.appendChild(bResume); act.appendChild(bTerm);
+  act.appendChild(bSafe);
   act.appendChild(bFork); act.appendChild(bRename);
   act.appendChild(bView); act.appendChild(bProf);
   act.appendChild(bCwd); act.appendChild(bExport);
@@ -986,11 +1029,12 @@ function attachTouchScroll(host, term){
   }, {passive:false, capture:true});
   host.addEventListener('touchend',()=>{ ty=null; }, {passive:true, capture:true});
 }
-async function loadTerminal(s){
+async function loadTerminal(s, safe){
   let cred={};
   if(MODE==='relay'){ cred=await ensurePriv(); if(cred===null) return; }   // 외부 터미널 → grace/2차 인증
+  if(safe) cred={...cred, safe:true};      // 권한확인 유지 - 프롬프트가 뜨고 원격 승인 가능
   const main=paneDetail(); main.classList.remove('term-mode'); main.innerHTML='';
-  $('#head').textContent='터미널 재개';
+  $('#head').textContent='터미널 재개'+(safe?' (권한확인)':'');
   const bar=backbar('상세',()=>{ if(_term){_term.close();_term=null;} loadDetail(s); });
   const hist=el('button',null,'📖 이력'); hist.title='과거 대화를 뷰어로 보기';
   hist.style.cssText='margin-left:auto;color:var(--accent);padding:10px 14px;font-weight:650';
@@ -1004,7 +1048,7 @@ async function loadTerminal(s){
     // div(.term-frame)로 감싸고 그 안에서 absolute 로 채운다(위 CSS 참고).
     const wrap=el('div','term-frame');
     const frame=document.createElement('iframe');
-    frame.src=`${APIBASE}/terminal?id=${encodeURIComponent(s.session_id)}&skip=1`;
+    frame.src=`${APIBASE}/terminal?id=${encodeURIComponent(s.session_id)}&skip=${safe?0:1}`;
     frame.setAttribute('allow','clipboard-read; clipboard-write');
     wrap.appendChild(frame); main.appendChild(wrap); return;
   }

@@ -861,6 +861,25 @@ def create_app() -> FastAPI:
         from session_manager import push
         return {"subscriptions": push.list_subscriptions()}
 
+    # ---- 원격 권한 승인: 실행 중인 ClewPath 터미널의 권한 프롬프트에 키 주입 ----
+    @app.post("/api/owner/sessions/{session_id}/respond")
+    async def owner_session_respond(session_id: str, request: Request):
+        from session_manager import webterm
+        body = await request.json()
+        action = str((body or {}).get("action") or "")
+        # claude TUI 권한 다이얼로그: 숫자키 즉시 선택, Esc = 거부.
+        # (키맵은 claude 버전에 따라 바뀔 수 있음 - qa-checklist 에서 실물 검증)
+        keys = {"allow": "1", "allow_session": "2", "deny": "\x1b"}
+        if action not in keys:
+            return JSONResponse({"error": "action 은 allow/allow_session/deny"},
+                                status_code=400)
+        if not webterm.write_to(session_id, keys[action]):
+            return JSONResponse(
+                {"error": "no_terminal",
+                 "hint": "이 세션이 ClewPath 터미널(권한확인 유지 모드)로 실행 중일 때만 원격 승인이 가능합니다"},
+                status_code=409)
+        return {"ok": True, "sent": action}
+
     @app.post("/api/owner/push/test")
     def push_test():
         # 전달 경로(브라우저/OS 알림 설정 포함)를 사용자가 즉석 검증하는 용도.

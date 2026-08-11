@@ -21,6 +21,31 @@ import threading
 
 from session_manager.scanner import scan_one, resolve_launch_cwd
 
+# 실행 중인 PTY 레지스트리 - 원격 승인(권한 프롬프트에 키 주입)용.
+# 한 세션 = 한 터미널 점유 규칙 그대로, 키는 세션 id(fork 면 fork id).
+_ACTIVE: dict[str, object] = {}
+
+
+def write_to(session_id: str, data: str) -> bool:
+    """실행 중인 그 세션의 PTY 에 키 입력을 넣는다. 없으면 False.
+
+    원격(폰)에서 권한 프롬프트에 응답하는 용도 - Host 가 PTY 를 소유하고
+    있어서 가능한 우리 구조의 강점. 죽은 프로세스면 레지스트리에서 걷어낸다.
+    """
+    proc = _ACTIVE.get(session_id)
+    if proc is None:
+        return False
+    try:
+        proc.write(data)
+        return True
+    except Exception:  # noqa: BLE001
+        _ACTIVE.pop(session_id, None)
+        return False
+
+
+def has_terminal(session_id: str) -> bool:
+    return session_id in _ACTIVE
+
 
 def _claude_argv(session_id: str, skip_permissions: bool = True,
                  fork_id: str | None = None) -> list[str]:
@@ -68,6 +93,7 @@ async def run_terminal(ws, session_id: str, skip_permissions: bool = True,
         await ws.send_text(f"\r\n\x1b[31m[오류] 터미널 시작 실패: {e}\x1b[0m\r\n")
         await _safe_close(ws)
         return
+    _ACTIVE[fork_id or session_id] = proc   # 원격 승인용 등록
 
     stop = threading.Event()
 
@@ -119,6 +145,10 @@ async def run_terminal(ws, session_id: str, skip_permissions: bool = True,
         pass
     finally:
         stop.set()
+        # 내가 등록한 그 프로세스일 때만 걷어낸다(새 터미널이 대체했을 수 있음)
+        key = fork_id or session_id
+        if _ACTIVE.get(key) is proc:
+            _ACTIVE.pop(key, None)
         try:
             proc.terminate(force=True)
         except Exception:  # noqa: BLE001
