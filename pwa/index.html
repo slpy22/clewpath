@@ -168,6 +168,9 @@
   .askopt:disabled{opacity:.55;cursor:default}
   .planbody{font-size:.85rem;border-left:3px solid var(--line);padding-left:10px;margin:8px 0;
     max-height:40vh;overflow:auto;white-space:pre-wrap}
+  /* 웹 재개: 작업 중 보낸 메시지의 대기/실패 칩 */
+  .qchip{font-size:.72rem;color:var(--muted);margin-top:4px;font-style:italic}
+  .qchip.fail{color:#f85149}
   .devrow{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)}
   .devrow>div:first-child{flex:1;min-width:0}
   .devrow .devname{font-weight:600;font-size:.95rem}
@@ -1321,6 +1324,8 @@ async function loadResume(s, inplace, safe){
   sess=T.resume(s.session_id,(f)=>{
     if(f.eof){ setBusy(false);
       if(f.error==='2fa_invalid'||f.error==='2fa_required') clearGrace();  // 만료 → 재인증
+      while(pend.length){ const it=pend.shift();                            // 대기분은 못 보냄
+        it.chip.textContent='✖ 전송되지 않음 - 세션이 종료됨'; it.chip.classList.add('fail'); }
       push('result', f.error?('종료: '+otpErrMsg(f.error)):'— 세션 종료 —'); return; }
     const ev=f.data||{};
     if(ev.type==='system'){ if(ev.subtype==='init')push('msg sys','● 세션 시작'); return; }
@@ -1337,12 +1342,25 @@ async function loadResume(s, inplace, safe){
       } return; }
     if(ev.type==='result'){ setBusy(false);
       const cost=ev.total_cost_usd!=null?(' · $'+ev.total_cost_usd):'';
-      push('result','완료'+cost); return; }
+      push('result','완료'+cost);
+      drainPend();                       // 대기 중이던 메시지를 이어서 전송
+      return; }
     if(ev.type==='user'){ return; } // tool_result 에코 생략
   },Object.assign({inplace:isIn},cred));
-  const doSend=()=>{ const t=ta.value.trim(); if(!t||busy)return;
-    push('msg user',t); ta.value=''; ta.style.height='auto';
-    setBusy(true); sess.input(t); };
+  // 작업 중에도 입력을 받는다: busy 면 큐에 쌓고(대기 칩 표시) 턴이 끝나면 자동 전송.
+  const pend=[];   // {t, chip}
+  const doSend=()=>{ const t=ta.value.trim(); if(!t)return;
+    ta.value=''; ta.style.height='auto';
+    if(busy){
+      const d=push('msg user',t);
+      const chip=el('div','qchip','⏳ 현재 작업이 끝나면 전송됩니다');
+      d.appendChild(chip); pend.push({t,chip});
+      return;
+    }
+    push('msg user',t); setBusy(true); sess.input(t); };
+  const drainPend=()=>{ if(!pend.length) return;
+    const it=pend.shift(); it.chip.remove();
+    setBusy(true); try{ sess.input(it.t); }catch(e){} };
   send.onclick=doSend;
   ta.onkeydown=(e)=>{ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();doSend();} };
 }
