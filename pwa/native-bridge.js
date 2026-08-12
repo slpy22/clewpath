@@ -27,7 +27,9 @@
     keyboard: { setup: noop },                     // ②
     voice: { startPTT: noop, stopPTT: noop, streamToWhisper: noop,
              speak: noop, setAudioSession: noop }, // ④
-    syncRoomKey: noop                              // ⑤
+    syncRoomKey: noop,                             // ⑤
+    showLocalPcOption: function () { return true; }, // 앱=false(폰에 로컬 서비스 없음)
+    scanQr: null                                   // 앱에서만 구현(네이티브 카메라)
   };
   window.ClewBridge = B;
   if (!isApp) return;
@@ -35,9 +37,19 @@
   /* ================= 이하 앱 전용 ================= */
   var Prefs = cap.registerPlugin('Preferences');
   var App = cap.registerPlugin('App');
+  var Scanner = cap.registerPlugin('CapacitorBarcodeScanner');
+
+  // 네이티브 QR 스캔(전체 화면 스캐너 UI). 성공 시 내용 문자열, 취소/실패 시 ''.
+  B.scanQr = function () {
+    return Scanner.scanBarcode({ hint: 0, scanInstructions: 'PC 화면의 페어링 QR 을 비춰 주세요' })
+      .then(function (r) { return (r && r.ScanResult) || ''; })
+      .catch(function () { return ''; });
+  };
 
   // 앱은 항상 릴레이 클라이언트다(로컬 번들이라 경로 추론이 'local' 로 빠지는 것을 교정)
   B.modeOverride = function () { return 'relay'; };
+  // 폰에서 로컬 서비스를 띄울 일은 없다 — PC 선택 목록의 localhost 항목 숨김
+  B.showLocalPcOption = function () { return false; };
   // 페어링 링크에서 저장한 릴레이 WS 주소. 없으면 null → 페어링 오버레이가 뜬다.
   B.wsBaseOverride = function () { return localStorage.getItem('sm_relay_ws') || null; };
 
@@ -129,17 +141,24 @@
       '<li>PC 브라우저에서 ClewPath (<span style="font-family:monospace">127.0.0.1:5100</span>) 열기</li>' +
       '<li>상단 <b>📱</b> → <b>＋ 새 기기 추가</b></li>' +
       '<li>표시된 <b>외부 접속 링크(https)</b> 를 복사해 아래에 붙여넣기</li></ol>' +
+      '<button id="cb-qr">📷 QR 스캔으로 연결</button>' +
+      '<div style="margin:10px 0 4px;opacity:.6;font-size:12px">또는 링크 붙여넣기</div>' +
       '<input type="url" id="cb-link" placeholder="https://…/relay/app#room=…" autocomplete="off">' +
       '<button id="cb-go">연결</button><div id="cb-err"></div></div>';
     document.body.appendChild(ov);
-    ov.querySelector('#cb-go').addEventListener('click', function () {
-      var v = ov.querySelector('#cb-link').value.trim();
-      var err = ov.querySelector('#cb-err');
-      if (!v) { err.textContent = PAIR_ERR.bad_url; return; }
+    var err = ov.querySelector('#cb-err');
+    function tryUrl(v) {
+      if (!v) { err.style.color = '#e66'; err.textContent = PAIR_ERR.bad_url; return; }
       err.style.color = '';
       err.textContent = '연결 중…';
       var r = handlePairingUrl(v);          // 'ok' 면 이 아래는 리로드로 사라진다
       if (r !== 'ok') { err.style.color = '#e66'; err.textContent = PAIR_ERR[r] || PAIR_ERR.bad_url; }
+    }
+    ov.querySelector('#cb-qr').addEventListener('click', function () {
+      B.scanQr().then(function (v) { if (v) tryUrl(v); });
+    });
+    ov.querySelector('#cb-go').addEventListener('click', function () {
+      tryUrl(ov.querySelector('#cb-link').value.trim());
     });
   }
 

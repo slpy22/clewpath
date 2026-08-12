@@ -2324,7 +2324,11 @@ function relayPcsSave(a){ LS.setItem('sm_pcs_relay', JSON.stringify(a)); }
 function refreshPcSelect(){
   const sel=$('#pcname'); if(!sel) return;
   const curRoom=LS.getItem('sm_room');
-  const opts=[{v:'__local__', t:'🖥 localhost'}];
+  // localhost 항목: 폰에서는 무의미(폰에 로컬 서비스 없음) — 앱은 브리지가 숨기고,
+  // 모바일 브라우저(릴레이 화면 + 터치 기기)에서도 숨긴다.
+  const allowLocal=(!window.ClewBridge||ClewBridge.showLocalPcOption())
+    && !(MODE==='relay'&&matchMedia('(pointer: coarse)').matches);
+  const opts=allowLocal?[{v:'__local__', t:'🖥 localhost'}]:[];
   if(MODE==='relay'){
     const seen=new Set();
     pcsLoad().forEach(pc=>{ opts.push({v:pc.room, t:'🖥 '+pcName(pc)}); seen.add(pc.room); });
@@ -2336,7 +2340,7 @@ function refreshPcSelect(){
   }
   sel.innerHTML='';
   opts.forEach(o=>{ const op=document.createElement('option'); op.value=o.v; op.textContent=o.t; sel.appendChild(op); });
-  sel.value = (MODE==='local') ? '__local__' : (curRoom||'__local__');
+  sel.value = (MODE==='local') ? '__local__' : (curRoom||(opts[0]&&opts[0].v)||'');
   setTitle(curPcLabel());
   sel.classList.remove('hidden');
 }

@@ -7,6 +7,9 @@
 	<!-- 수출 규정: 표준 암호화(TLS/AES)만 사용 - exempt. TestFlight 업로드마다 묻는 질문 생략 -->
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
+	<!-- QR 페어링 스캔용 카메라 권한(미기재 시 스캔 호출에서 크래시) -->
+	<key>NSCameraUsageDescription</key>
+	<string>PC 화면의 페어링 QR 코드를 스캔해 연결하는 데 사용합니다.</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
