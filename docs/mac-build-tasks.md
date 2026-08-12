@@ -3,6 +3,19 @@
 > 이 문서는 Windows 측(주 개발)에서 맥 측 Claude 에게 전달하는 작업 지시서다.
 > 위에서부터 순서대로 실행하면 된다. 완료 후 결과를 사용자에게 보고할 것.
 
+## ★ 업데이트 (registerPlugin 크래시 — 맥 측 발견 반영됨)
+
+맥 측이 찾은 `cap.registerPlugin is not a function` 크래시는 정확한 진단이었고,
+동일 수정이 **커밋 6fae801 로 본 저장소에 반영됐다** (Plugins 프록시 폴백 + 주석).
+맥 로컬에 커밋 전 수정본이 남아 있다면 충돌 방지를 위해 버리고 pull 할 것:
+
+```bash
+git checkout -- pwa/native-bridge.js   # 로컬 미커밋 수정 폐기(내용 동일)
+git pull                                # 6fae801 수신
+```
+
+이후 아래 ①(번들·동기화)부터 재실행 → ② 체크리스트 검증 → 통과 시 ③ TestFlight.
+
 ## 0. 왜 시뮬레이터에 과거 버전이 뜨는가 (필독)
 
 `app/www` 와 `ios/App/App/public` 은 **생성물**이다. `git pull` 은 원본(`pwa/`)만
