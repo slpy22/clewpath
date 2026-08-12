@@ -31,10 +31,24 @@
 npm install
 npm run bundle        # pwa/ → www 스냅샷
 npx cap sync          # www → 네이티브 프로젝트 반영
-npx cap open android  # Android Studio (SDK 필요)
 ```
 
-- Android: Android Studio(SDK) 설치 후 `android/` 열어 APK 빌드.
+Android CLI 빌드(이 PC 실측 기준):
+
+```powershell
+cd android
+$env:JAVA_HOME="C:\Program Files\Java\jdk-21.0.10"   # Gradle 8.2 는 Java 25 미지원(major 69)
+$env:ANDROID_HOME="$env:LOCALAPPDATA\Android\Sdk"    # 사용자 SDK 루트(아래 참고)
+.\gradlew.bat assembleDebug
+# → app/build/outputs/apk/debug/app-debug.apk
+```
+
+이 PC 의 빌드 환경 함정(실측):
+- SDK 본체는 `C:\Program Files (x86)\Android\android-sdk`(쓰기 불가) —
+  `%LOCALAPPDATA%\Android\Sdk` 에 junction + 실폴더(licenses, build-tools 추가분)로
+  사용자 SDK 루트를 구성해 두었다. licenses/새 build-tools 설치가 여기로 들어간다.
+- 한글 프로젝트 경로: `gradle.properties` 의 `android.overridePathCheck=true` 로 허용
+  (aapt2 문제 재발 시 ASCII junction 경로로 이전).
 - iOS: Mac + Xcode 필요(`ios/`). Windows 에서는 스캐폴드만 관리.
 - 아이콘/스플래시 재생성: `npx @capacitor/assets generate --iconBackgroundColor '#109098' --splashBackgroundColor '#109098'` (원본은 `assets/`).
 
