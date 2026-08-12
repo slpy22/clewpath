@@ -4,6 +4,9 @@
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
+	<!-- 수출 규정: 표준 암호화(TLS/AES)만 사용 - exempt. TestFlight 업로드마다 묻는 질문 생략 -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
