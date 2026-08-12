@@ -21,6 +21,27 @@ allprojects {
     repositories {
         google()
         mavenCentral()
+        // @capacitor/barcode-scanner 의 osbarcode-android — OutSystems 공개 Azure 저장소.
+        // 플러그인 모듈에는 선언돼 있지만 app 모듈의 전이 해석에도 필요해 여기 중복 선언.
+        maven {
+            url 'https://pkgs.dev.azure.com/OutSystemsRD/9e79bc5b-69b2-4476-9ca5-d67594972a52/_packaging/PublicArtifactRepository/maven/v1'
+            name 'Azure'
+            credentials {
+                username = "optional"
+                password = ""
+            }
+            content {
+                includeGroup "com.github.outsystems"
+            }
+        }
+    }
+}
+
+// JDK 21 로 빌드하면 Kotlin 이 JVM 21 을 기본으로 잡아 Java(17)와 어긋난다
+// (barcode-scanner 모듈에서 실측). 전 모듈 Kotlin 타깃을 17 로 고정.
+allprojects {
+    tasks.matching { it.name.startsWith("compile") && it.name.contains("Kotlin") }.configureEach {
+        kotlinOptions { jvmTarget = "17" }
     }
 }
 
