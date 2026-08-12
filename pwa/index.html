@@ -279,6 +279,21 @@
   #paneDetail.term-mode>.backbar{min-width:0}
   .term-note{padding:18px}
 
+  /* ---- 모바일 터미널 UX (M2 스파이크, 기획서 §5) — 보조키 바 · 최신 복귀 ---- */
+  /* 터치 기기에서만 표시(pointer:coarse). 키보드 위 고정은 grid 마지막 auto 행이 담당 —
+     소프트 키보드가 뷰포트를 줄이면 행 전체가 따라 올라온다. */
+  .term-keybar{display:flex;gap:4px;padding:6px 8px calc(6px + env(safe-area-inset-bottom));
+    background:#161b22;border-top:1px solid #30363d;overflow-x:auto;
+    -webkit-user-select:none;user-select:none;touch-action:pan-x}
+  .term-keybar button{flex:1 0 auto;min-width:36px;padding:9px 10px;border:1px solid #30363d;
+    border-radius:8px;background:#21262d;color:#e6edf3;font-size:13px;
+    font-family:ui-monospace,"Cascadia Code",Consolas,monospace}
+  .term-keybar button:active{background:#30363d}
+  .term-keybar button.armed{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .term-jump{position:absolute;right:14px;bottom:14px;z-index:5;padding:8px 14px;
+    border-radius:18px;border:1px solid #30363d;background:rgba(33,38,45,.92);
+    color:#58a6ff;font-size:13px;display:none}
+
   /* ---- 모달 (프로파일/폴더변경/사용량) ---- */
   .overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;
     align-items:center;justify-content:center;z-index:50;padding:14px}
@@ -1329,21 +1344,117 @@ function loadXterm(){
   });
   return _xtermP;
 }
-// 모바일: 터치 슬라이드 → xterm 뷰포트를 직접 스크롤(과거 이력 보기).
-// capture 단계로 xterm 내부 핸들러보다 먼저 가로채고, 뷰포트 scrollTop 을 직접 이동.
-function attachTouchScroll(host, term){
-  const vp=()=>host.querySelector('.xterm-viewport');
-  let ty=null, startTop=0;
+// ---- 모바일 터미널 UX (M2 스파이크, 기획서 §5) ----
+// 원칙: 웹뷰 기본 스크롤/줌에 기대지 않는다 — 전부 xterm API 로 처리(웹뷰 줌·바운스 배제).
+//  · 한 손가락 스크롤: 일반 버퍼 → scrollLines(관성 포함) / TUI(alternate 버퍼) → 화살표 키
+//    (alternate 버퍼는 스크롤백이 없어 scrollLines 가 무의미 — 데스크톱 터미널들의 휠 관례처럼
+//     ↑/↓ 시퀀스로 변환해야 claude 같은 TUI 의 선택지·이력이 움직인다)
+//  · 두 손가락 핀치: fontSize 조절 + fit 재계산 (변경은 opts.onFont 로 통지 → resize 전파)
+//  · "↓ 최신" 복귀 버튼: 위로 스크롤 중일 때만 표시
+//  · 6px 이동 임계 전에는 개입하지 않는다 — 탭·긴누름(복사)은 xterm/브라우저 기본 동작 유지
+function attachMobileTermUX(host, term, opts){
+  host.style.position='relative';
+  const cellH=()=>{ const r=host.querySelector('.xterm-rows'); const c=r&&r.firstElementChild;
+    const h=c?c.getBoundingClientRect().height:0; return h>4?h:(term.options.fontSize||13)*1.6; };
+  const isAlt=()=>term.buffer&&term.buffer.active&&term.buffer.active.type==='alternate';
+
+  // 복귀 버튼 — onScroll(뷰포트 이동)마다 표시 갱신
+  const jump=el('button','term-jump','↓ 최신');
+  jump.onclick=()=>{ term.scrollToBottom(); };
+  host.appendChild(jump);
+  const updJump=()=>{ const b=term.buffer.active;
+    jump.style.display=(!isAlt()&&b.viewportY<b.baseY)?'block':'none'; };
+  const offScroll=term.onScroll(updJump);
+
+  let ty=null, tx=null, moved=false, acc=0, arrowAcc=0;
+  let vel=0, lastY=0, lastT=0, raf=0;
+  let pinch=null;  // {d0, fs0}
+  const stopInertia=()=>{ if(raf){ cancelAnimationFrame(raf); raf=0; } vel=0; };
+  const applyPx=(dy)=>{            // 아래로 dy px 끌면 위 이력이 보인다(자연 방향)
+    const h=cellH();
+    if(isAlt()){                   // TUI: cell 1.2배마다 화살표 1회(과속 방지)
+      arrowAcc+=dy;
+      while(arrowAcc>=h*1.2){ arrowAcc-=h*1.2; opts.send('\x1b[A'); }
+      while(arrowAcc<=-h*1.2){ arrowAcc+=h*1.2; opts.send('\x1b[B'); }
+      return;
+    }
+    acc+=dy;
+    const lines=Math.trunc(acc/h);
+    if(lines){ acc-=lines*h; term.scrollLines(-lines); updJump(); }
+  };
   host.addEventListener('touchstart',e=>{
-    if(e.touches.length===1){ ty=e.touches[0].clientY; const v=vp(); startTop=v?v.scrollTop:0; }
+    stopInertia();
+    if(e.touches.length===2){        // 핀치 시작
+      const dx=e.touches[0].clientX-e.touches[1].clientX,
+            dy=e.touches[0].clientY-e.touches[1].clientY;
+      pinch={d0:Math.hypot(dx,dy)||1, fs0:term.options.fontSize||13};
+      ty=null; return;
+    }
+    if(e.touches.length===1){ ty=lastY=e.touches[0].clientY; tx=e.touches[0].clientX;
+      lastT=e.timeStamp; moved=false; acc=0; arrowAcc=0; }
   }, {passive:true, capture:true});
   host.addEventListener('touchmove',e=>{
+    if(pinch&&e.touches.length===2){
+      const dx=e.touches[0].clientX-e.touches[1].clientX,
+            dy=e.touches[0].clientY-e.touches[1].clientY;
+      const fs=Math.max(8,Math.min(22,Math.round(pinch.fs0*Math.hypot(dx,dy)/pinch.d0)));
+      if(fs!==term.options.fontSize){ term.options.fontSize=fs; opts.onFont(fs); }
+      e.preventDefault(); e.stopPropagation(); return;
+    }
     if(ty==null||e.touches.length!==1) return;
-    const v=vp(); if(!v) return;
-    v.scrollTop = startTop + (ty - e.touches[0].clientY);
+    const y=e.touches[0].clientY;
+    if(!moved&&Math.hypot(y-ty,e.touches[0].clientX-tx)<6) return;  // 탭/긴누름 보호
+    moved=true;
+    applyPx(y-lastY);
+    const dt=e.timeStamp-lastT;
+    if(dt>0) vel=0.8*vel+0.2*((y-lastY)/dt);   // px/ms 지수 평활
+    lastY=y; lastT=e.timeStamp;
     e.preventDefault(); e.stopPropagation();
   }, {passive:false, capture:true});
-  host.addEventListener('touchend',()=>{ ty=null; }, {passive:true, capture:true});
+  host.addEventListener('touchend',e=>{
+    if(pinch){ if(e.touches.length<2) pinch=null; return; }
+    if(ty==null) return;
+    ty=null;
+    if(!moved||isAlt()||Math.abs(vel)<0.25) { vel=0; return; }
+    let v=vel*16, t=performance.now();          // px/frame 근사로 변환해 감쇠
+    const step=(now)=>{ const k=Math.min((now-t)/16,3); t=now;
+      applyPx(v*k); v*=Math.pow(0.94,k);
+      if(Math.abs(v)>0.5) raf=requestAnimationFrame(step); else raf=0; };
+    raf=requestAnimationFrame(step);
+  }, {passive:true, capture:true});
+
+  // Ctrl 토글(보조키 바가 세팅) — 다음 입력 1글자를 제어문자로 변환
+  let ctrlArmed=null;   // {btn} 버튼 참조(무장 해제 시 표시 복원)
+  const transform=(d)=>{
+    if(ctrlArmed&&d.length===1){
+      const c=d.toUpperCase().charCodeAt(0);
+      ctrlArmed.btn.classList.remove('armed'); ctrlArmed=null;
+      if(c>=64&&c<=95) return String.fromCharCode(c&31);   // A~Z, [ 등 → ^A..
+    }
+    return d;
+  };
+
+  // 보조키 바(기획서 §5 키맵 그대로). 이스케이프 시퀀스를 PTY 로 직접 전송(IME 우회).
+  // pointerdown+preventDefault: 버튼이 포커스를 뺏어 소프트 키보드가 닫히는 것을 방지.
+  const KEYS=[['Esc','\x1b'],['Tab','\t'],['Ctrl',null],['↑','\x1b[A'],['↓','\x1b[B'],
+              ['←','\x1b[D'],['→','\x1b[C'],['1','1'],['2','2'],['3','3'],['Enter','\r']];
+  const bar=el('div','term-keybar');
+  for(const [label,seq] of KEYS){
+    const b=el('button',null,label);
+    b.addEventListener('pointerdown',ev=>{
+      ev.preventDefault();
+      if(seq===null){                       // Ctrl 토글
+        if(ctrlArmed){ ctrlArmed.btn.classList.remove('armed'); ctrlArmed=null; }
+        else { b.classList.add('armed'); ctrlArmed={btn:b}; }
+        return;
+      }
+      opts.send(transform(seq));
+    });
+    bar.appendChild(b);
+  }
+
+  return { bar, transform,
+    dispose(){ stopInertia(); try{offScroll.dispose();}catch(e){} } };
 }
 async function loadTerminal(s, safe){
   let cred={};
@@ -1374,11 +1485,12 @@ async function loadTerminal(s, safe){
   try{ await loadXterm(); }catch(e){
     main.classList.remove('term-mode'); main.innerHTML='';
     main.appendChild(el('div','term-note','xterm 로드 실패: '+e.message)); return; }
-  const term=new Terminal({fontSize:13,cursorBlink:true,scrollback:10000,
+  // 핀치로 조절한 글자 크기는 기기별로 기억한다(M2 스파이크)
+  const savedFs=parseInt(LS.getItem('sm_term_fs')||'',10);
+  const term=new Terminal({fontSize:(savedFs>=8&&savedFs<=22)?savedFs:13,cursorBlink:true,scrollback:10000,
     fontFamily:'ui-monospace,"Cascadia Code",Consolas,monospace',
     theme:{background:'#0d1117',foreground:'#e6edf3',cursor:'#58a6ff'}});
   const fit=new FitAddon.FitAddon(); term.loadAddon(fit); term.open(host);
-  attachTouchScroll(host, term);
   const tc=T.terminal(s.session_id,(data,eof,err)=>{
     if(eof){ if(err==='2fa_invalid'||err==='2fa_required') clearGrace();
       term.write('\r\n\x1b[91m── '+(err?otpErrMsg(err):'연결 종료')+' ──\x1b[0m\r\n'); }
@@ -1388,13 +1500,26 @@ async function loadTerminal(s, safe){
   const doResize=()=>{ try{ fit.fit();
     const dim=term.cols+'x'+term.rows; if(dim!==_lastDim){ _lastDim=dim; tc.send({type:'resize',cols:term.cols,rows:term.rows}); }
   }catch(e){} };
+  // 모바일 터치 UX: scrollLines 스크롤·관성·TUI 화살표·핀치·복귀 버튼 (위 attachMobileTermUX)
+  const ux=attachMobileTermUX(host, term, {
+    send:(d)=>tc.send({type:'input',data:d}),
+    onFont:(fs)=>{ LS.setItem('sm_term_fs',String(fs)); doResize(); }});
+  // 보조키 바는 터치 기기에서만(데스크톱은 실키보드가 있으니 불필요)
+  if(matchMedia('(pointer: coarse)').matches) main.appendChild(ux.bar);
+  // 터미널 표시 중 화면꺼짐 방지(§5). 실패해도 무해(iOS<16.4 등) — 조용히 넘어간다.
+  let wl=null;
+  if(navigator.wakeLock&&navigator.wakeLock.request){
+    navigator.wakeLock.request('screen').then(l=>{wl=l;}).catch(()=>{});
+  }
   const onWin=()=>doResize(); window.addEventListener('resize',onWin);
   // 컨테이너가 실제 크기를 얻거나 바뀔 때마다 채운다 — 초기 레이아웃/창 리사이즈 모두.
   let ro=null;
   if(window.ResizeObserver){ ro=new ResizeObserver(doResize); ro.observe(host); }
   if(document.fonts&&document.fonts.ready) document.fonts.ready.then(doResize);
-  _term={ close:()=>{ try{tc.close();}catch(e){} window.removeEventListener('resize',onWin); if(ro)ro.disconnect(); } };
-  term.onData(d=>tc.send({type:'input',data:d}));
+  _term={ close:()=>{ try{tc.close();}catch(e){} window.removeEventListener('resize',onWin);
+    if(ro)ro.disconnect(); ux.dispose(); if(wl){ try{wl.release();}catch(e){} wl=null; } } };
+  // Ctrl 토글(보조키 바)은 실키보드 입력에도 적용된다 — transform 경유
+  term.onData(d=>tc.send({type:'input',data:ux.transform(d)}));
   setTimeout(doResize,80); setTimeout(doResize,300); term.focus();
 }
 
