@@ -35,9 +35,15 @@
   if (!isApp) return;
 
   /* ================= 이하 앱 전용 ================= */
-  var Prefs = cap.registerPlugin('Preferences');
-  var App = cap.registerPlugin('App');
-  var Scanner = cap.registerPlugin('CapacitorBarcodeScanner');
+  // registerPlugin 은 번들러로 import 한 @capacitor/core 에만 있다. 주입 런타임만
+  // 있는 무번들 앱에서는 cap.Plugins.<이름> 프록시로 접근한다(시뮬레이터 실측:
+  // cap.registerPlugin 부재로 TypeError -> 앱 초기화 전체가 죽어 웹 기본값으로 보였음).
+  var getPlugin = cap.registerPlugin
+    ? function (n) { return cap.registerPlugin(n); }
+    : function (n) { return cap.Plugins[n]; };
+  var Prefs = getPlugin('Preferences');
+  var App = getPlugin('App');
+  var Scanner = getPlugin('CapacitorBarcodeScanner');
 
   // 네이티브 QR 스캔(전체 화면 스캐너 UI). 성공 시 내용 문자열, 취소/실패 시 ''.
   B.scanQr = function () {
