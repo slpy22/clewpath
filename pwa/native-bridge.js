@@ -88,20 +88,25 @@
   //       리로드 — 이후는 index.html 의 기존 페어링 파싱 경로가 그대로 처리한다.
   function handlePairingUrl(raw) {
     var u;
-    try { u = new URL(raw); } catch (e) { return false; }
+    try { u = new URL(String(raw).trim()); } catch (e) { return 'bad_url'; }
     var frag = u.hash ? u.hash.slice(1) : (u.search ? u.search.slice(1) : '');
     if (u.protocol === 'https:' || u.protocol === 'http:') {
+      // iOS(WKWebView)는 보안 컨텍스트에서 평문 ws:// 를 차단한다 — 외부(https) 링크만 수용.
+      // (로컬 http://127.0.0.1 링크는 폰에서 자기 자신을 가리켜 어차피 무의미)
+      if (u.protocol === 'http:') return 'need_https';
       // /relay/app → wss://host/relay/ws  (index.html wsUrl() 과 같은 유도 규칙)
       var base = u.pathname.replace(/\/(app|index\.html)\/?$/, '').replace(/\/$/, '');
-      var ws = (u.protocol === 'https:' ? 'wss' : 'ws') + '://' + u.host + base + '/ws';
-      localStorage.setItem('sm_relay_ws', ws);
+      localStorage.setItem('sm_relay_ws', 'wss://' + u.host + base + '/ws');
     } else if (!localStorage.getItem('sm_relay_ws')) {
-      return false;                        // clewpath:// 는 릴레이 주소 기저장 필요
+      return 'bad_url';                    // clewpath:// 는 릴레이 주소 기저장 필요
     }
-    if (!frag) { location.reload(); return true; }
-    location.href = 'index.html#' + frag;  // 기존 부트 파서가 rk/cs/dev 를 저장
+    if (!frag) return 'no_frag';           // 페어링 정보(#room=..)가 없는 링크
+    // 주의: location.href 로 경로를 바꾸면 뒤이은 reload() 가 내비게이션을 삼켜
+    // fragment 가 유실된다(실기기 재현). 해시만 바꾸고 리로드 — 해시는 리로드에도
+    // 유지되고, index.html 부트 파서가 location.hash 에서 rk/cs/dev 를 저장한다.
+    location.hash = frag;
     location.reload();
-    return true;
+    return 'ok';
   }
   App.addListener('appUrlOpen', function (ev) {
     if (ev && ev.url) handlePairingUrl(ev.url);
@@ -109,20 +114,32 @@
 
   // ---- 페어링 오버레이(M1 최소): 릴레이 주소가 없으면 링크 붙여넣기 안내 ----
   // 정식 온보딩(QR 카메라·데모)은 M4. 내부 설치 테스트를 위한 최소 경로만 둔다.
+  var PAIR_ERR = {
+    bad_url: '링크 형식을 확인해 주세요 (https://… 전체를 붙여넣어야 합니다)',
+    need_https: 'PC 화면(127.0.0.1) 주소가 아니라, 📱 새 기기 추가가 만든 외부 접속(https) 링크를 붙여넣어 주세요',
+    no_frag: '이 링크에는 페어링 정보(#room=…)가 없습니다 - 📱 새 기기 추가에서 새 링크를 만들어 주세요'
+  };
   function pairingOverlay() {
     if (localStorage.getItem('sm_relay_ws')) return;
     var ov = document.createElement('div');
     ov.id = 'cb-pair';
     ov.innerHTML =
       '<div class="cb-card"><h2>PC 연결</h2>' +
-      '<p>PC 의 ClewPath 에서 📱 새 기기 추가로 만든 링크를 붙여넣어 주세요.</p>' +
+      '<ol style="margin:10px 0 4px 18px;padding:0;line-height:1.7;font-size:14px">' +
+      '<li>PC 브라우저에서 ClewPath (<span style="font-family:monospace">127.0.0.1:5100</span>) 열기</li>' +
+      '<li>상단 <b>📱</b> → <b>＋ 새 기기 추가</b></li>' +
+      '<li>표시된 <b>외부 접속 링크(https)</b> 를 복사해 아래에 붙여넣기</li></ol>' +
       '<input type="url" id="cb-link" placeholder="https://…/relay/app#room=…" autocomplete="off">' +
       '<button id="cb-go">연결</button><div id="cb-err"></div></div>';
     document.body.appendChild(ov);
     ov.querySelector('#cb-go').addEventListener('click', function () {
       var v = ov.querySelector('#cb-link').value.trim();
-      if (!v || !handlePairingUrl(v))
-        ov.querySelector('#cb-err').textContent = '링크 형식을 확인해 주세요';
+      var err = ov.querySelector('#cb-err');
+      if (!v) { err.textContent = PAIR_ERR.bad_url; return; }
+      err.style.color = '';
+      err.textContent = '연결 중…';
+      var r = handlePairingUrl(v);          // 'ok' 면 이 아래는 리로드로 사라진다
+      if (r !== 'ok') { err.style.color = '#e66'; err.textContent = PAIR_ERR[r] || PAIR_ERR.bad_url; }
     });
   }
 
