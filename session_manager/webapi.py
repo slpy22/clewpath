@@ -35,6 +35,29 @@ import uuid
 from session_manager.scanner import scan_one, resolve_launch_cwd
 
 
+def _append_claude_history(prompt: str, session_id: str, cwd: str | None) -> None:
+    """웹 재개로 보낸 프롬프트를 claude 입력 히스토리(~/.claude/history.jsonl)에 기록.
+
+    터미널(대화형 claude)의 ↑/↓ 는 이 파일을 읽으므로, 웹에서 보낸 질문도
+    나중에 터미널에서 불러 쓸 수 있게 된다. 포맷은 비공식(실측:
+    display/pastedContents/timestamp(ms)/project/sessionId) — claude 버전에
+    따라 바뀔 수 있으니 실패는 조용히 무시한다(best-effort, ask 동작 무영향).
+    """
+    if not prompt:
+        return
+    try:
+        import time as _time
+        home = os.environ.get("SESSION_MANAGER_CLAUDE_HOME") \
+            or os.path.join(os.path.expanduser("~"), ".claude")
+        rec = {"display": prompt, "pastedContents": {},
+               "timestamp": int(_time.time() * 1000),
+               "project": cwd or "", "sessionId": session_id}
+        with open(os.path.join(home, "history.jsonl"), "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _guardrail_args(g: dict, skip_permissions: bool) -> list[str]:
     """실효 가드레일(dict)을 claude CLI 인자로 변환한다."""
     args: list[str] = []
@@ -159,7 +182,10 @@ async def run_resume_api(ws, session_id: str, skip_permissions: bool = True,
             mtype = msg.get("type")
             line = None
             if mtype == "prompt":
-                line = _user_message(str(msg.get("text", "")))
+                text = str(msg.get("text", ""))
+                line = _user_message(text)
+                # 터미널 ↑/↓ 히스토리에도 남긴다(웹→터미널 이력 연속성)
+                _append_claude_history(text, session_id, cwd)
             elif mtype == "user" and isinstance(msg.get("message"), dict):
                 # 원시 stream-json user 메시지 그대로 전달
                 line = json.dumps(msg, ensure_ascii=False) + "\n"
@@ -217,6 +243,9 @@ def ephemeral_ask(session_id: str, prompt: str, skip_permissions: bool = True,
     if not cwd or not os.path.isdir(cwd):
         return {"error": f"세션 작업 폴더를 찾을 수 없습니다: {cwd or '(미상)'}",
                 "session_id": session_id}
+
+    # 터미널 ↑/↓ 히스토리에도 남긴다(웹→터미널 이력 연속성)
+    _append_claude_history(prompt, session_id, cwd)
 
     fork_id = str(uuid.uuid4())
     exe = shutil.which("claude") or "claude"
