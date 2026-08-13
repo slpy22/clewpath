@@ -477,7 +477,18 @@ function pcsRemove(room){ pcsSave(pcsLoad().filter(x=>x.room!==room)); }
 
 // ---- client JWT: 기기 전용 secret 을 단기 JWT 로 교환(캐시+사전갱신) ----
 function cpBase(){
-  // 릴레이가 /relay/ 로 서빙되면 CP 는 같은 호스트의 /cp/
+  // 앱(로컬 번들): 페이지 origin 이 capacitor://localhost 라 유도가 불가능 —
+  // 페어링 때 저장한 릴레이 WS 주소(wss://host[/relay]/ws)에서 CP 를 유도한다.
+  // (이게 빠져서 앱이 JWT 없이 릴레이에 붙어 4401 나던 버그 - 맥 측 실측)
+  const o=window.ClewBridge&&ClewBridge.wsBaseOverride();
+  if(o){
+    try{
+      const u=new URL(o.replace(/^ws/,'http'));
+      const p=u.pathname.replace(/\/relay\/ws\/?$/,'').replace(/\/ws\/?$/,'');
+      return u.origin + p + '/cp';
+    }catch(e){}
+  }
+  // 웹: 릴레이가 /relay/ 로 서빙되면 CP 는 같은 호스트의 /cp/
   const m=location.pathname.match(/^(.*)\/relay\//);
   return (location.origin + ((m&&m[1])||'') + '/cp');
 }
