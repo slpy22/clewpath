@@ -75,9 +75,31 @@ def write_to(session_id: str, data: str) -> bool:
         return False
 
 
+def _get_live(key: str) -> _TermSession | None:
+    """살아있는 세션만 돌려준다 — 시체(PTY 종료)는 그 자리에서 정리.
+
+    dead 플래그는 reader 가 EOF 를 '읽은 뒤'에야 서므로 믿을 수 없다(winpty 는
+    claude 종료 후 EOF 가 늦거나 안 오는 경우가 실측됨). 그 상태의 등록부 항목에
+    재접속하면 '연결 종료'만 반복되는 좀비 UX 가 된다(재연결 2회→4회… 증가 사고).
+    그래서 조회 시점마다 isalive() 로 실측 검증하고, 죽었으면 즉시 정리해
+    호출자가 새 스폰 경로를 타게 한다.
+    """
+    sess = _ACTIVE.get(key)
+    if sess is None:
+        return None
+    alive = False
+    try:
+        alive = (not sess.dead) and sess.proc.isalive()
+    except Exception:  # noqa: BLE001
+        alive = False
+    if not alive:
+        _cleanup(sess)
+        return None
+    return sess
+
+
 def has_terminal(session_id: str) -> bool:
-    sess = _ACTIVE.get(session_id)
-    return sess is not None and not sess.dead
+    return _get_live(session_id) is not None
 
 
 def stop_terminal(session_id: str) -> bool:
@@ -87,9 +109,9 @@ def stop_terminal(session_id: str) -> bool:
     이것뿐이다(터미널 안에서 claude 를 종료하는 것 외에). 프로세스가 죽으면
     reader 의 EOF 경로가 등록부 정리·화면 닫기를 수행한다.
     """
-    sess = _ACTIVE.get(session_id)
-    if sess is None or sess.dead:
-        return False
+    sess = _get_live(session_id)
+    if sess is None:
+        return False            # 없거나 이미 시체(그 자리에서 정리됨)
     try:
         sess.proc.terminate(force=True)
     except Exception:  # noqa: BLE001
@@ -158,11 +180,18 @@ def _start_reader(sess: _TermSession) -> None:
                             if sess.client is client:
                                 sess.client = None
         finally:
-            # claude 자체가 끝났다(사용자 exit 등) → 진짜 정리
+            # claude 자체가 끝났다(사용자 exit 등) → 진짜 정리.
+            # '연결 끊김'과 구분되는 명시 문구를 먼저 보낸다(상태 모델: 세션 종료).
             client = sess.client
             _cleanup(sess)
             if client is not None:
                 ws, loop = client
+                try:
+                    asyncio.run_coroutine_threadsafe(ws.send_text(
+                        "\r\n\x1b[33m── 세션이 종료되었습니다(claude 종료). "
+                        "연결하면 새로 시작합니다 ──\x1b[0m\r\n"), loop).result(timeout=3)
+                except Exception:  # noqa: BLE001
+                    pass
                 asyncio.run_coroutine_threadsafe(_safe_close(ws), loop)
 
     threading.Thread(target=reader, name=f"pty-{sess.key[:8]}", daemon=True).start()
@@ -178,9 +207,11 @@ async def run_terminal(ws, session_id: str, skip_permissions: bool = True,
 
     loop = asyncio.get_event_loop()
     key = fork_id or session_id
-    sess = _ACTIVE.get(key)
+    # 살아있는 세션만 재접속 대상 - 시체는 _get_live 가 정리해 새 스폰으로 떨어진다.
+    # (연결 버튼은 항상 1번이면 되어야 한다는 상태 모델 - 시체 상태를 사용자에게 노출 금지)
+    sess = _get_live(key)
 
-    if sess is not None and not sess.dead:
+    if sess is not None:
         # ---- 재접속: 스폰하지 않고 기존 프로세스에 붙는다 ----
         with sess.lock:
             old = sess.client
@@ -232,6 +263,9 @@ async def run_terminal(ws, session_id: str, skip_permissions: bool = True,
                 try:
                     sess.proc.write(msg.get("data", ""))
                 except Exception:  # noqa: BLE001
+                    # 쓰기 실패 = 프로세스가 죽었을 가능성 - persist 라도 좀비로
+                    # 남기지 않는다(안 지우면 다음 재접속이 또 시체에 붙는다)
+                    _get_live(key)
                     break
             elif mtype == "resize":
                 try:

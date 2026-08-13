@@ -148,7 +148,7 @@
   ws.onmessage = (e) => { term.write(e.data); };
   ws.onclose = () => {
     dot.className = "dot off"; statusEl.textContent = "연결 종료";
-    term.write("\r\n\x1b[90m── 연결이 종료되었습니다. '재연결' 또는 탭을 닫으세요. ──\x1b[0m\r\n");
+    term.write("\r\n\x1b[90m── 연결이 끊겼습니다. '재연결'을 누르세요(세션이 끝났다면 새로 시작됩니다). ──\x1b[0m\r\n");
   };
   ws.onerror = () => { dot.className = "dot off"; statusEl.textContent = "오류"; };
 

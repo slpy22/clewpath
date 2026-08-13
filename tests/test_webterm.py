@@ -20,6 +20,10 @@ class FakeProc:
             raise OSError("dead")
         self.written.append(d)
 
+    def isalive(self):
+        # 실제 winpty PtyProcess 인터페이스와 동일 - _get_live 의 생존 실측이 부른다
+        return not self.terminated
+
     def terminate(self, force=False):
         self.terminated = True
 
