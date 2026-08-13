@@ -342,6 +342,8 @@ def create_app() -> FastAPI:
         meta_dict["labels"] = rec.get("labels", [])
         meta_dict["label_name"] = rec.get("name")
         meta_dict["label_color"] = rec.get("color")
+        # 피커 미표시 세션의 노출 정책(사용자 승격 여부) - 배지/은닉 유지 판단에 사용
+        meta_dict["picker_expose"] = rec.get("picker") == "expose"
         meta_dict["title"] = _display_title(meta_dict, rec)
         return meta_dict
 
@@ -690,6 +692,17 @@ def create_app() -> FastAPI:
     def delete(session_id: str, dry_run: bool = Body(True, embed=True)):
         # 하드 삭제가 아니라 휴지통으로 이동 — restore 로 복구 가능.
         return lifecycle.delete_session(session_id, dry_run=dry_run)
+
+    @app.post("/api/sessions/{session_id}/picker-expose")
+    def picker_expose(session_id: str, expose: bool = Body(..., embed=True)):
+        """피커 미표시 세션(에이전트/포크 산물)의 노출 정책 토글.
+
+        expose=True: 승격 - 이후 대화형 사용 시 자동 제목이 유지되어 claude
+        `--resume` 목록에도 나타난다. False: 은닉 유지(기본) - ClewPath 로
+        재개해 써도 사용 후 자동 제목을 걷어내 claude 목록 밖에 머문다.
+        """
+        labels.set_record(session_id, picker=("expose" if expose else None))
+        return {"session_id": session_id, "picker_expose": expose}
 
     @app.get("/api/owner/trash")
     def owner_trash():

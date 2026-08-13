@@ -45,6 +45,9 @@ class _TermSession:
         self.client = None              # (ws, loop) | None
         self.lock = threading.Lock()
         self.dead = False
+        # 은닉 유지: 스폰 시점에 '피커 미표시 세션'이었고 사용자가 승격하지
+        # 않았다면, claude 종료 후 이번 사용이 붙인 자동 제목을 걷어낸다.
+        self.scrub_on_exit = False
 
     def feed(self, data: str) -> None:
         self.chunks.append(data)
@@ -184,6 +187,14 @@ def _start_reader(sess: _TermSession) -> None:
             # '연결 끊김'과 구분되는 명시 문구를 먼저 보낸다(상태 모델: 세션 종료).
             client = sess.client
             _cleanup(sess)
+            if sess.scrub_on_exit:
+                # 은닉 유지: 이번 대화형 사용이 붙인 자동 제목(ai-title/agent-name)
+                # 제거 → 이 세션은 계속 claude 재개 목록 밖에 머문다.
+                try:
+                    from session_manager import lifecycle as _lc
+                    _lc.scrub_auto_titles(sess.key)
+                except Exception:  # noqa: BLE001
+                    pass
             if client is not None:
                 ws, loop = client
                 try:
@@ -246,6 +257,12 @@ async def run_terminal(ws, session_id: str, skip_permissions: bool = True,
             return
         sess = _TermSession(key, proc, persist=not fork_id)
         sess.client = (ws, loop)
+        # 은닉 유지 판정(스폰 시점 상태 기준): 피커 미표시 세션 + 승격 안 됨 + 원본
+        # 재개(포크는 새 세션이라 원본과 무관). 종료 후 자동 제목을 걷어내
+        # claude `--resume` 목록에 새로 나타나는 혼동을 막는다(기획: 오삭제 사고 재발 방지).
+        if not fork_id and meta is not None and meta.picker_hidden:
+            from session_manager import labels as _labels
+            sess.scrub_on_exit = _labels.get(session_id).get("picker") != "expose"
         _ACTIVE[key] = sess
         _start_reader(sess)
         rejoined = False

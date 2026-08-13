@@ -1253,6 +1253,11 @@ function renderRows(wrap,q){
       if(bd){ const t=el('span','sstate',bd.text); t.style.setProperty('--c',bd.c);
         if(bd.text==='권한 대기'){ t.style.cursor='pointer'; t.onclick=(e)=>{e.stopPropagation();showApprove(s);}; }
         r1.appendChild(t); }
+      if(s.picker_hidden&&!s.picker_expose){
+        const g=el('span','schip gear','⚙ 에이전트');
+        g.title='claude 재개 목록(피커)에 없는 세션 - 에이전트/포크 산물. 상세에서 설명 보기';
+        r1.appendChild(g);
+      }
       if(s.labels&&s.labels.length)r1.appendChild(el('span','schip','#'+s.labels[0]));
       info.appendChild(r1);
       const meta=el('div','smeta2');
@@ -1302,6 +1307,46 @@ async function loadDetail(s){
     c.appendChild(kv);
     const cwd=el('div','cwd',s.cwd||''); cwd.style.marginTop='10px'; c.appendChild(cwd);
     return c; })());
+  // ---- 에이전트/포크 세션 안내(피커 미표시) - 왜 배지가 붙었고 어떻게 동작하는지 ----
+  if(s.picker_hidden){
+    const c=el('div','card'); c.appendChild(el('h3',null,'⚙ claude 재개 목록에 없는 세션'));
+    const p1=el('div','cwd'); p1.style.whiteSpace='pre-line'; p1.textContent=
+      '이 세션에는 claude 가 대화형 세션에 자동으로 붙이는 제목(ai-title)이 없어, '
+      +'터미널의 claude --resume 선택 목록(피커)에는 나타나지 않습니다. '
+      +'세션 자체는 정상이며 ClewPath 에서는 ID 로 직접 재개하므로 모든 기능이 그대로 동작합니다.\n\n'
+      +'이런 세션이 생기는 경우:\n'
+      +'  · 백그라운드 에이전트(잡)로 생성된 세션\n'
+      +'  · 다른 세션에서 포크(--fork-session)되어 만들어진 세션\n'
+      +'  · 헤드리스(claude -p)·자동화 실행이 남긴 세션\n'
+      +'  · 그 밖에 대화형 UI 를 거치지 않아 자동 제목이 안 붙은 세션';
+    c.appendChild(p1);
+    const pol=el('div','cwd'); pol.style.marginTop='10px'; pol.style.whiteSpace='pre-line';
+    const bTog=el('button','btn ghost'); bTog.style.marginTop='10px';
+    const renderPol=()=>{
+      if(s.picker_expose){
+        pol.textContent='현재 정책: 노출 허용 - 여기서 터미널 재개로 대화하면 자동 제목이 붙어, '
+          +'이후 claude 재개 목록에도 다른 세션처럼 나타납니다.';
+        bTog.textContent='🙈 다시 숨김 유지로 (claude 목록에 안 나오게)';
+      }else{
+        pol.textContent='현재 정책: 숨김 유지(기본) - 여기서 터미널 재개로 사용해도, 끝난 뒤 '
+          +'자동 제목을 걷어내 claude 재개 목록에는 계속 나타나지 않습니다. '
+          +'(직접 만든 적 없는 세션이 claude 목록에 생기는 혼동 방지)';
+        bTog.textContent='📢 claude 재개 목록에도 노출하기 (승격)';
+      }
+    };
+    bTog.onclick=async()=>{
+      try{
+        const next=!s.picker_expose;
+        await T.api('POST',`/api/sessions/${s.session_id}/picker-expose`,{body:{expose:next}});
+        s.picker_expose=next; renderPol();
+        toast(next?'승격됨 - 다음 대화형 사용부터 claude 목록에도 표시됩니다'
+                  :'숨김 유지로 변경됨');
+      }catch(e){ toast('변경 실패: '+e.message); }
+    };
+    renderPol();
+    c.appendChild(pol); c.appendChild(bTog);
+    d.appendChild(c);
+  }
   const statCard=el('div','card'); statCard.appendChild(el('h3',null,'통계 / 비용'));
   const statBody=el('div'); statBody.appendChild(el('div','spin')); statCard.appendChild(statBody);
   d.appendChild(statCard);

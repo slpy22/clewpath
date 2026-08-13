@@ -29,7 +29,8 @@ from datetime import datetime, timezone
 from session_manager import config
 
 _LOCK = threading.Lock()
-_FIELDS = ("labels", "name", "color", "note")
+# picker: 피커 미표시 세션의 노출 정책 - "expose"(claude 재개 목록에 노출 허용) 또는 없음(은닉 유지)
+_FIELDS = ("labels", "name", "color", "note", "picker")
 
 
 def _now() -> str:
@@ -104,7 +105,7 @@ def set_record(session_id: str, **fields) -> dict:
         # None/빈 값 정리
         rec = {k: v for k, v in rec.items()
                if k == "labels" or v not in (None, "")}
-        if not rec.get("labels") and not any(rec.get(k) for k in ("name", "color", "note")):
+        if not rec.get("labels") and not any(rec.get(k) for k in ("name", "color", "note", "picker")):
             data["sessions"].pop(session_id, None)
             _save(data)
             return {}

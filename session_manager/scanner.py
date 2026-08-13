@@ -36,6 +36,11 @@ class SessionMeta:
     size_bytes: int
     mtime: float             # 파일 수정 시각 (epoch)
     has_side_dir: bool       # {uuid}/ 사이드 폴더 존재 여부
+    # claude 의 `--resume` 피커 목록에 안 나오는 세션(에이전트/포크/헤드리스 산물).
+    # 판정 근거(실측): 피커는 자동 제목(ai-title) 기준으로 나열 - ai-title/agent-name 이
+    # 전혀 없는 세션은 목록에서 빠진다. 갓 시작한 대화형 세션의 오탐을 줄이기 위해
+    # 메시지가 어느 정도 쌓인 뒤에만 판정한다(대화형은 초반에 ai-title 이 붙는다).
+    picker_hidden: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -133,6 +138,7 @@ def _parse_meta(jsonl_path: Path, stat) -> SessionMeta:
         size_bytes=stat.st_size,
         mtime=stat.st_mtime,
         has_side_dir=side_dir.is_dir(),
+        picker_hidden=(ai_title is None and agent_name is None and message_count >= 6),
     )
 
 

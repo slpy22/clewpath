@@ -100,3 +100,24 @@ def test_change_cwd_preserves_unparseable_lines(fake_claude_home):
     lifecycle.change_cwd("aaaa1111", "F:\\new", dry_run=False)
     content = jsonl.read_text(encoding="utf-8")
     assert "not json line" in content  # 보존됨
+
+
+def test_scrub_auto_titles_removes_only_title_records(fake_claude_home):
+    """은닉 유지: ai-title/agent-name 만 제거, 대화·custom-title 은 보존."""
+    sid = "cccc3333"
+    write_session(fake_claude_home, "P--x", sid, [
+        {"type": "user", "cwd": "F:\p", "message": {"role": "user", "content": "hi"},
+         "timestamp": "2026-08-13T00:00:00.000Z"},
+        {"type": "ai-title", "aiTitle": "자동 제목"},
+        {"type": "assistant", "message": {"role": "assistant", "content": "yo"},
+         "timestamp": "2026-08-13T00:01:00.000Z"},
+        {"type": "agent-name", "agentName": "branchy"},
+        {"type": "custom-title", "customTitle": "내가 붙인 이름"},
+    ])
+    res = lifecycle.scrub_auto_titles(sid)
+    assert res["removed"] == 2
+    path = fake_claude_home / "projects" / "P--x" / f"{sid}.jsonl"
+    kinds = [json.loads(l)["type"] for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert "ai-title" not in kinds and "agent-name" not in kinds
+    assert kinds.count("user") == 1 and kinds.count("assistant") == 1
+    assert "custom-title" in kinds          # 사용자가 붙인 이름은 보존
