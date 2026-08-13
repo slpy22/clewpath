@@ -3,6 +3,20 @@
 > 이 문서는 Windows 측(주 개발)에서 맥 측 Claude 에게 전달하는 작업 지시서다.
 > 위에서부터 순서대로 실행하면 된다. 완료 후 결과를 사용자에게 보고할 것.
 
+## ★★ 업데이트 2 (cpBase 4401 버그 — 맥 측 발견, 6601198 반영됨)
+
+맥 측이 확정한 cpBase() origin 유도 버그(앱에서 JWT 미발급 → 릴레이 4401)는
+**커밋 6601198 로 반영됐다** (wsBaseOverride 에서 CP 유도 + 비/relay 배포 형태 보강).
+로컬에 미커밋 수정본이 있으면 폐기 후 pull:
+
+```bash
+git checkout -- pwa/index.html && git pull    # 6601198 수신
+cd app && npm run bundle && npx cap sync ios
+```
+
+시뮬레이터에서 페어링 → 세션 목록 접속(4401 없이)까지 확인 후,
+**빌드 번호 올려서(1.3(4)) Archive → TestFlight 재업로드**.
+
 ## ★ 업데이트 (registerPlugin 크래시 — 맥 측 발견 반영됨)
 
 맥 측이 찾은 `cap.registerPlugin is not a function` 크래시는 정확한 진단이었고,
