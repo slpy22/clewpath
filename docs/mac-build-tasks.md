@@ -12,7 +12,7 @@
 2. **doPair fragment 파싱**: 커밋 023e5c7 — fragment(#room=) 우선 파싱 + E2EE 키(rk)
    저장 누락도 함께 수정(수동 페어링 시 평문 접속 되던 문제).
 
-맥 작업: `git pull`(023e5c7) → `cd app && npm run bundle && npx cap sync ios`
+맥 작업: `git pull`(ad0fc7b - 탭바 뷰포트 보정 포함) → `cd app && npm run bundle && npx cap sync ios`
 → 시뮬레이터에서 페어링→세션 목록 진입(4401 없이) 확인
 → **빌드 번호 +1 (1.3(4)) → Archive → TestFlight 업로드**.
 
