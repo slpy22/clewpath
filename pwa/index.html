@@ -1484,6 +1484,17 @@ async function loadTerminal(s, safe){
   hist.style.cssText='margin-left:auto;color:var(--accent);padding:10px 14px;font-weight:650';
   hist.onclick=()=>{ if(_term){_term.close();_term=null;} loadViewer(s); };
   bar.appendChild(hist);
+  // 종료: persist PTY 는 화면을 닫아도 살아 있어(재접속 설계) 여기서 끝내는 게 유일한 UI 경로
+  const stop=el('button',null,'⏹ 종료'); stop.title='이 터미널의 claude 프로세스를 종료합니다';
+  stop.style.cssText='color:#e66;padding:10px 14px;font-weight:650';
+  stop.onclick=async()=>{
+    if(!confirm('열려 있는 터미널(claude)을 종료할까요?\n화면을 닫아도 유지되던 프로세스가 완전히 끝납니다.')) return;
+    try{ await T.api('POST',`/api/sessions/${s.session_id}/terminal/stop`);
+      toast('터미널을 종료했습니다');
+      if(_term){_term.close();_term=null;} loadDetail(s);
+    }catch(e){ toast('종료 실패: '+e.message); }
+  };
+  bar.appendChild(stop);
   main.appendChild(bar);
   showDetailPane();
   main.classList.add('term-mode');

@@ -872,6 +872,15 @@ def create_app() -> FastAPI:
         from session_manager import push
         return {"subscriptions": push.list_subscriptions()}
 
+    # ---- 열린 터미널 명시 종료: persist PTY 는 화면을 닫아도 살아 있어(재접속 설계)
+    #      사용자가 끝낼 유일한 UI 경로. 원격 승인과 같은 신뢰 수준(기기 인증 뒤 API 터널).
+    @app.post("/api/sessions/{session_id}/terminal/stop")
+    def terminal_stop(session_id: str):
+        from session_manager import webterm
+        if not webterm.stop_terminal(session_id):
+            return JSONResponse({"error": "no_terminal"}, status_code=404)
+        return {"ok": True}
+
     # ---- 원격 권한 승인: 실행 중인 ClewPath 터미널의 권한 프롬프트에 키 주입 ----
     @app.post("/api/owner/sessions/{session_id}/respond")
     async def owner_session_respond(session_id: str, request: Request):

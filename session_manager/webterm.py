@@ -80,6 +80,23 @@ def has_terminal(session_id: str) -> bool:
     return sess is not None and not sess.dead
 
 
+def stop_terminal(session_id: str) -> bool:
+    """열려 있는 터미널의 claude 프로세스를 명시 종료한다(화면 유무 무관).
+
+    persist 세션은 화면이 떨어져도 살아 있는 게 설계라, 사용자가 끝낼 방법이
+    이것뿐이다(터미널 안에서 claude 를 종료하는 것 외에). 프로세스가 죽으면
+    reader 의 EOF 경로가 등록부 정리·화면 닫기를 수행한다.
+    """
+    sess = _ACTIVE.get(session_id)
+    if sess is None or sess.dead:
+        return False
+    try:
+        sess.proc.terminate(force=True)
+    except Exception:  # noqa: BLE001
+        _cleanup(sess)
+    return True
+
+
 def _cleanup(sess: _TermSession) -> None:
     sess.dead = True
     if _ACTIVE.get(sess.key) is sess:
