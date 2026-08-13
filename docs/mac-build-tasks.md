@@ -3,6 +3,19 @@
 > 이 문서는 Windows 측(주 개발)에서 맥 측 Claude 에게 전달하는 작업 지시서다.
 > 위에서부터 순서대로 실행하면 된다. 완료 후 결과를 사용자에게 보고할 것.
 
+## ★★★ 업데이트 3 (CORS 서버 반영 완료 + doPair fragment 수정 — 2026-08-13)
+
+맥 측이 확정한 두 건 모두 처리됐다:
+1. **CP CORS**: 서버(control_plane)에 CORSMiddleware 추가 + **운영 반영 완료**
+   (util-session-cp 재시작, 프리플라이트 200 + `ACAO: capacitor://localhost` 실측 확인).
+   → 앱의 JWT 교환이 이제 통과한다. 서버 대기 없이 바로 재시도 가능.
+2. **doPair fragment 파싱**: 커밋 023e5c7 — fragment(#room=) 우선 파싱 + E2EE 키(rk)
+   저장 누락도 함께 수정(수동 페어링 시 평문 접속 되던 문제).
+
+맥 작업: `git pull`(023e5c7) → `cd app && npm run bundle && npx cap sync ios`
+→ 시뮬레이터에서 페어링→세션 목록 진입(4401 없이) 확인
+→ **빌드 번호 +1 (1.3(4)) → Archive → TestFlight 업로드**.
+
 ## ★★ 업데이트 2 (cpBase 4401 버그 — 맥 측 발견, 6601198 반영됨)
 
 맥 측이 확정한 cpBase() origin 유도 버그(앱에서 JWT 미발급 → 릴레이 4401)는
