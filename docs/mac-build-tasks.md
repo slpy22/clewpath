@@ -3,6 +3,22 @@
 > 이 문서는 Windows 측(주 개발)에서 맥 측 Claude 에게 전달하는 작업 지시서다.
 > 위에서부터 순서대로 실행하면 된다. 완료 후 결과를 사용자에게 보고할 것.
 
+## ★★★★ 업데이트 4 (다음 배포 = 1.5(5), 버전은 저장소에 고정됨)
+
+다음 TestFlight 배포는 **1.5(5)** 로 확정(사장님 결정). pbxproj 에
+MARKETING_VERSION=1.5 / CURRENT_PROJECT_VERSION=5 를 커밋해 뒀으니
+**Xcode 에서 버전을 손대지 말고** 아래만 수행:
+
+```bash
+git checkout -- ios/App/App.xcodeproj/project.pbxproj   # 맥 로컬의 버전 수정 폐기
+git pull                                                 # bd0df30+ (PgUp/PgDn 수정 포함)
+cd app && npm run bundle && npx cap sync ios
+```
+
+포함된 웹 수정: TUI 스와이프 = PageUp/PageDown 변환(화살표 오작동 수정, iPhone 실기기
+발견 건) + 보조키바 PgUp/PgDn 버튼. 시뮬레이터 확인 후 Archive → Upload (1.5(5)).
+pull 충돌 시: 맥 로컬 변경을 버리는 방향으로(모든 확정 수정은 원격 main 에 있다).
+
 ## ★★★ 업데이트 3 (CORS 서버 반영 완료 + doPair fragment 수정 — 2026-08-13)
 
 맥 측이 확정한 두 건 모두 처리됐다:
