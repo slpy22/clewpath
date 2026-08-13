@@ -191,6 +191,31 @@
     });
     document.body.appendChild(bar);
     document.body.classList.add('cb-app');
+    pinToViewport(bar);
+  }
+
+  // 탭바를 '보이는 영역' 하단에 고정. Android WebView 는 키보드 개폐 후 비주얼
+  // 뷰포트가 레이아웃보다 작게 남는 경우가 있어(에뮬레이터 실측 839 vs 1055 CSS px)
+  // fixed bottom:0 이 화면 밖에 붙는다. visualViewport 를 추적해 보정하고,
+  // 키보드가 실제로 떠 있을 때(오프셋 큰 경우)는 탭바를 숨겨 입력을 가리지 않는다.
+  function pinToViewport(elm) {
+    var vv = window.visualViewport;
+    if (!vv) return;
+    function apply() {
+      // 항상 보이는 하단으로 이동(숨김 휴리스틱 금지 — 뷰포트가 216px 줄어든 채
+      // 고착되는 에뮬레이터 실측 케이스를 키보드로 오판해 바가 사라졌었다).
+      // 키보드가 정말 떠 있으면 바가 키보드 위에 얹힌다 — 기능 유지가 우선.
+      var off = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+      elm.style.transform = off > 1 ? 'translateY(-' + off + 'px)' : '';
+    }
+    vv.addEventListener('resize', apply);
+    vv.addEventListener('scroll', apply);
+    // 레이아웃 뷰포트만 커지는 경우 visualViewport resize 가 안 온다(실측:
+    // 로드 시 839/839 -> 이후 839/1055 로 벌어졌는데 초기 apply 만 돌아 미보정).
+    window.addEventListener('resize', apply);
+    window.addEventListener('orientationchange', apply);
+    apply();
+    setTimeout(apply, 300); setTimeout(apply, 1200);   // 초기 레이아웃 안정화 재보정
   }
 
   // 앱 전용 스타일(탭바·오버레이). 웹 CSS 를 건드리지 않기 위해 여기서 주입.
@@ -200,9 +225,11 @@
       '#cb-tabs{position:fixed;left:0;right:0;bottom:0;display:flex;z-index:900;' +
       'background:var(--panel,#1b1f27);border-top:1px solid var(--line,#2a2f3a);' +
       'padding-bottom:env(safe-area-inset-bottom)}' +
-      '#cb-tabs button{flex:1;padding:12px 0;background:none;border:0;' +
+      '#cb-tabs button{flex:1 1 0;min-width:0;padding:12px 0;background:none;border:0;' +
       'color:var(--fg,#dfe3ea);font-size:13px}' +
       'body.cb-app #app{padding-bottom:calc(46px + env(safe-area-inset-bottom))}' +
+      /* 터미널 전체화면(기획 §4): 터미널 표시 중엔 탭바 숨김(보조키바와 겹침 방지) */
+      'body:has(#paneDetail.term-mode) #cb-tabs{display:none}' +
       '#cb-pair{position:fixed;inset:0;z-index:1000;background:var(--bg,#12151b);' +
       'display:flex;align-items:center;justify-content:center;padding:24px}' +
       '#cb-pair .cb-card{max-width:420px;width:100%}' +
