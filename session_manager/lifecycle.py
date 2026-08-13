@@ -9,10 +9,16 @@ from __future__ import annotations
 
 import json
 import shutil
+import time
 from pathlib import Path
 
 from session_manager import config
 from session_manager.scanner import scan_one
+
+
+def _trash_root() -> Path:
+    """삭제된 세션을 잠시 보관하는 휴지통. 데이터 폴더 아래 — 재설치/업데이트가 안 건드림."""
+    return config.data_dir() / "trash"
 
 
 def _related_paths(session_id: str) -> list[Path]:
@@ -41,7 +47,11 @@ def _related_paths(session_id: str) -> list[Path]:
 
 
 def delete_session(session_id: str, dry_run: bool = True) -> dict:
-    """세션과 연관 파일을 삭제한다. dry_run이면 삭제 대상만 반환."""
+    """세션과 연관 파일을 삭제한다 — 하드 삭제가 아니라 **휴지통으로 이동**해 복구 가능.
+
+    실수로 지워도 restore_session 으로 되살릴 수 있다(중요 세션 유실 방지).
+    dry_run이면 삭제 대상만 반환. 오래된 휴지통(기본 30일)은 자동 영구삭제.
+    """
     targets = _related_paths(session_id)
     target_info = [
         {"path": str(p), "type": "dir" if p.is_dir() else "file",
@@ -58,20 +68,101 @@ def delete_session(session_id: str, dry_run: bool = True) -> dict:
         return {"dry_run": False, "session_id": session_id,
                 "deleted": [], "error": "세션을 찾을 수 없습니다."}
 
-    deleted: list[str] = []
+    # 휴지통 버킷으로 '이동'(rmtree/unlink 아님). 같은 이름 충돌 방지 위해 인덱스 접두사.
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    bucket = _trash_root() / f"{session_id}_{stamp}"
+    bucket.mkdir(parents=True, exist_ok=True)
+
+    moved: list[str] = []
     errors: list[str] = []
-    for p in targets:
+    items: list[dict] = []
+    for i, p in enumerate(targets):
         try:
-            if p.is_dir():
-                shutil.rmtree(p)
-            else:
-                p.unlink()
-            deleted.append(str(p))
-        except Exception as e:
+            stored = bucket / f"{i:02d}__{p.name}"
+            shutil.move(str(p), str(stored))
+            moved.append(str(p))
+            items.append({"original": str(p), "stored": str(stored),
+                          "type": "dir" if stored.is_dir() else "file"})
+        except Exception as e:  # noqa: BLE001
             errors.append(f"{p}: {e}")
 
+    (bucket / "manifest.json").write_text(
+        json.dumps({"session_id": session_id, "deleted_at": stamp,
+                    "items": items}, ensure_ascii=False, indent=1),
+        encoding="utf-8")
+    _purge_old_trash()
+
     return {"dry_run": False, "session_id": session_id,
-            "deleted": deleted, "errors": errors}
+            "deleted": moved, "errors": errors,
+            "trash": str(bucket), "recoverable": True}
+
+
+def list_trash() -> list[dict]:
+    """휴지통에 있는(복구 가능한) 삭제 세션 목록. 최근 삭제 순."""
+    root = _trash_root()
+    out: list[dict] = []
+    if not root.is_dir():
+        return out
+    for bucket in sorted(root.iterdir(), key=lambda b: b.name, reverse=True):
+        mf = bucket / "manifest.json"
+        if not mf.is_file():
+            continue
+        try:
+            m = json.loads(mf.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            continue
+        out.append({"bucket": bucket.name, "session_id": m.get("session_id"),
+                    "deleted_at": m.get("deleted_at"),
+                    "items": len(m.get("items", []))})
+    return out
+
+
+def restore_session(bucket_name: str) -> dict:
+    """휴지통 버킷을 원위치로 복구한다. 이미 같은 경로가 있으면 덮어쓰지 않고 건너뜀."""
+    bucket = _trash_root() / bucket_name
+    mf = bucket / "manifest.json"
+    if not mf.is_file():
+        return {"error": "휴지통 항목을 찾을 수 없습니다.", "bucket": bucket_name}
+    m = json.loads(mf.read_text(encoding="utf-8"))
+    restored: list[str] = []
+    errors: list[str] = []
+    skipped: list[str] = []
+    for it in m.get("items", []):
+        orig = Path(it["original"])
+        stored = Path(it["stored"])
+        try:
+            if not stored.exists():
+                skipped.append(f"{orig} (휴지통 파일 없음)")
+                continue
+            if orig.exists():
+                skipped.append(f"{orig} (이미 존재 — 덮어쓰지 않음)")
+                continue
+            orig.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(stored), str(orig))
+            restored.append(str(orig))
+        except Exception as e:  # noqa: BLE001
+            errors.append(f"{orig}: {e}")
+    if restored and not errors and not skipped:
+        try:
+            shutil.rmtree(bucket)   # 전부 복구됐으면 버킷 정리
+        except Exception:  # noqa: BLE001
+            pass
+    return {"session_id": m.get("session_id"), "restored": restored,
+            "errors": errors, "skipped": skipped}
+
+
+def _purge_old_trash(keep_days: int = 30) -> None:
+    """휴지통에서 keep_days 지난 버킷만 영구 삭제(무한 성장 방지)."""
+    root = _trash_root()
+    if not root.is_dir():
+        return
+    cutoff = time.time() - keep_days * 86400
+    for bucket in root.iterdir():
+        try:
+            if bucket.is_dir() and bucket.stat().st_mtime < cutoff:
+                shutil.rmtree(bucket)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 def change_cwd(session_id: str, new_cwd: str, dry_run: bool = True) -> dict:

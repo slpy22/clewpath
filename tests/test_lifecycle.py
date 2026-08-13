@@ -31,6 +31,31 @@ def test_delete_actually_removes(fake_claude_home):
     assert any("aaaa1111.jsonl" in p for p in res["deleted"])
 
 
+def test_delete_is_recoverable_via_trash(fake_claude_home):
+    """삭제는 하드 삭제가 아니라 휴지통 이동 — restore 로 되살릴 수 있어야 한다(오삭제 방지)."""
+    jsonl = _make(fake_claude_home)
+    res = lifecycle.delete_session("aaaa1111", dry_run=False)
+    assert res["recoverable"] is True
+    assert not jsonl.exists()               # 원본 위치는 비었지만
+    trash = lifecycle.list_trash()
+    assert len(trash) == 1 and trash[0]["session_id"] == "aaaa1111"
+    # 복구하면 원본이 되살아난다
+    rr = lifecycle.restore_session(trash[0]["bucket"])
+    assert jsonl.exists()
+    assert any("aaaa1111.jsonl" in p for p in rr["restored"])
+    assert lifecycle.list_trash() == []     # 복구 후 버킷 정리
+
+
+def test_restore_does_not_overwrite_existing(fake_claude_home):
+    """같은 경로가 이미 있으면 덮어쓰지 않고 건너뛴다(복구가 현재 것을 지우면 안 됨)."""
+    jsonl = _make(fake_claude_home)
+    trash = (lifecycle.delete_session("aaaa1111", dry_run=False), lifecycle.list_trash())[1]
+    _make(fake_claude_home)                 # 같은 id 로 새 세션이 다시 생김
+    rr = lifecycle.restore_session(trash[0]["bucket"])
+    assert rr["restored"] == []
+    assert any("이미 존재" in s for s in rr["skipped"])
+
+
 def test_delete_includes_side_dir_and_session_env(fake_claude_home):
     jsonl = _make(fake_claude_home)
     # 사이드 폴더

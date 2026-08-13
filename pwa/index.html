@@ -407,6 +407,7 @@
     <button class="icon hidden" id="btn-pcs" title="PC 전환">🖧</button>
     <span class="connbadge hidden" id="conn-badge" title="릴레이 접속 인증 모드"></span>
     <button class="icon hidden" id="btn-devices" title="외부 접속 기기 관리">📱</button>
+    <button class="icon hidden" id="btn-trash" title="휴지통 (삭제한 세션 복구)">🗑</button>
     <button class="icon hidden" id="btn-push" title="알림 (권한 요청·작업 완료)">🔔</button>
     <button class="icon" id="btn-import" title="세션 가져오기">📥</button>
     <button class="icon" id="btn-usage" title="API 사용량">📈</button>
@@ -1746,11 +1747,36 @@ async function renameNative(s){
   }
 }
 async function doDelete(s){
-  if(!confirm('이 세션을 삭제할까요? 되돌릴 수 없습니다.'))return;
-  try{ await T.api('POST',`/api/sessions/${s.session_id}/delete`,{body:{dry_run:false}});
-    toast('삭제됨'); if(SELECTED_ID===s.session_id){SELECTED_ID=null; detailPlaceholder('삭제됨');}
+  if(!confirm('이 세션을 휴지통으로 보낼까요?\n영구 삭제가 아니라 복구할 수 있습니다(🗑 휴지통에서 되살리기).'))return;
+  try{ const r=await T.api('POST',`/api/sessions/${s.session_id}/delete`,{body:{dry_run:false}});
+    toast(r&&r.recoverable ? '휴지통으로 이동됨 (복구 가능)' : '삭제됨');
+    if(SELECTED_ID===s.session_id){SELECTED_ID=null; detailPlaceholder('삭제됨');}
     loadList();
   }catch(e){ toast('삭제 실패: '+e.message); }
+}
+// ---- 휴지통: 복구 가능한 삭제 세션 ----
+async function showTrash(){
+  const body=el('div');
+  const status=el('p',null,'불러오는 중…'); body.appendChild(status);
+  openModal('🗑 휴지통', body, []);
+  let d; try{ d=await T.api('GET','/api/owner/trash'); }catch(e){ status.textContent='불러오기 실패: '+e.message; return; }
+  const list=(d&&d.trash)||[];
+  status.remove();
+  if(!list.length){ body.appendChild(el('div','cwd','휴지통이 비어 있습니다. (삭제한 세션은 30일간 복구 가능)')); return; }
+  list.forEach(t=>{
+    const row=el('div','devrow'); const info=el('div');
+    info.appendChild(el('div','devname','🗑 '+(t.session_id||t.bucket).slice(0,8)+'…'));
+    info.appendChild(el('div','devmeta','삭제 '+(t.deleted_at||'')+' · '+t.items+'개 파일'));
+    row.appendChild(info);
+    const go=el('button','btn ghost sm','되살리기');
+    go.onclick=async()=>{ go.disabled=true; go.textContent='복구 중…';
+      try{ const r=await T.api('POST',`/api/owner/trash/${encodeURIComponent(t.bucket)}/restore`);
+        if(r&&r.restored&&r.restored.length){ toast('복구됨'); closeModal(); loadList(); }
+        else toast('복구 안 됨: '+((r&&r.skipped&&r.skipped[0])||'대상 없음')); }
+      catch(e){ toast('복구 실패: '+e.message); go.disabled=false; go.textContent='되살리기'; } };
+    row.appendChild(go);
+    body.appendChild(row);
+  });
 }
 
 // ---- export / import ----
@@ -2281,6 +2307,7 @@ conn.onauth=(ok,err)=>{
 };
 $('#btn-security').onclick=showSecurity;
 $('#btn-devices').onclick=showDevices;
+$('#btn-trash').onclick=showTrash;
 $('#btn-pcs').onclick=showPcs;
 $('#btn-import').onclick=importSession;
 $('#btn-usage').onclick=showUsage;
@@ -2515,6 +2542,7 @@ if(_pcexport){
 }else if(MODE==='local'){
   $('#btn-logout').classList.add('hidden');      // 로컬은 로그아웃 개념 없음
   $('#btn-devices').classList.remove('hidden');  // 기기 관리는 로컬 전용 → 로컬에서만 노출
+  $('#btn-trash').classList.remove('hidden');     // 휴지통(복구)도 로컬 전용
   window.addEventListener('message', onRelayPcsMessage);   // 팝업 동기화 수신
   refreshConnBadge();                            // 접속 인증 모드 배지(JWT/fallback)
   setInterval(refreshConnBadge, 60000);

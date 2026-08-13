@@ -688,7 +688,18 @@ def create_app() -> FastAPI:
     # ---- 삭제 / 폴더변경 ----
     @app.post("/api/sessions/{session_id}/delete")
     def delete(session_id: str, dry_run: bool = Body(True, embed=True)):
+        # 하드 삭제가 아니라 휴지통으로 이동 — restore 로 복구 가능.
         return lifecycle.delete_session(session_id, dry_run=dry_run)
+
+    @app.get("/api/owner/trash")
+    def owner_trash():
+        """삭제되어 휴지통에 있는(복구 가능한) 세션 목록."""
+        return {"trash": lifecycle.list_trash()}
+
+    @app.post("/api/owner/trash/{bucket}/restore")
+    def owner_trash_restore(bucket: str):
+        """휴지통의 세션을 원위치로 복구."""
+        return lifecycle.restore_session(bucket)
 
     @app.post("/api/sessions/{session_id}/change-cwd")
     def change_cwd(session_id: str,
