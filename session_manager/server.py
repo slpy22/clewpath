@@ -707,13 +707,23 @@ def create_app() -> FastAPI:
         return {"session_id": session_id, "picker_expose": expose}
 
     @app.get("/api/owner/trash")
-    def owner_trash():
-        """삭제되어 휴지통에 있는(복구 가능한) 세션 목록."""
+    def owner_trash(request: Request):
+        """삭제되어 휴지통에 있는(복구 가능한) 세션 목록. 로컬 전용.
+
+        [원칙] claude 파일 이동(승인 예외)의 통제 지점을 좁게 유지 — 원격 기기
+        탈취 시 휴지통 조작이 불가능하도록 이 PC 로컬에서만 허용한다.
+        """
+        if not _is_local(request):
+            return JSONResponse({"error": "휴지통은 이 PC(로컬)에서만 사용할 수 있습니다."},
+                                status_code=403)
         return {"trash": lifecycle.list_trash()}
 
     @app.post("/api/owner/trash/{bucket}/restore")
-    def owner_trash_restore(bucket: str):
-        """휴지통의 세션을 원위치로 복구."""
+    def owner_trash_restore(bucket: str, request: Request):
+        """휴지통의 세션을 원위치로 복구. 로컬 전용(위와 동일 원칙)."""
+        if not _is_local(request):
+            return JSONResponse({"error": "휴지통은 이 PC(로컬)에서만 사용할 수 있습니다."},
+                                status_code=403)
         return lifecycle.restore_session(bucket)
 
     @app.post("/api/sessions/{session_id}/change-cwd")

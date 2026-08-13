@@ -181,7 +181,7 @@
         else if (window.toast) toast('실행 중인 터미널이 없습니다 — 세션에서 재개해 주세요');
       }],
       ['알림', function () { if (window.toast) toast('알림함은 다음 업데이트(M3)에서 열립니다'); }],
-      ['설정', function () { window.showDevices && showDevices(); }]
+      ['설정', function () { window.showSettings && showSettings(); }]
     ];
     items.forEach(function (it) {
       var b = document.createElement('button');

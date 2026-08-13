@@ -148,6 +148,21 @@
   .connbadge.fallback{color:var(--warn);border-color:var(--warn);background:color-mix(in srgb,var(--warn) 14%,transparent)}
   .connbadge.shared{color:var(--muted);border-color:var(--line2)}
   /* 버전 표기. 업데이트가 있으면 accent 로 바뀌어 눈에 띈다(로컬만). */
+  /* ⚙ 설정 버튼: 새 버전이 있으면 우상단 점 표시 */
+  #btn-settings{position:relative}
+  #btn-settings.upd::after{content:'';position:absolute;top:6px;right:6px;width:8px;height:8px;
+    border-radius:50%;background:var(--accent)}
+  /* 설정 화면 행 */
+  .setsec{margin:14px 0 4px;font-size:.72rem;font-weight:700;color:var(--muted);
+    text-transform:none;letter-spacing:.02em}
+  .setrow{display:flex;align-items:center;gap:10px;width:100%;text-align:left;
+    padding:12px 10px;border:1px solid var(--line);border-radius:12px;margin:6px 0;
+    background:var(--surface);color:var(--fg);font-size:.92rem}
+  .setrow:active{background:var(--line)}
+  .setrow .si{flex:none;font-size:1.05rem}
+  .setrow .st{flex:1;min-width:0}
+  .setrow .st small{display:block;color:var(--muted);font-size:.74rem;margin-top:2px}
+  .setrow .lock{flex:none;opacity:.6}
   .verbadge{font-family:ui-monospace,monospace;font-size:.68rem;color:var(--muted);
     flex:none;white-space:nowrap;align-self:center}
   .verbadge.upd{color:var(--accent);cursor:pointer;font-weight:700}
@@ -401,18 +416,9 @@
     <span class="dot" id="status"></span>
     <span class="title" id="head">세션</span>
     <select class="pcname hidden" id="pcname" title="PC 선택 (localhost / 저장된 PC)"></select>
-    <span class="verbadge hidden" id="ver"></span>
     <span class="grow"></span>
-    <button class="icon" id="btn-security" title="보안(2차 인증)">🔒</button>
-    <button class="icon hidden" id="btn-pcs" title="PC 전환">🖧</button>
-    <span class="connbadge hidden" id="conn-badge" title="릴레이 접속 인증 모드"></span>
-    <button class="icon hidden" id="btn-devices" title="외부 접속 기기 관리">📱</button>
-    <button class="icon hidden" id="btn-trash" title="휴지통 (삭제한 세션 복구)">🗑</button>
-    <button class="icon hidden" id="btn-push" title="알림 (권한 요청·작업 완료)">🔔</button>
-    <button class="icon" id="btn-import" title="세션 가져오기">📥</button>
-    <button class="icon" id="btn-usage" title="API 사용량">📈</button>
     <button class="icon" id="btn-refresh" title="새로고침">⟳</button>
-    <button class="icon" id="btn-logout" title="연결해제">⏻</button>
+    <button class="icon" id="btn-settings" title="설정">⚙</button>
   </header>
   <main id="main"><div id="paneList"></div><div id="resizer" title="드래그로 폭 조절 · 더블클릭 초기화"></div><div id="paneDetail"></div></main>
 </div>
@@ -941,7 +947,6 @@ async function togglePush(){
   }catch(e){ toast('알림 설정 실패: '+e.message); }
   refreshPushBtn();
 }
-$('#btn-push').onclick=togglePush;
 function renderChips(wrap,rerender){
   const counts=new Map();
   for(const s of SESSIONS) for(const l of (s.labels||[])) counts.set(l,(counts.get(l)||0)+1);
@@ -2362,14 +2367,81 @@ conn.onauth=(ok,err)=>{
   if(ok){ window._authLost=false; return; }
   if(err==='auth_required'||err==='auth_invalid') showAuthLost(err);
 };
-$('#btn-security').onclick=showSecurity;
-$('#btn-devices').onclick=showDevices;
-$('#btn-trash').onclick=showTrash;
-$('#btn-pcs').onclick=showPcs;
-$('#btn-import').onclick=importSession;
-$('#btn-usage').onclick=showUsage;
 $('#btn-refresh').onclick=()=>loadList();
-$('#btn-logout').onclick=()=>T.logout();
+$('#btn-settings').onclick=()=>showSettings();
+
+// ---- ⚙ 설정 화면: 흩어져 있던 도구를 한곳에(5개 섹션). 로컬 전용 항목은
+// 원격에서 숨기지 않고 🔒+안내로 보여준다 — 기능의 존재와 보안 설계를 설명.
+function showSettings(){
+  const body=el('div');
+  const sec=(t)=>body.appendChild(el('div','setsec',t));
+  const row=(icon,title,desc,fn,opt)=>{
+    opt=opt||{};
+    const b=el('button','setrow');
+    b.appendChild(el('span','si',icon));
+    const st=el('span','st'); st.appendChild(el('span',null,title));
+    if(desc){ const s=document.createElement('small'); s.textContent=desc; st.appendChild(s); }
+    b.appendChild(st);
+    const lockRemote=opt.local && MODE!=='local';
+    if(lockRemote) b.appendChild(el('span','lock','🔒'));
+    b.onclick=()=>{
+      if(lockRemote){ toast('이 기능은 PC 의 로컬 화면(127.0.0.1:5100)에서만 사용할 수 있습니다'); return; }
+      closeModal(); fn();
+    };
+    body.appendChild(b);
+  };
+
+  sec('연결 · PC');
+  { const info=el('div','setrow'); info.style.cursor='default';
+    const st=el('span','st');
+    st.appendChild(el('span',null,'🖥 '+(MODE==='local'?'localhost (이 PC)':curPcLabel())));
+    const parts=[];
+    if(VERSTATE.cur) parts.push('v'+VERSTATE.cur+(VERSTATE.latest?' → v'+VERSTATE.latest:''));
+    parts.push(MODE==='local'?'로컬 접속':('릴레이 접속'+(conn&&conn.e2eeKey?' · 🔒 E2EE':'')));
+    const s=document.createElement('small'); s.textContent=parts.join(' · '); st.appendChild(s);
+    info.appendChild(st); body.appendChild(info); }
+  if(MODE==='relay'){
+    row('🔄','PC 전환 · 관리','저장된 PC 목록 · 이름 변경 · 제거',showPcs);
+    row('🚪','연결 해제','이 기기에 저장된 접속 자격을 지웁니다',()=>T.logout());
+  }
+
+  sec('알림');
+  if(pushSupported()) row('🔔','알림 설정','권한 요청·작업 완료 푸시 · 받는 기기 관리',togglePush);
+  else body.appendChild(el('div','cwd','이 브라우저는 웹 푸시를 지원하지 않습니다'));
+
+  sec('보안');
+  row('🔒','2차 인증(2FA)','원격 접속 보호 · 설정 변경',showSecurity,{local:true});
+  row('📱','외부 접속 기기','기기 추가(QR) · 폐기 · 킬',showDevices,{local:true});
+
+  sec('데이터');
+  row('📥','세션 가져오기','내보낸 세션 파일 불러오기',importSession);
+  row('🗑','휴지통','삭제한 세션 복구 (30일 보관)',showTrash,{local:true});
+
+  sec('정보 · 진단');
+  row('⬆','업데이트',
+      VERSTATE.latest?('새 버전 v'+VERSTATE.latest+' 설치 가능'):'현재 버전 확인 · 재설치',
+      ()=>{ if(VERSTATE.latest) showUpdateApply(VERSTATE.cur,VERSTATE.latest);
+            else checkUpdateNow(VERSTATE.cur); });
+  row('📈','API 사용량','토큰 · 환산 비용 통계',showUsage);
+  row('🩺','진단','설치 상태 · 세션 수 · 설정 파일 위치',showDiagnostics,{local:true});
+
+  openModal('⚙ 설정', body, []);
+}
+async function showDiagnostics(){
+  const body=el('div'); const st=el('p',null,'불러오는 중…'); body.appendChild(st);
+  openModal('🩺 진단', body, []);
+  try{
+    const d=await T.api('GET','/api/owner/diagnostics');
+    st.remove(); const kv=el('div','kv');
+    const add=(k,v)=>{kv.appendChild(el('div','k',k));kv.appendChild(el('div','v',String(v)));};
+    add('버전','v'+(d.version||'?'));
+    add('세션 수',d.session_count);
+    add('claude 폴더',d.claude_home_exists?'정상':'없음');
+    add('claude 실행파일',d.claude_exe_found?'찾음':'못 찾음');
+    body.appendChild(kv);
+    body.appendChild(el('div','cwd','설정 파일: '+(d.config_file||'')));
+  }catch(e){ st.textContent='불러오기 실패: '+e.message; }
+}
 function enterApp(){ $('#pair').classList.add('hidden'); $('#app').classList.remove('hidden');
   $('#app').setAttribute('data-view','list');
   const sel=$('#pcname'); if(sel && !sel.onchange) sel.onchange=onPcSelect;
@@ -2512,20 +2584,13 @@ function onPcSelect(){
   if(v===LS.getItem('sm_room')){ return; }                                                // 현재와 같음
   if(MODE==='relay'){ const pc=pcsLoad().find(x=>x.room===v)||{room:v,name:''}; switchToPc(pc); }
 }
+// 버전 상태는 설정 화면(⑤ 정보)이 소비한다. 헤더의 ⚙ 에는 새 버전일 때만 점 표시.
+let VERSTATE={cur:null, latest:null};
 function showVer(cur, latest){
-  const b=$('#ver'); if(!b||!cur) return;
-  b.classList.remove('hidden');
-  if(latest){
-    b.textContent=`v${cur} → ${latest}`;
-    b.classList.add('upd');
-    b.title='새 버전이 있습니다. 클릭하면 지금 업데이트.';
-    // 로컬=직접 적용, 릴레이=커넥터 프록시로 원격 PC 에 적용 — 둘 다 가능.
-    b.onclick=()=>showUpdateApply(cur,latest);
-  } else {
-    b.textContent='v'+cur; b.classList.remove('upd');
-    // 최신이어도 뱃지를 눌러 업데이트를 확인/재설치할 수 있게 — 발견성 확보(로컬·릴레이 공통).
-    b.title='클릭하면 업데이트를 확인합니다'; b.onclick=()=>checkUpdateNow(cur);
-  }
+  if(!cur) return;
+  VERSTATE={cur, latest: latest||null};
+  const g=$('#btn-settings');
+  if(g) g.classList.toggle('upd', !!latest);
 }
 // 로컬: 뱃지 클릭 → 지금 업데이트 확인. 있으면 적용 모달, 없으면 '최신' 안내.
 async function checkUpdateNow(cur){
@@ -2597,9 +2662,6 @@ if(_pcexport){
   // 로컬 앱이 목록 동기화를 위해 이 릴레이 페이지를 팝업으로 열었다 — 목록만 넘기고 끝(부팅 안 함).
   doExport(_pcexport);
 }else if(MODE==='local'){
-  $('#btn-logout').classList.add('hidden');      // 로컬은 로그아웃 개념 없음
-  $('#btn-devices').classList.remove('hidden');  // 기기 관리는 로컬 전용 → 로컬에서만 노출
-  $('#btn-trash').classList.remove('hidden');     // 휴지통(복구)도 로컬 전용
   window.addEventListener('message', onRelayPcsMessage);   // 팝업 동기화 수신
   refreshConnBadge();                            // 접속 인증 모드 배지(JWT/fallback)
   setInterval(refreshConnBadge, 60000);
@@ -2609,9 +2671,6 @@ if(_pcexport){
   enterApp();
   maybeShowFirstRunHint();
 }else{
-  // 원격(릴레이)에서는 2FA 패널을 숨긴다 — 설정 변경은 로컬 전용이라 상태 표시뿐이고,
-  // 유일한 실행 동작이던 'grace 해제'는 ⏻ 연결 해제가 sm_grace 를 지우므로 대체된다.
-  $('#btn-security').classList.add('hidden');
   // 페어링 파라미터: fragment(#) 우선 - query 는 릴레이 접근로그에 남을 수 있어
   // 신형 링크는 전부 fragment 로 온다. 구형(query) 링크도 계속 수용.
   const p=new URLSearchParams(location.search);

@@ -111,3 +111,13 @@ def test_no_silent_modification_of_claude_files():
     '사용자 사전 고지+승인' 게이트와 함께 원칙 협의를 먼저 할 것.
     """
     assert not hasattr(lifecycle, "scrub_auto_titles")
+
+
+def test_trash_api_is_local_only(fake_claude_home):
+    """[원칙] 휴지통 API 는 로컬 전용 - 원격(비루프백)에서는 403."""
+    from fastapi.testclient import TestClient
+    from session_manager.server import create_app
+    c = TestClient(create_app())
+    # TestClient 기본 호스트는 'testclient'(비루프백) → 원격 취급
+    assert c.get("/api/owner/trash").status_code == 403
+    assert c.post("/api/owner/trash/x/restore").status_code == 403
