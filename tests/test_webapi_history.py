@@ -1,23 +1,12 @@
-"""웹 재개 프롬프트 → claude 입력 히스토리(~/.claude/history.jsonl) 기록.
+"""[원칙 회귀 방지] 웹 재개 프롬프트의 claude 히스토리 기록 기능은 제거됐다.
 
-터미널 ↑/↓ 가 읽는 파일이라 포맷(실측 키 5개)이 깨지면 조용히 무용지물이 된다.
+~/.claude/history.jsonl 은 claude 소유 파일(터미널 ↑/↓ 입력 히스토리)이고,
+고지 없는 자동 append 는 'claude 파일 무단 수정 금지' 원칙 위반이다(CLAUDE.md).
+같은 이름의 함수가 부활하면 이 테스트가 막는다 - 되살리려면 옵트인 설정
+(위험 고지+승인) 게이트와 함께 원칙 협의를 먼저 할 것.
 """
-import json
 
 
-def test_web_prompt_appends_claude_history(fake_claude_home):
+def test_no_silent_claude_history_append():
     from session_manager import webapi
-    webapi._append_claude_history("웹에서 보낸 질문", "sid-123", r"F:\proj\demo")
-    line = (fake_claude_home / "history.jsonl").read_text(encoding="utf-8").strip()
-    rec = json.loads(line)
-    assert rec["display"] == "웹에서 보낸 질문"
-    assert rec["sessionId"] == "sid-123"
-    assert rec["project"] == r"F:\proj\demo"
-    assert rec["pastedContents"] == {}
-    assert isinstance(rec["timestamp"], int) and rec["timestamp"] > 10**12  # ms 단위
-
-
-def test_empty_prompt_not_recorded(fake_claude_home):
-    from session_manager import webapi
-    webapi._append_claude_history("", "sid-123", None)
-    assert not (fake_claude_home / "history.jsonl").exists()
+    assert not hasattr(webapi, "_append_claude_history")
