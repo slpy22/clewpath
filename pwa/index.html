@@ -1170,6 +1170,15 @@ function showResumeChooser(s){
   render();
   const go=el('button','btn full','▶ 재개');
   go.onclick=()=>{
+    // [원칙: 사전 고지+승인] 피커 미표시 세션(에이전트/포크 산물)을 대화형으로
+    // 재개하면 claude 가 자동 제목을 붙여 claude 재개 목록에 나타나게 된다.
+    // ClewPath 는 이를 막기 위해 claude 파일을 건드리지 않는다 - 대신 미리 알린다.
+    if(pref.how==='term' && s.picker_hidden && !s.picker_expose){
+      if(!confirm('이 세션은 claude 재개 목록(피커)에 없는 세션입니다(에이전트/포크 산물).\n\n'
+        +'터미널(대화형)로 재개하면 claude 가 자동 제목을 붙여, 앞으로 claude 재개 목록에도 '
+        +'이 세션이 나타나게 됩니다.\n\n계속할까요?\n'
+        +'(세션 상세의 ⚙ 카드에서 이 알림을 끌 수 있습니다)')) return;
+    }
     LS.setItem('sm_resume_pref',JSON.stringify(pref)); closeModal();
     if(pref.how==='term') loadTerminal(s, !pref.yolo);
     else loadResume(s, true, !pref.yolo);
@@ -1322,16 +1331,20 @@ async function loadDetail(s){
     c.appendChild(p1);
     const pol=el('div','cwd'); pol.style.marginTop='10px'; pol.style.whiteSpace='pre-line';
     const bTog=el('button','btn ghost'); bTog.style.marginTop='10px';
+    // [원칙] ClewPath 는 claude 의 세션 파일을 수정하지 않는다. 대화형 재개 시
+    // claude 가 스스로 자동 제목을 붙여 자기 목록에 넣는 것은 claude 의 정상
+    // 동작이며, 우리는 그 사실을 '재개 전에 알리고 승인받는' 것까지만 한다.
     const renderPol=()=>{
       if(s.picker_expose){
-        pol.textContent='현재 정책: 노출 허용 - 여기서 터미널 재개로 대화하면 자동 제목이 붙어, '
-          +'이후 claude 재개 목록에도 다른 세션처럼 나타납니다.';
-        bTog.textContent='🙈 다시 숨김 유지로 (claude 목록에 안 나오게)';
+        pol.textContent='현재 설정: 알고 있음(경고 안 함) - 터미널(대화형)로 재개하면 claude 가 '
+          +'자동 제목을 붙여, 이후 claude 재개 목록에도 이 세션이 나타납니다.';
+        bTog.textContent='🔔 재개 전에 다시 알려주기 (기본으로)';
       }else{
-        pol.textContent='현재 정책: 숨김 유지(기본) - 여기서 터미널 재개로 사용해도, 끝난 뒤 '
-          +'자동 제목을 걷어내 claude 재개 목록에는 계속 나타나지 않습니다. '
-          +'(직접 만든 적 없는 세션이 claude 목록에 생기는 혼동 방지)';
-        bTog.textContent='📢 claude 재개 목록에도 노출하기 (승격)';
+        pol.textContent='현재 설정: 재개 전 알림(기본) - 터미널(대화형)로 재개하면 claude 가 '
+          +'자동 제목을 붙여 claude 재개 목록에도 나타나게 되므로, 재개 직전에 이 사실을 '
+          +'확인받습니다. (웹 재개는 자동 제목이 붙지 않아 해당 없음)\n'
+          +'※ ClewPath 는 claude 의 세션 파일을 수정하지 않습니다 - 이 변화는 claude 자신의 동작입니다.';
+        bTog.textContent='👌 알고 있으니 경고 없이 재개하기';
       }
     };
     bTog.onclick=async()=>{
@@ -1339,8 +1352,7 @@ async function loadDetail(s){
         const next=!s.picker_expose;
         await T.api('POST',`/api/sessions/${s.session_id}/picker-expose`,{body:{expose:next}});
         s.picker_expose=next; renderPol();
-        toast(next?'승격됨 - 다음 대화형 사용부터 claude 목록에도 표시됩니다'
-                  :'숨김 유지로 변경됨');
+        toast(next?'이 세션은 경고 없이 재개됩니다':'재개 전 알림이 다시 표시됩니다');
       }catch(e){ toast('변경 실패: '+e.message); }
     };
     renderPol();

@@ -102,22 +102,12 @@ def test_change_cwd_preserves_unparseable_lines(fake_claude_home):
     assert "not json line" in content  # 보존됨
 
 
-def test_scrub_auto_titles_removes_only_title_records(fake_claude_home):
-    """은닉 유지: ai-title/agent-name 만 제거, 대화·custom-title 은 보존."""
-    sid = "cccc3333"
-    write_session(fake_claude_home, "P--x", sid, [
-        {"type": "user", "cwd": "F:\p", "message": {"role": "user", "content": "hi"},
-         "timestamp": "2026-08-13T00:00:00.000Z"},
-        {"type": "ai-title", "aiTitle": "자동 제목"},
-        {"type": "assistant", "message": {"role": "assistant", "content": "yo"},
-         "timestamp": "2026-08-13T00:01:00.000Z"},
-        {"type": "agent-name", "agentName": "branchy"},
-        {"type": "custom-title", "customTitle": "내가 붙인 이름"},
-    ])
-    res = lifecycle.scrub_auto_titles(sid)
-    assert res["removed"] == 2
-    path = fake_claude_home / "projects" / "P--x" / f"{sid}.jsonl"
-    kinds = [json.loads(l)["type"] for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
-    assert "ai-title" not in kinds and "agent-name" not in kinds
-    assert kinds.count("user") == 1 and kinds.count("assistant") == 1
-    assert "custom-title" in kinds          # 사용자가 붙인 이름은 보존
+def test_no_silent_modification_of_claude_files():
+    """[원칙 회귀 방지] claude 세션 파일을 무단 수정하는 기능이 되살아나면 안 된다.
+
+    은닉 유지(scrub_auto_titles: 재개 후 ai-title 자동 제거)는 claude 자체 동작에
+    영향을 주는 무단 파일 수정이라 원칙 위반으로 제거됐다(2026-08-13 확정).
+    같은 이름의 함수가 다시 생기면 이 테스트가 막는다 - 부활시키려면
+    '사용자 사전 고지+승인' 게이트와 함께 원칙 협의를 먼저 할 것.
+    """
+    assert not hasattr(lifecycle, "scrub_auto_titles")

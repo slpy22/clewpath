@@ -151,42 +151,10 @@ def restore_session(bucket_name: str) -> dict:
             "errors": errors, "skipped": skipped}
 
 
-def scrub_auto_titles(session_id: str) -> dict:
-    """세션 jsonl 에서 자동 제목 레코드(ai-title/agent-name)를 제거한다.
-
-    용도(은닉 유지): 피커 미표시 세션(에이전트/포크 산물)을 ClewPath 터미널로
-    재개해 대화형으로 쓰면 claude 가 자동 제목을 붙여 `--resume` 피커 목록에
-    새로 나타난다 - 사용자가 만든 적 없는 세션이 갑자기 목록에 생겨 혼동을
-    준다(실사고: 오삭제). 사용 종료 후 이 레코드만 걷어내 원래대로 목록 밖에
-    둔다. 대화 내용·custom-title 은 건드리지 않는다.
-    """
-    meta = scan_one(session_id)
-    if meta is None:
-        return {"error": "세션을 찾을 수 없습니다.", "removed": 0}
-    path = Path(meta.jsonl_path)
-    kept: list[str] = []
-    removed = 0
-    try:
-        with path.open(encoding="utf-8", errors="replace") as f:
-            for raw in f:
-                line = raw.rstrip("\n")
-                if not line.strip():
-                    continue
-                try:
-                    t = json.loads(line).get("type")
-                except Exception:  # noqa: BLE001
-                    t = None
-                if t in ("ai-title", "agent-name"):
-                    removed += 1
-                    continue
-                kept.append(line)
-        if removed:
-            tmp = path.with_suffix(".jsonl.scrub")
-            tmp.write_text("\n".join(kept) + "\n", encoding="utf-8")
-            tmp.replace(path)
-    except Exception as e:  # noqa: BLE001
-        return {"error": str(e), "removed": 0}
-    return {"removed": removed}
+# [원칙] ClewPath 는 claude 의 세션 파일을 임의로 수정하지 않는다.
+# 한때 '은닉 유지'(재개 후 ai-title 레코드 자동 제거)를 구현했으나, claude 자체
+# 동작에 영향을 주는 무단 파일 수정이라 원칙 위반으로 제거했다(2026-08-13 확정).
+# 피커 미표시 세션의 대화형 재개는 '재개 전 고지 + 사용자 승인'으로 대체한다.
 
 
 def _purge_old_trash(keep_days: int = 30) -> None:

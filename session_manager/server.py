@@ -695,11 +695,13 @@ def create_app() -> FastAPI:
 
     @app.post("/api/sessions/{session_id}/picker-expose")
     def picker_expose(session_id: str, expose: bool = Body(..., embed=True)):
-        """피커 미표시 세션(에이전트/포크 산물)의 노출 정책 토글.
+        """피커 미표시 세션(에이전트/포크 산물)의 재개 전 알림 설정 토글.
 
-        expose=True: 승격 - 이후 대화형 사용 시 자동 제목이 유지되어 claude
-        `--resume` 목록에도 나타난다. False: 은닉 유지(기본) - ClewPath 로
-        재개해 써도 사용 후 자동 제목을 걷어내 claude 목록 밖에 머문다.
+        [원칙] ClewPath 는 claude 세션 파일을 수정하지 않는다. 대화형 재개 시
+        claude 가 자동 제목을 붙여 자기 `--resume` 목록에 넣는 것은 claude 의
+        정상 동작이고, 우리는 그 사실을 재개 직전에 고지할지만 정한다.
+        expose=True: 사용자가 인지함 - 경고 없이 재개. False(기본): 재개 전 확인.
+        이 플래그는 ClewPath 자체 저장소(labels)에만 기록된다.
         """
         labels.set_record(session_id, picker=("expose" if expose else None))
         return {"session_id": session_id, "picker_expose": expose}
