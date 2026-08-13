@@ -1383,10 +1383,14 @@ function attachMobileTermUX(host, term, opts){
   const stopInertia=()=>{ if(raf){ cancelAnimationFrame(raf); raf=0; } vel=0; };
   const applyPx=(dy)=>{            // 아래로 dy px 끌면 위 이력이 보인다(자연 방향)
     const h=cellH();
-    if(isAlt()){                   // TUI: cell 1.2배마다 화살표 1회(과속 방지)
+    if(isAlt()){
+      // TUI(alternate 버퍼): claude 등은 이력 스크롤이 PageUp/PageDown 이다.
+      // 화살표로 보내면 스크롤이 아니라 입력 이력·커서를 건드린다(iPhone 실기기 확인).
+      // 반 화면 분량을 끌 때마다 페이지 1회 — 페이지 단위라 과민하지 않게.
+      const page=Math.max(h*4, (term.rows||24)/2*h);
       arrowAcc+=dy;
-      while(arrowAcc>=h*1.2){ arrowAcc-=h*1.2; opts.send('\x1b[A'); }
-      while(arrowAcc<=-h*1.2){ arrowAcc+=h*1.2; opts.send('\x1b[B'); }
+      while(arrowAcc>=page){ arrowAcc-=page; opts.send('\x1b[5~'); }   // PageUp
+      while(arrowAcc<=-page){ arrowAcc+=page; opts.send('\x1b[6~'); }  // PageDown
       return;
     }
     acc+=dy;
@@ -1448,7 +1452,8 @@ function attachMobileTermUX(host, term, opts){
   // 보조키 바(기획서 §5 키맵 그대로). 이스케이프 시퀀스를 PTY 로 직접 전송(IME 우회).
   // pointerdown+preventDefault: 버튼이 포커스를 뺏어 소프트 키보드가 닫히는 것을 방지.
   const KEYS=[['Esc','\x1b'],['Tab','\t'],['Ctrl',null],['↑','\x1b[A'],['↓','\x1b[B'],
-              ['←','\x1b[D'],['→','\x1b[C'],['1','1'],['2','2'],['3','3'],['Enter','\r']];
+              ['←','\x1b[D'],['→','\x1b[C'],['PgUp','\x1b[5~'],['PgDn','\x1b[6~'],
+              ['1','1'],['2','2'],['3','3'],['Enter','\r']];
   const bar=el('div','term-keybar');
   for(const [label,seq] of KEYS){
     const b=el('button',null,label);
