@@ -161,3 +161,14 @@ def test_memory_cap(monkeypatch):
     for i in range(5):
         hooks.update_from_event(_ev("SessionStart", sid=f"s{i}"))
     assert len(hooks.status_map()) <= 3
+
+
+def test_hooks_event_endpoint_returns_204(home, monkeypatch):
+    """훅 엔드포인트 실호출 회귀 - 0.3.22 에서 Response 미임포트 NameError 로
+    모든 훅이 500(Internal Server Error)을 받던 실사고. 반드시 204 무본문."""
+    from fastapi.testclient import TestClient
+    from session_manager.server import create_app
+    c = TestClient(create_app())
+    r = c.post("/api/hooks/event", json={"hook_event_name": "Stop", "session_id": "x"})
+    assert r.status_code == 204
+    assert r.content == b""

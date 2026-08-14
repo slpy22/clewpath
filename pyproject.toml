@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "clewpath-host"
-version = "0.3.22"
+version = "0.3.23"
 description = "ClewPath Host — 내 PC의 클로드 코드 세션으로 돌아가는 길. 폰·웹에서 이어쓰기."
 license = "MIT"
 license-files = ["LICENSE"]
