@@ -36,10 +36,13 @@ def test_register_fresh(home):
         assert any("/api/hooks/event" in c for c in cmds), ev
     cmd = hooks.hook_command(5100)
     assert "127.0.0.1:5100/api/hooks/event" in cmd
-    # Claude 는 Windows 에서도 훅을 bash 로 실행한다(실측) - 셸 불문 조건:
-    assert "\\" not in cmd                          # 백슬래시 경로 금지(bash 가 삼킴)
+    # Claude 의 훅 실행 셸은 PC 마다 다르다(bash·cmd·PS5.1 실측) - 셸 불문 조건:
+    assert "\\" not in cmd.replace('\\"', "")       # 백슬래시 경로 금지(bash 가 삼킴)
     assert ">" not in cmd                           # 리다이렉션 금지(셸별 문법 다름)
-    assert cmd.endswith("|| exit 0")                # 실패해도 Claude 를 방해 안 함
+    assert "||" not in cmd                          # PS 5.1 파서 에러(타 PC 실사고)
+    assert "@- " not in cmd and '"@-"' in cmd       # 맨몸 @- 는 PS 스플래팅 파서 에러
+    assert '-H Content-Type:application/json' in cmd  # 공백/인용 헤더 금지(셸 지뢰)
+    assert "curl.exe" in cmd                        # PS 의 curl 별칭(IWR) 회피
 
 
 def test_register_is_idempotent(home):

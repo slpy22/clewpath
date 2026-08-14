@@ -875,7 +875,9 @@ def create_app() -> FastAPI:
                 push.notify_from_event(payload)
             except Exception as e:  # noqa: BLE001
                 print(f"[push] 알림 처리 실패: {e}", flush=True)
-        return {"ok": True}
+        # 무본문 204: 훅 curl 의 stdout 을 비운다 - Stop 훅에서 stdout JSON 은
+        # Claude 가 정지 제어문으로 해석을 시도하므로 아무것도 안 찍는 게 안전.
+        return Response(status_code=204)
 
     # ---- 웹푸시 구독 (로컬/원격 PWA 공용 - 원격은 커넥터 /api/ 프록시 경유) ----
     @app.get("/api/owner/push/vapid")

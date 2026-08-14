@@ -56,14 +56,23 @@ def hook_cmd_path() -> Path:
 def hook_command(port: int) -> str:
     """stdin(JSON)을 로컬 Host 로 넘기는 셸 불문 한 줄.
 
-    - curl.exe: Windows 10+ 기본 탑재, bash(Git Bash)에서도 PATH 로 찾는다
-    - 리다이렉션 없음(>nul 은 bash, /dev/null 은 cmd 에서 깨진다)
-    - `|| exit 0`: bash/cmd 공통 문법 - Host 가 꺼져 있어도 훅 실패 경고로
-      사용자 세션을 시끄럽게 하지 않는다
-    - -m 3: Host 다운 시에도 Claude 를 3초 이상 붙잡지 않는다
+    Claude 가 훅을 어느 셸로 실행하는지는 PC/버전마다 다르다(bash·cmd·
+    PowerShell 5.1 실측). 세 셸 모두에서 유효한 형태의 조건:
+    - `||` 금지: PS 5.1 파서 에러(타 PC 실사고 - 훅이 매번 ParserError 실패)
+    - 맨몸 `@-` 금지: PS 가 스플래팅 토큰으로 파싱 - `"@-"` 로 인용(세 셸 모두
+      curl 에 @- 가 전달됨)
+    - 공백 있는 인용 헤더 금지(셸별 인용 규칙 지뢰) - `-H Content-Type:application/json`
+      처럼 공백 없이(curl 유효 문법)
+    - `cmd /c` 래핑 금지: bash(MSYS)가 `/c` 를 `C:\` 경로로 변환해 cmd 가
+      대화형으로 떠버린다(실측)
+    - `curl.exe` 명시: PS 의 curl 별칭(Invoke-WebRequest) 회피
+    실패 무음화(구 `|| exit 0`)는 셸 공통 문법이 없어 포기 - Host 가 꺼져 있으면
+    로그 창에 non-blocking 한 줄이 남지만 세션 진행엔 영향 없다.
+    -m 3: Host 다운 시에도 Claude 를 3초 이상 붙잡지 않는다.
     """
-    return ("curl.exe -s -m 3 -H \"Content-Type: application/json\" "
-            f"--data-binary @- http://127.0.0.1:{port}/api/hooks/event || exit 0")
+    return ("curl.exe -s -m 3 --data-binary \"@-\" "
+            "-H Content-Type:application/json "
+            f"http://127.0.0.1:{port}/api/hooks/event")
 
 
 def _is_ours(entry: dict) -> bool:
