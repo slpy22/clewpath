@@ -106,6 +106,24 @@ def cmd_sign(a) -> int:
         print(f"[!] 파일이 없습니다: {art}")
         return 1
     data = art.read_bytes()
+    # 버전 대조 게이트: zip 안의 pyproject 버전과 --version 이 다르면 중단.
+    # (실사고: 같은 날짜 파일명 때문에 패키징이 중단됐는데 구 zip 을 새 버전으로
+    #  서명·게시 - 수정이 빠진 릴리스가 나감. 이 게이트가 그 사고를 막는다)
+    try:
+        import io
+        import re
+        import zipfile
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            m = re.search(r'^version = "([^"]+)"',
+                          zf.read("pyproject.toml").decode("utf-8"), re.M)
+        zip_ver = m.group(1) if m else None
+    except Exception as e:  # noqa: BLE001
+        print(f"[!] zip 버전 확인 실패({e}) - 아티팩트가 배포 zip 이 맞는지 확인하세요")
+        return 1
+    if zip_ver != a.version:
+        print(f"[!] 버전 불일치: --version {a.version} vs zip 내부 {zip_ver}")
+        print("    패키징을 다시 하세요:  pwsh -File ops/package-for-user.ps1 -Force")
+        return 1
     digest = hashlib.sha256(data).hexdigest()
     priv = serialization.load_pem_private_key(Path(a.key).read_bytes(), password=None)
     kid = _kid(priv.public_key())
