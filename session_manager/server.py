@@ -263,12 +263,15 @@ async def _lifespan(app: FastAPI):
     except Exception as e:  # noqa: BLE001
         print(f"[data] 점검 실패: {type(e).__name__}: {e}")
 
-    # 이전 Host 가 강제 종료되며 남긴 고아 웹재개 스트림 정리(협의된 예외 -
-    # ClewPath 자신이 낳은 프로세스 한정). 스레드로 - 기동을 막지 않게.
+    # 이전 Host 가 강제 종료되며 남긴 고아 정리(협의된 예외 - ClewPath 자신이
+    # 낳은 프로세스 한정): 웹재개 스트림(서명+부모사망) + PTY(자기 등록부 기반).
+    # 스레드로 - 기동을 막지 않게.
+    def _sweep_all():
+        from session_manager import webapi as _webapi, webterm as _webterm
+        _webapi.sweep_orphan_streams()
+        _webterm.sweep_orphan_ptys()
     try:
-        from session_manager import webapi as _webapi
-        threading.Thread(target=_webapi.sweep_orphan_streams,
-                         name="orphan-sweep", daemon=True).start()
+        threading.Thread(target=_sweep_all, name="orphan-sweep", daemon=True).start()
     except Exception as e:  # noqa: BLE001
         print(f"[sweep] 시작 실패: {e}", flush=True)
 
@@ -288,6 +291,17 @@ async def _lifespan(app: FastAPI):
     try:
         yield
     finally:
+        # 정상 종료(업데이트 재기동 포함) 시 우리가 띄운 PTY 를 함께 내린다 -
+        # 살려두면 고아→claude bg 승격→세션 잠금("already running as background
+        # agent")이 재기동마다 재발한다(실사고). 재기동 후엔 등록을 잃어
+        # 재접속도 불가하므로 유지할 가치가 없다.
+        try:
+            from session_manager import webterm as _webterm
+            n = _webterm.shutdown_all()
+            if n:
+                print(f"[term] 종료와 함께 PTY {n}개 정리", flush=True)
+        except Exception as e:  # noqa: BLE001
+            print(f"[term] PTY 정리 실패: {e}", flush=True)
         for t in (task, upd_task):
             if t is not None:
                 t.cancel()

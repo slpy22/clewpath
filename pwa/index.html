@@ -1609,10 +1609,32 @@ async function loadTerminal(s, safe){
     fontFamily:'ui-monospace,"Cascadia Code",Consolas,monospace',
     theme:{background:'#0d1117',foreground:'#e6edf3',cursor:'#58a6ff'}});
   const fit=new FitAddon.FitAddon(); term.loadAddon(fit); term.open(host);
+  // 세션 잠금 감지: 이전 Host 강제종료로 남은 고아가 claude bg 에이전트로
+  // 승격되면 --resume 이 이 문구로 거부된다. 원문 에러만 흘리지 말고 원인과
+  // 출구(포크)를 안내한다. 자동 정리는 하지 않음 - 사용자가 직접 만든 bg
+  // 에이전트일 수도 있어(불가침 원칙) 구분이 안 되는 정리는 위험하다.
+  let _bgLockNotified=false;
+  const _detectBgLock=(chunk)=>{
+    if(_bgLockNotified||chunk.indexOf('running as a background agent')<0) return;
+    _bgLockNotified=true;
+    const body=el('div');
+    body.appendChild(el('p',null,'이 세션이 백그라운드 실행에 잠겨 있어 이어서 재개할 수 없습니다.'));
+    const why=el('div','cwd'); why.style.whiteSpace='pre-line';
+    why.textContent='가능한 원인:\n'
+      +'  · 이전에 열어둔 터미널이 백그라운드로 남아 있음 (PC 재시작·업데이트 후 흔함)\n'
+      +'  · 직접 만든 백그라운드 에이전트가 이 세션을 쓰는 중\n\n'
+      +'해결:\n'
+      +'  · 아래 [포크로 재개] - 원본을 건드리지 않는 사본에서 바로 이어서 작업 (권장)\n'
+      +'  · 또는 PC 터미널에서 claude agents 로 해당 실행을 확인·종료한 뒤 다시 재개';
+    body.appendChild(why);
+    const go=el('button','btn full','🔱 포크로 재개');
+    go.onclick=()=>{ closeModal(); if(_term){_term.close();_term=null;} loadResume(s,false); };
+    openModal('세션이 잠겨 있습니다', body, [go]);
+  };
   const tc=T.terminal(s.session_id,(data,eof,err)=>{
     if(eof){ if(err==='2fa_invalid'||err==='2fa_required') clearGrace();
       term.write('\r\n\x1b[91m── '+(err?otpErrMsg(err):'연결 종료')+' ──\x1b[0m\r\n'); }
-    else term.write(data); }, cred);
+    else { _detectBgLock(data); term.write(data); } }, cred);
   // 크기가 실제로 바뀔 때만 통지(ResizeObserver 가 자주 불려도 과다 전송 방지)
   let _lastDim='';
   const doResize=()=>{ try{ fit.fit();

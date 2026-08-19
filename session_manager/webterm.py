@@ -127,6 +127,120 @@ def _cleanup(sess: _TermSession) -> None:
         sess.proc.terminate(force=True)
     except Exception:  # noqa: BLE001
         pass
+    _registry_remove(getattr(sess.proc, "pid", None))
+
+
+# ---------------------------------------------------------------- PTY 등록부
+# 우리가 띄운 PTY 의 (pid, 세션ID)를 파일에 기록한다. Host 가 강제 종료돼도
+# 파일은 남으므로, 다음 기동 때 '우리가 낳았다 잃은' 프로세스를 서명 추측 없이
+# 정확히 식별해 정리할 수 있다(임의의 claude 오인 정리가 원리적으로 불가능).
+# 방치하면 claude 데몬이 고아를 bg 에이전트로 승격시켜 세션을 잠근다(실사고:
+# "already running as a background agent" - 업데이트 재기동마다 재발 위험).
+
+_REG_LOCK = threading.Lock()
+
+
+def _registry_path():
+    from session_manager import config as _cfg
+    return _cfg.data_dir() / "pty-registry.json"
+
+
+def _registry_load() -> list[dict]:
+    try:
+        import json as _json
+        return _json.loads(_registry_path().read_text(encoding="utf-8")) or []
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _registry_save(entries: list[dict]) -> None:
+    try:
+        import json as _json
+        p = _registry_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(_json.dumps(entries, ensure_ascii=False), encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _registry_add(pid: int | None, session_id: str) -> None:
+    if not pid:
+        return
+    with _REG_LOCK:
+        entries = [e for e in _registry_load() if e.get("pid") != pid]
+        entries.append({"pid": pid, "sid": session_id})
+        _registry_save(entries)
+
+
+def _registry_remove(pid: int | None) -> None:
+    if not pid:
+        return
+    with _REG_LOCK:
+        entries = [e for e in _registry_load() if e.get("pid") != pid]
+        _registry_save(entries)
+
+
+def shutdown_all() -> int:
+    """Host 정상 종료 시 우리가 띄운 PTY 전부 종료(고아 예방의 제1방어선).
+
+    업데이트 = 재기동이므로, persist PTY 를 살려두면 재기동마다 고아→bg 승격→
+    세션 잠금이 재발한다. 재기동 후엔 어차피 등록을 잃어 재접속도 불가하므로
+    유지할 가치가 없다 - 함께 내리는 게 맞다.
+    """
+    n = 0
+    for sess in list(_ACTIVE.values()):
+        try:
+            _cleanup(sess)
+            n += 1
+        except Exception:  # noqa: BLE001
+            pass
+    with _REG_LOCK:
+        _registry_save([])
+    return n
+
+
+def pick_orphans(entries: list[dict], procs: list[dict]) -> list[int]:
+    """등록부 항목 중 실제로 살아있고 명령줄에 그 세션ID가 있는 PID(순수 판정).
+
+    PID 재사용 가드: 재부팅/시간 경과로 같은 PID 가 다른 프로세스일 수 있어,
+    명령줄에 등록된 세션 ID 가 들어 있을 때만 우리 고아로 인정한다.
+    """
+    by_pid = {p["pid"]: p.get("cmdline", "") for p in procs}
+    return [e["pid"] for e in entries
+            if e.get("pid") in by_pid and e.get("sid", "") and e["sid"] in by_pid[e["pid"]]]
+
+
+def sweep_orphan_ptys() -> int:
+    """기동 시: 이전 Host 가 등록부에 남긴 PTY 고아 정리(강제 종료 대비 제2방어선)."""
+    import subprocess
+    with _REG_LOCK:
+        entries = _registry_load()
+        if not entries:
+            return 0
+        try:
+            out = subprocess.run(
+                ["powershell", "-NoProfile", "-Command",
+                 "Get-CimInstance Win32_Process -Filter \"Name like '%claude%'\" | "
+                 "Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress"],
+                capture_output=True, timeout=30).stdout.decode("utf-8", "replace")
+            rows = json.loads(out or "[]")
+            if isinstance(rows, dict):
+                rows = [rows]
+            procs = [{"pid": int(r["ProcessId"]), "cmdline": r.get("CommandLine") or ""}
+                     for r in rows]
+        except Exception as e:  # noqa: BLE001
+            print(f"[sweep] PTY 고아 조회 실패, 건너뜀: {e}", flush=True)
+            return 0
+        killed = 0
+        for pid in pick_orphans(entries, procs):
+            print(f"[sweep] PTY 고아 정리 pid={pid} (이전 Host 의 등록부 기반)", flush=True)
+            subprocess.run(["taskkill", "/PID", str(pid), "/F"],
+                           capture_output=True, timeout=10)
+            killed += 1
+        _registry_save([])          # 등록부는 이번 기동 기준으로 리셋
+        if killed:
+            print(f"[sweep] PTY 고아 {killed}개 정리 완료", flush=True)
+        return killed
 
 
 # ---------------------------------------------------------------- 내부
@@ -246,6 +360,7 @@ async def run_terminal(ws, session_id: str, skip_permissions: bool = True,
             return
         sess = _TermSession(key, proc, persist=not fork_id)
         sess.client = (ws, loop)
+        _registry_add(getattr(proc, "pid", None), session_id)   # 고아 대비 자기 등록
         _ACTIVE[key] = sess
         _start_reader(sess)
         rejoined = False
