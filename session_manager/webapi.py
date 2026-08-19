@@ -35,6 +35,63 @@ import uuid
 from session_manager.scanner import scan_one, resolve_launch_cwd
 
 
+# ---- 고아 스트림 청소 (Host 기동 시 1회) ----
+# Host 가 강제 종료되면 웹재개 자식(-p 스트림)이 부모 없이 남는다. 이 프로세스는
+# ClewPath 만 만드는 고유 인자 조합(-p + --resume + stream-json)이라 식별 가능하고,
+# '부모 사망' 조건까지 겹치면 우리가 낳았다 잃어버린 자식이 확실하다.
+# [원칙 협의됨 2026-08-19] claude 프로세스 종료지만 ClewPath 자신이 만든 것 한정 -
+# 사장님 승인으로 기동 시 자동 정리한다. 임의의 claude 는 절대 건드리지 않는다.
+
+def _our_stream_signature(cmdline: str) -> bool:
+    """이 명령줄이 ClewPath 가 띄운 웹재개/일회성 스트림인가(고유 서명)."""
+    c = cmdline or ""
+    return ("claude" in c.lower() and " -p" in c
+            and "--resume" in c and "stream-json" in c)
+
+
+def find_orphan_stream_pids(procs: list[dict]) -> list[int]:
+    """프로세스 목록에서 '우리 서명 + 부모 사망' 인 고아 PID 를 고른다(순수 판정).
+
+    procs: [{"pid":int, "ppid":int, "cmdline":str}, ...] 전체 프로세스 목록.
+    """
+    alive = {p["pid"] for p in procs}
+    return [p["pid"] for p in procs
+            if _our_stream_signature(p.get("cmdline", ""))
+            and p.get("ppid") not in alive]
+
+
+def sweep_orphan_streams() -> int:
+    """기동 시 고아 스트림 정리. 실패해도 서버 기동에 영향 없음(best-effort).
+
+    전체 프로세스(pid/ppid)를 한 번에 받아 '부모 사망'을 존재 여부로 정확히
+    판정한다(이름 휴리스틱 금지). 명령줄은 claude 류에만 실려 오면 충분.
+    """
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-CimInstance Win32_Process | "
+             "Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress"],
+            capture_output=True, timeout=30).stdout.decode("utf-8", "replace")
+        rows = json.loads(out or "[]")
+        if isinstance(rows, dict):
+            rows = [rows]
+        procs = [{"pid": int(r["ProcessId"]), "ppid": int(r.get("ParentProcessId") or 0),
+                  "cmdline": r.get("CommandLine") or ""} for r in rows]
+        killed = 0
+        for pid in find_orphan_stream_pids(procs):
+            cmd = next((p["cmdline"] for p in procs if p["pid"] == pid), "")
+            print(f"[sweep] 고아 웹재개 스트림 정리 pid={pid}: {cmd[:100]}", flush=True)
+            subprocess.run(["taskkill", "/PID", str(pid), "/F"],
+                           capture_output=True, timeout=10)
+            killed += 1
+        if killed:
+            print(f"[sweep] 고아 스트림 {killed}개 정리 완료", flush=True)
+        return killed
+    except Exception as e:  # noqa: BLE001
+        print(f"[sweep] 고아 정리 건너뜀: {e}", flush=True)
+        return 0
+
+
 # [원칙] 한때 웹 재개 프롬프트를 claude 입력 히스토리(~/.claude/history.jsonl)에
 # append 하는 기능이 있었으나(웹→터미널 ↑/↓ 이력 연속성), claude 소유 파일을
 # 고지 없이 자동 수정하는 것이라 원칙 위반으로 제거했다(2026-08-13, CLAUDE.md).

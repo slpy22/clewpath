@@ -5,6 +5,7 @@ import asyncio
 import json
 import os
 import tempfile
+import threading
 import time
 from contextlib import asynccontextmanager
 from http.cookies import SimpleCookie
@@ -261,6 +262,15 @@ async def _lifespan(app: FastAPI):
         print(f"[data] claude_exe={_cfg.claude_exe()}")
     except Exception as e:  # noqa: BLE001
         print(f"[data] 점검 실패: {type(e).__name__}: {e}")
+
+    # 이전 Host 가 강제 종료되며 남긴 고아 웹재개 스트림 정리(협의된 예외 -
+    # ClewPath 자신이 낳은 프로세스 한정). 스레드로 - 기동을 막지 않게.
+    try:
+        from session_manager import webapi as _webapi
+        threading.Thread(target=_webapi.sweep_orphan_streams,
+                         name="orphan-sweep", daemon=True).start()
+    except Exception as e:  # noqa: BLE001
+        print(f"[sweep] 시작 실패: {e}", flush=True)
 
     upd_task = None
     if appconfig.get_bool("update", "auto_check", True):

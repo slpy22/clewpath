@@ -504,8 +504,20 @@ class Connector:
         elif t == "peer":
             # 기기 연결 종료 → 인증/암호화 상태 정리
             if frame.get("event") == "client_offline":
-                self.authed.pop(frame.get("cid"), None)
-                self.enc_cids.discard(frame.get("cid"))
+                cid = frame.get("cid")
+                self.authed.pop(cid, None)
+                self.enc_cids.discard(cid)
+                # ★ 그 기기가 잡고 있던 스트림 파이프 해체. 이게 빠져 있어서 폰이
+                # 소리 없이 사라지면(앱 스와이프 종료·탭 닫기·전파 단절) 파이프가
+                # Host 로컬 WS 를 계속 잡아 웹재개 claude(-p 스트림)가 고아로
+                # 남았다(실사고: 5일 생존 2건). task.cancel() 이 `async with
+                # connect` 를 해제해 로컬 WS 가 닫히고, Host 의 finally 가
+                # 프로세스를 정리한다. persist 터미널은 화면만 떨어지고 PTY 는
+                # 설계대로 유지된다(webterm 의 프로세스-화면 분리).
+                for rid, task in list(self.streams.items()):
+                    if self.req_cid.get(rid) == cid:
+                        _log(f"[stream] client_offline cid={cid} → 파이프 해체 rid={rid}")
+                        task.cancel()
         elif t == "ping":
             await self.send({"v": 1, "type": "pong", "id": frame.get("id"),
                              **({"cid": frame["cid"]} if frame.get("cid") is not None else {})})
