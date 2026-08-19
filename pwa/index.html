@@ -982,6 +982,22 @@ function sessionBadge(s){
   if(rt.phase==='ready'    &&fresh(rt.ready_at,60*M))       return {c:'#3fb950',pulse:false,text:'완료'};
   return null;
 }
+// 이 세션이 ClewPath 밖(직접 연 터미널·다른 화면)에서 사용 중인 것으로 보이는가.
+// 근거: 훅의 최근 활동(진행형 phase)이 있는데 우리가 소유한 PTY(live_terminal)는
+// 아닌 경우. 동시 재개는 대화 트리 분기·원격 승인 오주입을 일으키므로(재개 방식
+// 문서 참고) 재개 직전에 경고한다. 훅 이벤트를 읽기만 하는 판정이라
+// 'claude 파일 무단 수정 금지' 원칙과 무관.
+function externallyActive(s){
+  const rt=s.runtime;
+  if(!rt||!rt.phase||s.live_terminal) return false;   // PTY 소유 시 재개=재접속이라 무관
+  const now=Date.now()/1000+CLOCK_SKEW;
+  const recent=(t,w)=>typeof t==='number'&&t>0&&(now-t)<w;
+  const M=60;
+  // 진행형 상태만 본다 - ready/ended 는 이미 닫혔거나 유휴일 가능성이 커 오탐 방지
+  return (rt.phase==='thinking'  &&recent(rt.thinking_at,  30*M))
+      || (rt.phase==='permission'&&recent(rt.permission_at,30*M))
+      || (rt.phase==='waiting'   &&recent(rt.waiting_at,   30*M));
+}
 // ---- 구조화 도구 카드 (웹 재개 스트림 + 뷰어 공용) ----
 // 도구 호출(input)은 즉시 카드로, 결과는 tool_use_id 로 짝을 맞춰 나중에 채운다.
 function _base(p){ p=String(p||''); const i=Math.max(p.lastIndexOf('/'),p.lastIndexOf('\\')); return i>=0?p.slice(i+1):p; }
@@ -1175,6 +1191,15 @@ function showResumeChooser(s){
   render();
   const go=el('button','btn full','▶ 재개');
   go.onclick=()=>{
+    // [동시 재개 경고] 훅 활동상 이 세션이 지금 다른 곳에서 돌고 있는 듯하면
+    // 먼저 확인 - 웹(in-place)·터미널 둘 다 두 번째 프로세스를 만들기 때문.
+    // (포크로 재개는 원본을 안 건드려 해당 없음 - 상세 화면의 별도 버튼)
+    if(externallyActive(s)){
+      if(!confirm('⚠ 이 세션은 지금 ClewPath 밖(직접 연 터미널 등)에서도 사용 중인 것으로 보입니다.\n\n'
+        +'동시에 열면 대화가 두 갈래로 갈라지고(한쪽 이력이 사라진 것처럼 보임), '
+        +'원격 승인이 엉뚱한 쪽에 입력될 수 있습니다.\n\n'
+        +'원본을 건드리지 않는 "🔱 포크로 재개"(세션 상세 화면)를 권장합니다.\n\n그래도 계속할까요?')) return;
+    }
     // [원칙: 사전 고지+승인] 피커 미표시 세션(에이전트/포크 산물)을 대화형으로
     // 재개하면 claude 가 자동 제목을 붙여 claude 재개 목록에 나타나게 된다.
     // ClewPath 는 이를 막기 위해 claude 파일을 건드리지 않는다 - 대신 미리 알린다.
