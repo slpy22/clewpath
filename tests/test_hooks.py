@@ -172,3 +172,21 @@ def test_hooks_event_endpoint_returns_204(home, monkeypatch):
     r = c.post("/api/hooks/event", json={"hook_event_name": "Stop", "session_id": "x"})
     assert r.status_code == 204
     assert r.content == b""
+
+
+def test_status_survives_restart(home, tmp_path, monkeypatch):
+    """[실사고 회귀] Host 재기동 시 훅 상태 소실 - 디스크 스냅샷으로 복원돼야 한다.
+
+    재기동(=업데이트마다) 후 긴 턴 진행 중 세션이 idle/무상태로 보여
+    뱃지·동시재개 경고가 전부 꺼지던 문제(경고 미발화 실측).
+    """
+    monkeypatch.setattr("session_manager.config.data_dir", lambda: tmp_path)
+    hooks._last_persist = 0.0          # 스로틀 리셋(다른 테스트의 잔향 제거)
+    hooks._persist_loaded = True       # 실데이터 스냅샷 오염 방지
+    hooks.update_from_event(_ev("UserPromptSubmit", sid="persist1"))
+    assert hooks.status_of("persist1")["phase"] == "thinking"
+    # 재기동 시뮬: 메모리 초기화 + 로드 플래그 리셋
+    hooks._STATUS.clear()
+    hooks._persist_loaded = False
+    st = hooks.status_of("persist1")
+    assert st is not None and st["phase"] == "thinking"   # 디스크에서 복원됨

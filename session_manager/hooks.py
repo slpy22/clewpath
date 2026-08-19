@@ -30,9 +30,50 @@ EVENTS = ("SessionStart", "UserPromptSubmit", "Notification", "Stop", "SessionEn
 
 HOOK_CMD_NAME = "clewpath-hook.cmd"
 
-# 세션별 상태(메모리 전용, 재기동하면 사라짐 - 훅이 다시 채운다).
+# 세션별 상태. 디스크에도 스냅샷을 남긴다(우리 데이터 폴더) - 메모리 전용이면
+# Host 재기동(=업데이트마다)에 상태가 통째로 사라져, 긴 턴 진행 중인 세션은
+# 다음 훅 이벤트가 올 때까지 뱃지·동시재개 경고가 전부 무상태가 된다(실측:
+# 재기동 13분 뒤에도 '작업 중' 세션이 idle 로 보여 경고 미발화).
 _STATUS: dict[str, dict[str, Any]] = {}
 _MAX_SESSIONS = 300
+_PERSIST_MIN_INTERVAL = 2.0     # 저장 스로틀(초) - 이벤트 폭주 시 디스크 보호
+_last_persist = 0.0
+_persist_loaded = False
+
+
+def _status_path():
+    from session_manager import config as _cfg
+    return _cfg.data_dir() / "hooks-status.json"
+
+
+def _load_status_once() -> None:
+    """기동 후 첫 이벤트/조회 때 디스크 스냅샷을 복원한다(1회)."""
+    global _persist_loaded
+    if _persist_loaded:
+        return
+    _persist_loaded = True
+    try:
+        data = json.loads(_status_path().read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            for k, v in list(data.items())[:_MAX_SESSIONS]:
+                if isinstance(v, dict):
+                    _STATUS.setdefault(k, v)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _persist_status() -> None:
+    global _last_persist
+    now = time.time()
+    if now - _last_persist < _PERSIST_MIN_INTERVAL:
+        return
+    _last_persist = now
+    try:
+        p = _status_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(_STATUS, ensure_ascii=False), encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        pass
 
 
 # ---------------------------------------------------------------- 경로 해석
@@ -167,6 +208,7 @@ def update_from_event(payload: dict) -> None:
     ev = str(payload.get("hook_event_name") or "")
     now = int(time.time())
 
+    _load_status_once()
     st = _STATUS.get(sid)
     if st is None:
         if len(_STATUS) >= _MAX_SESSIONS:
@@ -199,10 +241,14 @@ def update_from_event(payload: dict) -> None:
         st["phase"] = "ended"
         st["ended_at"] = now
 
+    _persist_status()   # 재기동에도 상태 유지(스로틀 내장)
+
 
 def status_of(session_id: str) -> dict[str, Any] | None:
+    _load_status_once()
     return _STATUS.get(session_id)
 
 
 def status_map() -> dict[str, dict[str, Any]]:
+    _load_status_once()
     return _STATUS

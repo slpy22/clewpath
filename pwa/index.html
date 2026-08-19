@@ -993,8 +993,14 @@ function externallyActive(s){
   const now=Date.now()/1000+CLOCK_SKEW;
   const recent=(t,w)=>typeof t==='number'&&t>0&&(now-t)<w;
   const M=60;
-  // 진행형 상태만 본다 - ready/ended 는 이미 닫혔거나 유휴일 가능성이 커 오탐 방지
-  return (rt.phase==='thinking'  &&recent(rt.thinking_at,  30*M))
+  // ① active_at: 모든 훅 이벤트가 갱신하는 생존 신호 - 최근 10분 내 이벤트가
+  //   있었으면 그 세션의 claude 가 어딘가에 떠 있을 개연성이 높다(대화형은
+  //   턴이 끝나도 프로세스가 유지되므로 ready 직후도 충돌 위험군이 맞다).
+  //   Host 재기동으로 phase 가 소실돼도 이벤트 하나면 복원되는 견고한 기준.
+  // ② 진행형 phase: 창을 뱃지와 일관되게(thinking 은 긴 턴 대비 120분 -
+  //   30분으로 좁혔다가 실측에서 경고 미발화 사고)
+  return recent(rt.active_at,10*M)
+      || (rt.phase==='thinking'  &&recent(rt.thinking_at, 120*M))
       || (rt.phase==='permission'&&recent(rt.permission_at,30*M))
       || (rt.phase==='waiting'   &&recent(rt.waiting_at,   30*M));
 }
