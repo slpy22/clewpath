@@ -415,6 +415,23 @@ async def run_terminal(ws, session_id: str, skip_permissions: bool = True,
             )
             await _safe_close(ws)
             return
+        # bg 에이전트 점유 사전 차단: claude 가 어차피 거부할 스폰("still running
+        # as a background agent")을 시도하지 않고, 구조화된 안내로 대체한다.
+        # 포크는 원본 무접촉이라 통과. (판정 실패 시엔 그냥 진행 - 기능 축소 없음)
+        if not fork_id:
+            try:
+                from session_manager import agents as _agents
+                hold = _agents.holder_of(session_id)
+            except Exception:  # noqa: BLE001
+                hold = None
+            if hold and hold.get("kind") == "background":
+                await ws.send_text(
+                    f"\r\n\x1b[33m── 이 세션은 백그라운드 에이전트 "
+                    f"'{hold.get('name') or '(이름 없음)'}' 가 사용 중입니다 ──\x1b[0m\r\n"
+                    "포크로 재개하거나, PC 터미널의 claude agents 에서 해당 "
+                    "에이전트를 확인·종료한 뒤 다시 재개하세요.\r\n")
+                await _safe_close(ws)
+                return
         argv = _claude_argv(session_id, skip_permissions, fork_id)
         try:
             proc = PtyProcess.spawn(argv, cwd=cwd, dimensions=(24, 80))

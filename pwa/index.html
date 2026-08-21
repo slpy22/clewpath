@@ -988,6 +988,11 @@ function sessionBadge(s){
 // 문서 참고) 재개 직전에 경고한다. 훅 이벤트를 읽기만 하는 판정이라
 // 'claude 파일 무단 수정 금지' 원칙과 무관.
 function externallyActive(s){
+  // 1차(확정): claude 공식 실시간 점유(agents --json, 서버가 s.agent 로 조인).
+  // 대화형 세션이 우리 PTY(live_terminal) 밖에서 열려 있으면 충돌 확정.
+  // (bg 점유는 별도의 잠금 게이트 showBgHold 가 처리)
+  if(s.agent&&s.agent.kind==='interactive'&&!s.live_terminal) return true;
+  // 2차(폴백): 훅 신선도 휴리스틱 - agents 데이터가 없는 환경(구 CLI 등)용
   const rt=s.runtime;
   if(!rt||!rt.phase||s.live_terminal) return false;   // PTY 소유 시 재개=재접속이라 무관
   const now=Date.now()/1000+CLOCK_SKEW;
@@ -1197,6 +1202,10 @@ function showResumeChooser(s){
   render();
   const go=el('button','btn full','▶ 재개');
   go.onclick=()=>{
+    // [bg 잠금 게이트] claude 네이티브 백그라운드 에이전트가 세션을 점유 중이면
+    // 이어재개는 claude 가 거부한다("still running as a background agent" -
+    // 실사용자 사고). 원문 에러 대신 원인·출구를 먼저 보여준다.
+    if(s.agent&&s.agent.kind==='background'){ closeModal(); showBgHold(s); return; }
     // [동시 재개 경고] 훅 활동상 이 세션이 지금 다른 곳에서 돌고 있는 듯하면
     // 먼저 확인 - 웹(in-place)·터미널 둘 다 두 번째 프로세스를 만들기 때문.
     // (포크로 재개는 원본을 안 건드려 해당 없음 - 상세 화면의 별도 버튼)
@@ -1220,6 +1229,25 @@ function showResumeChooser(s){
     else loadResume(s, true, !pref.yolo);
   };
   openModal('재개', body, [go]);
+}
+
+// bg 에이전트 점유 안내 - 잠금의 원인과 출구를 보여준다(원문 에러 노출 금지)
+function showBgHold(s){
+  const a=s.agent||{};
+  const body=el('div');
+  body.appendChild(el('p',null,'이 세션은 백그라운드 에이전트가 사용 중이라 이어서 재개할 수 없습니다 (claude 의 세션 잠금).'));
+  const kv=el('div','cwd'); kv.style.whiteSpace='pre-line'; kv.style.marginTop='8px';
+  kv.textContent='에이전트: '+(a.name||'(이름 없음)')
+    +'\n상태: '+(a.status||'?')+(a.waiting_for?(' — '+a.waiting_for):'')
+    +'\n\n선택지:'
+    +'\n  · 아래 [포크로 재개] — 원본을 건드리지 않는 사본에서 바로 작업 (권장)'
+    +'\n  · 에이전트를 계속 쓰려면: PC 터미널에서 claude agents → 해당 항목에 접속(attach)'
+    +'\n  · 에이전트를 끝내고 이 세션을 풀려면: attach 해서 진행 중 작업을 확인한 뒤 종료'
+    +'\n    (에이전트가 며칠째 작업/질문 대기 중일 수 있습니다 — 종료 전 확인을 권장)';
+  body.appendChild(kv);
+  const go=el('button','btn full','🔱 포크로 재개');
+  go.onclick=()=>{ closeModal(); loadResume(s,false); };
+  openModal('🤖 백그라운드 에이전트 사용 중', body, [go]);
 }
 
 // ---- 원격 권한 승인 (권한 대기 세션 -> PTY 키 주입) ----
@@ -1298,6 +1326,11 @@ function renderRows(wrap,q){
       if(bd){ const t=el('span','sstate',bd.text); t.style.setProperty('--c',bd.c);
         if(bd.text==='권한 대기'){ t.style.cursor='pointer'; t.onclick=(e)=>{e.stopPropagation();showApprove(s);}; }
         r1.appendChild(t); }
+      if(s.agent&&s.agent.kind==='background'){
+        const g=el('span','schip agentbg','🤖 '+(s.agent.name||'에이전트'));
+        g.title='백그라운드 에이전트가 이 세션 사용 중 - 이어재개 잠김(포크는 가능)';
+        r1.appendChild(g);
+      }
       if(s.picker_hidden&&!s.picker_expose){
         const g=el('span','schip gear','⚙ 에이전트');
         g.title='claude 재개 목록(피커)에 없는 세션 - 에이전트/포크 산물. 상세에서 설명 보기';
