@@ -2709,6 +2709,11 @@ function showUpdateApply(cur,latest){
   const body=el('div');
   body.appendChild(el('p',null,`새 버전 ${latest} 이 나왔습니다 (현재 v${cur}).`));
   body.appendChild(el('p',null,'서명·해시를 검증한 뒤 적용하고, 실패하면 자동으로 이전 버전으로 되돌립니다. 설정·기기·페어링은 그대로 유지됩니다.'));
+  // 업데이트 = 재기동: 영향 범위를 정확히 고지(실질 주의점은 열린 터미널의 진행 중 턴 하나뿐)
+  body.appendChild(el('div','cwd',
+    '※ ClewPath 로 열어둔 터미널·웹재개 화면은 재기동과 함께 닫힙니다 - 진행 중이던 '
+    +'작업 턴은 중단되니 끝난 뒤 업데이트를 권장합니다. (대화 이력은 보존되어 재개하면 '
+    +'이어지고, 직접 연 터미널의 claude 는 영향받지 않습니다)'));
   const status=el('div'); status.style.cssText='margin-top:10px;color:var(--ink2)'; body.appendChild(status);
   const go=el('button','btn full',`지금 v${latest} 로 업데이트`);
   go.onclick=async()=>{
