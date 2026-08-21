@@ -210,6 +210,70 @@ def pick_orphans(entries: list[dict], procs: list[dict]) -> list[int]:
             if e.get("pid") in by_pid and e.get("sid", "") and e["sid"] in by_pid[e["pid"]]]
 
 
+_LEGACY_UUID_RE = None
+
+
+def is_legacy_orphan_cmdline(cmdline: str) -> bool:
+    """구버전(등록부 없던 ≤0.3.24) ClewPath 가 띄운 PTY 의 고유 서명인가.
+
+    webterm 은 항상 `--resume <UUID> --dangerously-skip-permissions` 형태로
+    띄웠다(YOLO 기본). 사용자가 손으로 UUID 까지 쳐서 같은 형태를 만들고 그
+    콘솔만 죽는 경우는 사실상 없고(콘솔 종료는 자식도 죽인다), bg 승격체
+    (--bg-pty-host)나 웹재개 스트림(stream-json)은 별도 취급이라 제외한다.
+    [원칙 협의 2026-08-21] 실사용자 세션 잠금 사고로 소급 정리 승인 -
+    '부모 사망 + 이 서명' 이중 조건에서만.
+    """
+    global _LEGACY_UUID_RE
+    import re
+    if _LEGACY_UUID_RE is None:
+        _LEGACY_UUID_RE = re.compile(
+            r"--resume\s+[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}"
+            r"-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+    c = cmdline or ""
+    return ("claude" in c.lower()
+            and _LEGACY_UUID_RE.search(c) is not None
+            and "--dangerously-skip-permissions" in c
+            and "stream-json" not in c
+            and "bg-pty-host" not in c)
+
+
+def pick_legacy_orphans(procs: list[dict]) -> list[int]:
+    """전체 프로세스 목록에서 '레거시 서명 + 부모 사망' PID(순수 판정)."""
+    alive = {p["pid"] for p in procs}
+    return [p["pid"] for p in procs
+            if is_legacy_orphan_cmdline(p.get("cmdline", ""))
+            and p.get("ppid") not in alive]
+
+
+def sweep_legacy_orphans() -> int:
+    """부팅 시: 구버전이 남긴 레거시 PTY 고아 소급 정리(등록부 이전 시대분)."""
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "Get-CimInstance Win32_Process | "
+             "Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress"],
+            capture_output=True, timeout=30).stdout.decode("utf-8", "replace")
+        rows = json.loads(out or "[]")
+        if isinstance(rows, dict):
+            rows = [rows]
+        procs = [{"pid": int(r["ProcessId"]), "ppid": int(r.get("ParentProcessId") or 0),
+                  "cmdline": r.get("CommandLine") or ""} for r in rows]
+    except Exception as e:  # noqa: BLE001
+        print(f"[sweep] 레거시 고아 조회 실패, 건너뜀: {e}", flush=True)
+        return 0
+    killed = 0
+    for pid in pick_legacy_orphans(procs):
+        cmd = next((p["cmdline"] for p in procs if p["pid"] == pid), "")
+        print(f"[sweep] 레거시 PTY 고아 정리 pid={pid} (구버전 잔재): {cmd[:100]}", flush=True)
+        import subprocess as _sp
+        _sp.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True, timeout=10)
+        killed += 1
+    if killed:
+        print(f"[sweep] 레거시 고아 {killed}개 정리 완료", flush=True)
+    return killed
+
+
 def sweep_orphan_ptys() -> int:
     """기동 시: 이전 Host 가 등록부에 남긴 PTY 고아 정리(강제 종료 대비 제2방어선)."""
     import subprocess
@@ -360,7 +424,11 @@ async def run_terminal(ws, session_id: str, skip_permissions: bool = True,
             return
         sess = _TermSession(key, proc, persist=not fork_id)
         sess.client = (ws, loop)
-        _registry_add(getattr(proc, "pid", None), session_id)   # 고아 대비 자기 등록
+        # 고아 방지 3중: ① Job Object(커널 동반 종료 - Host 가 어떻게 죽든)
+        # ② 자기 등록부(① 실패 대비 부팅 청소) ③ 정상 종료 shutdown_all
+        from session_manager import jobguard
+        jobguard.guard(getattr(proc, "pid", None))
+        _registry_add(getattr(proc, "pid", None), session_id)
         _ACTIVE[key] = sess
         _start_reader(sess)
         rejoined = False

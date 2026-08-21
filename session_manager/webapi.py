@@ -174,6 +174,9 @@ async def run_resume_api(ws, session_id: str, skip_permissions: bool = True,
         await _send(ws, {"type": "error", "message": f"claude 시작 실패: {e}"})
         await _safe_close(ws)
         return
+    # 고아 방지: 커널 동반 종료(Job Object) - Host 가 어떻게 죽든 스트림도 정리
+    from session_manager import jobguard
+    jobguard.guard(proc.pid)
 
     await _send(ws, {"type": "ready", "session_id": session_id, "cwd": cwd,
                      "fork_id": fork_id, "forked": bool(fork_id),

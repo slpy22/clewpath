@@ -32,3 +32,18 @@ def test_sweep_resets_registry_even_when_clean(tmp_path, monkeypatch):
     monkeypatch.setattr("session_manager.config.data_dir", lambda: tmp_path)
     webterm._registry_save([])
     assert webterm.sweep_orphan_ptys() == 0     # 빈 등록부 - 프로세스 조회도 안 함
+
+
+def test_legacy_orphan_signature_precision():
+    """[원칙] 레거시 소급 정리는 우리 서명+부모사망에서만 - 임의 claude 불가침."""
+    sig = "claude.exe --resume 2832abdd-7aab-4358-aee7-7b28ba419537 --dangerously-skip-permissions"
+    assert webterm.is_legacy_orphan_cmdline(sig)
+    # 불가침 대상들
+    assert not webterm.is_legacy_orphan_cmdline("claude.exe --resume --dangerously-skip-permissions")  # 픽커(UUID 없음)
+    assert not webterm.is_legacy_orphan_cmdline("claude.exe --resume 2832abdd-7aab-4358-aee7-7b28ba419537")  # safe 모드/수동
+    assert not webterm.is_legacy_orphan_cmdline(sig + " --input-format stream-json")  # 웹재개(별도 sweep)
+    assert not webterm.is_legacy_orphan_cmdline(sig + " --bg-pty-host x")  # bg 승격체(데몬 소유)
+    procs = [{"pid": 1, "ppid": 999, "cmdline": sig},            # 부모 사망 → 정리
+             {"pid": 2, "ppid": 3, "cmdline": sig},              # 부모 생존 → 불가침
+             {"pid": 3, "ppid": 999, "cmdline": "python x"}]
+    assert webterm.pick_legacy_orphans(procs) == [1]

@@ -270,6 +270,7 @@ async def _lifespan(app: FastAPI):
         from session_manager import webapi as _webapi, webterm as _webterm
         _webapi.sweep_orphan_streams()
         _webterm.sweep_orphan_ptys()
+        _webterm.sweep_legacy_orphans()   # 구버전(≤0.3.24) 잔재 소급 정리
     try:
         threading.Thread(target=_sweep_all, name="orphan-sweep", daemon=True).start()
     except Exception as e:  # noqa: BLE001

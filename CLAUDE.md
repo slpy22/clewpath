@@ -25,3 +25,11 @@ ClewPath 는 claude 를 **관찰·중계·실행**하는 도구이지, claude �
 - 세션 가져오기 → 새 jsonl 파일 생성
 
 이 목록에 없는 claude 파일 접근을 추가할 때는 위 1·2 를 적용할 것.
+
+프로세스 정리 예외(2026-08-21 사장님 협의 — 실사용자 세션 잠금 사고로 승인):
+- ClewPath 가 낳는 자식은 **Job Object(KILL_ON_JOB_CLOSE)** 에 편입 — Host 가
+  어떻게 죽든 커널이 동반 종료(고아 원천 차단). jobguard.py
+- 구버전(≤0.3.24) 잔재는 부팅 시 소급 정리: '레거시 서명(--resume <UUID>
+  --dangerously-skip-permissions) + 부모 사망' 이중 조건에서만. 픽커 재개·safe
+  모드·bg 승격체(--bg-pty-host)·사용자 bg 에이전트는 계속 불가침.
+  가드 테스트: test_pty_registry.py::test_legacy_orphan_signature_precision
