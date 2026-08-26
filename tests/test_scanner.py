@@ -74,9 +74,14 @@ def test_picker_hidden_detection(fake_claude_home):
                   [{"type": "permission-mode"}, U(0)])
     # ④ 빈 파일 → hidden 아님(목록에도 안 뜸, 오탐 방지)
     write_session(fake_claude_home, "P--x", "00007777", [])
+    # ⑤ agent-name 만 있는 스텁(fork/named 산물) → 마커 0이어도 픽커에 뜸
+    write_session(fake_claude_home, "P--x", "55558888",
+                  [{"type": "ai-title", "aiTitle": "x"},
+                   {"type": "agent-name", "agentName": "터널 스텁"}])
     metas = {m.session_id: m for m in scanner.scan_all()}
     assert metas["dddd4444"].picker_hidden is True    # 에이전트 산물(ai-title 무관)
     assert metas["eeee5555"].picker_hidden is False   # 대화형
     assert metas["ffff6666"].picker_hidden is False   # 대화형(제목 없어도)
     assert metas["00007777"].picker_hidden is False   # 빈 세션
+    assert metas["55558888"].picker_hidden is False   # agent-name 스텁(픽커 뜸)
 

@@ -37,8 +37,8 @@ class SessionMeta:
     mtime: float             # 파일 수정 시각 (epoch)
     has_side_dir: bool       # {uuid}/ 사이드 폴더 존재 여부
     # claude 의 `--resume` 피커에 안 나오는 세션(에이전트/포크/헤드리스 산물).
-    # 판정: 대화형 마커(mode/permission-mode/system) 유무 - 피커 표시 여부와
-    # 정확히 일치함을 실측으로 확정(2026-08-26). _parse_meta 참조.
+    # 판정: (대화형 마커 mode/permission-mode/system) 또는 (agent-name) 유무
+    # - 피커 표시 여부와 일치(실측 확정 2026-08-26). _parse_meta 참조.
     picker_hidden: bool = False
 
     def to_dict(self) -> dict:
@@ -144,9 +144,13 @@ def _parse_meta(jsonl_path: Path, stat) -> SessionMeta:
         size_bytes=stat.st_size,
         mtime=stat.st_mtime,
         has_side_dir=side_dir.is_dir(),
-        # 픽커 미표시 = 대화형으로 열린 적 없는 세션(에이전트/포크/헤드리스 산물).
-        # 빈 세션(줄 0)은 목록에도 거의 안 뜨므로 오탐 영향 없음.
-        picker_hidden=(interactive_markers == 0 and line_count > 0),
+        # 픽커 표시 규칙(실측 확정 2026-08-26, E:\004·E:\020 교차검증):
+        # claude --resume 픽커는 (대화형 마커 mode/permission-mode/system) 또는
+        # (agent-name 레코드)가 있으면 나열한다. agent-name 만 있고 대화 내용이
+        # 없는 스텁 세션(fork/named 산물)도 픽커에 뜬다 - 이 케이스를 놓쳐 흐리게
+        # 오판하던 버그. 둘 다 없는 순수 헤드리스(-p) 세션만 미표시.
+        picker_hidden=(interactive_markers == 0 and agent_name is None
+                       and line_count > 0),
     )
 
 
