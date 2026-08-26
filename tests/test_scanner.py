@@ -51,25 +51,32 @@ def test_malformed_lines_are_counted_but_skipped(fake_claude_home):
 
 
 def test_picker_hidden_detection(fake_claude_home):
-    """자동 제목 없는 세션(에이전트/포크 산물)만 picker_hidden 판정."""
+    """picker_hidden = 대화형 마커(mode/permission-mode/system) 유무.
+
+    claude --resume 픽커는 '대화형으로 열린 적 있는 세션'만 나열한다(실측
+    2026-08-26: gitBranch 동일 세 세션에서 이 마커 유무만이 픽커 표시를 갈랐다).
+    ai-title 유무 기준은 반례(ai-title 있는 에이전트 세션)로 폐기됨.
+    """
     from session_manager import scanner
     from tests.conftest import write_session
-    # ① 자동 제목 없는 세션(메시지 6개 이상) → hidden
-    write_session(fake_claude_home, "P--x", "dddd4444", [
-        {"type": "user", "cwd": "F:\p", "message": {"role": "user", "content": f"m{i}"},
-         "timestamp": f"2026-08-13T00:0{i}:00.000Z"} for i in range(6)
-    ])
-    # ② ai-title 있는 세션 → 정상(피커 표시)
-    write_session(fake_claude_home, "P--x", "eeee5555", [
-        {"type": "user", "cwd": "F:\p", "message": {"role": "user", "content": f"m{i}"},
-         "timestamp": f"2026-08-13T00:0{i}:00.000Z"} for i in range(6)
-    ] + [{"type": "ai-title", "aiTitle": "제목"}])
-    # ③ 갓 시작한 세션(메시지 적음) → 오탐 방지로 hidden 아님
-    write_session(fake_claude_home, "P--x", "ffff6666", [
-        {"type": "user", "cwd": "F:\p", "message": {"role": "user", "content": "hi"},
-         "timestamp": "2026-08-13T00:00:00.000Z"},
-    ])
+    U = lambda i: {"type": "user", "cwd": "F:\p",
+                   "message": {"role": "user", "content": f"m{i}"},
+                   "timestamp": f"2026-08-13T00:0{i}:00.000Z"}
+    # ① 헤드리스/에이전트 산물: 대화형 마커 0, ai-title 있어도 hidden
+    write_session(fake_claude_home, "P--x", "dddd4444",
+                  [U(0), {"type": "ai-title", "aiTitle": "제목"}])
+    # ② 대화형 세션: mode/system 마커 있으면 표시(제목 유무 무관)
+    write_session(fake_claude_home, "P--x", "eeee5555",
+                  [{"type": "system", "content": "init"}, U(0),
+                   {"type": "mode", "mode": "default"}])
+    # ③ 대화형이지만 제목 없음 → 그래도 표시(마커 기준)
+    write_session(fake_claude_home, "P--x", "ffff6666",
+                  [{"type": "permission-mode"}, U(0)])
+    # ④ 빈 파일 → hidden 아님(목록에도 안 뜸, 오탐 방지)
+    write_session(fake_claude_home, "P--x", "00007777", [])
     metas = {m.session_id: m for m in scanner.scan_all()}
-    assert metas["dddd4444"].picker_hidden is True
-    assert metas["eeee5555"].picker_hidden is False
-    assert metas["ffff6666"].picker_hidden is False
+    assert metas["dddd4444"].picker_hidden is True    # 에이전트 산물(ai-title 무관)
+    assert metas["eeee5555"].picker_hidden is False   # 대화형
+    assert metas["ffff6666"].picker_hidden is False   # 대화형(제목 없어도)
+    assert metas["00007777"].picker_hidden is False   # 빈 세션
+

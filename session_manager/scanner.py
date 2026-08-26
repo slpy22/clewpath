@@ -36,10 +36,9 @@ class SessionMeta:
     size_bytes: int
     mtime: float             # 파일 수정 시각 (epoch)
     has_side_dir: bool       # {uuid}/ 사이드 폴더 존재 여부
-    # claude 의 `--resume` 피커 목록에 안 나오는 세션(에이전트/포크/헤드리스 산물).
-    # 판정 근거(실측): 피커는 자동 제목(ai-title) 기준으로 나열 - ai-title/agent-name 이
-    # 전혀 없는 세션은 목록에서 빠진다. 갓 시작한 대화형 세션의 오탐을 줄이기 위해
-    # 메시지가 어느 정도 쌓인 뒤에만 판정한다(대화형은 초반에 ai-title 이 붙는다).
+    # claude 의 `--resume` 피커에 안 나오는 세션(에이전트/포크/헤드리스 산물).
+    # 판정: 대화형 마커(mode/permission-mode/system) 유무 - 피커 표시 여부와
+    # 정확히 일치함을 실측으로 확정(2026-08-26). _parse_meta 참조.
     picker_hidden: bool = False
 
     def to_dict(self) -> dict:
@@ -80,6 +79,11 @@ def _parse_meta(jsonl_path: Path, stat) -> SessionMeta:
     message_count = 0
     # 네이티브 이름 레코드 — '마지막 값'이 유효(rename 시마다 append 되므로)
     custom_title: str | None = None
+    # 대화형 세션 마커: mode/permission-mode/system 레코드는 대화형 UI 를
+    # 거친 세션에만 생긴다(헤드리스 -p/에이전트 dispatch 산물엔 0). claude 의
+    # --resume 픽커가 나열하는 기준과 정확히 일치(실측 2026-08-26: gitBranch
+    # 동일한 세 세션에서 이 마커 유무만이 픽커 표시 여부를 갈랐다).
+    interactive_markers = 0
     ai_title: str | None = None
     agent_name: str | None = None
 
@@ -111,6 +115,8 @@ def _parse_meta(jsonl_path: Path, stat) -> SessionMeta:
                     ai_title = obj["aiTitle"]
                 elif t == "agent-name" and obj.get("agentName"):
                     agent_name = obj["agentName"]
+                elif t in ("mode", "permission-mode", "system"):
+                    interactive_markers += 1
     except Exception:
         # 파일 읽기 자체가 실패하면 최소 정보만 반환
         pass
@@ -138,7 +144,9 @@ def _parse_meta(jsonl_path: Path, stat) -> SessionMeta:
         size_bytes=stat.st_size,
         mtime=stat.st_mtime,
         has_side_dir=side_dir.is_dir(),
-        picker_hidden=(ai_title is None and agent_name is None and message_count >= 6),
+        # 픽커 미표시 = 대화형으로 열린 적 없는 세션(에이전트/포크/헤드리스 산물).
+        # 빈 세션(줄 0)은 목록에도 거의 안 뜨므로 오탐 영향 없음.
+        picker_hidden=(interactive_markers == 0 and line_count > 0),
     )
 
 
