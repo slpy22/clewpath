@@ -92,12 +92,16 @@ def _is_local(scope_or_ws) -> bool:
 
 
 def _display_title(md: dict, rec: dict | None = None) -> str:
-    """표시 이름. 네이티브 custom-title(Ctrl+R) → AI제목 → slug → id 순.
+    """표시 이름. claude 이름(custom-title/AI제목) 우선, 없으면 우리 라벨명,
+    그다음 slug → id.
 
-    이름은 네이티브 custom-title 단일 소스. 사이드카는 태그(labels)만 담당.
+    claude 파일의 이름이 있으면 그걸 존중한다(우리는 claude 파일을 안 건드림).
+    claude 이름이 없을 때만 사이드카 라벨명(rec.name)을 제목으로 승격 - 사용자가
+    ClewPath 에서 붙인 이름이 ID 로 가려지지 않게(에이전트/헤드리스 세션 등).
     """
     return (md.get("custom_title")
             or md.get("ai_title")
+            or (rec.get("name") if rec else None)
             or md.get("slug")
             or md["session_id"][:8])
 
