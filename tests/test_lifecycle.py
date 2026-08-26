@@ -121,3 +121,15 @@ def test_trash_api_is_local_only(fake_claude_home):
     # TestClient 기본 호스트는 'testclient'(비루프백) → 원격 취급
     assert c.get("/api/owner/trash").status_code == 403
     assert c.post("/api/owner/trash/x/restore").status_code == 403
+
+
+def test_delete_removes_sidecar_labels(fake_claude_home, monkeypatch, tmp_path):
+    """삭제 시 ClewPath 라벨도 함께 제거(B안) - 유령 라벨 누적 방지."""
+    from session_manager import lifecycle, labels
+    monkeypatch.setattr("session_manager.config.data_dir", lambda: tmp_path)
+    jsonl = _make(fake_claude_home, sid="lbl99999")
+    labels.set_record("lbl99999", name="지울이름", labels=["태그"])
+    assert labels.get("lbl99999")                       # 라벨 존재
+    lifecycle.delete_session("lbl99999", dry_run=False)
+    assert not jsonl.exists()
+    assert labels.get("lbl99999") == {}                 # 라벨도 제거됨

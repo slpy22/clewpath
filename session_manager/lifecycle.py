@@ -92,6 +92,15 @@ def delete_session(session_id: str, dry_run: bool = True) -> dict:
         encoding="utf-8")
     _purge_old_trash()
 
+    # 우리 사이드카 라벨도 함께 제거(B안): 삭제된 세션의 유령 라벨이 labels.json
+    # 에 쌓이지 않게. 복구해도 라벨은 안 돌아온다(사용자가 다시 붙임). claude
+    # 파일이 아니라 ClewPath 자체 저장소만 건드리므로 원칙과 무관.
+    try:
+        from session_manager import labels as _labels
+        _labels.delete(session_id)
+    except Exception:  # noqa: BLE001
+        pass
+
     return {"dry_run": False, "session_id": session_id,
             "deleted": moved, "errors": errors,
             "trash": str(bucket), "recoverable": True}
