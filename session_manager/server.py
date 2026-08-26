@@ -1001,6 +1001,7 @@ def create_app() -> FastAPI:
                 "custom_title": s.custom_title,
                 "ai_title": s.ai_title,
                 "agent_name": s.agent_name,
+                "picker_hidden": s.picker_hidden,   # ⚙ 배지 - v1(폰·릴레이) 누락 버그 수정
                 "title": _display_title(md, rec),
                 "git_branch": s.git_branch,
                 "message_count": s.message_count,
