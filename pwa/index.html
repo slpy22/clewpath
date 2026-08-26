@@ -104,6 +104,12 @@
     background:var(--accent-wash);color:var(--accent);font-family:var(--mono);
     border:1px solid color-mix(in srgb,var(--accent) 30%,transparent)}
   .smeta2{font-size:.75rem;color:var(--muted);margin-top:4px;display:flex;gap:9px;flex-wrap:wrap}
+  /* 픽커 미표시(에이전트/포크 산물) 세션: 일반 세션과 구분되게 흐리게 */
+  .srow.dim .sname{color:var(--muted)}
+  .srow.dim .sinfo{opacity:.62}
+  .srow.dim.sel .sinfo{opacity:1}   /* 선택 시엔 또렷하게 */
+  .schip.gear{background:color-mix(in srgb,var(--muted) 16%,transparent);
+    color:var(--muted);border-color:color-mix(in srgb,var(--muted) 30%,transparent)}
   .spath{font-family:var(--mono);font-size:.7rem;color:var(--muted);margin-top:3px;
     overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .sbtn{width:54px;flex:none;display:grid;place-items:center;font-size:1.3rem;
@@ -1176,6 +1182,12 @@ function renderPlanCard(container, input, sendText, focusInput){
 // ---- 재개 방식 선택 (웹/터미널 x YOLO/일반) - 기본: 웹+YOLO, 마지막 선택 기억 ----
 function showResumeChooser(s){
   if(s.live_terminal){ loadTerminal(s); return; }   // 이미 돌고 있으면 그냥 돌아간다
+  // [사전 확인] 픽커 미표시 세션(에이전트/포크 산물)은 재개 옵션을 고르기 전에
+  // 먼저 성격을 알린다 - 승인해야 옵션 모달로 넘어간다(사용자 요청 순서).
+  if(s.picker_hidden && !s.picker_expose){
+    var _msg='⚙ 이 세션은 claude 재개 목록(피커)에 없는 세션입니다. 백그라운드 에이전트·포크·헤드리스 실행으로 만들어져 대화형으로 연 적이 없으며, 이어서 재개하면 claude 가 자동 제목을 붙여 이후 피커 목록에도 나타나게 됩니다. 계속해서 재개 방식을 선택할까요?';
+    if(!confirm(_msg)) return;
+  }
   let pref={how:'web', yolo:true};
   try{ pref={...pref, ...JSON.parse(LS.getItem('sm_resume_pref')||'{}')}; }catch(e){}
   const body=el('div');
@@ -1214,15 +1226,6 @@ function showResumeChooser(s){
         +'동시에 열면 대화가 두 갈래로 갈라지고(한쪽 이력이 사라진 것처럼 보임), '
         +'원격 승인이 엉뚱한 쪽에 입력될 수 있습니다.\n\n'
         +'원본을 건드리지 않는 "🔱 포크로 재개"(세션 상세 화면)를 권장합니다.\n\n그래도 계속할까요?')) return;
-    }
-    // [원칙: 사전 고지+승인] 피커 미표시 세션(에이전트/포크 산물)을 대화형으로
-    // 재개하면 claude 가 자동 제목을 붙여 claude 재개 목록에 나타나게 된다.
-    // ClewPath 는 이를 막기 위해 claude 파일을 건드리지 않는다 - 대신 미리 알린다.
-    if(pref.how==='term' && s.picker_hidden && !s.picker_expose){
-      if(!confirm('이 세션은 claude 재개 목록(피커)에 없는 세션입니다(에이전트/포크 산물).\n\n'
-        +'터미널(대화형)로 재개하면 claude 가 자동 제목을 붙여, 앞으로 claude 재개 목록에도 '
-        +'이 세션이 나타나게 됩니다.\n\n계속할까요?\n'
-        +'(세션 상세의 ⚙ 카드에서 이 알림을 끌 수 있습니다)')) return;
     }
     LS.setItem('sm_resume_pref',JSON.stringify(pref)); closeModal();
     if(pref.how==='term') loadTerminal(s, !pref.yolo);
@@ -1319,6 +1322,7 @@ function renderRows(wrap,q){
     for(const s of g.list){
       const srow=el('div','srow'); srow.dataset.sid=s.session_id;
       if(s.session_id===SELECTED_ID) srow.classList.add('sel');
+      if(s.picker_hidden && !s.picker_expose) srow.classList.add('dim');  // 픽커 미표시 = 흐리게
       // 탭 영역(정보) → 상세
       const info=el('button','sinfo');
       const r1=el('div','sr1');
