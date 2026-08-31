@@ -133,3 +133,36 @@ def test_delete_removes_sidecar_labels(fake_claude_home, monkeypatch, tmp_path):
     lifecycle.delete_session("lbl99999", dry_run=False)
     assert not jsonl.exists()
     assert labels.get("lbl99999") == {}                 # 라벨도 제거됨
+
+
+def test_move_session_relocates_file_and_cwd(fake_claude_home, monkeypatch):
+    """세션 이사: jsonl 을 새 cwd 인코딩 폴더로 이동 + cwd 치환.
+
+    claude 는 '파일이 어느 인코딩 폴더에 있는지'로 세션을 찾으므로, 폴더 이동은
+    파일 물리 이동이 필수(실증 2026-08-31). cwd 만 바꾸던 옛 방식의 갭 해소.
+    """
+    from session_manager import lifecycle
+    from session_manager.pathenc import path_to_folder
+    # cwd=F:\old\path 인 세션 생성(_make 는 그 cwd 로 만든다)
+    jsonl = _make(fake_claude_home, sid="mv111111", folder=path_to_folder(r"F:\old\path"))
+    assert jsonl.exists()
+    r = lifecycle.move_session("mv111111", r"F:\new\home", move_content=False, dry_run=False)
+    assert "error" not in r, r
+    # 원본 위치 비고, 새 인코딩 폴더에 존재
+    assert not jsonl.exists()
+    new_jsonl = (fake_claude_home / "projects" / path_to_folder(r"F:\new\home")
+                 / "mv111111.jsonl")
+    assert new_jsonl.exists()
+    # cwd 치환 확인
+    import json as _j
+    kinds = [_j.loads(l) for l in new_jsonl.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert all(o.get("cwd") == r"F:\new\home" for o in kinds if "cwd" in o)
+
+
+def test_move_session_blocks_live(fake_claude_home, monkeypatch):
+    """실행 중 세션은 이동 차단(파일 이동 중 손상 방지)."""
+    from session_manager import lifecycle, webterm
+    _make(fake_claude_home, sid="mv222222")
+    monkeypatch.setattr(webterm, "has_terminal", lambda sid: True)
+    r = lifecycle.move_session("mv222222", r"F:\x", dry_run=False)
+    assert "error" in r and "실행 중" in r["error"]

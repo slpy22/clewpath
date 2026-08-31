@@ -2246,15 +2246,30 @@ async function editProfile(s){
 function changeCwd(s){
   const body=el('div'); const inp=inputEl(s.cwd||'');
   body.appendChild(field('새 작업 폴더 경로', inp));
-  body.appendChild(el('div','cwd','세션 JSONL 의 cwd 를 바꿉니다(원본 대화는 보존). 재개 시 이 경로에서 claude 가 실행됩니다.'));
-  const save=el('button','btn','변경');
+  body.appendChild(el('div','cwd','세션을 이 폴더로 이사시킵니다 — 세션 기록을 새 폴더로 옮기고 cwd 를 바꿉니다(대화 내용은 보존). claude 재개·ClewPath 양쪽에서 새 폴더 기준으로 인식됩니다.'));
+  // 콘텐츠 이동 체크박스(기본 꺼짐) - 실제 작업 폴더의 파일까지 목적 폴더로 이동
+  const cw=el('label','ckrow'); cw.style.cssText='display:flex;align-items:center;gap:8px;margin:12px 0;font-size:.9rem';
+  const ck=document.createElement('input'); ck.type='checkbox';
+  cw.appendChild(ck); cw.appendChild(document.createTextNode('실제 작업 폴더 내용도 함께 이동'));
+  body.appendChild(cw);
+  const warn=el('div','cwd'); warn.style.cssText='color:#e8a03c;font-size:.78rem;display:none;margin-top:-4px';
+  warn.textContent='⚠ 원본 폴더의 모든 파일·하위폴더가 목적 폴더로 실제 이동합니다(되돌리기 어려움).';
+  body.appendChild(warn);
+  ck.onchange=()=>{ warn.style.display=ck.checked?'block':'none'; };
+  const save=el('button','btn','이사');
   save.onclick=async()=>{
     const nc=inp.value.trim(); if(!nc){ toast('경로를 입력하세요'); return; }
-    try{ await T.api('POST',`/api/sessions/${s.session_id}/change-cwd`,{body:{new_cwd:nc,dry_run:false}});
-      toast('폴더 변경됨'); s.cwd=nc; closeModal(); loadList();
-    }catch(e){ toast('변경 실패: '+e.message); }
+    const mc=ck.checked;
+    var _base='세션을 "'+nc+'" 로 이사시킬까요? (세션 기록이 새 폴더로 옮겨집니다)';
+    var _full='세션 이사 + 실제 작업 폴더 내용 이동을 진행할까요?\n\n원본 "'+(s.cwd||'?')+'" 의 모든 파일이 "'+nc+'" 로 실제 이동합니다. 되돌리기 어렵습니다.';
+    if(!confirm(mc?_full:_base)) return;
+    save.disabled=true; save.textContent='이동 중…';
+    try{ const r=await T.api('POST',`/api/sessions/${s.session_id}/change-cwd`,{body:{new_cwd:nc,move_content:mc,dry_run:false}});
+      if(r&&r.error){ toast('실패: '+r.error); save.disabled=false; save.textContent='이사'; return; }
+      toast(mc?'이사 + 콘텐츠 이동 완료':'세션 이사 완료'); s.cwd=nc; closeModal(); loadList();
+    }catch(e){ toast('이동 실패: '+e.message); save.disabled=false; save.textContent='이사'; }
   };
-  openModal('📁 폴더(cwd) 변경 — '+s.session_id.slice(0,8), body, [save]);
+  openModal('📁 세션 이사 — '+s.session_id.slice(0,8), body, [save]);
 }
 
 // ---- 사용량 대시보드 ----

@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import os
 import json
 import shutil
 import time
@@ -236,3 +237,126 @@ def _path_size(p: Path) -> int:
         return p.stat().st_size
     except Exception:
         return 0
+
+
+def move_session(session_id: str, new_cwd: str, move_content: bool = False,
+                 dry_run: bool = True) -> dict:
+    """세션을 다른 작업 폴더로 '이사'시킨다 (claude 가 미지원하는 폴더 이동 지원).
+
+    claude 는 세션을 projects/<cwd 인코딩>/uuid.jsonl 로 저장하고, '어느 인코딩
+    폴더에 있는지'로 세션의 프로젝트를 판단한다. 그래서 작업 폴더를 옮기려면
+    cwd 값만 바꿔선 안 되고(그러면 claude 픽커가 못 찾음), 세션 파일을 새 cwd 의
+    인코딩 폴더로 물리 이동해야 한다(실증 2026-08-31: 이동+치환 후 새 폴더에서
+    --resume 정상 인식).
+
+    동작:
+      1) 세션 jsonl 을 새 폴더(projects/<new 인코딩>/)로 이동하며 cwd 값 치환
+      2) 사이드 폴더(uuid/)도 함께 이동 (session-env/todos 는 uuid 기반이라 무관)
+      3) move_content=True 면 실제 작업 폴더 내용도 new_cwd 로 이동(콘텐츠 이사)
+
+    [원칙] claude 세션 파일의 물리 이동 - 승인된 예외(2026-08-31 사장님 승인).
+    안전: 실행 중 세션 차단, 경로 검증, dry_run 지원.
+    """
+    from session_manager.pathenc import path_to_folder
+
+    meta = scan_one(session_id)
+    if meta is None:
+        return {"error": "세션을 찾을 수 없습니다.", "session_id": session_id}
+
+    # 실행 중 세션은 파일 이동 중 손상 위험 → 차단
+    try:
+        from session_manager import webterm
+        if webterm.has_terminal(session_id):
+            return {"error": "이 세션은 실행 중입니다. 터미널을 종료한 뒤 이동하세요.",
+                    "session_id": session_id}
+    except Exception:  # noqa: BLE001
+        pass
+
+    src_jsonl = Path(meta.jsonl_path)
+    old_cwd = meta.cwd
+    new_folder = path_to_folder(new_cwd)
+    dst_dir = config.projects_dir() / new_folder
+    dst_jsonl = dst_dir / src_jsonl.name
+    side_src = src_jsonl.parent / session_id
+    side_dst = dst_dir / session_id
+
+    # 대상 폴더가 지금 폴더와 같으면 = 이동 불필요(cwd 만 치환)
+    same_folder = (src_jsonl.parent.resolve() == dst_dir.resolve()
+                   if dst_dir.exists() else src_jsonl.parent.name == new_folder)
+
+    plan = {
+        "session_id": session_id, "old_cwd": old_cwd, "new_cwd": new_cwd,
+        "session_file_move": None if same_folder else {
+            "from": str(src_jsonl), "to": str(dst_jsonl)},
+        "side_dir_move": ({"from": str(side_src), "to": str(side_dst)}
+                          if side_src.is_dir() and not same_folder else None),
+        "content_move": None,
+    }
+    if move_content and old_cwd and os.path.isdir(old_cwd):
+        entries = sorted(os.listdir(old_cwd))
+        plan["content_move"] = {"from": old_cwd, "to": new_cwd, "items": entries}
+    elif move_content:
+        plan["content_move"] = {"error": f"원본 작업 폴더가 없습니다: {old_cwd}"}
+
+    if dry_run:
+        return {"dry_run": True, **plan}
+
+    if dst_jsonl.exists() and not same_folder:
+        return {"error": "대상 폴더에 같은 세션 파일이 이미 있습니다.",
+                "session_id": session_id}
+
+    moved_ops: list[str] = []
+    try:
+        # 1) 세션 jsonl: cwd 치환하며 새 위치로 (같은 폴더면 제자리 치환)
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        out_lines: list[str] = []
+        with src_jsonl.open(encoding="utf-8", errors="replace") as f:
+            for raw in f:
+                line = raw.rstrip("\n")
+                if line.strip():
+                    try:
+                        obj = json.loads(line)
+                        if "cwd" in obj:
+                            obj["cwd"] = new_cwd
+                        line = json.dumps(obj, ensure_ascii=False)
+                    except Exception:  # noqa: BLE001
+                        pass
+                out_lines.append(line)
+        target = src_jsonl if same_folder else dst_jsonl
+        target.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
+        if not same_folder:
+            src_jsonl.unlink()
+            moved_ops.append(f"세션 파일 → {dst_jsonl}")
+            # 2) 사이드 폴더
+            if side_src.is_dir():
+                shutil.move(str(side_src), str(side_dst))
+                moved_ops.append(f"사이드 폴더 → {side_dst}")
+        else:
+            moved_ops.append("cwd 치환(제자리 - 같은 폴더)")
+
+        # 3) 콘텐츠 이동(옵션)
+        content_result = None
+        if move_content and old_cwd and os.path.isdir(old_cwd) \
+                and os.path.abspath(old_cwd) != os.path.abspath(new_cwd):
+            os.makedirs(new_cwd, exist_ok=True)
+            moved_items, skipped = [], []
+            for name in os.listdir(old_cwd):
+                s = os.path.join(old_cwd, name)
+                d = os.path.join(new_cwd, name)
+                if os.path.exists(d):
+                    skipped.append(f"{name} (대상에 이미 존재)")
+                    continue
+                shutil.move(s, d)
+                moved_items.append(name)
+            content_result = {"moved": moved_items, "skipped": skipped}
+            moved_ops.append(f"콘텐츠 {len(moved_items)}개 → {new_cwd}")
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"이동 실패: {e}", "session_id": session_id,
+                "partial": moved_ops}
+
+    from session_manager import scanner as _sc
+    _sc._CACHE.clear()   # 캐시 무효화(경로 바뀜)
+    return {"dry_run": False, "session_id": session_id,
+            "old_cwd": old_cwd, "new_cwd": new_cwd,
+            "operations": moved_ops,
+            "content": content_result if move_content else None}

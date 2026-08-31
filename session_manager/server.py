@@ -756,10 +756,17 @@ def create_app() -> FastAPI:
         return lifecycle.restore_session(bucket)
 
     @app.post("/api/sessions/{session_id}/change-cwd")
-    def change_cwd(session_id: str,
+    def change_cwd(session_id: str, request: Request,
                    new_cwd: str = Body(..., embed=True),
+                   move_content: bool = Body(False, embed=True),
                    dry_run: bool = Body(True, embed=True)):
-        return lifecycle.change_cwd(session_id, new_cwd, dry_run=dry_run)
+        # 세션 이사(파일 물리 이동 + cwd 치환). move_content=True 면 실제 작업
+        # 폴더 내용까지 이동. claude 파일 이동이라 로컬 전용(원격 오조작 차단).
+        if not _is_local(request):
+            return JSONResponse({"error": "폴더 이동은 이 PC(로컬)에서만 가능합니다."},
+                                status_code=403)
+        return lifecycle.move_session(session_id, new_cwd,
+                                      move_content=move_content, dry_run=dry_run)
 
     # ---- export / import ----
     @app.get("/api/sessions/{session_id}/export")
