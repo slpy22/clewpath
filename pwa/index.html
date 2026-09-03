@@ -346,6 +346,36 @@
   .qrbox{background:#fff;padding:12px;border-radius:12px;display:flex;justify-content:center;margin:8px 0 14px}
   .qrbox img{width:210px;height:210px;image-rendering:pixelated}
 
+  /* ---- 오케스트레이션 관제 타임라인 ---- */
+  .mon-ov{position:fixed;inset:0;background:var(--bg);z-index:60;display:flex;flex-direction:column}
+  .mon-head{padding:12px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;background:var(--surface)}
+  .mon-head h3{margin:0;font-size:1rem;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .mon-head .x{width:34px;height:34px;border-radius:9px;font-size:1.1rem;color:var(--muted);flex:none}
+  .mon-head .x:active,.mon-head .x:hover{background:var(--surface2)}
+  .mon-live{font-size:.72rem;font-family:var(--mono);color:var(--muted);display:flex;align-items:center;gap:6px;white-space:nowrap}
+  .mon-live .dot2{width:9px;height:9px;border-radius:50%;background:#3ac06a}
+  .mon-live.on .dot2{animation:monpulse 2s infinite}
+  .mon-live.off .dot2{background:var(--muted);animation:none}
+  @keyframes monpulse{0%{box-shadow:0 0 0 0 rgba(58,192,106,.5)}70%{box-shadow:0 0 0 7px rgba(58,192,106,0)}100%{box-shadow:0 0 0 0 rgba(58,192,106,0)}}
+  .mon-body{flex:1;overflow-y:auto;padding:12px 14px;background:var(--bg)}
+  .mrow{border-left:3px solid var(--line);padding:7px 10px;margin:5px 0;border-radius:0 8px 8px 0;background:var(--surface)}
+  .mrow.sub{margin-left:22px}
+  .mrow-h{display:flex;align-items:center;gap:8px;font-size:.8rem;margin-bottom:3px}
+  .mrow-h .mlab{font-weight:600}
+  .mrow-h .mtime{color:var(--muted);font-family:var(--mono);font-size:.68rem;margin-left:auto}
+  .mcall{display:inline-flex;align-items:center;gap:6px;font-size:.76rem;background:var(--accent-wash);
+    color:var(--accent);border-radius:7px;padding:3px 8px;margin:3px 6px 3px 0}
+  .mcall b{font-weight:600}
+  .mtext{font-size:.86rem;white-space:pre-wrap;word-break:break-word;color:var(--ink)}
+  .mtool{display:inline-block;font-size:.72rem;font-family:var(--mono);color:var(--ink2);
+    background:var(--surface2);border-radius:6px;padding:2px 7px;margin:3px 5px 0 0}
+  .mres{font-size:.76rem;color:var(--ink2);border-left:2px solid var(--line2);padding-left:8px;margin-top:4px;white-space:pre-wrap;word-break:break-word}
+  .mon-empty{color:var(--muted);text-align:center;padding:40px 20px;font-size:.86rem}
+  .mpick{display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--line);border-radius:10px;margin:6px 0}
+  .mpick .mp-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.9rem}
+  .mpick .mp-mgr{font-size:.72rem;color:var(--muted);display:flex;align-items:center;gap:4px;flex:none}
+  .mpick input[type=checkbox],.mpick input[type=radio]{width:18px;height:18px;flex:none}
+
   /* ---- 데스크톱(≥880px): master-detail 2-pane ---- */
   @media (min-width:880px){
     body{background:var(--surface2)}
@@ -423,6 +453,7 @@
     <span class="title" id="head">세션</span>
     <select class="pcname hidden" id="pcname" title="PC 선택 (localhost / 저장된 PC)"></select>
     <span class="grow"></span>
+    <button class="icon" id="btn-monitor" title="오케스트레이션 관제">🎬</button>
     <button class="icon" id="btn-refresh" title="새로고침">⟳</button>
     <button class="icon" id="btn-settings" title="설정">⚙</button>
   </header>
@@ -673,6 +704,13 @@ class Conn{
     return { send:(obj)=>this._tx({v:1,type:'stream_in',id,data:obj}),
              close:()=>this.streams.delete(id) };
   }
+  // 오케스트레이션 관제 스트림(읽기전용). onEvent(dataStr, eof, error)
+  startMonitor(ids,manager,onEvent){
+    const id='mon'+(++this.seq);
+    this.streams.set(id,(m)=>{ if(m.eof){onEvent(null,true,m.error);} else onEvent(m.data,false); });
+    this._tx({v:1,type:'req',id,method:'monitor',params:{ids,manager}});
+    return { close:()=>this.streams.delete(id) };
+  }
   _closeMsg(code){
     if(code===4402) return '기기 자격이 만료·거부되었습니다(갱신 후 재시도)';
     if(code===4403) return '이 room 이 더 이상 유효하지 않습니다 — 재페어링이 필요합니다';
@@ -708,6 +746,7 @@ const relayT={
   api:(v,p,o)=>conn.api(v,p,o),
   resume:(id,cb,opts)=>conn.startResume(id,cb,opts&&opts.inplace,opts),
   terminal:(id,cb,opts)=>conn.startTerminal(id,cb,opts),
+  monitor:(ids,manager,cb)=>conn.startMonitor(ids,manager,cb),
   async exportSession(id,wd){ const r=await conn.req('export',{session_id:id,include_workdir:!!wd});
     if(!r.ok)throw new Error(r.error||'내보내기 실패'); return r.data; },
   async importSession(file,opts){ const b64=await fileToB64(file);
@@ -738,6 +777,16 @@ const localT={
     return { input:(text)=>ws.send(JSON.stringify(
               {type:'user',message:{role:'user',content:[{type:'text',text}]}})),
              close:()=>{try{ws.close();}catch(e){}} };
+  },
+  monitor(ids,manager,cb){
+    const proto=location.protocol==='https:'?'wss':'ws';
+    let url=`${proto}://${location.host}${APIBASE}/ws/monitor?ids=${encodeURIComponent(ids)}`;
+    if(manager)url+=`&manager=${encodeURIComponent(manager)}`;
+    const ws=new WebSocket(url);
+    ws.onmessage=(ev)=>cb(ev.data,false);
+    ws.onclose=()=>cb(null,true);
+    ws.onerror=()=>{};
+    return { close:()=>{try{ws.close();}catch(e){}} };
   },
   async importSession(file,opts){
     const fd=new FormData(); fd.append('file',file);
@@ -2016,6 +2065,101 @@ function openModal(title, bodyEl, footChildren){
   ov.onclick=(e)=>{ if(e.target===ov)closeModal(); };
   document.body.appendChild(ov);
 }
+// ---- 오케스트레이션 관제(멀티 세션 실시간 관전) ----
+function monSessName(s){ return s.title||s.label_name||s.slug||s.session_id.slice(0,8); }
+
+function showMonitorPicker(){
+  const body=el('div');
+  body.appendChild(el('div','cwd','관리 에이전트 1개 + 하위 세션들을 골라 실시간 관전합니다. 관리는 하위를 claude -p 로 호출하는 세션입니다. 읽기전용이라 세션에 영향을 주지 않습니다.'));
+  const list=el('div'); list.style.margin='10px 0'; body.appendChild(list);
+  const rows=[];
+  (SESSIONS||[]).forEach(s=>{
+    const row=el('div','mpick');
+    const cb=el('input'); cb.type='checkbox';
+    const nm=el('div','mp-name',monSessName(s));
+    const ml=el('label','mp-mgr'); const mr=el('input'); mr.type='radio'; mr.name='mon-mgr';
+    mr.onclick=()=>{ cb.checked=true; };   // 관리로 지정하면 자동 포함
+    ml.appendChild(mr); ml.appendChild(document.createTextNode('관리'));
+    row.appendChild(cb); row.appendChild(nm); row.appendChild(ml);
+    list.appendChild(row); rows.push({cb,mr,s});
+  });
+  if(!rows.length) list.appendChild(el('div','empty','세션이 없습니다.'));
+  const go=el('button','btn','관전 시작');
+  go.onclick=()=>{
+    const picked=rows.filter(r=>r.cb.checked);
+    if(picked.length<1){ toast('세션을 1개 이상 선택하세요'); return; }
+    const mgrRow=rows.find(r=>r.mr.checked);
+    const mgr=mgrRow?mgrRow.s.session_id:picked[0].s.session_id;
+    if(!picked.some(r=>r.s.session_id===mgr)) picked.unshift(rows.find(r=>r.s.session_id===mgr));
+    const labels={}; picked.forEach(r=>{ labels[r.s.session_id]=monSessName(r.s); });
+    closeModal();
+    openMonitor(picked.map(r=>r.s.session_id), mgr, labels);
+  };
+  openModal('🎬 오케스트레이션 관제 — 그룹 선택', body, [go]);
+}
+
+function openMonitor(ids, manager, labels){
+  const ov=el('div','mon-ov'); ov.id='mon-ov';
+  const head=el('div','mon-head');
+  head.appendChild(el('h3',null,'🎬 오케스트레이션 관제'));
+  const live=el('div','mon-live off'); live.appendChild(el('span','dot2'));
+  const lt=el('span',null,'연결 중…'); live.appendChild(lt); head.appendChild(live);
+  const x=el('button','x','✕'); head.appendChild(x);
+  const bodyW=el('div','mon-body');
+  bodyW.appendChild(el('div','mon-empty','이벤트를 기다리는 중… 세션에서 대화가 오가면 여기에 실시간으로 표시됩니다.'));
+  ov.appendChild(head); ov.appendChild(bodyW);
+  document.body.appendChild(ov);
+
+  const gmap={}; let lastSeq=0; let emptyShown=true;
+  if(labels) Object.keys(labels).forEach(sid=>{ gmap[sid]={label:labels[sid]}; });  // 호출선 라벨 선점
+  const fmtT=(ts)=>{ try{ return ts?new Date(ts).toLocaleTimeString():''; }catch(e){ return ''; } };
+  const nearBottom=()=> bodyW.scrollHeight-bodyW.scrollTop-bodyW.clientHeight < 90;
+  const setLive=(on,txt)=>{ live.className='mon-live '+(on?'on':'off'); lt.textContent=txt; };
+
+  function renderEvent(ev){
+    if(ev.seq!=null){ if(ev.seq<=lastSeq) return; lastSeq=ev.seq; }
+    if(emptyShown){ bodyW.innerHTML=''; emptyShown=false; }
+    gmap[ev.session_id]={label:ev.session_label,color:ev.color};
+    const row=el('div','mrow'+(ev.session_role==='sub'?' sub':''));
+    if(ev.color) row.style.borderLeftColor=ev.color;
+    const h=el('div','mrow-h');
+    const lab=el('span','mlab',ev.session_label||ev.session_id.slice(0,8)); if(ev.color)lab.style.color=ev.color;
+    h.appendChild(lab);
+    if(ev.role) h.appendChild(el('span','mtool',ev.role));
+    h.appendChild(el('span','mtime',fmtT(ev.ts)));
+    row.appendChild(h);
+    (ev.calls_out||[]).forEach(c=>{
+      const tl=(gmap[c.target_session_id]&&gmap[c.target_session_id].label)||c.target_session_id.slice(0,8);
+      const call=el('div','mcall'); call.appendChild(el('b',null,'→ '+tl));
+      if(c.prompt) call.appendChild(el('span',null,'“'+c.prompt+'”'));
+      row.appendChild(call);
+    });
+    if(ev.text){ row.appendChild(el('div','mtext',ev.text.length>1200?ev.text.slice(0,1200)+'…':ev.text)); }
+    (ev.tools||[]).forEach(nm=>row.appendChild(el('span','mtool','⚙ '+nm)));
+    (ev.tool_results||[]).forEach(r=>{ if(r.text){ row.appendChild(el('div','mres',
+      (r.is_error?'⚠ ':'↳ ')+(r.text.length>400?r.text.slice(0,400)+'…':r.text))); } });
+    bodyW.appendChild(row);
+  }
+
+  function onMsg(dataStr, eof, error){
+    if(eof){ setLive(false, error?('종료: '+error):'연결 종료'); return; }
+    let m; try{ m=JSON.parse(dataStr); }catch(e){ return; }
+    if(m.type==='heartbeat'){ setLive(true,'● live'); return; }
+    if(m.type==='error'){ setLive(false,'오류: '+(m.error||'')); toast('관제 오류: '+(m.error||'')); return; }
+    if(m.type==='snapshot'||m.type==='events'){
+      const stick=nearBottom();
+      (m.events||[]).forEach(renderEvent);
+      setLive(true,'● live');
+      if(stick) bodyW.scrollTop=bodyW.scrollHeight;
+    }
+  }
+
+  let h=null;
+  try{ h=T.monitor(ids.join(','), manager, onMsg); }
+  catch(e){ setLive(false,'연결 실패'); toast('관제 연결 실패: '+e.message); }
+  x.onclick=()=>{ try{ h&&h.close(); }catch(e){} ov.remove(); };
+}
+
 function field(label,inp){ const f=el('div','field'); f.appendChild(el('label',null,label)); f.appendChild(inp); return f; }
 function inputEl(val){ const i=el('input'); i.value=(val==null?'':val); return i; }
 function askOtp(){ const c=prompt('2차 인증 코드 (인증앱 6자리):'); if(c==null)return null; return (c||'').trim(); }
@@ -2478,6 +2622,7 @@ conn.onauth=(ok,err)=>{
   if(err==='auth_required'||err==='auth_invalid') showAuthLost(err);
 };
 $('#btn-refresh').onclick=()=>loadList();
+$('#btn-monitor').onclick=()=>showMonitorPicker();
 $('#btn-settings').onclick=()=>showSettings();
 
 // ---- ⚙ 설정 화면: 흩어져 있던 도구를 한곳에(5개 섹션). 로컬 전용 항목은

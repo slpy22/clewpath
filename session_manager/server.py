@@ -61,8 +61,8 @@ class ProfileReq(BaseModel):
 
 from session_manager import (
     scanner, viewer, search, stats, lifecycle, exporter, importer, resume,
-    webterm, webapi, auth, labels, policy, profiles, native_title, owner2fa,
-    devices, appconfig, config,
+    webterm, webapi, webmonitor, auth, labels, policy, profiles, native_title,
+    owner2fa, devices, appconfig, config,
 )
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -819,6 +819,21 @@ def create_app() -> FastAPI:
         await websocket.accept()
         await webterm.run_terminal(websocket, session_id,
                                    skip_permissions=skip, fork_id=fork_id)
+
+    # ---- 오케스트레이션 관제 (여러 세션 실시간 관전, 읽기전용·무침습) ----
+    # ?ids=<uuid1>,<uuid2>,...  &manager=<uuid>  (manager 미지정 시 첫 세션)
+    @app.websocket("/ws/monitor")
+    async def ws_monitor(websocket: WebSocket):
+        # 관전은 읽기전용이지만 세션 내용을 노출하므로 터미널과 동일 인증 수준.
+        if not _is_local(websocket) and auth.enabled() \
+                and not auth.valid(websocket.cookies.get(auth.COOKIE)):
+            await websocket.close(code=1008)  # policy violation
+            return
+        specs = webmonitor.specs_from_query(
+            websocket.query_params.get("ids"),
+            websocket.query_params.get("manager"))
+        await websocket.accept()
+        await webmonitor.run_monitor(websocket, specs)
 
     # ---- 외부 API v1: 세션 재개(구조화 JSON, 멀티턴) ----
     # 인증: API 토큰(Authorization: Bearer <t> 또는 ?token=<t>). 웹 비밀번호와 별개.

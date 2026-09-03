@@ -105,6 +105,37 @@ def _tool_results(content) -> list[dict]:
     return out
 
 
+def parse_record(obj) -> dict | None:
+    """단일 jsonl 레코드(파싱된 dict)를 대화 이벤트로 변환. 대화가 아니면 None.
+
+    read_conversation(배치 뷰어)과 라이브 tail(monitor 오케스트레이션 관제)이
+    공유하는 단일 파서(DRY). user/assistant 의 text + 도구 호출/결과만 남기고
+    thinking·메타 레코드(mode/queue-operation/attachment 등)는 None 으로 걸러낸다.
+
+    반환 형태:
+        {"role", "text", "tools", "tool_calls", "tool_results", "timestamp"}
+    tool_calls[].input.command 에는 셸 명령이 들어오므로(관리 세션의
+    `claude -p --resume <UUID>` 호출), monitor 가 이 위에서 호출선을 추출한다.
+    """
+    if not isinstance(obj, dict):
+        return None
+    if obj.get("type") not in ("user", "assistant"):
+        return None
+    msg = obj.get("message")
+    if not isinstance(msg, dict):
+        return None
+    content = msg.get("content")
+    text = _text_blocks(content).strip()
+    tools = _tool_names(content)
+    calls = _tool_calls(content)
+    results = _tool_results(content)
+    if not text and not tools and not results:
+        return None  # 빈 메타 레코드 제외
+    return {"role": msg.get("role"), "text": text, "tools": tools,
+            "tool_calls": calls, "tool_results": results,
+            "timestamp": obj.get("timestamp")}
+
+
 def read_conversation(session_id: str, limit: int = 200) -> dict | None:
     """대화만 깔끔하게 추출(Claude 표시용). user/assistant 의 text + 사용도구만.
 
@@ -124,22 +155,9 @@ def read_conversation(session_id: str, limit: int = 200) -> dict | None:
                 obj = json.loads(line)
             except Exception:
                 continue
-            if obj.get("type") not in ("user", "assistant"):
-                continue
-            msg = obj.get("message")
-            if not isinstance(msg, dict):
-                continue
-            role = msg.get("role")
-            content = msg.get("content")
-            text = _text_blocks(content).strip()
-            tools = _tool_names(content)
-            calls = _tool_calls(content)
-            results = _tool_results(content)
-            if not text and not tools and not results:
-                continue  # 빈 메타 레코드 제외
-            conv.append({"role": role, "text": text, "tools": tools,
-                         "tool_calls": calls, "tool_results": results,
-                         "timestamp": obj.get("timestamp")})
+            ev = parse_record(obj)
+            if ev is not None:
+                conv.append(ev)
 
     total = len(conv)
     if limit and limit > 0:

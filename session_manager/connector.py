@@ -287,6 +287,10 @@ class Connector:
                 # 웹터미널(/ws/terminal) 원시 스트림 터널링 (외부에서 진짜 xterm)
                 await self._start_terminal(rid, params)
 
+            elif method == "monitor":
+                # 오케스트레이션 관제(/ws/monitor) 이벤트 스트림 터널링(읽기전용).
+                await self._start_monitor(rid, params)
+
             elif method == "grant":
                 # OTP 1회 검증 → grace 토큰 발급(이후 유효기간 동안 코드 없이 특권 동작)
                 from session_manager import owner2fa
@@ -452,6 +456,39 @@ class Connector:
                         await self._stream_send(rid, data=raw)
                 finally:
                     up_task.cancel()
+            await self._stream_send(rid, eof=True)
+        except Exception as e:  # noqa: BLE001
+            await self._stream_send(rid, eof=True, error=f"{type(e).__name__}: {e}")
+        finally:
+            self.streams.pop(rid, None)
+            self.stream_in.pop(rid, None)
+
+    # ---- 관제 스트리밍 파이프 (읽기전용 단방향) ----
+    async def _start_monitor(self, rid: str, params: dict) -> None:
+        if rid in self.streams:
+            await self._res(rid, False, error="stream_exists")
+            return
+        # ids: 콤마 문자열 또는 리스트. manager: 선택.
+        ids = params.get("ids") or params.get("session_ids") or ""
+        if isinstance(ids, list):
+            ids = ",".join(str(x) for x in ids)
+        ids = str(ids).strip()
+        if not ids:
+            await self._stream_send(rid, eof=True, error="empty_group")
+            return
+        q = {"ids": ids}
+        manager = params.get("manager")
+        if manager:
+            q["manager"] = str(manager)
+        local_ws = f"{_to_ws(self.local_base)}/ws/monitor?{urlencode(q)}"
+        # 관전은 클라이언트→로컬 방향이 없다(up 파이프 불필요).
+        self.streams[rid] = asyncio.create_task(self._pipe_monitor(rid, local_ws))
+
+    async def _pipe_monitor(self, rid: str, local_ws: str) -> None:
+        try:
+            async with connect(local_ws, max_size=None) as lws:
+                async for raw in lws:  # local → client (관제 이벤트 JSON 그대로)
+                    await self._stream_send(rid, data=raw)
             await self._stream_send(rid, eof=True)
         except Exception as e:  # noqa: BLE001
             await self._stream_send(rid, eof=True, error=f"{type(e).__name__}: {e}")
