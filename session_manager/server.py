@@ -267,17 +267,25 @@ async def _lifespan(app: FastAPI):
     (경계 유지 → 필요해지면 별도 프로세스로 다시 분리 가능).
     """
     # 기동 시 '무엇을 찾았는지' 를 남긴다 — 세션 0개일 때 원인 파악의 출발점.
+    # ★ 반드시 스레드로: scan_all 은 세션이 많으면 수십 초 걸린다. 기동 경로에서
+    #   직접 부르면 서버가 그동안 요청을 못 받아, 업데이트 헬스체크(45초)가 타임아웃돼
+    #   멀쩡한 새 버전이 롤백된다(실사고 2026-09-04). 진단 로그는 늦게 떠도 무방하다.
+    def _data_check():
+        try:
+            from session_manager import config as _cfg, scanner as _sc
+            _home = _cfg.claude_home()
+            _n = len(_sc.scan_all())
+            print(f"[data] claude_home={_home} (exists={_home.is_dir()}) sessions={_n}")
+            if _n == 0:
+                print("[data] 세션이 0개입니다. 클로드 폴더를 옮겨 쓴다면 CLAUDE_CONFIG_DIR 을 "
+                      "설정하고 다시 시작하세요.")
+            print(f"[data] claude_exe={_cfg.claude_exe()}")
+        except Exception as e:  # noqa: BLE001
+            print(f"[data] 점검 실패: {type(e).__name__}: {e}")
     try:
-        from session_manager import config as _cfg, scanner as _sc
-        _home = _cfg.claude_home()
-        _n = len(_sc.scan_all())
-        print(f"[data] claude_home={_home} (exists={_home.is_dir()}) sessions={_n}")
-        if _n == 0:
-            print("[data] 세션이 0개입니다. 클로드 폴더를 옮겨 쓴다면 CLAUDE_CONFIG_DIR 을 "
-                  "설정하고 다시 시작하세요.")
-        print(f"[data] claude_exe={_cfg.claude_exe()}")
-    except Exception as e:  # noqa: BLE001
-        print(f"[data] 점검 실패: {type(e).__name__}: {e}")
+        threading.Thread(target=_data_check, name="data-check", daemon=True).start()
+    except Exception:  # noqa: BLE001
+        pass
 
     # 이전 Host 가 강제 종료되며 남긴 고아 정리(협의된 예외 - ClewPath 자신이
     # 낳은 프로세스 한정): 웹재개 스트림(서명+부모사망) + PTY(자기 등록부 기반).
@@ -354,7 +362,14 @@ def create_app() -> FastAPI:
         from session_manager import config as _cfg
         import shutil
         home = _cfg.claude_home()
-        sessions = scanner.scan_all()
+        # ★ 빠른 카운트: scan_all(전체 파싱)은 세션 많으면 수십 초 → 이 엔드포인트가
+        #   업데이트 헬스체크에 쓰이므로 절대 느리면 안 된다(45초 타임아웃→롤백 사고).
+        #   .jsonl 파일 개수만 센다(파싱 없이).
+        try:
+            _pdir = home / "projects"
+            _cnt = sum(1 for _ in _pdir.glob("*/*.jsonl")) if _pdir.is_dir() else 0
+        except Exception:  # noqa: BLE001
+            _cnt = 0
         exe = _cfg.claude_exe()
         from session_manager import updater as _upd
         return {
@@ -362,7 +377,7 @@ def create_app() -> FastAPI:
             "claude_home": str(home),
             "claude_home_exists": home.is_dir(),
             "projects_exists": (home / "projects").is_dir(),
-            "session_count": len(sessions),
+            "session_count": _cnt,
             "claude_exe": exe,
             "claude_exe_found": bool(shutil.which("claude")) or exe != "claude",
             "claude_config_dir_env": os.environ.get("CLAUDE_CONFIG_DIR"),
@@ -370,7 +385,7 @@ def create_app() -> FastAPI:
             # (설치 폴더가 아니라 데이터 폴더에 있어서 눈에 잘 안 띈다)
             "config_file": str(appconfig.config_path()),
             "config_file_exists": appconfig.config_path().is_file(),
-            "ok": home.is_dir() and len(sessions) > 0,
+            "ok": home.is_dir() and _cnt > 0,
         }
 
     @app.get("/api/health")

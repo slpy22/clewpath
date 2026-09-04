@@ -273,6 +273,22 @@ def apply(manifest: dict[str, Any], staged: Path, restart_cmd: str | None = None
     updater 는 설치 폴더 밖(데이터 폴더)으로 복사해서 실행한다 — 설치 폴더를
     통째로 갈아끼우는 동안 자기 자신이 사라지면 안 된다.
     """
+    # ★ 동시 실행 방지 잠금(실사고 2026-09-04): 사용자가 업데이트를 연달아 누르거나
+    #   재기동 자동적용이 겹치면 runner 가 2개 이상 동시에 돌아 포트 경합으로 서비스가
+    #   완전히 죽는다. 5분 내 진행 중인 apply 가 있으면 거부한다(만료 시 자기치유).
+    import time as _time
+    lock = work_dir() / "apply.lock"
+    try:
+        if lock.is_file() and (_time.time() - lock.stat().st_mtime) < 300:
+            raise UpdateError("이미 업데이트 적용이 진행 중입니다 — 완료를 기다려 주세요"
+                              "(재기동까지 최대 1~2분).")
+    except OSError:
+        pass
+    try:
+        lock.write_text(str(_time.time()), encoding="utf-8")
+    except OSError:
+        pass
+
     root = install_root()
     runner_src = runner_script()
     if not runner_src.is_file():

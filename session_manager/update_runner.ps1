@@ -202,4 +202,8 @@ try {
     Set-Content -Path (Join-Path (Split-Path $LogFile) "last_apply.json") -Value $res -Encoding UTF8
 } catch {}
 
+# 동시 실행 방지 잠금 해제(updater.py 가 apply 시작 시 건다). 완료됐으니 다음 정상
+# 업데이트를 막지 않도록 지운다. 못 지워도 5분 뒤 자동 만료된다.
+try { Remove-Item -Force (Join-Path (Split-Path $LogFile) "apply.lock") -ErrorAction SilentlyContinue } catch {}
+
 Log "=== 종료 (성공: $healthy) ==="
