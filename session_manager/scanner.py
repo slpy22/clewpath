@@ -27,6 +27,8 @@ class SessionMeta:
     custom_title: str | None  # 네이티브 이름(Ctrl+R). JSONL custom-title 레코드 최신값
     ai_title: str | None      # AI 자동 제목(ai-title 레코드 최신값)
     agent_name: str | None    # branch/agent 이름(agent-name 레코드 최신값)
+    last_model: str | None    # 마지막 assistant 응답의 message.model(<synthetic> 제외).
+                              # claude --resume 이 --model 없이 이어받는 모델(실측 확정).
     git_branch: str | None
     version: str | None      # Claude Code 버전
     started_at: str | None   # 첫 timestamp
@@ -86,6 +88,7 @@ def _parse_meta(jsonl_path: Path, stat) -> SessionMeta:
     interactive_markers = 0
     ai_title: str | None = None
     agent_name: str | None = None
+    last_model: str | None = None   # 마지막 실사용 모델(재개 시 계승)
 
     try:
         with jsonl_path.open(encoding="utf-8", errors="replace") as f:
@@ -117,6 +120,14 @@ def _parse_meta(jsonl_path: Path, stat) -> SessionMeta:
                     agent_name = obj["agentName"]
                 elif t in ("mode", "permission-mode", "system"):
                     interactive_markers += 1
+                # 마지막 실사용 모델: assistant 레코드의 message.model(계속 덮어써 마지막값).
+                # <synthetic>(시스템 생성)는 실모델이 아니라 제외 → 재개 계승 모델과 일치.
+                if t == "assistant":
+                    _m = obj.get("message")
+                    if isinstance(_m, dict):
+                        _mdl = _m.get("model")
+                        if _mdl and _mdl != "<synthetic>":
+                            last_model = _mdl
     except Exception:
         # 파일 읽기 자체가 실패하면 최소 정보만 반환
         pass
@@ -135,6 +146,7 @@ def _parse_meta(jsonl_path: Path, stat) -> SessionMeta:
         custom_title=custom_title,
         ai_title=ai_title,
         agent_name=agent_name,
+        last_model=last_model,
         git_branch=meta["gitBranch"],
         version=meta["version"],
         started_at=started_at,

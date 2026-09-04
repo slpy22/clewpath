@@ -72,6 +72,18 @@ STATIC_DIR = Path(__file__).parent / "static"
 BASE_PATH = os.environ.get("SM_BASE_PATH", "").rstrip("/")
 COOKIE_PATH = (BASE_PATH + "/") if BASE_PATH else "/"
 
+# 세션별 재개 모델로 고를 수 있는 목록(현행 라인업). --model 유효값 기준.
+# (실측: message.model 문자열이 곧 유효 --model 값은 아님 - 여기 값들로 검증됨)
+SELECTABLE_MODELS = [
+    {"id": "claude-opus-5", "label": "Opus 5"},
+    {"id": "claude-sonnet-5", "label": "Sonnet 5"},
+    {"id": "claude-opus-4-8", "label": "Opus 4.8"},
+    {"id": "claude-fable-5-1", "label": "Fable 5.1"},
+    {"id": "claude-haiku-4-5-20251001", "label": "Haiku 4.5"},
+]
+# --model 값 안전 토큰(argv 리스트라 셸 주입 위험은 없으나 오타·쓰레기 차단).
+_MODEL_TOKEN_RE = __import__("re").compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
 # 루프백(로컬) 요청은 인증 생략. SM_TRUST_LOCAL=0 이면 끔.
 # 서버가 127.0.0.1 에만 바인딩되고, 외부는 nginx(도커 브리지 IP)로 들어오므로
 # 클라이언트 IP 가 루프백이면 '이 PC 로컬 프로세스'임이 보장된다(TCP 소켓 주소, 위조 불가).
@@ -374,6 +386,10 @@ def create_app() -> FastAPI:
         # 피커 미표시 세션의 노출 정책(사용자 승격 여부) - 배지/은닉 유지 판단에 사용
         meta_dict["picker_expose"] = rec.get("picker") == "expose"
         meta_dict["title"] = _display_title(meta_dict, rec)
+        # 재개 모델: 오버라이드(설정값) 있으면 그것, 없으면 감지(마지막 실사용).
+        # last_model 은 to_dict() 에 이미 포함(스캐너).
+        meta_dict["model_override"] = rec.get("model")
+        meta_dict["resume_model"] = rec.get("model") or meta_dict.get("last_model")
         return meta_dict
 
     # ---- 목록 / 통계 ----
@@ -400,6 +416,34 @@ def create_app() -> FastAPI:
             "total_size_bytes": sum(s.size_bytes for s in sessions),
             "projects": project_list,
         }
+
+    # ---- 세션별 재개 모델 (표시·설정) ----
+    # claude 파일 무수정 - ClewPath 사이드카(labels.json)에만 기록하고, 재개 시
+    # --model 로 붙인다(실측: 그 재개가 응답을 내면 세션 마지막 모델이 되어 이후에도 계승).
+    @app.get("/api/models")
+    def list_models():
+        # 운영측(CP) 중앙 관리 목록 우선, CP 미설정·불통이면 내장 기본으로 폴백.
+        m = None
+        try:
+            from session_manager import cp_client
+            m = cp_client.fetch_models()
+        except Exception:  # noqa: BLE001
+            m = None
+        return {"models": m or SELECTABLE_MODELS,
+                "source": "cp" if m else "builtin"}
+
+    @app.post("/api/sessions/{session_id}/model")
+    async def set_session_model(session_id: str, request: Request):
+        body = await request.json()
+        model = (body or {}).get("model")
+        if model in (None, "", "default", "auto"):
+            labels.set_record(session_id, model=None)   # 해제 → 감지값(마지막 모델) 사용
+            return {"ok": True, "model_override": None}
+        model = str(model).strip()
+        if not _MODEL_TOKEN_RE.match(model):
+            return JSONResponse({"error": "잘못된 모델 값"}, status_code=400)
+        labels.set_record(session_id, model=model)
+        return {"ok": True, "model_override": model}
 
     # ---- 라벨 (웹, 쿠키 인증) ----
     @app.get("/api/labels")
@@ -1037,6 +1081,10 @@ def create_app() -> FastAPI:
                 "mtime": s.mtime,
                 "labels": rec.get("labels", []),
                 "label_name": rec.get("name"),
+                # 재개 모델: 오버라이드 있으면 그것, 없으면 감지(마지막 실사용).
+                "last_model": s.last_model,
+                "model_override": rec.get("model"),
+                "resume_model": rec.get("model") or s.last_model,
                 # 훅 기반 실시간 상태(없으면 None). 신선도 판정은 화면 쪽 책임.
                 "runtime": runtime.get(s.session_id),
                 "agent": occupancy.get(s.session_id),

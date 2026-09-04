@@ -60,6 +60,36 @@ def cp_url() -> str | None:
     return u.rstrip("/") if u else None
 
 
+# 운영측이 중앙 관리하는 재개 모델 목록(전역). Host 가 fetch·캐시하고 PWA 에 내려준다.
+_models_cache: dict = {"models": None, "at": 0.0}
+
+
+def fetch_models(ttl: int = 3600) -> list | None:
+    """CP 의 전역 모델 목록을 가져온다(캐시 ttl 초). CP 미설정·불통이면 None → Host 폴백.
+
+    실패해도 이전 캐시가 있으면 그걸 쓰고(잠깐 CP 불통에 목록이 사라지지 않게),
+    끝내 없으면 None 을 돌려 호출측이 내장 기본 목록으로 폴백하게 한다.
+    """
+    base = cp_url()
+    if not base:
+        return None
+    import time as _t
+    now = _t.time()
+    cached = _models_cache.get("models")
+    if cached is not None and now - _models_cache.get("at", 0) < ttl:
+        return cached
+    try:
+        r = httpx.get(f"{base}/config/models", timeout=5)
+        if r.status_code == 200:
+            models = (r.json() or {}).get("models")
+            if isinstance(models, list) and models:
+                _models_cache.update(models=models, at=now)
+                return models
+    except Exception:  # noqa: BLE001  CP 불통 - 조용히 캐시/폴백
+        pass
+    return cached   # 이전 캐시(있으면) 또는 None
+
+
 def _file():
     return config.data_dir() / _FILE_NAME
 

@@ -30,7 +30,7 @@ from session_manager import config
 
 _LOCK = threading.Lock()
 # picker: 피커 미표시 세션의 노출 정책 - "expose"(claude 재개 목록에 노출 허용) 또는 없음(은닉 유지)
-_FIELDS = ("labels", "name", "color", "note", "picker")
+_FIELDS = ("labels", "name", "color", "note", "picker", "model")
 
 
 def _now() -> str:
@@ -86,6 +86,15 @@ def get_many(session_ids) -> dict:
         return {sid: sess[sid] for sid in ids if sid in sess}
 
 
+def model_of(session_id: str) -> str | None:
+    """세션별 모델 오버라이드(없으면 None). ClewPath 재개 시 --model 로 쓰인다."""
+    try:
+        m = get(session_id).get("model")
+        return m or None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def set_record(session_id: str, **fields) -> dict:
     """라벨 레코드를 부분 업데이트(upsert). 제공한 필드만 갱신.
 
@@ -105,7 +114,7 @@ def set_record(session_id: str, **fields) -> dict:
         # None/빈 값 정리
         rec = {k: v for k, v in rec.items()
                if k == "labels" or v not in (None, "")}
-        if not rec.get("labels") and not any(rec.get(k) for k in ("name", "color", "note", "picker")):
+        if not rec.get("labels") and not any(rec.get(k) for k in ("name", "color", "note", "picker", "model")):
             data["sessions"].pop(session_id, None)
             _save(data)
             return {}

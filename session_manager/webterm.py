@@ -322,6 +322,16 @@ def _claude_argv(session_id: str, skip_permissions: bool = True,
     argv = [exe, "--resume", session_id]
     if fork_id:
         argv += ["--fork-session", "--session-id", fork_id]
+    else:
+        # 세션별 모델 오버라이드(ClewPath 사이드카). 원본 세션 재개에만 적용
+        # (fork 는 새 세션이라 제외). claude 파일 무수정 - 런치 플래그만 추가.
+        try:
+            from session_manager import labels as _labels
+            _mdl = _labels.model_of(session_id)
+        except Exception:  # noqa: BLE001
+            _mdl = None
+        if _mdl:
+            argv += ["--model", _mdl]
     if skip_permissions:
         argv.append("--dangerously-skip-permissions")
     return argv

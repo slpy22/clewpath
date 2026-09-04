@@ -110,6 +110,11 @@
   .srow.dim.sel .sinfo{opacity:1}   /* 선택 시엔 또렷하게 */
   .schip.gear{background:color-mix(in srgb,var(--muted) 16%,transparent);
     color:var(--muted);border-color:color-mix(in srgb,var(--muted) 30%,transparent)}
+  /* 재개 모델 칩: 감지값=흐리게, 설정됨(오버라이드)=또렷하게. 클릭=모델 설정 */
+  .schip.model{background:color-mix(in srgb,var(--muted) 12%,transparent);color:var(--muted);
+    border-color:color-mix(in srgb,var(--muted) 26%,transparent);cursor:pointer}
+  .schip.model.set{background:var(--accent-wash);color:var(--accent);
+    border-color:color-mix(in srgb,var(--accent) 40%,transparent)}
   .spath{font-family:var(--mono);font-size:.7rem;color:var(--muted);margin-top:3px;
     overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .sbtn{width:54px;flex:none;display:grid;place-items:center;font-size:1.3rem;
@@ -1228,6 +1233,46 @@ function renderPlanCard(container, input, sendText, focusInput){
   return true;
 }
 
+// ---- 세션별 재개 모델: 표시 + 설정 ----
+let MODEL_OPTS=null;
+async function loadModelOpts(){
+  if(MODEL_OPTS) return MODEL_OPTS;
+  try{ const r=await T.api('GET','/api/models'); MODEL_OPTS=r.models||[]; }
+  catch(e){ MODEL_OPTS=[]; }
+  return MODEL_OPTS;
+}
+function modelShort(id){
+  if(!id) return '';
+  const map={'claude-opus-5':'Opus 5','claude-sonnet-5':'Sonnet 5','claude-opus-4-8':'Opus 4.8',
+             'claude-fable-5-1':'Fable 5.1','claude-fable-5':'Fable 5','claude-opus-5-1':'Opus 5.1',
+             'claude-haiku-4-5-20251001':'Haiku 4.5'};
+  if(map[id]) return map[id];
+  return id.replace(/^claude-/,'').replace(/-\d{6,}$/,'');   // 폴백 축약
+}
+async function showModelPicker(s){
+  const opts=await loadModelOpts();
+  const cur=s.model_override||null, det=s.last_model||null;
+  const body=el('div');
+  body.appendChild(el('div','cwd','이 세션을 재개할 때 쓸 모델을 고릅니다. ClewPath 가 재개 시 --model 로 붙입니다(원본 파일 무수정). 설정하면 다음 재개부터 그 모델로 뜨고, 응답이 생기면 ClewPath 밖 재개에도 이어집니다.'));
+  const info=el('div','cwd'); info.style.marginTop='6px';
+  info.textContent='감지(마지막 사용): '+(modelShort(det)||'없음')
+    +(cur?('   ·   설정됨: '+modelShort(cur)):'   ·   설정 없음(감지값으로 재개)');
+  body.appendChild(info);
+  const wrap=el('div'); wrap.style.cssText='display:flex;flex-wrap:wrap;gap:8px;margin-top:12px';
+  const mk=(id,label,active)=>{ const b=el('button','btn'+(active?'':' ghost'),label);
+    b.style.cssText='flex:0 0 auto;padding:9px 14px';
+    b.onclick=async()=>{ b.disabled=true;
+      try{ await T.api('POST','/api/sessions/'+s.session_id+'/model',{body:{model:id}});
+        toast(id?('재개 모델: '+modelShort(id)):'모델 설정 해제(감지값 사용)');
+        closeModal(); loadList(); }
+      catch(e){ b.disabled=false; toast('설정 실패: '+(e.message||e)); } };
+    return b; };
+  wrap.appendChild(mk(null,'⟲ 기본(해제)', !cur));
+  opts.forEach(o=>wrap.appendChild(mk(o.id,o.label,cur===o.id)));
+  body.appendChild(wrap);
+  openModal('🧠 재개 모델 설정', body);
+}
+
 // ---- 재개 방식 선택 (웹/터미널 x YOLO/일반) - 기본: 웹+YOLO, 마지막 선택 기억 ----
 function showResumeChooser(s){
   if(s.live_terminal){ loadTerminal(s); return; }   // 이미 돌고 있으면 그냥 돌아간다
@@ -1261,6 +1306,13 @@ function showResumeChooser(s){
     grid.appendChild(el('div','cwd',CAPTION[pref.how+'|'+pref.yolo]));
   };
   render();
+  // 재개 모델 표시 + 변경(세션별 오버라이드)
+  const mrow=el('div','cwd'); mrow.style.marginTop='2px';
+  mrow.textContent='🧠 재개 모델: '+(modelShort(s.resume_model)||'세션 기본(감지값)')
+    +(s.model_override?' (설정됨)':'');
+  const mbtn=el('button','btn ghost','🧠 모델 변경'); mbtn.style.marginTop='6px';
+  mbtn.onclick=()=>{ closeModal(); showModelPicker(s); };
+  body.appendChild(mrow); body.appendChild(mbtn);
   const go=el('button','btn full','▶ 재개');
   go.onclick=()=>{
     // [bg 잠금 게이트] claude 네이티브 백그라운드 에이전트가 세션을 점유 중이면
@@ -1392,6 +1444,12 @@ function renderRows(wrap,q){
         r1.appendChild(g);
       }
       if(s.labels&&s.labels.length)r1.appendChild(el('span','schip','#'+s.labels[0]));
+      if(s.resume_model){
+        const mc=el('span','schip model'+(s.model_override?' set':''),'🧠 '+modelShort(s.resume_model));
+        mc.title='재개 모델'+(s.model_override?'(설정됨)':'(감지값)')+' — 클릭해 변경';
+        mc.onclick=(e)=>{ e.stopPropagation(); showModelPicker(s); };
+        r1.appendChild(mc);
+      }
       info.appendChild(r1);
       const meta=el('div','smeta2');
       meta.appendChild(el('span',null,(s.message_count||0)+' msgs'));
