@@ -391,6 +391,25 @@
   .vlive .vdot{width:8px;height:8px;border-radius:50%;background:#3ac06a;flex:none}
   .vlive.off .vdot{background:var(--muted)}
   .vlive.on .vdot{animation:monpulse 2s infinite}
+  /* 관제 분할: 좌 타임라인 / 우 선택세션 뷰어 */
+  .mon-split{flex:1;display:flex;min-height:0;position:relative}
+  .mon-split .mon-body{min-width:0}
+  .mon-viewer{width:42%;min-width:290px;max-width:640px;border-left:1px solid var(--line);
+    display:flex;flex-direction:column;background:var(--surface);min-height:0}
+  .mon-viewer.hide{display:none}
+  .mon-vhead{padding:9px 12px;border-bottom:1px solid var(--line);display:flex;align-items:center;
+    gap:8px;flex-wrap:wrap;background:var(--surface2)}
+  .mon-vhead .vname{font-weight:600;font-size:.84rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:45%}
+  .mon-vbody{flex:1;overflow-y:auto;padding:10px 12px;min-height:0}
+  .mon-follow{display:inline-flex;align-items:center;gap:5px;font-size:.72rem;color:var(--muted);cursor:pointer;white-space:nowrap}
+  .mon-follow input{width:15px;height:15px}
+  .mon-vtoggle{width:34px;height:34px;border-radius:9px;color:var(--muted);flex:none;font-size:1rem}
+  .mon-vtoggle:hover,.mon-vtoggle:active{background:var(--surface2)}
+  .mon-legend .lchip{cursor:pointer}
+  .mon-legend .lchip.sel{outline:2px solid var(--accent);outline-offset:1px}
+  .mon-legend .lchip .lact{width:7px;height:7px;border-radius:50%;background:var(--accent);
+    animation:monpulse 1.4s infinite;flex:none}
+  @media(max-width:760px){ .mon-viewer{position:absolute;inset:0;width:auto;min-width:0;max-width:none;z-index:3} }
   .mpick{display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--line);border-radius:10px;margin:6px 0}
   .mpick .mp-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.9rem}
   .mpick .mp-mgr{font-size:.72rem;color:var(--muted);display:flex;align-items:center;gap:4px;flex:none}
@@ -2219,12 +2238,22 @@ function openMonitor(ids, manager, labels){
   head.appendChild(el('h3',null,'🎬 오케스트레이션 관제'));
   const live=el('div','mon-live off'); live.appendChild(el('span','dot2'));
   const lt=el('span',null,'연결 중…'); live.appendChild(lt); head.appendChild(live);
+  const vtoggle=el('button','mon-vtoggle','◨'); vtoggle.title='뷰어 패널 접기/펼치기'; head.appendChild(vtoggle);
   const x=el('button','x','✕'); head.appendChild(x);
   const legend=el('div','mon-legend');
+  // 분할: 좌 타임라인(bodyW) / 우 선택세션 뷰어(viewer)
+  const split=el('div','mon-split');
   const bodyW=el('div','mon-body');
   bodyW.appendChild(el('div','mon-empty','이벤트를 기다리는 중… 세션에서 대화가 오가면 여기에 실시간으로 표시됩니다.'));
-  ov.appendChild(head); ov.appendChild(legend); ov.appendChild(bodyW);
+  const viewer=el('div','mon-viewer');
+  const vhead=el('div','mon-vhead');
+  const vwrap=el('div','mon-vbody');
+  vwrap.appendChild(el('div','empty','위에서 세션을 클릭하면 여기에 그 세션 대화가 실시간으로 보입니다.'));
+  viewer.appendChild(vhead); viewer.appendChild(vwrap);
+  split.appendChild(bodyW); split.appendChild(viewer);
+  ov.appendChild(head); ov.appendChild(legend); ov.appendChild(split);
   document.body.appendChild(ov);
+  vtoggle.onclick=()=>viewer.classList.toggle('hide');
 
   const gmap={}; let lastSeq=0; let emptyShown=true;
   // 활성 그룹 상태(동적 추가/삭제 반영). sid -> {label,color,role}
@@ -2233,17 +2262,71 @@ function openMonitor(ids, manager, labels){
                                        color:null, role:(sid===manager?'manager':'sub')}; });
   if(labels) Object.keys(labels).forEach(sid=>{ gmap[sid]={label:labels[sid]}; });  // 호출선 라벨 선점
 
+  // ---- 우측 뷰어(선택 세션 실시간) 상태 ----
+  let selectedSid=null, autoFollow=false, lastActiveSid=null;
+  let viewerPend={}, viewerLastTs='', selGen=0;
+  const activity={};   // sid -> 미확인 활동 여부(자동추적 꺼짐일 때 범례 점)
+
+  function renderVHead(){
+    vhead.innerHTML='';
+    const g=selectedSid&&group[selectedSid];
+    const nm=el('span','vname', selectedSid?((g&&g.label)||selectedSid.slice(0,8)):'세션 미선택');
+    if(g&&g.color) nm.style.color=g.color;
+    vhead.appendChild(nm);
+    const vlv=el('span','vlive '+(selectedSid?'on':'off')); vlv.appendChild(el('span','vdot'));
+    vlv.appendChild(el('span',null,selectedSid?'● 실시간':'대기')); vhead.appendChild(vlv);
+    const fl=el('label','mon-follow'); const cb=el('input'); cb.type='checkbox'; cb.checked=autoFollow;
+    cb.onchange=()=>{ autoFollow=cb.checked; if(autoFollow&&lastActiveSid) selectSession(lastActiveSid); };
+    fl.appendChild(cb); fl.appendChild(document.createTextNode('자동 추적'));
+    vhead.appendChild(fl);
+  }
+  renderVHead();
+
+  async function selectSession(sid){
+    if(!sid || sid===selectedSid) return;
+    selectedSid=sid; delete activity[sid]; const gen=++selGen;
+    renderLegend(); renderVHead();
+    viewerPend={}; viewerLastTs='';
+    vwrap.innerHTML=''; vwrap.appendChild(el('div','spin'));
+    try{
+      const msgs=await fetchRecentMessages(sid,200);
+      if(gen!==selGen) return;   // 그새 다른 세션 선택됨(경쟁 방지)
+      vwrap.innerHTML='';
+      if(!msgs.length) vwrap.appendChild(el('div','empty','표시할 대화 없음'));
+      for(const mm of msgs){ renderHistoryMsg(vwrap,mm,viewerPend);
+        if(mm.timestamp&&mm.timestamp>viewerLastTs) viewerLastTs=mm.timestamp; }
+      vwrap.scrollTop=vwrap.scrollHeight;
+    }catch(e){ if(gen===selGen){ vwrap.innerHTML=''; vwrap.appendChild(el('div','empty','뷰어 실패: '+e.message)); } }
+  }
+
+  function feedRight(ev){
+    lastActiveSid=ev.session_id;
+    if(!selectedSid){ selectSession(ev.session_id); return; }   // 최초 이벤트 자동 선택
+    if(autoFollow && ev.session_id!==selectedSid){ selectSession(ev.session_id); return; }
+    if(ev.session_id===selectedSid){
+      if(ev.ts && viewerLastTs && ev.ts<=viewerLastTs) return;   // 스냅샷 중복 제거
+      if(ev.ts) viewerLastTs=ev.ts;
+      const stick=vwrap.scrollHeight-vwrap.scrollTop-vwrap.clientHeight<120;
+      renderHistoryMsg(vwrap, ev, viewerPend);
+      if(stick) vwrap.scrollTop=vwrap.scrollHeight;
+    } else if(group[ev.session_id]){   // 비선택 세션 활동 → 범례에 활동 점
+      if(!activity[ev.session_id]){ activity[ev.session_id]=true; renderLegend(); }
+    }
+  }
+
   let handle=null;
   function renderLegend(){
     legend.innerHTML='';
     Object.keys(group).forEach(sid=>{
       const g=group[sid];
-      const chip=el('span','lchip');
+      const chip=el('span','lchip'+(sid===selectedSid?' sel':''));
       const dot=el('span','ldot'); dot.style.background=g.color||'var(--muted)'; chip.appendChild(dot);
       chip.appendChild(el('span',null,(g.role==='manager'?'★ ':'')+(g.label||sid.slice(0,8))));
+      if(activity[sid]&&sid!==selectedSid) chip.appendChild(el('span','lact'));   // 미확인 활동
       const rm=el('span','lx','×'); rm.title='관전에서 제거';
-      rm.onclick=()=>{ if(handle){ handle.remove(sid); } };   // ack 오면 legend 갱신
+      rm.onclick=(e)=>{ e.stopPropagation(); if(handle){ handle.remove(sid); } };
       chip.appendChild(rm);
+      chip.onclick=()=>selectSession(sid);   // 클릭 → 우측 뷰어 대상
       legend.appendChild(chip);
     });
     const add=el('button','ladd','+ 세션 추가');
@@ -2259,10 +2342,10 @@ function openMonitor(ids, manager, labels){
     if(ev.seq!=null){ if(ev.seq<=lastSeq) return; lastSeq=ev.seq; }
     if(emptyShown){ bodyW.innerHTML=''; emptyShown=false; }
     gmap[ev.session_id]={label:ev.session_label,color:ev.color};
-    // 범례 색·이름 최신화(이벤트로 처음 파악되는 경우)
     if(group[ev.session_id]){ const g=group[ev.session_id];
       if(!g.color&&ev.color){ g.color=ev.color; g.label=ev.session_label||g.label; renderLegend(); } }
     const row=el('div','mrow'+(ev.session_role==='sub'?' sub':''));
+    row.style.cursor='pointer'; row.onclick=()=>selectSession(ev.session_id);   // 행 클릭 → 뷰어
     if(ev.color) row.style.borderLeftColor=ev.color;
     const h=el('div','mrow-h');
     const lab=el('span','mlab',ev.session_label||ev.session_id.slice(0,8)); if(ev.color)lab.style.color=ev.color;
@@ -2281,6 +2364,7 @@ function openMonitor(ids, manager, labels){
     (ev.tool_results||[]).forEach(r=>{ if(r.text){ row.appendChild(el('div','mres',
       (r.is_error?'⚠ ':'↳ ')+(r.text.length>400?r.text.slice(0,400)+'…':r.text))); } });
     bodyW.appendChild(row);
+    feedRight(ev);   // 우측 뷰어에도 반영(선택/자동추적/활동점)
   }
 
   function onMsg(dataStr, eof, error){
@@ -2288,14 +2372,17 @@ function openMonitor(ids, manager, labels){
     let m; try{ m=JSON.parse(dataStr); }catch(e){ return; }
     if(m.type==='heartbeat'){ setLive(true,'● live'); return; }
     if(m.type==='error'){ setLive(false,'오류: '+(m.error||'')); toast('관제 오류: '+(m.error||'')); return; }
-    if(m.type==='group'){   // 동적 추가/삭제 ack → 범례 갱신
+    if(m.type==='group'){
       if(m.action==='add' && m.session_id && !group[m.session_id]){
         const nm=(SESSIONS.find(s=>s.session_id===m.session_id)||{});
         group[m.session_id]={label:(nm.title||nm.label_name||nm.slug||m.session_id.slice(0,8)),
                              color:null, role:'sub'};
         renderLegend(); toast('세션 추가됨');
       } else if(m.action==='remove' && m.session_id){
-        delete group[m.session_id]; renderLegend(); toast('세션 제거됨');
+        delete group[m.session_id]; delete activity[m.session_id];
+        if(selectedSid===m.session_id){ selectedSid=null; renderVHead();
+          vwrap.innerHTML=''; vwrap.appendChild(el('div','empty','세션이 제거되었습니다. 다른 세션을 선택하세요.')); }
+        renderLegend(); toast('세션 제거됨');
       }
       return;
     }
