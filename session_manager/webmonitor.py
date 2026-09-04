@@ -16,6 +16,7 @@ text/tool_calls/tool_results/calls_out/seq/ts).
 from __future__ import annotations
 
 import asyncio
+import json
 
 from session_manager import monitor
 
@@ -49,21 +50,45 @@ async def run_monitor(ws, specs: list[dict]) -> None:
         return
 
     closed = asyncio.Event()
+    cmds: asyncio.Queue = asyncio.Queue()   # 클라이언트 제어(add/remove) → 폴 루프에서 처리
 
-    async def _watch_close() -> None:
-        # 관전은 단방향이라 클라이언트 수신이 없지만, 끊기면 receive 가 예외로
-        # 떨어진다 → 폴링 루프를 즉시 종료시킨다.
+    async def _watch() -> None:
+        # 클라이언트 제어 메시지 수신 + 끊김 감지. 모든 ws 전송은 폴 루프에만 두어
+        # 동시 전송으로 프레임이 깨지는 것을 막는다(여기선 큐에 넣기만).
         try:
             while True:
-                await ws.receive_text()
+                raw = await ws.receive_text()
+                try:
+                    msg = json.loads(raw)
+                except Exception:  # noqa: BLE001
+                    continue
+                if isinstance(msg, dict) and msg.get("type") in ("add", "remove"):
+                    await cmds.put(msg)
         except Exception:  # noqa: BLE001 (WebSocketDisconnect 포함)
             closed.set()
 
-    watcher = asyncio.create_task(_watch_close())
+    watcher = asyncio.create_task(_watch())
     try:
         idle = 0.0
         while not closed.is_set():
             await asyncio.sleep(_POLL_INTERVAL)
+            # 1) 클라이언트 제어(그룹 동적 변경) 먼저 반영
+            while not cmds.empty():
+                c = cmds.get_nowait()
+                if c["type"] == "add" and c.get("session_id") \
+                        and len(group.sessions) < _MAX_SESSIONS:
+                    evs = group.add_session({"session_id": c["session_id"],
+                                             "role": c.get("role", "sub")})
+                    await ws.send_json({"type": "group", "action": "add",
+                                        "session_id": c["session_id"]})
+                    if evs:
+                        await ws.send_json({"type": "events", "events": evs})
+                elif c["type"] == "remove" and c.get("session_id"):
+                    group.remove_session(c["session_id"])
+                    await ws.send_json({"type": "group", "action": "remove",
+                                        "session_id": c["session_id"]})
+                idle = 0.0
+            # 2) 증분 이벤트
             evs = group.poll()
             if evs:
                 await ws.send_json({"type": "events", "events": evs})

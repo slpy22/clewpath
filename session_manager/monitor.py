@@ -219,6 +219,46 @@ class MonitorGroup:
         """재연결 시 되감기용: 현재 링버퍼 전체."""
         return list(self.buffer)
 
+    # ---- 동적 그룹 변경 ----
+
+    def has(self, session_id: str) -> bool:
+        return session_id in self.uuids
+
+    def add_session(self, spec: dict) -> list[dict]:
+        """관전 중 세션을 동적 추가. 최근 tail 부터 시작해 그 세션의 근래 이벤트를
+        즉시 반환(버퍼에도 적재). 이미 있으면 빈 리스트."""
+        sid = spec["session_id"]
+        if sid in self.uuids:
+            return []
+        from session_manager.scanner import scan_one
+        meta = scan_one(sid)
+        path = meta.jsonl_path if meta else None
+        label = (spec.get("label")
+                 or (meta and (meta.custom_title or meta.ai_title or meta.slug))
+                 or sid[:8])
+        color = _PALETTE[len(self.sessions) % len(_PALETTE)]
+        sess = _Session(sid, path, label, color, spec.get("role", "sub"))
+        sess.tailer.seek_tail()             # 처음부터가 아니라 최근부터
+        self.sessions.append(sess)
+        self.uuids.add(sid)
+        # 추가 직후 그 세션의 근래 이벤트를 뽑아 즉시 표시(맥락 제공)
+        out: list[dict] = []
+        for obj in sess.tailer.read_new():
+            ev = parse_record(obj)
+            if ev is None:
+                continue
+            tagged = self._tag(ev, sess)
+            self._push(tagged)
+            out.append(tagged)
+        return out
+
+    def remove_session(self, session_id: str) -> bool:
+        """관전 중 세션을 동적 제거. 기존 버퍼 이벤트는 남고 새 이벤트만 멈춘다."""
+        before = len(self.sessions)
+        self.sessions = [s for s in self.sessions if s.session_id != session_id]
+        self.uuids.discard(session_id)
+        return len(self.sessions) != before
+
 
 def build_group(specs: list[dict]) -> MonitorGroup:
     """세션 지정 목록으로 그룹을 만든다. path·label 은 스캐너로 해석.

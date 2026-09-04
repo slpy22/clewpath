@@ -481,14 +481,27 @@ class Connector:
         if manager:
             q["manager"] = str(manager)
         local_ws = f"{_to_ws(self.local_base)}/ws/monitor?{urlencode(q)}"
-        # 관전은 클라이언트→로컬 방향이 없다(up 파이프 불필요).
+        # 관전은 기본 단방향이나, 동적 그룹 변경(add/remove) 제어를 위해 up 채널을 둔다.
+        self.stream_in[rid] = asyncio.Queue()
         self.streams[rid] = asyncio.create_task(self._pipe_monitor(rid, local_ws))
 
     async def _pipe_monitor(self, rid: str, local_ws: str) -> None:
         try:
             async with connect(local_ws, max_size=None) as lws:
-                async for raw in lws:  # local → client (관제 이벤트 JSON 그대로)
-                    await self._stream_send(rid, data=raw)
+                async def up():  # client → local (그룹 add/remove 제어 객체)
+                    q = self.stream_in[rid]
+                    while True:
+                        data = await q.get()
+                        if data is None:
+                            return
+                        await lws.send(json.dumps(data, ensure_ascii=False))
+
+                up_task = asyncio.create_task(up())
+                try:
+                    async for raw in lws:  # local → client (관제 이벤트 JSON 그대로)
+                        await self._stream_send(rid, data=raw)
+                finally:
+                    up_task.cancel()
             await self._stream_send(rid, eof=True)
         except Exception as e:  # noqa: BLE001
             await self._stream_send(rid, eof=True, error=f"{type(e).__name__}: {e}")

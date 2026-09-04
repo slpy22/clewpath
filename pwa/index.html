@@ -376,6 +376,21 @@
     background:var(--surface2);border-radius:6px;padding:2px 7px;margin:3px 5px 0 0}
   .mres{font-size:.76rem;color:var(--ink2);border-left:2px solid var(--line2);padding-left:8px;margin-top:4px;white-space:pre-wrap;word-break:break-word}
   .mon-empty{color:var(--muted);text-align:center;padding:40px 20px;font-size:.86rem}
+  .mon-legend{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:8px 14px;
+    border-bottom:1px solid var(--line);background:var(--surface)}
+  .mon-legend .lchip{display:inline-flex;align-items:center;gap:5px;font-size:.72rem;
+    padding:2px 8px;border-radius:999px;border:1px solid var(--line2)}
+  .mon-legend .lchip .ldot{width:8px;height:8px;border-radius:50%;flex:none}
+  .mon-legend .lchip .lx{cursor:pointer;color:var(--muted);font-weight:700;padding:0 2px}
+  .mon-legend .lchip .lx:hover{color:var(--danger,#e5534b)}
+  .mon-legend .ladd{cursor:pointer;font-size:.72rem;padding:3px 10px;border-radius:999px;
+    border:1px dashed var(--line2);color:var(--accent);background:none}
+  /* 뷰어 실시간 배지 */
+  .vlive{display:inline-flex;align-items:center;gap:5px;font-size:.7rem;font-family:var(--mono);
+    color:var(--muted);margin-left:auto;white-space:nowrap}
+  .vlive .vdot{width:8px;height:8px;border-radius:50%;background:#3ac06a;flex:none}
+  .vlive.off .vdot{background:var(--muted)}
+  .vlive.on .vdot{animation:monpulse 2s infinite}
   .mpick{display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--line);border-radius:10px;margin:6px 0}
   .mpick .mp-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.9rem}
   .mpick .mp-mgr{font-size:.72rem;color:var(--muted);display:flex;align-items:center;gap:4px;flex:none}
@@ -714,7 +729,13 @@ class Conn{
     const id='mon'+(++this.seq);
     this.streams.set(id,(m)=>{ if(m.eof){onEvent(null,true,m.error);} else onEvent(m.data,false); });
     this._tx({v:1,type:'req',id,method:'monitor',params:{ids,manager}});
-    return { close:()=>this.streams.delete(id) };
+    return {
+      add:(sid,role)=>this._tx({v:1,type:'stream_in',id,
+        data:{type:'add',session_id:sid,role:role||'sub'}}),
+      remove:(sid)=>this._tx({v:1,type:'stream_in',id,
+        data:{type:'remove',session_id:sid}}),
+      close:()=>this.streams.delete(id),
+    };
   }
   _closeMsg(code){
     if(code===4402) return '기기 자격이 만료·거부되었습니다(갱신 후 재시도)';
@@ -791,7 +812,12 @@ const localT={
     ws.onmessage=(ev)=>cb(ev.data,false);
     ws.onclose=()=>cb(null,true);
     ws.onerror=()=>{};
-    return { close:()=>{try{ws.close();}catch(e){}} };
+    const ctl=(o)=>{ try{ws.send(JSON.stringify(o));}catch(e){} };
+    return {
+      add:(sid,role)=>ctl({type:'add',session_id:sid,role:role||'sub'}),
+      remove:(sid)=>ctl({type:'remove',session_id:sid}),
+      close:()=>{try{ws.close();}catch(e){}},
+    };
   },
   async importSession(file,opts){
     const fd=new FormData(); fd.append('file',file);
@@ -1480,6 +1506,7 @@ function backbar(label,onback,cls){ const b=el('div','backbar'+(cls?' '+cls:''))
   const btn=el('button',null,'‹ '+label); btn.onclick=onback; b.appendChild(btn); return b; }
 
 async function loadDetail(s){
+  closeLiveViewer();                       // 뷰어 실시간 스트림 정리(있으면)
   SELECTED_ID=s.session_id; highlightSelected();
   CURRENT_TERM_SID=null;                   // 터미널 화면에서 벗어남
   const main=paneDetail(); main.classList.remove('term-mode'); main.innerHTML=''; $('#head').textContent='세션 상세';
@@ -1716,6 +1743,7 @@ function attachMobileTermUX(host, term, opts){
     dispose(){ stopInertia(); try{offScroll.dispose();}catch(e){} } };
 }
 async function loadTerminal(s, safe){
+  closeLiveViewer();                       // 뷰어 실시간 스트림 정리(있으면)
   let cred={};
   if(MODE==='relay'){ cred=await ensurePriv(); if(cred===null) return; }   // 외부 터미널 → grace/2차 인증
   if(safe) cred={...cred, safe:true};      // 권한확인 유지 - 프롬프트가 뜨고 원격 승인 가능
@@ -1815,19 +1843,48 @@ async function loadTerminal(s, safe){
   setTimeout(doResize,80); setTimeout(doResize,300); term.focus();
 }
 
+let _liveViewer=null;
+function closeLiveViewer(){ if(_liveViewer){ try{_liveViewer.close();}catch(e){} _liveViewer=null; } }
+
 async function loadViewer(s){
+  closeLiveViewer();
   const main=paneDetail(); main.classList.remove('term-mode'); main.innerHTML=''; $('#head').textContent='뷰어';
-  main.appendChild(backbar('상세',()=>loadDetail(s)));
+  const bar=backbar('상세',()=>loadDetail(s));
+  const badge=el('div','vlive off'); badge.appendChild(el('span','vdot'));
+  const bt=el('span',null,'실시간 연결 중…'); badge.appendChild(bt); bar.appendChild(badge);
+  main.appendChild(bar);
   showDetailPane();
   const wrap=el('div','stream'); wrap.appendChild(el('div','spin')); main.appendChild(wrap);
+  const pend={}; let lastTs='';
   try{
     const msgs=await fetchRecentMessages(s.session_id,300);
     wrap.innerHTML='';
-    if(!msgs.length){wrap.appendChild(el('div','empty','표시할 대화 없음'));return;}
-    const pend={};
-    for(const m of msgs) renderHistoryMsg(wrap,m,pend);
+    if(!msgs.length){ wrap.appendChild(el('div','empty','표시할 대화 없음')); }
+    for(const m of msgs){ renderHistoryMsg(wrap,m,pend);
+      if(m.timestamp&&m.timestamp>lastTs) lastTs=m.timestamp; }
     main.scrollTop=main.scrollHeight;
-  }catch(e){ wrap.innerHTML=''; wrap.appendChild(el('div','empty','뷰어 실패: '+e.message)); }
+  }catch(e){ wrap.innerHTML=''; wrap.appendChild(el('div','empty','뷰어 실패: '+e.message)); return; }
+  // 실시간 tail: 단일 세션 monitor 스트림을 붙여 새 메시지를 같은 카드로 append
+  const setBadge=(on,txt)=>{ badge.className='vlive '+(on?'on':'off'); bt.textContent=txt; };
+  const nearBot=()=> main.scrollHeight-main.scrollTop-main.clientHeight < 120;
+  function onMsg(dataStr,eof){
+    if(eof){ setBadge(false,'연결 끊김'); return; }
+    let m; try{ m=JSON.parse(dataStr); }catch(e){ return; }
+    if(m.type==='heartbeat'){ setBadge(true,'● 실시간'); return; }
+    if(m.type==='snapshot'||m.type==='events'){
+      const stick=nearBot(); const empty=wrap.querySelector('.empty');
+      (m.events||[]).forEach(ev=>{
+        if(ev.ts && lastTs && ev.ts<=lastTs) return;   // 스냅샷과 중복 제거
+        if(ev.ts) lastTs=ev.ts;
+        if(empty) empty.remove();
+        renderHistoryMsg(wrap, ev, pend);
+      });
+      setBadge(true,'● 실시간');
+      if(stick) main.scrollTop=main.scrollHeight;
+    }
+  }
+  try{ _liveViewer=T.monitor(s.session_id, s.session_id, onMsg); }
+  catch(e){ setBadge(false,'실시간 불가'); }
 }
 
 // 서버가 깔끔한 대화만(메타/도구인자/thinking 제외) 최근 limit개 준다.
@@ -2163,13 +2220,37 @@ function openMonitor(ids, manager, labels){
   const live=el('div','mon-live off'); live.appendChild(el('span','dot2'));
   const lt=el('span',null,'연결 중…'); live.appendChild(lt); head.appendChild(live);
   const x=el('button','x','✕'); head.appendChild(x);
+  const legend=el('div','mon-legend');
   const bodyW=el('div','mon-body');
   bodyW.appendChild(el('div','mon-empty','이벤트를 기다리는 중… 세션에서 대화가 오가면 여기에 실시간으로 표시됩니다.'));
-  ov.appendChild(head); ov.appendChild(bodyW);
+  ov.appendChild(head); ov.appendChild(legend); ov.appendChild(bodyW);
   document.body.appendChild(ov);
 
   const gmap={}; let lastSeq=0; let emptyShown=true;
+  // 활성 그룹 상태(동적 추가/삭제 반영). sid -> {label,color,role}
+  const group={};
+  (ids||[]).forEach(sid=>{ group[sid]={label:(labels&&labels[sid])||sid.slice(0,8),
+                                       color:null, role:(sid===manager?'manager':'sub')}; });
   if(labels) Object.keys(labels).forEach(sid=>{ gmap[sid]={label:labels[sid]}; });  // 호출선 라벨 선점
+
+  let handle=null;
+  function renderLegend(){
+    legend.innerHTML='';
+    Object.keys(group).forEach(sid=>{
+      const g=group[sid];
+      const chip=el('span','lchip');
+      const dot=el('span','ldot'); dot.style.background=g.color||'var(--muted)'; chip.appendChild(dot);
+      chip.appendChild(el('span',null,(g.role==='manager'?'★ ':'')+(g.label||sid.slice(0,8))));
+      const rm=el('span','lx','×'); rm.title='관전에서 제거';
+      rm.onclick=()=>{ if(handle){ handle.remove(sid); } };   // ack 오면 legend 갱신
+      chip.appendChild(rm);
+      legend.appendChild(chip);
+    });
+    const add=el('button','ladd','+ 세션 추가');
+    add.onclick=()=>showAddSessionPicker(group, sid=>{ if(handle) handle.add(sid,'sub'); });
+    legend.appendChild(add);
+  }
+  renderLegend();
   const fmtT=(ts)=>{ try{ return ts?new Date(ts).toLocaleTimeString():''; }catch(e){ return ''; } };
   const nearBottom=()=> bodyW.scrollHeight-bodyW.scrollTop-bodyW.clientHeight < 90;
   const setLive=(on,txt)=>{ live.className='mon-live '+(on?'on':'off'); lt.textContent=txt; };
@@ -2178,6 +2259,9 @@ function openMonitor(ids, manager, labels){
     if(ev.seq!=null){ if(ev.seq<=lastSeq) return; lastSeq=ev.seq; }
     if(emptyShown){ bodyW.innerHTML=''; emptyShown=false; }
     gmap[ev.session_id]={label:ev.session_label,color:ev.color};
+    // 범례 색·이름 최신화(이벤트로 처음 파악되는 경우)
+    if(group[ev.session_id]){ const g=group[ev.session_id];
+      if(!g.color&&ev.color){ g.color=ev.color; g.label=ev.session_label||g.label; renderLegend(); } }
     const row=el('div','mrow'+(ev.session_role==='sub'?' sub':''));
     if(ev.color) row.style.borderLeftColor=ev.color;
     const h=el('div','mrow-h');
@@ -2204,6 +2288,17 @@ function openMonitor(ids, manager, labels){
     let m; try{ m=JSON.parse(dataStr); }catch(e){ return; }
     if(m.type==='heartbeat'){ setLive(true,'● live'); return; }
     if(m.type==='error'){ setLive(false,'오류: '+(m.error||'')); toast('관제 오류: '+(m.error||'')); return; }
+    if(m.type==='group'){   // 동적 추가/삭제 ack → 범례 갱신
+      if(m.action==='add' && m.session_id && !group[m.session_id]){
+        const nm=(SESSIONS.find(s=>s.session_id===m.session_id)||{});
+        group[m.session_id]={label:(nm.title||nm.label_name||nm.slug||m.session_id.slice(0,8)),
+                             color:null, role:'sub'};
+        renderLegend(); toast('세션 추가됨');
+      } else if(m.action==='remove' && m.session_id){
+        delete group[m.session_id]; renderLegend(); toast('세션 제거됨');
+      }
+      return;
+    }
     if(m.type==='snapshot'||m.type==='events'){
       const stick=nearBottom();
       (m.events||[]).forEach(renderEvent);
@@ -2212,10 +2307,26 @@ function openMonitor(ids, manager, labels){
     }
   }
 
-  let h=null;
-  try{ h=T.monitor(ids.join(','), manager, onMsg); }
+  try{ handle=T.monitor(ids.join(','), manager, onMsg); }
   catch(e){ setLive(false,'연결 실패'); toast('관제 연결 실패: '+e.message); }
-  x.onclick=()=>{ try{ h&&h.close(); }catch(e){} ov.remove(); };
+  x.onclick=()=>{ try{ handle&&handle.close(); }catch(e){} ov.remove(); };
+}
+
+// 관전 중 추가할 세션 고르기(현재 그룹에 없는 세션만)
+function showAddSessionPicker(group, onPick){
+  const body=el('div');
+  body.appendChild(el('div','cwd','관전에 추가할 세션을 고르세요. 추가하면 그 세션의 근래 대화가 타임라인에 합류합니다.'));
+  const wrap=el('div'); wrap.style.cssText='display:flex;flex-direction:column;gap:6px;margin-top:10px;max-height:50vh;overflow:auto';
+  const avail=(SESSIONS||[]).filter(s=>!group[s.session_id]);
+  if(!avail.length){ wrap.appendChild(el('div','empty','추가할 다른 세션이 없습니다.')); }
+  avail.forEach(s=>{
+    const b=el('button','btn ghost',(s.title||s.label_name||s.slug||s.session_id.slice(0,8)));
+    b.style.cssText='justify-content:flex-start;padding:9px 12px';
+    b.onclick=()=>{ onPick(s.session_id); closeModal(); };
+    wrap.appendChild(b);
+  });
+  body.appendChild(wrap);
+  openModal('➕ 관전 세션 추가', body);
 }
 
 function field(label,inp){ const f=el('div','field'); f.appendChild(el('label',null,label)); f.appendChild(inp); return f; }

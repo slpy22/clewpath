@@ -100,3 +100,46 @@ def test_monitor_empty_group_errors(app_client):
     with client.websocket_connect("/ws/monitor?ids=") as ws:
         msg = ws.receive_json()
         assert msg["type"] == "error" and msg["error"] == "empty_group"
+
+
+def test_monitor_dynamic_add_remove(app_client):
+    client, home = app_client
+    _seed(home)
+    # 새로 추가할 세션(처음엔 그룹 밖)
+    NEW = "cccc3333-1111-2222-3333-444444444444"
+    write_session(home, "F--thesis", NEW, [
+        {"type": "user", "cwd": "F:/thesis", "slug": "thesis-svc",
+         "message": {"role": "user", "content": "인용 확인"},
+         "timestamp": "2026-09-03T00:00:05Z"},
+        {"type": "assistant", "cwd": "F:/thesis",
+         "message": {"role": "assistant", "content": [
+             {"type": "text", "text": "논문 근래 이벤트"}]},
+         "timestamp": "2026-09-03T00:00:06Z"},
+    ])
+    with client.websocket_connect(
+            f"/ws/monitor?ids={MGR},{SUB}&manager={MGR}") as ws:
+        ws.receive_json()  # snapshot
+        # 동적 추가
+        ws.send_json({"type": "add", "session_id": NEW, "role": "sub"})
+        added_ack = None
+        added_ev = None
+        for _ in range(20):
+            m = ws.receive_json()
+            if m["type"] == "group" and m.get("action") == "add":
+                added_ack = m
+            if m["type"] == "events" and any(
+                    e["session_id"] == NEW for e in m["events"]):
+                added_ev = m
+                break
+        assert added_ack and added_ack["session_id"] == NEW
+        assert added_ev and any(e["text"] == "논문 근래 이벤트"
+                                for e in added_ev["events"])
+        # 동적 제거
+        ws.send_json({"type": "remove", "session_id": NEW})
+        removed = None
+        for _ in range(20):
+            m = ws.receive_json()
+            if m["type"] == "group" and m.get("action") == "remove":
+                removed = m
+                break
+        assert removed and removed["session_id"] == NEW

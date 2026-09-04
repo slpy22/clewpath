@@ -229,6 +229,30 @@ def test_group_seq_monotonic(tmp_path):
 
 # ---- build_group (스캐너 경유) ----
 
+def test_group_remove_session(tmp_path):
+    g, mgr_p, sub_p = _group(tmp_path)
+    assert g.has(MGR) and g.has(SUB)
+    assert g.remove_session(SUB) is True
+    assert not g.has(SUB) and g.has(MGR)
+    assert g.remove_session(SUB) is False    # 이미 없음
+
+
+def test_group_add_session_dedup(fake_claude_home):
+    # add_session 은 scan_one 경유 - fake home 에서 검증
+    write_session(fake_claude_home, "F--x", SUB, [
+        {"type": "user", "cwd": "F:/x", "slug": "sub-x",
+         "message": {"role": "user", "content": "hi"}, "timestamp": "t1"},
+        {"type": "assistant", "cwd": "F:/x",
+         "message": {"role": "assistant", "content": [
+             {"type": "text", "text": "근래 응답"}]}, "timestamp": "t2"},
+    ])
+    g = MonitorGroup([])
+    evs = g.add_session({"session_id": SUB, "role": "sub"})
+    assert g.has(SUB)
+    assert any(e["text"] == "근래 응답" for e in evs)   # 근래 이벤트 즉시 반환
+    assert g.add_session({"session_id": SUB}) == []      # 중복 추가 무시
+
+
 def test_build_group_resolves_path_and_label(fake_claude_home):
     write_session(fake_claude_home, "F--portal", SUB, [
         {"type": "user", "cwd": "F:/portal", "slug": "brave-portal-fox",
