@@ -397,6 +397,11 @@
   .mon-viewer{width:42%;min-width:290px;max-width:640px;border-left:1px solid var(--line);
     display:flex;flex-direction:column;background:var(--surface);min-height:0}
   .mon-viewer.hide{display:none}
+  .mon-resizer{width:7px;flex:none;cursor:col-resize;background:var(--surface);position:relative}
+  .mon-resizer::before{content:'';position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+    width:2px;height:26px;border-radius:2px;background:var(--line2)}
+  .mon-resizer:hover::before,.mon-resizer.dragging::before{background:var(--accent);height:44px}
+  .mon-resizer.gone{display:none}
   .mon-vhead{padding:9px 12px;border-bottom:1px solid var(--line);display:flex;align-items:center;
     gap:8px;flex-wrap:wrap;background:var(--surface2)}
   .mon-vhead .vname{font-weight:600;font-size:.84rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:45%}
@@ -409,7 +414,8 @@
   .mon-legend .lchip.sel{outline:2px solid var(--accent);outline-offset:1px}
   .mon-legend .lchip .lact{width:7px;height:7px;border-radius:50%;background:var(--accent);
     animation:monpulse 1.4s infinite;flex:none}
-  @media(max-width:760px){ .mon-viewer{position:absolute;inset:0;width:auto;min-width:0;max-width:none;z-index:3} }
+  @media(max-width:760px){ .mon-viewer{position:absolute;inset:0;width:auto;min-width:0;max-width:none;z-index:3}
+    .mon-resizer{display:none} }
   .mpick{display:flex;align-items:center;gap:10px;padding:9px 10px;border:1px solid var(--line);border-radius:10px;margin:6px 0}
   .mpick .mp-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.9rem}
   .mpick .mp-mgr{font-size:.72rem;color:var(--muted);display:flex;align-items:center;gap:4px;flex:none}
@@ -2250,10 +2256,33 @@ function openMonitor(ids, manager, labels){
   const vwrap=el('div','mon-vbody');
   vwrap.appendChild(el('div','empty','위에서 세션을 클릭하면 여기에 그 세션 대화가 실시간으로 보입니다.'));
   viewer.appendChild(vhead); viewer.appendChild(vwrap);
-  split.appendChild(bodyW); split.appendChild(viewer);
+  const rez=el('div','mon-resizer'); rez.title='드래그로 좌우 폭 조절 · 더블클릭 초기화';
+  split.appendChild(bodyW); split.appendChild(rez); split.appendChild(viewer);
   ov.appendChild(head); ov.appendChild(legend); ov.appendChild(split);
   document.body.appendChild(ov);
-  vtoggle.onclick=()=>viewer.classList.toggle('hide');
+  vtoggle.onclick=()=>{ const hid=viewer.classList.toggle('hide'); rez.classList.toggle('gone',hid); };
+  // 좌우 폭 드래그 조절(저장·복원, 더블클릭 초기화). 폰(오버레이)은 CSS 로 숨김.
+  (function(){
+    const KEY='sm_monvw', saved=LS.getItem(KEY);
+    if(saved){ viewer.style.width=saved; viewer.style.maxWidth='none'; }
+    let drag=false;
+    const ptX=e=>e.touches&&e.touches[0]?e.touches[0].clientX:e.clientX;
+    function move(e){ if(!drag)return; const r=split.getBoundingClientRect();
+      let w=r.right-ptX(e); w=Math.max(240, Math.min(w, r.width-320));
+      viewer.style.width=Math.round(w)+'px'; viewer.style.maxWidth='none'; e.preventDefault(); }
+    function stop(){ if(!drag)return; drag=false; rez.classList.remove('dragging');
+      document.body.classList.remove('col-resizing');
+      if(viewer.style.width) LS.setItem(KEY,viewer.style.width);
+      window.removeEventListener('mousemove',move); window.removeEventListener('mouseup',stop);
+      window.removeEventListener('touchmove',move); window.removeEventListener('touchend',stop); }
+    function begin(e){ if(viewer.classList.contains('hide'))return; drag=true; rez.classList.add('dragging');
+      document.body.classList.add('col-resizing');
+      window.addEventListener('mousemove',move); window.addEventListener('mouseup',stop);
+      window.addEventListener('touchmove',move,{passive:false}); window.addEventListener('touchend',stop);
+      e.preventDefault(); }
+    rez.addEventListener('mousedown',begin); rez.addEventListener('touchstart',begin,{passive:false});
+    rez.addEventListener('dblclick',()=>{ viewer.style.width=''; viewer.style.maxWidth=''; LS.removeItem(KEY); });
+  })();
 
   const gmap={}; let lastSeq=0; let emptyShown=true;
   // 활성 그룹 상태(동적 추가/삭제 반영). sid -> {label,color,role}
