@@ -1,9 +1,49 @@
 # TODOS — ClewPath
 
 지속 백로그. office-hours·plan·document-release 가 공통으로 읽는다.
-설계 근거: `docs/2026-09-03-multi-session-monitoring-design.md`
+설계 근거: `docs/2026-09-03-multi-session-monitoring-design.md`,
+`docs/2026-09-10-multi-terminal-tabs-design.md`
 
-## 진행중 기능: 멀티 세션·멀티 에이전트 모니터링 (v0.6.0)
+## 진행중 기능: 탭 전환형 멀티 터미널 뷰어 (v0.7.0)
+
+여러 세션 터미널을 브라우저 탭처럼 열어두고 클릭 전환하며 **작업**(양방향).
+설계 근거: `docs/2026-09-10-multi-terminal-tabs-design.md`.
+실측 확정(2026-09-10): "1개 제한"은 **PWA UI 제약뿐** — 서버(webterm._ACTIVE
+세션별 PTY dict)·릴레이(connector.streams[rid] 다중 스트림)는 이미 멀티 지원.
+확정(plan-eng-review 2026-09-10, 교차검증 교정): 탭 전환(독립 세션) / 전경 1개 라이브
+WS / **스위칭=단일 xterm 재접속**(보유 xterm은 Phase2). "서버 변경 0"은 **틀림** —
+릴레이 stop 프레임·서버측 PTY 상한이 진짜 필수. 상세 §9.
+
+### Phase 1 (초판) — 대기 (아키텍처 lock 완료, 개발 착수 가능)
+- [ ] 전역 `_term` 단수 → **탭별 상태 dict**(구조 리팩터 먼저=1탭 기존동작 무변경, 그 뒤 멀티탭·Beck)
+- [ ] **단일 xterm 재접속** 스위칭(대상 세션으로 1개 WS 재지향, 서버 detach+tail 리플레이 재사용)
+- [ ] 탭바 UI: 데스크톱 상단 탭 / 모바일 가로 칩 (세션색 점+이름+×, 우측 `+`=피커 재사용)
+- [x] **릴레이 rid stop 프레임**(2026-09-10): connector `stream_close` 핸들러(rid 단위 task.cancel→로컬 WS close→화면 detach, PTY persist) + e2ee require 게이트 포함 + 클라 `close()`가 프레임 전송. 테스트 3건(test_connector_stream_close.py) + 전체 239 passed. 로컬모드는 실 WS close라 무관.
+- [ ] **터미널 재접속 스토리**: 릴레이 재연결·visibilitychange 시 전경 라이브 재프로브+재접속 (+`_pipe_terminal` CancelledError→eof 검토)
+- [x] **서버측 PTY 소프트 상한**(2026-09-10): webterm `_max_live_pty()`(SM_MAX_TERMINALS 기본 8)+`_live_count()`, run_terminal **새 스폰만** 상한(재접속 무관). 테스트 4건(test_webterm_cap.py).
+- [x] **stop 경로 2FA 게이트**(2026-09-10): connector `_handle_api` 가 특권 경로(`/terminal/stop`)에 start 와 대칭으로 `_priv_ok` 요구(릴레이 경유 한정, 소유자 로컬 무영향). 테스트 4건(test_connector_stop_2fa.py). [탭 닫기 detach/종료 선택 UI 는 Lane B]
+- [ ] 탭 닫기 UI: '화면만 닫기(PTY 유지)' vs '세션 종료(stop, OTP 동반)' 선택 [Lane B]
+- [ ] dedupe: `session_id` **및 `fork_id`**(포크 탭) → 이미 열린 탭으로 포커스
+- [ ] `CURRENT_TERM_SID` **단수→집합**(멀티탭 알림 선점/오억제 방지)
+- [ ] localStorage 복원: 신선 세션목록 fetch→`live_terminal` stale 판정, 삭제/이사(404) 처리, 전경만 attach
+- [ ] 로컬(iframe/terminal.html)·relay 양쪽 동작 + node --check + 브라우저 검증(elementFromPoint 클릭검증)
+- [ ] 회귀 가드(CRITICAL): 1탭=기존 동작, 멀티탭 jsonl 무수정, 배경 PTY persist, dedupe 동작
+
+### Phase 2 (고도화) — 대기 (절대 잊지 말 것)
+- [ ] **보유 xterm/즉시 전환**(서버 '리플레이 억제' 플래그 + 숨김 xterm fit/focus/wakeLock) — Decision1에서 이월
+- [ ] 백그라운드 탭 활동 배지 `●` — **모니터 tail 스트림 재사용**(라이브 WS N개 없이, 총 WS 2개)
+- [ ] eager 모델 검토(모든 탭 라이브 WS) — 모바일 연결수 실측 후 판단
+- [ ] 탭 드래그 재정렬 / 모바일 좌우 스와이프 전환
+- [ ] 전경 탭 자동 재부착·하트비트(현재 모니터에만 있음)
+- [ ] 탭 + 분할 혼합(2개 나란히 — 기각했던 분할뷰를 옵션으로 흡수)
+
+### Deferred (수요 확인 후)
+- [ ] 탭 그룹(워킹셋) 이름 저장·재사용 — labels sidecar 확장(모니터 그룹저장과 공통)
+- [ ] 세션 간 드래그로 프롬프트/텍스트 복사
+- [ ] 완료/에러 알림에서 해당 탭으로 점프
+- [ ] **화면 소유권 인계 UX** — 다중 기기 "세션당 화면 1개" 탈취전 완화(현재는 마지막 접속이 이김, webterm.py:407)
+
+## 참고(완료): 멀티 세션·멀티 에이전트 모니터링 (v0.6.0)
 
 오케스트레이션 타임라인 — 관리 에이전트가 하위 세션들을 부리는 소통을
 실시간 관전. 확정 결정: 타임라인 형태 / 관리+지정하위 병합 / 호출선 포함 완본.

@@ -747,7 +747,10 @@ class Conn{
       params:{session_id:sessionId,skip:!(cred&&cred.safe),   // safe=권한확인 유지(원격 승인용)
         grace:(cred&&cred.grace)||'',otp:(cred&&cred.otp)||''}});
     return { send:(obj)=>this._tx({v:1,type:'stream_in',id,data:obj}),
-             close:()=>this.streams.delete(id) };
+             // close 는 서버에 stream_close 를 보내 이 rid 의 로컬 WS 를 끊게 한다
+             // (배경 탭 detach: 화면만 뗌, PTY 는 persist 유지). 이게 없으면 릴레이
+             // 모드에서 close 가 클라 핸들러만 지우고 서버 화면은 계속 붙어 있었다.
+             close:()=>{ try{this._tx({v:1,type:'stream_close',id});}catch(e){} this.streams.delete(id); } };
   }
   // 오케스트레이션 관제 스트림(읽기전용). onEvent(dataStr, eof, error)
   startMonitor(ids,manager,onEvent){

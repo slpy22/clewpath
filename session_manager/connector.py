@@ -91,6 +91,19 @@ def _otp_error() -> str:
         return "2fa_required"
 
 
+# 제네릭 /api/* 프록시로 나가되 특권/파괴적이라 2FA 를 요구해야 하는 경로들.
+# 터미널 start 는 _start_terminal 에서 2FA 를 걸지만, 종료(stop)는 제네릭 프록시로
+# 새는 비대칭 갭이 있었다 — 원격에서 OTP 없이 남의 claude 프로세스를 죽일 수 있었다.
+# start 와 대칭이 되도록 stop 도 특권 경로로 취급한다(릴레이 경유 한정; 소유자
+# 로컬 직접 호출은 이 프록시를 안 타므로 무영향 — start 2FA 와 같은 원리).
+_PRIV_API_SUFFIXES = ("/terminal/stop",)
+
+
+def _is_privileged_api(path: str) -> bool:
+    p = (path or "").split("?", 1)[0].rstrip("/")
+    return any(p.endswith(s) for s in _PRIV_API_SUFFIXES)
+
+
 def _to_ws(base: str) -> str:
     """http(s)://host → ws(s)://host 로 변환."""
     if base.startswith("https://"):
@@ -320,6 +333,11 @@ class Connector:
         if not path.startswith("/api/") or ".." in path:
             await self._res(rid, False, error="path_not_allowed")
             return
+        # 특권/파괴적 경로(터미널 종료 등)는 start 와 대칭으로 2FA 를 요구한다.
+        if verb == "POST" and _is_privileged_api(path):
+            if not _priv_ok(params):
+                await self._res(rid, False, error=_otp_error())
+                return
         url = f"{self.local_base}{path}"
         query = params.get("query") or {}
         body = params.get("body")
@@ -541,7 +559,7 @@ class Connector:
             # 평문 프레임: require 모드면 실질 요청(req/stream_in)을 거부한다.
             from session_manager import appconfig
             if (appconfig.get_bool("e2ee", "require", False)
-                    and frame.get("type") in ("req", "stream_in")):
+                    and frame.get("type") in ("req", "stream_in", "stream_close")):
                 await self._plain_send({"v": 1, "type": "res", "id": frame.get("id"),
                                         "ok": False, "error": "e2ee_required",
                                         **({"cid": frame["cid"]} if frame.get("cid") is not None else {})})
@@ -551,6 +569,17 @@ class Connector:
             await self._handle_req(frame)
         elif t == "stream_in":
             await self._handle_stream_in(frame)
+        elif t == "stream_close":
+            # 클라이언트가 특정 스트림(예: 터미널 탭)만 닫는다 — rid 하나만 해체.
+            # client_offline 이 기기 전체를 해체하는 것과 달리 rid 단위다. task.cancel()
+            # 이 `async with connect` 를 풀어 로컬 WS 가 닫히고, Host 가 화면을 detach
+            # 한다(persist PTY 는 설계대로 유지 — 프로세스-화면 분리). 멀티탭 뷰어에서
+            # 배경 탭이 라이브 WS 를 놓되 PTY 는 살려두는 것의 서버측 근거.
+            rid = frame.get("id")
+            task = self.streams.get(rid)
+            if task is not None:
+                _log(f"[stream] stream_close rid={rid} → 파이프 해체(화면 detach, PTY 유지)")
+                task.cancel()
         elif t == "peer":
             # 기기 연결 종료 → 인증/암호화 상태 정리
             if frame.get("event") == "client_offline":

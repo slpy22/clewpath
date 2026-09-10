@@ -60,6 +60,31 @@ class _TermSession:
 _ACTIVE: dict[str, _TermSession] = {}
 
 
+def _max_live_pty() -> int:
+    """동시에 살아있는 터미널 PTY(=claude 프로세스) 상한.
+
+    터미널 1개 = claude 프로세스 1개다. 멀티탭 뷰어가 무심코 수십 개를 띄우면
+    메모리·CPU 가 폭주하고, 업데이트 재기동(shutdown_all → 전멸 → 콜드 재개)이
+    무거워져 헬스체크를 넘긴다 — 세션 많은 PC 업데이트 사망 사고(v0.6.6)의 구역.
+    UI 경고(가벼움)만으로는 다른 기기·복원 세트를 못 막으니 서버측 상한이 진짜다.
+    SM_MAX_TERMINALS 로 조정(기본 8). 0/음수/오타는 기본값으로 떨어진다.
+    """
+    import os as _os
+    try:
+        v = int(_os.environ.get("SM_MAX_TERMINALS", "8"))
+        return v if v >= 1 else 8
+    except Exception:  # noqa: BLE001
+        return 8
+
+
+def _live_count() -> int:
+    """살아있는 PTY 수. 세는 김에 시체(_get_live)가 그 자리에서 정리된다.
+
+    _ACTIVE 스냅샷을 돌므로 _cleanup 의 pop 과 겹쳐도 안전하다.
+    """
+    return sum(1 for k in list(_ACTIVE.keys()) if _get_live(k) is not None)
+
+
 # ---------------------------------------------------------------- 외부 API
 
 def write_to(session_id: str, data: str) -> bool:
@@ -416,6 +441,18 @@ async def run_terminal(ws, session_id: str, skip_permissions: bool = True,
         rejoined = True
     else:
         # ---- 새 스폰 ----
+        # 서버측 PTY 상한(진짜 안전 밸브). 재접속은 프로세스를 안 늘리니 위에서
+        # 이미 통과했고, 여기(새 스폰)만 막는다 — 이미 열린 세션에 다시 붙는 것은
+        # 상한과 무관. 상한 도달 시 스폰 대신 구조화된 안내로 대체한다.
+        cap = _max_live_pty()
+        if _live_count() >= cap:
+            await ws.send_text(
+                f"\r\n\x1b[33m[ClewPath] 동시에 열 수 있는 터미널 상한({cap}개)에 "
+                f"도달했습니다.\x1b[0m\r\n"
+                "다른 터미널을 종료(탭 닫기 → 세션 종료)한 뒤 다시 여세요. "
+                "이미 열려 있는 세션에 다시 붙는 것은 상한과 무관합니다.\r\n")
+            await _safe_close(ws)
+            return
         meta = scan_one(session_id)
         cwd = resolve_launch_cwd(meta) if meta else None
         if not cwd or not os.path.isdir(cwd):
