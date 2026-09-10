@@ -221,6 +221,26 @@
 10. 회귀 가드: 1탭=기존 동작, jsonl 무수정, PTY persist / 로컬·릴레이 양쪽 + node --check + 브라우저.
 
 ### 9-4. 알려진 한계 (Deferred 후보)
+(→ §10 뒤에 이어짐)
+
+## 10. 구현 결과 (2026-09-10)
+
+- **v0.7.0** 게시·운영자 PC 적용: Lane A(connector `stream_close`·webterm PTY 상한·stop 2FA) +
+  Lane B(PWA `TABS`+`termView`, 탭 스트립=모니터 범례 칩 재사용, 단일 xterm/iframe 재접속,
+  탭 닫기 모달, `sm_tabs` 복원). 테스트 247→249.
+- **로컬 e2e**(리포 서버 5199 + 실제 claude 2세션, 실제 클릭+elementFromPoint): 추가·전환·화면만닫기
+  (PTY 유지)·세션종료(이웃 전환)·새로고침 복원 통과.
+- **relay e2e**(데스크톱 Chrome 페어링, Host 0.7.0): host.log `stream_close rid=…`(배경 detach) ·
+  끊김→자동 재연결→전경 탭 복원 · 화면만닫기/재추가/세션종료(relay api+2FA 게이트) 통과.
+  e2e 가 잡은 relay 버그 2건 → **0.7.1**: ① `reattachForegroundTab` 의 `mounted()` 요구 제거 +
+  `loadList` 가 term-mode pane 을 비우지 않게 가드, ② 탭 전환 fast-path 에 `showDetailPane()`
+  (`data-view=list` 상태에서 보이지 않는 pane 에 재접속하던 문제).
+- **업데이트 파이프라인 2차 사고**(0.7.0 적용 중): e2e 용 5199 테스트 서버가 남긴 stale `runtime.json`
+  으로 runner 가 엉뚱한 포트를 헬스체크해 헛롤백. 재적용 정상. → 0.7.1 핫픽스 `updater.BOUND_PORT`
+  (실제 바인드 포트 권위) + runner `Test-Healthy` runtime.json 보조 확인·기대 버전 검사.
+  교훈: 테스트용 두 번째 Host 는 `SESSION_MANAGER_CLAUDE_HOME` 격리 필수.
+- **v0.7.1** 게시·운영자 PC 적용(runner 통과). 미검증: 2FA 필수 Host 에서 OTP 프롬프트 경로,
+  모바일 실기기 육안(가로 칩 스트립). 남은 Phase 2 는 TODOS.md.
 - **다중 기기 "세션당 화면 1개" 탈취전**: 폰이 세션 A 열면 데스크톱 A 화면이 밀림
   (webterm.py:407). dedupe 는 브라우저 내부라 못 막음. "화면 소유권 인계 UX"는 별도 과제.
 - **업데이트가 워킹셋 전멸**: 업데이트 잦으면 복원은 거의 stale. 세션 jsonl 은 남으니
