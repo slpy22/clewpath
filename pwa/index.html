@@ -961,7 +961,10 @@ async function loadList(q){
   const rerender=()=>{ renderChips(chipsWrap,rerender); renderRows(listWrap,inp.value); };
   inp.oninput=()=>{ clearTimeout(inp._t); inp._t=setTimeout(rerender,200); };
   showListPane();
-  if(!SELECTED_ID) detailPlaceholder();   // 데스크톱: 우측 안내
+  // 데스크톱: 우측 안내. 단 살아있는 터미널 뷰(term-mode)는 비우지 않는다 — 재연결
+  // 흐름(_scheduleReconnect→loadList)과 새로고침 버튼이 이 경로라, 여기서 pane 을
+  // 갈아엎으면 전경 터미널이 발밑에서 사라진다(relay e2e 실측 2026-09-10).
+  if(!SELECTED_ID && !paneDetail().classList.contains('term-mode')) detailPlaceholder();
   try{
     const data=await T.list({limit:0});
     SESSIONS=data.sessions||[];
@@ -1878,8 +1881,12 @@ function openTabPicker(){
 }
 // 릴레이 재연결·화면 복귀 시: 전경 탭이 끊겨 있으면 persist PTY 에 다시 붙인다(서버가 tail 리플레이).
 function reattachForegroundTab(){
+  // disconnected && active = "사용자가 보고 있던 전경 터미널이 발밑에서 죽었다"는 뜻이다
+  // (사용자가 스스로 떠났으면 leaveTerminalView→dispose 가 disconnected 를 지운다).
+  // 뷰가 아직 떠 있으면 loadTerminal 의 fast-path(attach 만), 재연결 흐름(loadList 등)이
+  // pane 을 갈아엎었으면 전체 재구축 — 어느 쪽이든 복원한다. relay e2e 실측(2026-09-10):
+  // mounted() 를 요구하면 재연결 뒤 목록 화면에 갇힌 채 아무것도 복원되지 않았다.
   if(MODE!=='relay'||!termView.disconnected||!TABS.active) return;
-  if(!termView.mounted(paneDetail())) return;
   const t=findTab(TABS.active); if(!t) return;
   switchTab(t.key);
 }
@@ -2030,7 +2037,10 @@ async function loadTerminal(s, safe){
   const main=paneDetail();
   $('#head').textContent='터미널 재개'+(safe?' (권한확인)':'');
   // 탭 전환 fast-path: 터미널 뷰가 이미 떠 있으면 화면 재구축 없이 세션만 갈아탄다(단일 xterm 재접속)
-  if(termView.mounted(main)){ termView.attach(s, cred, safe); renderTabBar(); saveTabs(); return; }
+  // showDetailPane 필수: 재연결 흐름(loadList)이나 알림 클릭이 data-view 를 list 로 돌려놓았을 수
+  // 있고, term-mode pane 은 그 상태에서 display:none 이다 — 붙이기만 하면 '보이지 않는 터미널에
+  // 재접속'이 된다(relay e2e 실측 2026-09-10: 화면은 비고 클릭은 허공).
+  if(termView.mounted(main)){ showDetailPane(); termView.attach(s, cred, safe); renderTabBar(); saveTabs(); return; }
   termView.dispose();                       // 이전 화면(있으면) 전부 해체 후 새로 구축
   main.classList.remove('term-mode'); main.innerHTML='';
   // 바의 버튼들은 '지금 전경인 탭'에 작동해야 한다 — 구축 시점의 s 를 붙들면 탭 전환 뒤

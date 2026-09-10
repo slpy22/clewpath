@@ -72,3 +72,40 @@ def test_apply_concurrency_lock(fake_claude_home, monkeypatch):
     os.utime(lock, (old, old))
     updater.apply(m, staged, restart_cmd="")
     assert calls["n"] == 2
+
+
+def _apply_port(fake_claude_home, monkeypatch, bound_port, runtime_port):
+    """apply() 가 runner 에 넘기는 -Port 값. runtime.json 은 runtime_port 로 심어둔다."""
+    import json
+    from session_manager import config, updater
+    captured = {}
+
+    class _Popen:
+        def __init__(self, args, *a, **k):
+            captured["args"] = list(args)
+    monkeypatch.setattr(updater.subprocess, "Popen", _Popen)
+    monkeypatch.setattr(updater, "BOUND_PORT", bound_port)
+    d = config.data_dir(); d.mkdir(parents=True, exist_ok=True)
+    (d / "runtime.json").write_text(json.dumps({"port": runtime_port}), encoding="utf-8")
+    lock = updater.work_dir() / "apply.lock"
+    if lock.exists():
+        lock.unlink()
+    staged = fake_claude_home / f"stage-{bound_port}-{runtime_port}"
+    staged.mkdir()
+    updater.apply({"ver": "9.9.9"}, staged, restart_cmd="")
+    a = captured["args"]
+    return a[a.index("-Port") + 1]
+
+
+def test_apply_prefers_bound_port_over_stale_runtime_json(fake_claude_home, monkeypatch):
+    # 실사고(2026-09-10 운영자 PC): 5199 테스트 서버가 남긴 stale runtime.json 때문에
+    # runner 가 5199 를 헬스체크해 멀쩡한 0.7.0 을 롤백. 살아있는 서버가 아는 실제
+    # 바인드 포트(BOUND_PORT)가 권위여야 한다.
+    monkeypatch.delenv("SM_PORT", raising=False)
+    assert _apply_port(fake_claude_home, monkeypatch, bound_port=5100, runtime_port=5199) == "5100"
+
+
+def test_apply_falls_back_to_runtime_json_without_bound_port(fake_claude_home, monkeypatch):
+    # 서버 밖(테스트·CLI)에서는 BOUND_PORT 가 없으니 runtime.json 이 그대로 폴백.
+    monkeypatch.delenv("SM_PORT", raising=False)
+    assert _apply_port(fake_claude_home, monkeypatch, bound_port=None, runtime_port=5199) == "5199"

@@ -1377,6 +1377,10 @@ def main():
         print("[auth] password gate OFF - local only. Set SM_PASSWORD before public exposure.")
     print(f"[serve] http://{host}:{port}")
     _write_runtime(host, port)
+    # 업데이트 헬스체크가 '이 프로세스가 실제로 연 포트'를 쓰게 한다. runtime.json 은
+    # 다른 인스턴스가 덮어쓸 수 있어 권위가 아니다(updater.BOUND_PORT 주석 참조).
+    from session_manager import updater as _upd
+    _upd.BOUND_PORT = port
     # Claude 훅 등록 - 세션 상태(권한대기/작업중/턴종료)를 구조화 이벤트로 받는다.
     # 실패해도 기동은 계속(상태 뱃지만 없는 상태로 동작).
     if appconfig.get_bool("hooks", "auto_register", True):

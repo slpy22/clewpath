@@ -27,13 +27,16 @@ WS / **스위칭=단일 xterm 재접속**(보유 xterm은 Phase2). "서버 변�
 - [x] 알림 클릭 멀티탭 대응: `CURRENT_TERM_SID`=전경 탭(유지) + `openSessionById`가 `TABS.list`(집합)를 먼저 봐 배경 탭이면 `switchTab` (새 화면 생성 없음)
 - [x] localStorage(`sm_tabs`) 복원 `restoreTabsOnce()`: `loadList` 후 1회, SESSIONS로 존재 검증(삭제/이사 세션 폐기), `live_terminal`→dead 표시, **터미널 자동 열기 없음**(다른 기기 화면 탈취 방지). e2e: 토스트·view=list·iframes=0 확인
 - [x] 로컬 모드 e2e(리포 서버 5199 + 실제 `claude --resume` 2세션): 추가/전환/화면만닫기/세션종료/복원 전부 실제 클릭+elementFromPoint 검증, 인라인 JS `node --check` 통과. ⚠ **relay 모드 e2e 미실시**(릴레이+페어링 기기 필요: OTP 동반 stop, stream_close 경유 detach, 재연결 재접속) — connector 단위테스트로만 커버. ⚠ 모바일 실기기 육안 미확인
-- [ ] **relay 모드 e2e** — 폰(페어링)에서: 탭 추가/전환(stream_close로 배경 detach), × 세션종료 시 OTP, 앱 내렸다 올려 재접속. 배포 전 필수
+- [x] **relay 모드 e2e**(2026-09-10, 데스크톱 Chrome을 테스트 기기로 페어링, Host 0.7.0): 탭 추가/전환 시 host.log `stream_close rid=…`(배경 detach, PTY 유지) · 릴레이 끊김(`conn.ws.close`)→eof→자동 재연결→**전경 탭 자동 복원**(리플레이 배너) · 배경 B 화면만닫기(live 유지) · 재추가 · 활성 B 세션종료(relay api 프록시+2FA 게이트, live=false) · 마지막 탭 종료 후 상세 복귀 — 전부 통과. 2FA는 이 Host에서 off(required:false)라 OTP 프롬프트 경로는 미검증.
+  - 🐛 e2e가 잡은 relay 버그 2건(수정·재검증 완료, 0.7.1): ① `reattachForegroundTab`이 `mounted()`를 요구해 재연결 흐름(`loadList`→pane 리셋) 뒤 복원 불가 → mounted 요구 제거(재구축 허용) + `loadList`가 term-mode pane을 비우지 않게 가드. ② 탭 전환 fast-path가 `showDetailPane()`을 안 불러 `data-view=list` 상태(재연결·알림 클릭)에서 **보이지 않는 pane에 재접속** → fast-path에 `showDetailPane()`.
+- [x] **0.7.1 핫픽스(업데이터 포트)**(2026-09-10): 0.7.0 적용 중 stale `runtime.json`(5199 테스트 서버 잔재)로 runner가 엉뚱한 포트를 헬스체크해 헛롤백. 수정: `updater.BOUND_PORT`(server.main 세팅) 권위·runtime.json 폴백, runner `Test-Healthy` runtime.json 포트 보조 확인+기대 버전 검사, 테스트 2건(전체 249). ⚠ runner 개선은 0.7.1 **이후** 업데이트부터 유효(runner는 현재 설치본에서 복사됨). 교훈: 테스트용 두 번째 Host는 `SESSION_MANAGER_CLAUDE_HOME` 격리 필수.
 - [x] 회귀 가드(CRITICAL): 1탭=기존 동작(구조 리팩터만, 동일 버튼/xterm/핸들러) · jsonl 무수정(터미널은 `claude --resume`만, 새 claude 파일 접근 0) · 배경 PTY persist(e2e live=true) · dedupe — e2e로 검증. ⚠ PWA JS 자동화 테스트 인프라는 없음(수동 e2e 의존) → Deferred 후보
 
 ### Phase 2 (고도화) — 대기 (절대 잊지 말 것)
 - [ ] **보유 xterm/즉시 전환**(서버 '리플레이 억제' 플래그 + 숨김 xterm fit/focus/wakeLock) — Decision1에서 이월
 - [ ] 백그라운드 탭 활동 배지 `●` — **모니터 tail 스트림 재사용**(라이브 WS N개 없이, 총 WS 2개)
 - [ ] eager 모델 검토(모든 탭 라이브 WS) — 모바일 연결수 실측 후 판단
+- [ ] relay `Conn.req()` 강화: 소켓이 닫힌 동안 보낸 요청이 waiter로 영원히 대기(재연결 후에도 미해소). 닫힘 상태면 즉시 reject 또는 재연결 후 재전송. (relay e2e 프로브가 이 경로에 걸려 발견)
 - [ ] 탭 드래그 재정렬 / 모바일 좌우 스와이프 전환
 - [ ] 전경 탭 자동 재부착·하트비트(현재 모니터에만 있음)
 - [ ] 탭 + 분할 혼합(2개 나란히 — 기각했던 분할뷰를 옵션으로 흡수)

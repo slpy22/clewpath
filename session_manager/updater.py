@@ -300,12 +300,21 @@ def apply(manifest: dict[str, Any], staged: Path, restart_cmd: str | None = None
         start_ps = root / "start-connector.ps1"
         restart_cmd = str(start_ps) if start_ps.is_file() else ""
 
+    # 헬스체크 포트. apply() 는 살아있는 서버 안에서 불리므로 서버가 실제로 바인드한
+    # 포트(BOUND_PORT — server.main 이 세팅)가 권위다. runtime.json 은 claude_home 당
+    # 하나뿐인 공유 파일이라 두 번째 인스턴스(개발/테스트 서버, 포트 폴백)가 덮어쓰면
+    # stale 해진다 — 그러면 runner 가 엉뚱한 포트를 헬스체크해 멀쩡한 새 버전을
+    # 롤백한다(실사고 2026-09-10 운영자 PC: 5199 테스트 서버가 남긴 runtime.json 으로
+    # 0.7.0 이 헛롤백). runtime.json 은 BOUND_PORT 가 없을 때(서버 밖 호출)만 폴백.
     port = int(os.environ.get("SM_PORT", "5100"))
-    try:
-        rt = json.loads((config.data_dir() / "runtime.json").read_text(encoding="utf-8"))
-        port = int(rt.get("port", port))
-    except Exception:  # noqa: BLE001
-        pass
+    if BOUND_PORT:
+        port = int(BOUND_PORT)
+    else:
+        try:
+            rt = json.loads((config.data_dir() / "runtime.json").read_text(encoding="utf-8"))
+            port = int(rt.get("port", port))
+        except Exception:  # noqa: BLE001
+            pass
 
     log = work_dir() / f"apply-{manifest['ver']}.log"
     pwsh = shutil.which("pwsh") or shutil.which("powershell") or "powershell"
@@ -334,6 +343,11 @@ def apply(manifest: dict[str, Any], staged: Path, restart_cmd: str | None = None
                      stdin=subprocess.DEVNULL)
     return write_state(applying=manifest["ver"], apply_log=str(log),
                        apply_started_at=int(time.time()))
+
+
+# 이 프로세스가 실제로 연 포트. server.main() 이 바인드 직후 세팅한다. apply() 의
+# 헬스체크 포트 권위(위 apply 주석). 서버 밖(테스트·CLI)에서는 None 이라 폴백 경로.
+BOUND_PORT: int | None = None
 
 
 def recently_failed(version: str) -> bool:

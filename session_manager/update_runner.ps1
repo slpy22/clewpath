@@ -87,13 +87,37 @@ function Sync-Deps($reason) {
     } catch { Log "의존성 동기화 실패($reason, 계속 진행): $_" }
 }
 
-function Test-Healthy($port, $seconds) {
+function Get-RuntimePort {
+    # 새로 뜬 본체가 runtime.json 에 적은 '실제' 포트. 옛 프로세스가 포트를 아직 안 풀어
+    # 폴백 포트로 떴을 때 -Port 만 보면 멀쩡한 새 버전을 롤백한다. 파일은 데이터 폴더
+    # (= 로그 폴더의 부모)에 있다. 없거나 깨지면 $null.
+    try {
+        $p = Join-Path (Split-Path (Split-Path $LogFile)) "runtime.json"
+        if (Test-Path $p) {
+            $j = Get-Content $p -Raw -Encoding UTF8 | ConvertFrom-Json
+            if ($j.port) { return [int]$j.port }
+        }
+    } catch {}
+    return $null
+}
+
+function Test-Healthy($port, $seconds, $expectVersion) {
+    # -Port 와, 새 본체가 runtime.json 에 적은 포트(다르면)를 함께 살핀다.
+    # $expectVersion 이 있으면 '그 버전이 응답'해야 통과 — 안 죽은 옛 프로세스가 포트를
+    # 쥐고 응답하는 것을 성공으로 오판하지 않는다(버전 필드가 없는 응답은 그냥 통과).
     $end = (Get-Date).AddSeconds($seconds)
     while ((Get-Date) -lt $end) {
-        try {
-            $r = Invoke-RestMethod "http://127.0.0.1:$port/api/owner/diagnostics" -TimeoutSec 3
-            if ($r.claude_home) { return $true }
-        } catch {}
+        $ports = @($port)
+        $rp = Get-RuntimePort
+        if ($rp -and ($rp -ne $port)) { $ports += $rp }
+        foreach ($p in $ports) {
+            try {
+                $r = Invoke-RestMethod "http://127.0.0.1:$p/api/owner/diagnostics" -TimeoutSec 3
+                if ($r.claude_home) {
+                    if ((-not $expectVersion) -or (-not $r.version) -or ($r.version -eq $expectVersion)) { return $true }
+                }
+            } catch {}
+        }
         Start-Sleep -Milliseconds 700
     }
     return $false
@@ -159,8 +183,8 @@ if ($swapped) { Sync-Deps "새 버전 $Version" }
 $healthy = $false
 if ($swapped) {
     Start-Host2
-    $healthy = Test-Healthy $Port 45
-    Log $(if ($healthy) { "헬스체크 통과 - 업데이트 성공 ($Version)" } else { "헬스체크 실패" })
+    $healthy = Test-Healthy $Port 45 $Version
+    Log $(if ($healthy) { "헬스체크 통과 - 업데이트 성공 ($Version)" } else { "헬스체크 실패 (port=$Port, runtime.json port=$(Get-RuntimePort))" })
 }
 
 # ── 6) 롤백 ─────────────────────────────────────────────────
