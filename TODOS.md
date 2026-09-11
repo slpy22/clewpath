@@ -4,7 +4,23 @@
 설계 근거: `docs/2026-09-03-multi-session-monitoring-design.md`,
 `docs/2026-09-10-multi-terminal-tabs-design.md`
 
-## 진행중 기능: 탭 전환형 멀티 터미널 뷰어 (v0.7.0)
+## 진행중 기능: 배경 탭 활동 배지 + relay req 강화 (v0.7.2)
+
+멀티탭 Phase 2 에서 승격(2026-09-11, devflow STEP 6→2). 설계 근거: 멀티탭 설계 문서 §4
+(모니터 tail 스트림 재사용 — 라이브 터미널 WS 1 + 모니터 WS 1 = 총 2, 서버 변경 0).
+
+### Phase 1 (이번 사이클) — 구현·relay e2e 완료(2026-09-11)
+- [x] 배지 구독기 `tabBadge`: `renderTabBar()` 끝에서 `sync()` — 없으면 `T.monitor` 1개 생성, 있으면 탭 집합과 차분 `add/remove`, eof(재연결) 뒤 다음 sync 가 재구독, `termView.dispose` 에서 close. e2e: streams=2(터미널+모니터), 탭 닫으면 host.log 에 `mon` rid 해체
+- [x] 이벤트 필터: webmonitor 는 `add` 직후에도 과거 이벤트를 `events` 로 리플레이(webmonitor.py:80-85)하므로 **구독 시각(CLOCK_SKEW 보정) 이후 ts** 만 인정, snapshot/heartbeat/group/error·전경 탭 무시. e2e: 프라임·add 리플레이로 점등 없음, 배경 B 활동 시 `●`(.lact 7px monpulse), 전환 시 소거
+- [x] relay `Conn.req()`: 소켓 미개방 시 즉시 `{ok:false,error:'disconnected'}`. e2e: 끊김 중 `T.list` 0ms 실패(전엔 45s hang)
+- [x] relay e2e(데스크톱 페어링, Host 0.7.1 + 작업트리 PWA): 전 시나리오 통과, 콘솔 오류 0. 로컬 모드는 동일 JS(`localT.monitor` 는 관제 오버레이로 기검증)라 별도 e2e 생략
+- [x] 회귀: 배지 구독은 자체 handle(`tabBadge.h`)이라 관제 오버레이 handle 과 독립 — 코드 검토로 확인(동시 사용 e2e 는 미실시)
+
+### Phase 2 (고도화) — 대기
+- [ ] 배지에 상태 색(작업 중/입력 대기) — 목록의 훅 상태(`rt.phase`) 재사용
+- [ ] 배지 이벤트 종류 표시(도구 실행/응답 완료) 툴팁
+
+## 참고(완료): 탭 전환형 멀티 터미널 뷰어 (v0.7.0/0.7.1)
 
 여러 세션 터미널을 브라우저 탭처럼 열어두고 클릭 전환하며 **작업**(양방향).
 설계 근거: `docs/2026-09-10-multi-terminal-tabs-design.md`.
