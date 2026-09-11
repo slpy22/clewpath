@@ -454,6 +454,11 @@ class Connector:
         local_ws = f"{_to_ws(self.local_base)}/ws/terminal/{sid}?skip={skip}"
         if fork:
             local_ws += f"&fork={fork}"
+        # 화면 커서(탭 즉시 전환): 클라가 탭마다 준 screen_id. Host 가 이 화면에 보낸
+        # 오프셋을 기억해 재접속 때 못 본 델타만 리플레이한다. 없으면 기존 동작.
+        screen = params.get("screen")
+        if screen:
+            local_ws += "&" + urlencode({"screen": str(screen)})
         self.stream_in[rid] = asyncio.Queue()
         self.streams[rid] = asyncio.create_task(self._pipe_terminal(rid, local_ws))
 

@@ -315,6 +315,12 @@
   .term-tabs .lchip .lname{overflow:hidden;text-overflow:ellipsis}
   .term-tabs .lchip.dead{opacity:.55}
   .term-tabs .lchip.dead .ldot{background:var(--muted)!important}
+  /* 탭 즉시 전환(v0.8.0): 터미널 영역(wrap)이 grid 1fr 행을 차지하고, 그 안에 탭별 host 를
+     절대배치로 보유한다. 전경(.on)만 표시 — 숨은 탭의 xterm 버퍼는 그대로 남는다. */
+  #paneDetail.term-mode>.term-wrap{position:relative;min-height:0;overflow:hidden;background:#0d1117}
+  .term-wrap>.thost{position:absolute;inset:0;display:none}
+  .term-wrap>.thost.on{display:block}
+  .term-wrap>.thost>iframe{position:absolute;inset:0;width:100%;height:100%;border:0}
   .term-note{padding:18px}
 
   /* ---- 모바일 터미널 UX (M2 스파이크, 기획서 §5) — 보조키 바 · 최신 복귀 ---- */
@@ -776,7 +782,8 @@ class Conn{
     this.streams.set(id,(m)=>{ if(m.eof){onData(null,true,m.error);} else onData(m.data,false); });
     this._tx({v:1,type:'req',id,method:'terminal',
       params:{session_id:sessionId,skip:!(cred&&cred.safe),   // safe=권한확인 유지(원격 승인용)
-        grace:(cred&&cred.grace)||'',otp:(cred&&cred.otp)||''}});
+        grace:(cred&&cred.grace)||'',otp:(cred&&cred.otp)||'',
+        screen:(cred&&cred.screen)||''}});   // 화면 커서: 재접속 때 이 화면이 못 본 델타만 리플레이
     return { send:(obj)=>this._tx({v:1,type:'stream_in',id,data:obj}),
              // close 는 서버에 stream_close 를 보내 이 rid 의 로컬 WS 를 끊게 한다
              // (배경 탭 detach: 화면만 뗌, PTY 는 persist 유지). 이게 없으면 릴레이
@@ -1690,63 +1697,93 @@ const TABS={ list:[], active:null };
 const tabKey=(s)=>(s.fork_id||s.session_id);
 const findTab=(key)=>TABS.list.find(t=>t.key===key)||null;
 
-// termView: 터미널 화면 하나(릴레이=xterm, 로컬=iframe)를 전경 탭에 붙였다(attach) 뗐다(detach).
-//  · attach 는 detach 를 먼저 해 tc 를 갈아끼운다(단일 xterm 재접속 — 서버가 tail 을 리플레이).
-//  · detach 는 화면만 뗀다: tc.close() 가 stream_close 를 보내 서버가 화면을 detach, PTY 는 유지.
-//  · dispose 는 뷰를 떠날 때 전부 해체(xterm 은 re-open 이 안 돼 다음 진입 때 새로 만든다).
+// termView: 터미널 영역(wrap) 안에 탭별 화면 인스턴스(릴레이=xterm, 로컬=iframe)를 보유한다.
+//  · 전환은 즉시다: 이전 탭은 tc 만 닫고(stream_close → 서버 화면 detach, PTY·xterm 버퍼 유지)
+//    host 를 숨기고, 대상 탭 host 를 보여 fit 한 뒤 tc 를 연다. 서버는 그 화면(screen_id)이 못 본
+//    출력만 델타 리플레이하므로 이중 렌더도 공백도 없다(v0.8.0, webterm 화면 커서).
+//  · 라이브 WS 는 전경 탭 1개뿐(모바일 안전). 배경 탭은 서버 persist PTY 로 살아있다.
+//  · 로컬 iframe 은 탭별로 보유해 항상 붙어 있다(로컬은 WS 수 부담이 없다).
+//  · dispose 는 뷰를 떠날 때 전부 해체. screenId 는 페이지 수명 동안만 — 새로고침 뒤엔 버퍼가
+//    비므로 새 id 로 전체 tail 을 받는다(sm_tabs 에 저장하지 않는 이유).
 const termView={
-  main:null, host:null, term:null, fit:null, ux:null, wl:null, ro:null, onWin:null,
-  frame:null, tc:null, sid:null, _lastDim:'', strip:null, disconnected:false,
+  main:null, wrap:null, strip:null, wl:null, ro:null, onWin:null,
+  tabs:{},              // key -> {host, term, fit, ux, tc, frame, screenId, lastDim, ended}
+  active:null,          // 전경 탭 key
+  sid:null, disconnected:false,
   // 이 pane 에 터미널 뷰가 떠 있는가 — 탭 전환 fast-path(재구축 없이 attach 만)의 조건
-  mounted(main){ return !!main && this.main===main && main.classList.contains('term-mode') && (MODE==='local' || !!this.term); },
-  send(obj){ if(this.tc){ try{this.tc.send(obj);}catch(e){} } },
-  // 크기가 실제로 바뀔 때만 통지(ResizeObserver 가 자주 불려도 과다 전송 방지)
-  resize(){ if(!this.term||!this.fit) return;
-    try{ this.fit.fit(); const dim=this.term.cols+'x'+this.term.rows;
-      if(dim!==this._lastDim){ this._lastDim=dim; this.send({type:'resize',cols:this.term.cols,rows:this.term.rows}); } }catch(e){} },
-  // 릴레이: xterm 을 host 에 한 번 만든다(탭 전환 간 재사용). 로드 실패는 throw.
-  async mount(main, host){
-    this.main=main; this.host=host;
+  mounted(main){ return !!main && this.main===main && main.classList.contains('term-mode') && !!this.wrap; },
+  cur(){ return this.active?this.tabs[this.active]:null; },
+  send(obj){ const c=this.cur(); if(c&&c.tc){ try{c.tc.send(obj);}catch(e){} } },
+  // 전경 탭만 fit. 크기가 실제로 바뀔 때만 통지(ResizeObserver 가 자주 불려도 과다 전송 방지)
+  resize(){ const c=this.cur(); if(!c||!c.term||!c.fit) return;
+    try{ c.fit.fit(); const dim=c.term.cols+'x'+c.term.rows;
+      if(dim!==c.lastDim){ c.lastDim=dim; this.send({type:'resize',cols:c.term.cols,rows:c.term.rows}); } }catch(e){} },
+  _newScreenId(){ return 'scr-'+Math.random().toString(36).slice(2,10)+Date.now().toString(36); },
+  // 터미널 영역(wrap)과 뷰 공용 자원(wakeLock·리사이즈 감시)을 만든다. 로드 실패는 throw.
+  async mount(main){
+    this.main=main;
+    const wrap=el('div','term-wrap'); main.appendChild(wrap); this.wrap=wrap;
     if(MODE==='local') return;
     await loadXterm();
-    // 핀치로 조절한 글자 크기는 기기별로 기억한다(M2 스파이크)
-    const savedFs=parseInt(LS.getItem('sm_term_fs')||'',10);
-    const term=new Terminal({fontSize:(savedFs>=8&&savedFs<=22)?savedFs:13,cursorBlink:true,scrollback:10000,
-      fontFamily:'ui-monospace,"Cascadia Code",Consolas,monospace',
-      theme:{background:'#0d1117',foreground:'#e6edf3',cursor:'#58a6ff'}});
-    const fit=new FitAddon.FitAddon(); term.loadAddon(fit); term.open(host);
-    this.term=term; this.fit=fit;
-    // 모바일 터치 UX: send 는 '현재' tc 를 읽으므로 탭 전환 뒤에도 유효하다
-    this.ux=attachMobileTermUX(host, term, {
-      send:(d)=>this.send({type:'input',data:d}),
-      onFont:(fs)=>{ LS.setItem('sm_term_fs',String(fs)); this.resize(); }});
-    // 보조키 바는 터치 기기에서만(데스크톱은 실키보드가 있으니 불필요)
-    if(matchMedia('(pointer: coarse)').matches) main.appendChild(this.ux.bar);
-    // 터미널 표시 중 화면꺼짐 방지(§5). 실패해도 무해(iOS<16.4 등) — 조용히 넘어간다.
+    // 터미널 표시 중 화면꺼짐 방지(§5) — 뷰당 1개. 실패해도 무해(iOS<16.4 등).
     if(navigator.wakeLock&&navigator.wakeLock.request){
       navigator.wakeLock.request('screen').then(l=>{this.wl=l;}).catch(()=>{}); }
     this.onWin=()=>this.resize(); window.addEventListener('resize',this.onWin);
-    // 컨테이너가 실제 크기를 얻거나 바뀔 때마다 채운다 — 초기 레이아웃/창 리사이즈 모두.
-    if(window.ResizeObserver){ this.ro=new ResizeObserver(()=>this.resize()); this.ro.observe(host); }
+    // wrap 이 실제 크기를 얻거나 바뀔 때마다 전경 탭을 채운다 — 초기 레이아웃/창 리사이즈 모두.
+    if(window.ResizeObserver){ this.ro=new ResizeObserver(()=>this.resize()); this.ro.observe(wrap); }
     if(document.fonts&&document.fonts.ready) document.fonts.ready.then(()=>this.resize());
-    // Ctrl 토글(보조키 바)은 실키보드 입력에도 적용된다 — transform 경유
-    term.onData(d=>this.send({type:'input',data:this.ux.transform(d)}));
   },
-  // 전경 탭을 세션 s 에 붙인다. 다른 세션에 붙어 있었으면 그 화면만 뗀 뒤(PTY 유지) 갈아탄다.
-  attach(s, cred, safe){
-    this.detach();
-    this.sid=s.session_id; this.disconnected=false;
+  // 탭 인스턴스 보장(없으면 생성). host 는 wrap 안에 절대배치, 기본 숨김(.on 만 표시).
+  _ensure(key, s, safe){
+    let t=this.tabs[key]; if(t) return t;
+    const host=el('div','thost'); this.wrap.appendChild(host);
+    t={host, term:null, fit:null, ux:null, tc:null, frame:null, lastDim:'', ended:false, screenId:this._newScreenId()};
     if(MODE==='local'){
-      // 로컬: 단일 iframe 을 세션으로 재지향. 이전 문서가 unload 되며 그 WS 가 닫혀 서버가
-      // 화면을 detach 한다(terminal.html 무수정). iframe 은 grid 트랙에 직접 안 늘어나므로
-      // div(.term-frame)로 감싸고 그 안에서 absolute 로 채운다(위 CSS 참고).
-      if(!this.frame){ const wrap=el('div','term-frame'); this.frame=document.createElement('iframe');
-        this.frame.setAttribute('allow','clipboard-read; clipboard-write');
-        wrap.appendChild(this.frame); this.main.appendChild(wrap); }
-      this.frame.src=`${APIBASE}/terminal?id=${encodeURIComponent(s.session_id)}&skip=${safe?0:1}`;
+      // 로컬: 탭별 iframe(terminal.html 무수정). 숨겨도 자기 WS 로 계속 붙어 있다.
+      const frame=document.createElement('iframe'); frame.setAttribute('allow','clipboard-read; clipboard-write');
+      frame.src=`${APIBASE}/terminal?id=${encodeURIComponent(s.session_id)}&skip=${safe?0:1}`;
+      host.appendChild(frame); t.frame=frame;
+    } else {
+      // 핀치로 조절한 글자 크기는 기기별로 기억한다(M2 스파이크)
+      const savedFs=parseInt(LS.getItem('sm_term_fs')||'',10);
+      const term=new Terminal({fontSize:(savedFs>=8&&savedFs<=22)?savedFs:13,cursorBlink:true,scrollback:10000,
+        fontFamily:'ui-monospace,"Cascadia Code",Consolas,monospace',
+        theme:{background:'#0d1117',foreground:'#e6edf3',cursor:'#58a6ff'}});
+      const fit=new FitAddon.FitAddon(); term.loadAddon(fit); term.open(host);
+      t.term=term; t.fit=fit;
+      // 모바일 터치 UX(탭별). 입력은 이 탭이 전경일 때만 보낸다 — 숨은 xterm 이 포커스를 얻어도 유실/오전송 없음
+      t.ux=attachMobileTermUX(host, term, {
+        send:(d)=>{ if(this.active===key) this.send({type:'input',data:d}); },
+        onFont:(fs)=>{ LS.setItem('sm_term_fs',String(fs)); this.resize(); }});
+      // Ctrl 토글(보조키 바)은 실키보드 입력에도 적용된다 — transform 경유
+      term.onData(d=>{ if(this.active===key) this.send({type:'input',data:t.ux.transform(d)}); });
+    }
+    this.tabs[key]=t; return t;
+  },
+  // 전경 탭을 세션 s 로 바꾼다. 이전 전경은 화면(tc)만 뗀다(PTY·xterm 버퍼 유지).
+  attach(s, cred, safe, wasDead){
+    const key=tabKey(s);
+    if(this.active && this.active!==key){
+      const p=this.tabs[this.active];
+      if(p){ if(p.tc){ try{p.tc.close();}catch(e){} p.tc=null; } p.host.classList.remove('on'); if(p.ux&&p.ux.bar) p.ux.bar.remove(); }
+    }
+    const t=this._ensure(key, s, safe);
+    this.active=key; this.sid=s.session_id; this.disconnected=false;
+    t.host.classList.add('on');
+    // PTY 가 죽어 새로 스폰되는 경우(복원 시점에 죽어 있던 탭, 또는 서버가 이 화면에 '세션 종료'를
+    // 알린 탭): 이전 화면은 지난 프로세스의 것이라 비우고 새 screen id 로 받는다(서버 커서도 새 세션).
+    // SESSIONS.live_terminal 은 20초 폴링이라 stale — 이걸 쓰면 살아있는 탭까지 비워 델타가 무너진다(실측).
+    const fresh=!!wasDead||t.ended;
+    if(MODE==='local'){
+      if(fresh&&t.frame){ t.frame.src=t.frame.src; t.ended=false; }
+      try{ t.frame&&t.frame.contentWindow&&t.frame.contentWindow.dispatchEvent(new Event('resize')); }catch(e){}
       return;
     }
-    const term=this.term; term.reset(); this._lastDim='';   // 새 세션 화면 — 서버가 tail 리플레이
+    if(t.tc) return;                       // 이미 라이브(같은 탭 재호출)
+    const term=t.term;
+    if(fresh){ term.reset(); t.lastDim=''; t.screenId=this._newScreenId(); t.ended=false; }
+    // 보조키 바는 터치 기기에서만, 전경 탭 것만 붙인다
+    if(matchMedia('(pointer: coarse)').matches && t.ux&&t.ux.bar) this.main.appendChild(t.ux.bar);
     // 세션 잠금 감지: 이전 Host 강제종료로 남은 고아가 claude bg 에이전트로
     // 승격되면 --resume 이 이 문구로 거부된다. 원문 에러만 흘리지 말고 원인과
     // 출구(포크)를 안내한다. 자동 정리는 하지 않음 - 사용자가 직접 만든 bg
@@ -1769,27 +1806,40 @@ const termView={
       go.onclick=()=>{ closeModal(); leaveTerminalView(); loadResume(s,false); };
       openModal('세션이 잠겨 있습니다', body, [go]);
     };
-    this.tc=T.terminal(s.session_id,(data,eof,err)=>{
-      if(eof){ this.disconnected=true;      // 재연결·화면 복귀 시 reattachForegroundTab 의 근거
+    // screen: 서버가 이 화면에 보낸 오프셋을 기억 → 재접속 때 못 본 델타만 리플레이(배너 없음)
+    t.tc=T.terminal(s.session_id,(data,eof,err)=>{
+      if(eof){ const dead=t.tc; t.tc=null;
+        if(dead){ try{dead.close();}catch(e){} }         // 핸들러 제거(eof 뒤 남으면 conn.streams 누수)
+        if(this.active===key) this.disconnected=true;   // 재연결·화면 복귀 시 reattachForegroundTab 의 근거
         if(err==='2fa_invalid'||err==='2fa_required') clearGrace();
         term.write('\r\n\x1b[91m── '+(err?otpErrMsg(err):'연결 종료')+' ──\x1b[0m\r\n'); }
-      else { _detectBgLock(data); term.write(data); } }, cred);
+      else { _detectBgLock(data);
+        if(data.indexOf('세션이 종료되었습니다')>=0) t.ended=true;   // 다음 attach 는 새 스폰 → 화면 비움
+        term.write(data); } }, Object.assign({}, cred||{}, {screen:t.screenId}));
     setTimeout(()=>this.resize(),80); setTimeout(()=>this.resize(),300); term.focus();
   },
-  // 화면만 뗀다(PTY 유지). tc.close() → stream_close → 서버 화면 detach.
-  detach(){ if(this.tc){ try{this.tc.close();}catch(e){} this.tc=null; } this.sid=null; },
+  // 전경 화면만 뗀다(PTY·버퍼 유지). tc.close() → stream_close → 서버 화면 detach.
+  detach(){ const c=this.cur(); if(c&&c.tc){ try{c.tc.close();}catch(e){} c.tc=null; } this.sid=null; },
+  // 탭 하나의 인스턴스 해체(탭 닫기). 로컬 iframe 은 about:blank 로 WS 를 닫게 한다.
+  closeTabInstance(key){ const t=this.tabs[key]; if(!t) return;
+    if(t.tc){ try{t.tc.close();}catch(e){} t.tc=null; }
+    if(t.ux){ try{t.ux.dispose();}catch(e){} if(t.ux.bar) t.ux.bar.remove(); }
+    if(t.term){ try{t.term.dispose();}catch(e){} }
+    if(t.frame){ try{t.frame.src='about:blank';}catch(e){} }
+    t.host.remove(); delete this.tabs[key];
+    if(this.active===key){ this.active=null; this.sid=null; } },
   // 전부 해체(뷰를 떠날 때). 탭 목록(TABS)은 건드리지 않는다 — 배경 PTY 는 살아있다.
-  dispose(){ this.detach(); tabBadge.close();
+  dispose(){ for(const k of Object.keys(this.tabs)) this.closeTabInstance(k); tabBadge.close();
     if(this.onWin){ window.removeEventListener('resize',this.onWin); this.onWin=null; }
     if(this.ro){ try{this.ro.disconnect();}catch(e){} this.ro=null; }
-    if(this.ux){ try{this.ux.dispose();}catch(e){} this.ux=null; }
     if(this.wl){ try{this.wl.release();}catch(e){} this.wl=null; }
-    if(this.term){ try{this.term.dispose();}catch(e){} this.term=null; this.fit=null; }
-    this.frame=null; this.host=null; this.main=null; this._lastDim=''; this.strip=null; this.disconnected=false; },
+    if(this.wrap){ this.wrap.remove(); this.wrap=null; }
+    this.main=null; this.strip=null; this.active=null; this.sid=null; this.disconnected=false; },
 };
 // 터미널 뷰를 떠날 때(상세/이력/종료/포크) 화면 전부 해체. 탭 목록은 유지(배경 PTY 살아있음).
 function leaveTerminalView(){ termView.dispose(); }
-function removeTab(key){ TABS.list=TABS.list.filter(t=>t.key!==key); if(TABS.active===key) TABS.active=null; }
+function removeTab(key){ TABS.list=TABS.list.filter(t=>t.key!==key); if(TABS.active===key) TABS.active=null;
+  termView.closeTabInstance(key); }   // 보유하던 xterm/iframe 해제
 
 // ---- 멀티탭 동작: 탭 스트립·전환·닫기·추가·저장/복원·재접속 ----
 const TAB_SOFT_CAP=6;   // 클라 경고선. 서버 하드 상한(SM_MAX_TERMINALS, 기본 8)은 webterm 이 따로 막는다.
@@ -2087,17 +2137,20 @@ async function loadTerminal(s, safe){
   // 탭 등록(dedupe: key 가 같으면 기존 탭을 최신 세션 객체로 갱신) + 전경 지정
   const key=tabKey(s);
   const t0=findTab(key);
+  // wasDead: 복원 시점에 PTY 가 없던 탭(다시 열면 새 스폰). attach 가 보유 xterm 을 비울지 정하는
+  // 근거 — 20초 폴링의 SESSIONS.live_terminal 은 stale 해서(e2e 실측: 살아난 뒤에도 false) 못 쓴다.
+  const wasDead=!!(t0&&t0.dead);
   if(t0){ t0.s=s; t0.safe=!!safe; t0.dead=false; t0.act=false; }   // 보는 순간 배지 소거
   else TABS.list.push({key, s, safe:!!safe, dead:false, act:false});
   TABS.active=key;
   CURRENT_TERM_SID=s.session_id;           // 알림 클릭이 이 화면을 갈아엎지 않게 표시
   const main=paneDetail();
   $('#head').textContent='터미널 재개'+(safe?' (권한확인)':'');
-  // 탭 전환 fast-path: 터미널 뷰가 이미 떠 있으면 화면 재구축 없이 세션만 갈아탄다(단일 xterm 재접속)
+  // 탭 전환 fast-path: 터미널 뷰가 이미 떠 있으면 화면 재구축 없이 전경 탭만 바꾼다(즉시 전환)
   // showDetailPane 필수: 재연결 흐름(loadList)이나 알림 클릭이 data-view 를 list 로 돌려놓았을 수
   // 있고, term-mode pane 은 그 상태에서 display:none 이다 — 붙이기만 하면 '보이지 않는 터미널에
   // 재접속'이 된다(relay e2e 실측 2026-09-10: 화면은 비고 클릭은 허공).
-  if(termView.mounted(main)){ showDetailPane(); termView.attach(s, cred, safe); renderTabBar(); saveTabs(); return; }
+  if(termView.mounted(main)){ showDetailPane(); termView.attach(s, cred, safe, wasDead); renderTabBar(); saveTabs(); return; }
   termView.dispose();                       // 이전 화면(있으면) 전부 해체 후 새로 구축
   main.classList.remove('term-mode'); main.innerHTML='';
   // 바의 버튼들은 '지금 전경인 탭'에 작동해야 한다 — 구축 시점의 s 를 붙들면 탭 전환 뒤
@@ -2126,15 +2179,12 @@ async function loadTerminal(s, safe){
   const strip=el('div','mon-legend term-tabs'); main.appendChild(strip);
   showDetailPane();
   main.classList.add('term-mode');
-  // 외부(릴레이): 내장 xterm 을 host 에 띄우고 릴레이 terminal 스트림에 연결(in-place).
-  // 로컬: termView.attach 가 iframe 을 만든다(host 는 안 쓴다).
-  const host=el('div'); host.style.cssText='flex:1;min-height:0';
-  if(MODE!=='local') main.appendChild(host);
-  try{ await termView.mount(main, host); }catch(e){
+  // 터미널 영역(wrap)을 만들고 그 안에 탭별 host(xterm 또는 iframe)를 보유한다 — termView.mount.
+  try{ await termView.mount(main); }catch(e){
     main.classList.remove('term-mode'); main.innerHTML='';
     main.appendChild(el('div','term-note','xterm 로드 실패: '+e.message)); return; }
   termView.strip=strip;
-  termView.attach(s, cred, safe);
+  termView.attach(s, cred, safe, wasDead);
   renderTabBar(); saveTabs();
 }
 

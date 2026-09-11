@@ -31,6 +31,8 @@ from session_manager.scanner import scan_one, resolve_launch_cwd
 # 화면 없이 도는 동안 모아두는 출력 상한(문자). 재접속 시 마지막 부분을 되감는다.
 _BUF_CAP = 200_000
 _REPLAY_TAIL = 60_000
+# 세션당 기억하는 화면 커서 수(탭 즉시 전환용). 사라진 탭의 커서는 오래된 순으로 버린다.
+_MAX_SCREENS = 16
 
 
 class _TermSession:
@@ -45,16 +47,52 @@ class _TermSession:
         self.client = None              # (ws, loop) | None
         self.lock = threading.Lock()
         self.dead = False
+        # ---- 화면 커서(탭 즉시 전환) ----
+        # 출력 스트림에 누적 오프셋을 매긴다: total_len = 지금까지 낳은 전체 길이,
+        # base_off = 링버퍼 첫 chunk 의 시작 오프셋(오래된 chunk 를 버리면 전진).
+        # screens[screen_id] = 그 화면이 실제로 받은 마지막 오프셋. 재접속 때 그 뒤(델타)만
+        # 리플레이하면 탭별로 보유한 xterm 이 이중 렌더·공백 없이 정확히 이어진다.
+        # 클라는 바이트를 세지 않는다(문자 단위 불일치 회피) — 서버가 보낸 만큼만 기록.
+        self.total_len = 0
+        self.base_off = 0
+        self.screens: dict[str, int] = {}
+        self.client_screen: str | None = None   # 지금 붙은 화면의 screen_id(없으면 구버전)
 
     def feed(self, data: str) -> None:
         self.chunks.append(data)
         self.buf_len += len(data)
+        self.total_len += len(data)
         while self.buf_len > _BUF_CAP and self.chunks:
-            self.buf_len -= len(self.chunks.popleft())
+            dropped = self.chunks.popleft()
+            self.buf_len -= len(dropped)
+            self.base_off += len(dropped)
 
     def tail(self) -> str:
         out = "".join(self.chunks)
         return out[-_REPLAY_TAIL:]
+
+    def tail_since(self, off: int) -> tuple[str, int, bool]:
+        """오프셋 off 이후의 출력 → (텍스트, 끝 오프셋, 폴백여부).
+
+        off 가 링버퍼 시작보다 오래됐으면(화면이 버퍼 용량보다 많이 놓침) 정확한 델타를
+        만들 수 없어 기존 tail 로 폴백하고 True 를 돌려준다(호출자가 배너로 알린다).
+        """
+        if off < self.base_off:
+            return self.tail(), self.total_len, True
+        if off >= self.total_len:
+            return "", self.total_len, False
+        out = "".join(self.chunks)
+        return out[off - self.base_off:], self.total_len, False
+
+    def mark_sent(self, screen_id: str | None, end_off: int) -> None:
+        """screen_id 화면이 end_off 까지 받았다고 기록(단조 증가, 개수 상한)."""
+        if not screen_id:
+            return
+        if end_off > self.screens.get(screen_id, -1):
+            self.screens[screen_id] = end_off
+        if len(self.screens) > _MAX_SCREENS:
+            for k in list(self.screens)[: len(self.screens) - _MAX_SCREENS]:
+                self.screens.pop(k, None)      # dict 삽입순 = 오래된 화면부터
 
 
 _ACTIVE: dict[str, _TermSession] = {}
@@ -383,11 +421,16 @@ def _start_reader(sess: _TermSession) -> None:
                 with sess.lock:
                     sess.feed(data)
                     client = sess.client
+                    screen = sess.client_screen
+                    end_off = sess.total_len
                 if client is not None:
                     ws, loop = client
                     fut = asyncio.run_coroutine_threadsafe(ws.send_text(data), loop)
                     try:
                         fut.result()          # 백프레셔: 전송 완료까지 대기
+                        with sess.lock:       # 이 화면이 여기까지 받았다(델타 리플레이 커서)
+                            if sess.client is client:
+                                sess.mark_sent(screen, end_off)
                     except Exception:  # noqa: BLE001
                         with sess.lock:       # 화면이 죽었어도 프로세스는 유지
                             if sess.client is client:
@@ -411,7 +454,7 @@ def _start_reader(sess: _TermSession) -> None:
 
 
 async def run_terminal(ws, session_id: str, skip_permissions: bool = True,
-                       fork_id: str | None = None) -> None:
+                       fork_id: str | None = None, screen_id: str | None = None) -> None:
     """WebSocket 한 개를 세션 PTY 에 붙인다(없으면 스폰, 있으면 재접속).
 
     호출 측에서 ws.accept()는 이미 끝난 상태로 가정한다.
@@ -429,15 +472,30 @@ async def run_terminal(ws, session_id: str, skip_permissions: bool = True,
         with sess.lock:
             old = sess.client
             sess.client = (ws, loop)
+            sess.client_screen = screen_id
+            cursor = sess.screens.get(screen_id) if screen_id else None
+            if cursor is not None:
+                replay, end_off, fallback = sess.tail_since(cursor)
+            else:
+                replay, end_off, fallback = sess.tail(), sess.total_len, False
         if old is not None:              # 점유 규칙: 이전 화면은 밀어낸다
             await _safe_close(old[0])
-        replay = sess.tail()
-        if replay:
-            try:
+        # 델타 리플레이(탭 즉시 전환): 이 화면이 본 뒤의 출력만 보내고 배너는 없다 — 끊김
+        # 없이 이어져야 하니까. 커서가 없으면(첫 접속·구버전 클라) 기존처럼 tail+배너,
+        # 버퍼를 넘겨 델타를 못 만들면 tail+생략 안내.
+        try:
+            if cursor is not None and not fallback:
+                if replay:
+                    await ws.send_text(replay)
+            elif replay:
                 await ws.send_text(replay)
-                await ws.send_text("\r\n\x1b[90m[ClewPath] 실행 중인 세션에 다시 연결했습니다\x1b[0m\r\n")
-            except Exception:  # noqa: BLE001
-                pass
+                note = ("일부 출력이 버퍼를 넘어 생략되었습니다" if fallback
+                        else "실행 중인 세션에 다시 연결했습니다")
+                await ws.send_text(f"\r\n\x1b[90m[ClewPath] {note}\x1b[0m\r\n")
+            with sess.lock:
+                sess.mark_sent(screen_id, end_off)
+        except Exception:  # noqa: BLE001
+            pass
         rejoined = True
     else:
         # ---- 새 스폰 ----
@@ -488,6 +546,8 @@ async def run_terminal(ws, session_id: str, skip_permissions: bool = True,
             return
         sess = _TermSession(key, proc, persist=not fork_id)
         sess.client = (ws, loop)
+        sess.client_screen = screen_id     # 첫 화면: 커서 0 부터 reader 가 전진시킨다
+        sess.mark_sent(screen_id, 0)
         # 고아 방지 3중: ① Job Object(커널 동반 종료 - Host 가 어떻게 죽든)
         # ② 자기 등록부(① 실패 대비 부팅 청소) ③ 정상 종료 shutdown_all
         from session_manager import jobguard

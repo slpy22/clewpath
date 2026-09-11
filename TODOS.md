@@ -4,7 +4,26 @@
 설계 근거: `docs/2026-09-03-multi-session-monitoring-design.md`,
 `docs/2026-09-10-multi-terminal-tabs-design.md`
 
-## 진행중 기능: 배경 탭 활동 배지 + relay req 강화 (v0.7.2)
+## 진행중 기능: 탭 즉시 전환 — 탭별 xterm 보유 + 화면 커서 델타 리플레이 (v0.8.0)
+
+멀티탭 Phase 2 승격(2026-09-11, 우선순위 1). 목표: 탭 전환이 즉시(깜빡임·재그리기 없음), 스크롤백
+보존, 배경 탭이 놓친 출력은 정확히 이어 붙음. 라이브 WS 는 여전히 전경 1개(모바일 안전).
+핵심 결정: "리플레이 억제 플래그" 대신 **screen_id 별 전송 커서**를 서버가 기억 → 재접속 시
+못 본 델타만 리플레이(버퍼 초과 시 기존 전체 tail+배너 폴백). 구버전 클라(screen 없음)는 기존 동작.
+
+### Phase 1 (이번 사이클) — 구현·격리 relay e2e 완료(2026-09-11)
+- [x] webterm: `_TermSession` `total_len/base_off/screens/client_screen`, `tail_since(off)`, `mark_sent()`(단조·상한 16), reader 가 전송 성공 시 커서 전진. `run_terminal(..., screen_id)`: 커서 있으면 델타만(배너 없음·빈 델타 무전송), 없으면 기존 tail+배너, 버퍼 초과면 tail+"생략" 안내. 새 스폰은 커서 0 등록
+- [x] server `/ws/terminal/{sid}?screen=` + connector `_start_terminal` `screen` 전달(urlencode). 테스트 8건(test_webterm_delta.py: 회계·경계·폴백·커서 단조/상한·재접속 선택·reader 전진), 전체 257 passed
+- [x] PWA `termView` 탭별 인스턴스(wrap 안 `.thost` 절대배치, `.on` 만 표시): 전환 = 이전 tc 닫기·숨김 → 대상 표시·fit·`screen` 으로 tc. wakeLock/ResizeObserver 뷰당 1개(wrap 관찰), onData/보조키는 전경만, 탭 닫기 `closeTabInstance`. eof 시 핸들러 `close()`(안 하면 `conn.streams` 누수 — e2e 발견)
+- [x] 로컬 모드: 탭별 iframe 보유, 표시 시 resize 이벤트. (⚠ 로컬 e2e 미실시 — 코드 검토만)
+- [x] screenId 는 **페이지 수명 동안만**(sm_tabs 에 저장 안 함 — 새로고침 뒤엔 버퍼가 비어 전체 tail 이 맞음). 새 스폰 판정 = 복원 시점 `dead`(loadTerminal 이 지우기 전 `wasDead` 포착) 또는 서버의 '세션 종료' 텍스트(`t.ended`). ⚠ `SESSIONS.live_terminal` 로 판정하면 20초 폴링 stale 로 살아있는 탭까지 비움(e2e 실측) — 금지
+- [x] e2e(격리 Host 5199 + `SESSION_MANAGER_CLAUDE_HOME` + A/B jsonl 복사 + CP 새 room, 데스크톱 페어링): A/B 왕복·재연결 내내 screenId 불변·**배너 0**·마커 중복 0, 배경 답변이 복귀 시 델타로만 덧붙음(마커 0→2), 정리 후 `conn.streams` 빈 것 확인, 콘솔 오류 0. ⚠ 미검증: 버퍼 초과 폴백(단위테스트만), 모바일 실기기 육안, 로컬 모드
+
+### Phase 2 (고도화) — 대기
+- [ ] 배경 탭 메모리 상한(스크롤백 줄 수 조정) 및 탭 수 상한 조정
+- [ ] 로컬 모드도 델타 커서 사용(iframe 보유 대신 단일 iframe+델타) — 메모리 절약 필요 시
+
+## 참고(완료): 배경 탭 활동 배지 + relay req 강화 (v0.7.2)
 
 멀티탭 Phase 2 에서 승격(2026-09-11, devflow STEP 6→2). 설계 근거: 멀티탭 설계 문서 §4
 (모니터 tail 스트림 재사용 — 라이브 터미널 WS 1 + 모니터 WS 1 = 총 2, 서버 변경 0).

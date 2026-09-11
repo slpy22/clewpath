@@ -875,9 +875,11 @@ def create_app() -> FastAPI:
         skip = websocket.query_params.get("skip", "1") not in ("0", "false", "False")
         # ?fork=<uuid> 이면 원본을 건드리지 않는 새 fork 세션으로 재개
         fork_id = websocket.query_params.get("fork") or None
+        # ?screen=<id> 화면 커서(탭 즉시 전환): 이 화면이 못 본 출력만 델타 리플레이. 없으면 기존 tail+배너
+        screen_id = websocket.query_params.get("screen") or None
         await websocket.accept()
         await webterm.run_terminal(websocket, session_id,
-                                   skip_permissions=skip, fork_id=fork_id)
+                                   skip_permissions=skip, fork_id=fork_id, screen_id=screen_id)
 
     # ---- 오케스트레이션 관제 (여러 세션 실시간 관전, 읽기전용·무침습) ----
     # ?ids=<uuid1>,<uuid2>,...  &manager=<uuid>  (manager 미지정 시 첫 세션)
