@@ -444,6 +444,10 @@
   .mon-follow input{width:15px;height:15px}
   .mon-vtoggle{width:34px;height:34px;border-radius:9px;color:var(--muted);flex:none;font-size:1rem}
   .mon-vtoggle:hover,.mon-vtoggle:active{background:var(--surface2)}
+  .mon-save{position:relative}
+  .mon-save.saved{color:var(--accent)}   /* 저장된 그룹으로 관전 중 */
+  .mon-save.dirty::after{content:'';position:absolute;top:4px;right:4px;width:8px;height:8px;border-radius:50%;
+    background:#e8a03c;box-shadow:0 0 0 2px var(--surface)}   /* 저장 그룹과 구성이 달라짐 */
   .mon-legend .lchip{cursor:pointer}
   .mon-legend .lchip.sel{outline:2px solid var(--accent);outline-offset:1px}
   .mon-legend .lchip .lact{width:7px;height:7px;border-radius:50%;background:var(--accent);
@@ -2582,7 +2586,7 @@ function monSessName(s){ return s.title||s.label_name||s.slug||s.session_id.slic
 async function fetchMonGroups(){ try{ const r=await T.api('GET','/api/owner/monitor/groups'); return (r&&r.groups)||[]; }catch(e){ return []; } }
 function openMonitorGroup(g){
   const ids=[g.manager].concat((g.subs||[]).filter(s=>s!==g.manager));
-  openMonitor(ids, g.manager, Object.assign({}, g.labels||{}));
+  openMonitor(ids, g.manager, Object.assign({}, g.labels||{}), {gid:g.id, name:g.name});   // 저장 그룹 → 💾 는 갱신 모드
 }
 async function openMonitorGroupById(gid){
   if(!gid) return;
@@ -2659,19 +2663,22 @@ function showMonitorPicker(){
   const go=el('button','btn','관전 시작');
   go.onclick=()=>{ const p=pick(); if(!p) return; closeModal(); openMonitor(p.ids, p.mgr, p.labels); };
   const save=el('button','btn','💾 저장하고 관전'); save.title='Host 에 그룹을 저장해 앱을 닫아도 관제 알림을 받습니다';
-  save.onclick=async()=>{ const p=pick(); if(!p) return;
-    try{ await T.api('POST','/api/owner/monitor/groups',{body:{name:nameIn.value.trim(), manager:p.mgr, subs:p.ids.filter(s=>s!==p.mgr), labels:p.labels}}); toast('관제 그룹 저장됨 — 알림이 켜졌습니다'); }
+  save.onclick=async()=>{ const p=pick(); if(!p) return; let r;
+    try{ r=await T.api('POST','/api/owner/monitor/groups',{body:{name:nameIn.value.trim(), manager:p.mgr, subs:p.ids.filter(s=>s!==p.mgr), labels:p.labels}}); toast('관제 그룹 저장됨 — 알림이 켜졌습니다'); }
     catch(e){ toast('저장 실패: '+e.message); return; }
-    closeModal(); openMonitor(p.ids, p.mgr, p.labels); };
+    closeModal(); openMonitor(p.ids, p.mgr, p.labels, {gid:r&&r.id, name:r&&r.name}); };
   openModal('🎬 오케스트레이션 관제 — 그룹 선택', body, [go, save]);
 }
 
-function openMonitor(ids, manager, labels){
+// opts.gid/name: 저장 그룹으로 열었을 때 — 💾 가 '갱신' 모드로 동작(세션 추가/제거 시 💾* 표시).
+function openMonitor(ids, manager, labels, opts){
+  opts=opts||{};
   const ov=el('div','mon-ov'); ov.id='mon-ov';
   const head=el('div','mon-head');
   head.appendChild(el('h3',null,'🎬 오케스트레이션 관제'));
   const live=el('div','mon-live off'); live.appendChild(el('span','dot2'));
   const lt=el('span',null,'연결 중…'); live.appendChild(lt); head.appendChild(live);
+  const saveBtn=el('button','mon-vtoggle mon-save','💾'); head.appendChild(saveBtn);   // 그룹 저장/갱신(v0.8.5)
   const vtoggle=el('button','mon-vtoggle','◨'); vtoggle.title='뷰어 패널 접기/펼치기'; head.appendChild(vtoggle);
   const x=el('button','x','✕'); head.appendChild(x);
   const legend=el('div','mon-legend');
@@ -2830,6 +2837,40 @@ function openMonitor(ids, manager, labels){
     renderFilterBar();   // 세션 집합·색·라벨 변동을 필터 토글에도 반영
   }
   renderLegend();
+  // ---- 💾 그룹 저장/갱신(v0.8.5): 관전 중인 구성(관리 + 하위, 라벨)을 Host 저장 그룹으로 ----
+  // 저장 그룹은 앱이 닫혀 있어도 오는 관제 알림의 근거(Phase 2-1). 피커로 돌아가지 않고 여기서 만든다.
+  let savedGid=opts.gid||null, savedName=opts.name||'', groupDirty=false;
+  function renderSaveBtn(){
+    saveBtn.classList.toggle('saved',!!savedGid);
+    saveBtn.classList.toggle('dirty',!!(savedGid&&groupDirty));   // 구성 변경 표시는 CSS 점(글자 '*' 는 34px 버튼에서 줄바꿈)
+    saveBtn.title=savedGid
+      ? (groupDirty?`'${savedName}' 저장 그룹과 구성이 달라졌습니다 — 클릭하면 갱신`:`저장된 그룹 '${savedName}' (관제 알림 켜짐)`)
+      : '이 그룹을 Host 에 저장 — 앱을 닫아도 관제 알림을 받습니다';
+  }
+  function groupPayload(name){
+    const sids=Object.keys(group); const mgr=group[manager]?manager:sids[0];   // 관리가 제거됐으면 첫 세션
+    const lbl={}; sids.forEach(s=>{ lbl[s]=group[s].label||s.slice(0,8); });
+    return {name, manager:mgr, subs:sids.filter(s=>s!==mgr), labels:lbl};
+  }
+  async function saveGroup(name, gid){
+    const p=groupPayload(name); if(gid) p.id=gid;    // id 있으면 같은 그룹 교체(mongroups.save gid)
+    const r=await T.api('POST','/api/owner/monitor/groups',{body:p});
+    savedGid=r.id; savedName=r.name; groupDirty=false; renderSaveBtn();
+    return r;
+  }
+  saveBtn.onclick=()=>{
+    if(!Object.keys(group).length){ toast('저장할 세션이 없습니다'); return; }
+    if(savedGid){ saveGroup(savedName, savedGid).then(()=>toast('관제 그룹 갱신됨')).catch(e=>toast('갱신 실패: '+e.message)); return; }
+    const body=el('div');
+    body.appendChild(el('div','cwd','Host 에 저장하면 앱을 닫아도 이 그룹의 관제 알림(관리 턴 종료·하위 응답 완료·호출 실패)이 옵니다.'));
+    const mgrLabel=(group[manager]&&group[manager].label)||'';
+    const nameIn=inputEl(mgrLabel); nameIn.placeholder='그룹 이름'; body.appendChild(field('그룹 이름', nameIn));
+    const ok=el('button','btn','💾 저장');
+    ok.onclick=async()=>{ try{ await saveGroup(nameIn.value.trim()||mgrLabel); closeModal(); toast('관제 그룹 저장됨 — 알림이 켜졌습니다'); }
+      catch(e){ toast('저장 실패: '+e.message); } };
+    openModal('💾 관제 그룹 저장', body, [ok]);
+  };
+  renderSaveBtn();
   const fmtT=(ts)=>{ try{ return ts?new Date(ts).toLocaleTimeString():''; }catch(e){ return ''; } };
   const nearBottom=()=> bodyW.scrollHeight-bodyW.scrollTop-bodyW.clientHeight < 90;
   const setLive=(on,txt)=>{ live.className='mon-live '+(on?'on':'off'); lt.textContent=txt; };
@@ -2881,9 +2922,11 @@ function openMonitor(ids, manager, labels){
         const nm=(SESSIONS.find(s=>s.session_id===m.session_id)||{});
         group[m.session_id]={label:(nm.title||nm.label_name||nm.slug||m.session_id.slice(0,8)),
                              color:null, role:'sub'};
+        if(savedGid){ groupDirty=true; renderSaveBtn(); }   // 저장 그룹과 구성이 달라짐
         renderLegend(); toast('세션 추가됨');
       } else if(m.action==='remove' && m.session_id){
         delete group[m.session_id]; delete activity[m.session_id];
+        if(savedGid){ groupDirty=true; renderSaveBtn(); }
         if(selectedSid===m.session_id){ selectedSid=null; renderVHead();
           vwrap.innerHTML=''; vwrap.appendChild(el('div','empty','세션이 제거되었습니다. 다른 세션을 선택하세요.')); }
         renderLegend(); toast('세션 제거됨');
