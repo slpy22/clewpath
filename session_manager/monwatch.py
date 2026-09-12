@@ -145,8 +145,10 @@ def notify_error(group: dict, target: str, text: str) -> int:
     name = str(group.get("name") or "관제")
     label = mongroups.label_of(group, target)
     body = " ".join(str(text or "").split())[:120] or "하위 호출이 오류로 끝났습니다"
-    return push.send("mon-error", target, f"[{name}] {label} 호출 실패", body,
-                     {"gid": str(group.get("id") or "")})
+    n = push.send("mon-error", target, f"[{name}] {label} 호출 실패", body,
+                  {"gid": str(group.get("id") or "")})
+    print(f"[monwatch] [{name}] {label} 호출 실패 감지 → 알림 {n}건", flush=True)
+    return n
 
 
 # ---------------------------------------------------------------- 스레드 러너

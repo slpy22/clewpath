@@ -2554,6 +2554,7 @@ function consumePendingMonitor(){
   openMonitorGroupById(gid);
 }
 const MON_NOTIFY_LABELS={manager_stop:'관리 턴 종료', sub_stop:'하위 응답 완료', sub_start:'하위 작업 시작', error:'하위 호출 실패'};
+const MON_NOTIFY_DEFAULT={manager_stop:true, sub_stop:true, sub_start:false, error:true}; // 옛 Host 가 키를 빠뜨려도 실효값 표시
 
 function showMonitorPicker(){
   const body=el('div');
@@ -2570,7 +2571,8 @@ function showMonitorPicker(){
       open.onclick=()=>{ closeModal(); openMonitorGroup(g); };
       row.appendChild(nm); row.appendChild(open);
       Object.keys(MON_NOTIFY_LABELS).forEach(k=>{
-        const lab=el('label','mp-mgr'); const cb=el('input'); cb.type='checkbox'; cb.checked=!!(g.notify&&g.notify[k]);
+        const lab=el('label','mp-mgr'); const cb=el('input'); cb.type='checkbox';
+        cb.checked=!!((g.notify&&(k in g.notify))?g.notify[k]:MON_NOTIFY_DEFAULT[k]);
         cb.onchange=async()=>{ try{ await T.api('POST',`/api/owner/monitor/groups/${encodeURIComponent(g.id)}/notify`,{body:{notify:{[k]:cb.checked}}}); toast('알림 설정 저장됨'); }
           catch(e){ cb.checked=!cb.checked; toast('저장 실패: '+e.message); } };
         lab.appendChild(cb); lab.appendChild(document.createTextNode('🔔 '+MON_NOTIFY_LABELS[k]));

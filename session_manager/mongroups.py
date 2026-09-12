@@ -73,17 +73,26 @@ def _clean_sids(subs, manager: str) -> list[str]:
     return out
 
 
+def _norm_group(g: dict) -> dict:
+    """읽기용 사본: notify 를 기본값으로 채운다 — 새 플래그(error 등)가 생겨도 옛 저장 파일을
+    읽는 API·UI·워처가 같은 값을 본다(저장 파일 자체는 다음 save/update 때 갱신)."""
+    out = dict(g)
+    out["notify"] = norm_notify(g.get("notify"))
+    return out
+
+
 # ---------------------------------------------------------------- 공개 API
 
 def list_groups() -> list[dict]:
     """최근 갱신 순."""
-    gs = list(_load()["groups"].values())
+    gs = [_norm_group(g) for g in _load()["groups"].values()]
     gs.sort(key=lambda g: g.get("updated_at") or "", reverse=True)
     return gs
 
 
 def get(gid: str) -> dict | None:
-    return _load()["groups"].get(str(gid or ""))
+    g = _load()["groups"].get(str(gid or ""))
+    return _norm_group(g) if g else None
 
 
 def save(name: str, manager: str, subs, labels=None, notify=None, gid: str | None = None) -> dict:
@@ -151,9 +160,9 @@ def groups_for_session(session_id: str) -> list[tuple[dict, str]]:
         return out
     for g in _load()["groups"].values():
         if g.get("manager") == sid:
-            out.append((g, "manager"))
+            out.append((_norm_group(g), "manager"))
         elif sid in (g.get("subs") or []):
-            out.append((g, "sub"))
+            out.append((_norm_group(g), "sub"))
     return out
 
 

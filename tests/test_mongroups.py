@@ -45,6 +45,19 @@ def test_update_notify_and_name_partial(fake_claude_home):
     assert mongroups.update("missing", name="x") is None
 
 
+def test_reads_fill_missing_notify_keys(fake_claude_home):
+    # 0.8.1 이전 저장 파일(error 키 없음)도 읽기 경로 3곳이 모두 기본값으로 채워 돌려준다
+    g = mongroups.save("g", M, [S1])
+    p = mongroups.groups_file()
+    data = json.loads(p.read_text(encoding="utf-8"))
+    data["groups"][g["id"]]["notify"] = {"manager_stop": True, "sub_stop": True, "sub_start": False}
+    p.write_text(json.dumps(data), encoding="utf-8")
+    assert mongroups.list_groups()[0]["notify"]["error"] is True
+    assert mongroups.get(g["id"])["notify"]["error"] is True
+    assert mongroups.groups_for_session(M)[0][0]["notify"]["error"] is True
+    assert "error" not in json.loads(p.read_text(encoding="utf-8"))["groups"][g["id"]]["notify"]  # 파일 무수정
+
+
 def test_replace_with_gid_keeps_id(fake_claude_home):
     g = mongroups.save("g", M, [S1])
     g2 = mongroups.save("g2", M, [S2], gid=g["id"])
