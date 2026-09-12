@@ -33,7 +33,7 @@
 - [x] 칩 상태 밑줄: `sessionBadge(최신 SESSIONS 객체)` 색/펄스를 칩 `::after` 밑줄(3px)로 — 작업 중 파랑 깜빡임·권한/입력 대기 주황 깜빡임·완료 초록. 세션 식별색(.ldot)·중지 탭(상태 없음)은 그대로. 탭 칩만 아래 여백 +2px(밑줄 자리). 20초 목록 폴링·loadList 뒤 term-mode 면 `renderTabBarSoon()`(300ms 코얼레싱), 활성 칩 스크롤은 활성 키가 바뀐 렌더에서만(`strip._sel`)
 - [x] 툴팁: `상태: …` + 배경 탭 `● 새 출력 N건 · 최근: 도구 실행(Bash, Read, Edit 외)/응답/도구 결과/프롬프트 입력 (방금)`. `tabBadge._on` 이 `t.actN/t.last` 갱신, 전환 시 loadTerminal 이 소거. 모바일은 title 툴팁이 안 뜨므로 색 밑줄만(툴팁은 데스크톱용)
 - [x] 검증: jscheck 통과. 릴레이 앱(작업트리 PWA, 데스크톱 임시 페어링 → 검증 후 폐기) 에서 실제 훅 데이터로 JS 구동 검증: thinking 세션 → `st stpulse` `--st:#2f81f7` "상태: 작업 중"; 합성 모니터 이벤트 2건 → `.lact` + "● 새 출력 2건 · 최근: 도구 결과 (방금)"; 메모리 패치로 waiting/ready → 주황 깜빡임/초록 고정, `::after` 3px·stblink; 배지 구독은 termView.main 없으면 생성 안 됨(subs 0); 콘솔 오류 0; 줌 스크린샷으로 밑줄 육안 확인. ⚠ 미검증: 실제 터미널 탭 마운트 상태에서의 주기 재렌더(코드 경로는 renderTabBar 동일), 모바일 실기기 육안
-- [ ] 로컬 모드(/app)는 다음 Host 릴리스에 포함(릴레이 앱은 즉시 라이브)
+- [x] 로컬 모드(/app)는 Host 0.8.3 묶음 릴리스에 포함(2026-09-12 게시·이 PC 적용)
 
 ## 참고(완료): 관제 그룹 저장 + 관제 알림 (v0.8.1)
 
@@ -55,7 +55,7 @@
 - [x] 테스트 `test_monwatch.py` 9건: 오류→1건(gid·대상·본문), 정상→무발송, 그룹 밖 UUID·비-claude 오류 무시, 과거 이력 미재생, 그룹 없음/플래그 off/삭제 시 tail 없음, 파일 없다가 생김, 3000자 넘는 프롬프트 뒤 UUID, 페이로드+마스터 스위치, 스레드 start/stop. 전체 284 passed
 - [x] 실측: 실제 jsonl 의 `claude --resume` 실패 tool_result = `{is_error:true, content:"Exit code 1\nNo conversation found with session ID: …"}` 확인(로컬 세션 400개 + 직접 발생). 0.8.2 게시·이 PC 적용(헬스체크 통과)
 - [ ] 푸시 실수신(사장님 확인 대기): 임시 그룹 `ecdec71f`(관리=이 세션 97aeef21, 하위=없는 UUID, 알림은 error 만) 만들고 없는 UUID 호출 → Host 로그에 push 실패 없음. 이 PC Chrome 에 "[e2e-호출실패] 없는하위 호출 실패" 알림 떴는지 확인 후 그룹 삭제
-- [x] e2e 발견 버그 수정(커밋, 다음 릴리스에 포함): 그룹 API 가 저장 형태 그대로 반환 → 옛 그룹은 error 키 없어 PWA 토글이 꺼진 듯 표시. 읽기 경로 3곳 norm_notify 사본 반환(파일 무수정) + PWA 기본값 폴백(즉시 라이브)
+- [x] e2e 발견 버그 수정(Host 0.8.3 에 포함, 2026-09-12 게시): 그룹 API 가 저장 형태 그대로 반환 → 옛 그룹은 error 키 없어 PWA 토글이 꺼진 듯 표시. 읽기 경로 3곳 norm_notify 사본 반환(파일 무수정) + PWA 기본값 폴백(즉시 라이브)
 
 ### Phase 2 (고도화) — 대기
 - [x] 관제 오버레이 안에서 "💾 저장" 버튼(피커 밖에서 열었을 때) — v0.8.5 사이클로 승격(2026-09-12, 위 진행중 섹션)
