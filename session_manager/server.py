@@ -300,6 +300,13 @@ async def _lifespan(app: FastAPI):
     except Exception as e:  # noqa: BLE001
         print(f"[sweep] 시작 실패: {e}", flush=True)
 
+    # 관제 호출 실패 감지: 저장 그룹의 관리 세션 jsonl 만 2초 tail(읽기 전용). 데몬 스레드.
+    from session_manager import monwatch as _monwatch
+    try:
+        _monwatch.start()
+    except Exception as e:  # noqa: BLE001
+        print(f"[monwatch] 시작 실패: {e}", flush=True)
+
     upd_task = None
     if appconfig.get_bool("update", "auto_check", True):
         upd_task = asyncio.create_task(_update_watch())
@@ -327,6 +334,7 @@ async def _lifespan(app: FastAPI):
                 print(f"[term] 종료와 함께 PTY {n}개 정리", flush=True)
         except Exception as e:  # noqa: BLE001
             print(f"[term] PTY 정리 실패: {e}", flush=True)
+        _monwatch.stop()
         for t in (task, upd_task):
             if t is not None:
                 t.cancel()

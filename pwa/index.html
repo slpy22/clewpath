@@ -2553,7 +2553,7 @@ function consumePendingMonitor(){
   const gid=PENDING_OPEN_GID; PENDING_OPEN_GID='';
   openMonitorGroupById(gid);
 }
-const MON_NOTIFY_LABELS={manager_stop:'관리 턴 종료', sub_stop:'하위 응답 완료', sub_start:'하위 작업 시작'};
+const MON_NOTIFY_LABELS={manager_stop:'관리 턴 종료', sub_stop:'하위 응답 완료', sub_start:'하위 작업 시작', error:'하위 호출 실패'};
 
 function showMonitorPicker(){
   const body=el('div');

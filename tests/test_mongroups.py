@@ -39,7 +39,7 @@ def test_manager_required(fake_claude_home):
 def test_update_notify_and_name_partial(fake_claude_home):
     g = mongroups.save("g", M, [S1])
     u = mongroups.update(g["id"], notify={"sub_stop": False, "bogus": True})
-    assert u["notify"] == {"manager_stop": True, "sub_stop": False, "sub_start": False}
+    assert u["notify"] == {"manager_stop": True, "sub_stop": False, "sub_start": False, "error": True}
     u = mongroups.update(g["id"], name="새 이름")
     assert u["name"] == "새 이름" and u["notify"]["sub_stop"] is False   # 이전 플래그 유지
     assert mongroups.update("missing", name="x") is None

@@ -16,10 +16,15 @@
 - [x] API(relay 프록시가 GET/POST 만이라 POST 변형): `GET/POST /api/owner/monitor/groups`, `POST …/{id}/notify`, `POST …/{id}/delete`. 테스트 2건
 - [x] 알림 엔진 `push._notify_groups`: 소속 세션은 그룹 설정이 결정(관리 Stop→`[그룹] 관리 에이전트 턴 종료`, 하위 Stop→`[그룹] X 응답 완료`, 하위 UserPromptSubmit→`작업 시작`(기본 off)), 일반 '작업 완료' 중복 방지, 권한요청은 항상 일반, `[push] monitor=false` 면 일반으로 폴백. payload `gid`. 테스트 8건
 - [x] PWA: 피커에 저장된 그룹(열기·🔔 토글 3개·삭제) + 이름 입력 + "💾 저장하고 관전". sw.js `gid`→`#monitor=<gid>` 딥링크·`open-monitor` 메시지, PWA `PENDING_OPEN_GID`→`consumePendingMonitor`(목록 준비 후 오버레이)
-- [ ] 푸시 실수신 e2e: 0.8.1 적용 후 테스트 그룹 생성 → 합성 Stop 훅 이벤트 → 폰 수신·알림 클릭이 관제 오버레이로 가는지(사장님 확인)
+- [ ] 푸시 실수신 e2e(사장님 확인 대기): 0.8.1 적용 후 테스트 그룹 `048f244c` 생성 → 합성 Stop 훅 2건 발송 완료(구독 1개="Windows"=이 PC Chrome, 폰 구독 없음). 확인할 것: 이 PC 알림 2건·클릭 시 `#monitor=` 관제 오버레이·폰 🔔 구독 후 재발송. 끝나면 테스트 그룹 삭제
+
+### 2-2 호출 실패 감지 (v0.8.2) — 진행중
+- [x] `monwatch.py`: Host 백그라운드 워처 1스레드. 저장 그룹 중 `notify.error` 켜진 그룹의 **관리 세션 jsonl 만** Tailer 로 2초 폴링(seek_end 부터 — 과거 오류 재알림 없음). tool_use(Bash `claude -p --resume <하위>`, parse_calllines, 원본 command 무절삭) 를 pending{tool_use_id→target} 에 두고, 같은 id 의 tool_result 가 is_error 면 push `mon-error` "[그룹] X 호출 실패"(본문 앞 120자). 그룹 목록은 폴링마다 재로드(저장·삭제·플래그 즉시 반영), 파일 없음→30초 재탐색, 회전 내성(Tailer)
+- [x] `notify.error` 플래그(기본 on, 기존 저장 파일은 norm_notify 로 보정) — mongroups DEFAULT_NOTIFY·PWA 토글 라벨 '하위 호출 실패'. server lifespan 에서 start()/stop() (daemon, 기동 비블로킹)
+- [x] 테스트 `test_monwatch.py` 9건: 오류→1건(gid·대상·본문), 정상→무발송, 그룹 밖 UUID·비-claude 오류 무시, 과거 이력 미재생, 그룹 없음/플래그 off/삭제 시 tail 없음, 파일 없다가 생김, 3000자 넘는 프롬프트 뒤 UUID, 페이로드+마스터 스위치, 스레드 start/stop. 전체 284 passed
+- [ ] 실측: 실제 jsonl 의 `claude --resume` 실패 tool_result 형태 확인(is_error 키 존재·content 문자열) → 0.8.2 적용 후 저장 그룹에서 일부러 없는 하위 UUID 호출해 '호출 실패' 푸시 수신(사장님 확인)
 
 ### Phase 2 (고도화) — 대기
-- [ ] 에러 감지: 관리 세션 tail 에서 `claude -p --resume` tool_result is_error → "호출 실패" push(훅으론 못 봄)
 - [ ] 관제 오버레이 안에서 "💾 저장" 버튼(피커 밖에서 열었을 때)
 
 ## 참고(완료): 탭 즉시 전환 — 탭별 xterm 보유 + 화면 커서 델타 리플레이 (v0.8.0)

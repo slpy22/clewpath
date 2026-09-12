@@ -98,6 +98,10 @@ class Tailer:
         except OSError:
             self.offset = 0
 
+    def seek_end(self) -> None:
+        """지금 이후에 추가되는 줄만 보겠다(과거 무시). 워처(monwatch)의 시작점."""
+        self.offset = self._size()
+
     def read_new(self) -> list[dict]:
         """오프셋 이후 새로 완성된 줄들을 파싱해 dict 리스트로. 오프셋 전진."""
         if not self.path:

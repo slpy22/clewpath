@@ -261,3 +261,24 @@ tool_result is_error)로 미룸.
 - PWA 피커: 저장된 그룹(열기·🔔 토글 3·삭제) + 이름 + "💾 저장하고 관전".
 
 **검증**: 단위 18건(저장소 8·라우팅 8·API 2), 전체 275 passed. 푸시 실수신은 게시 후 폰으로.
+
+## Phase 2-2. 하위 호출 실패 감지 (v0.8.2, 2026-09-12)
+
+**훅의 사각지대**: 관리 에이전트의 `claude -p --resume <하위> "…"` 가 오류로 끝나면(세션 없음·
+비-0 종료·타임아웃) 하위 세션의 Stop 훅은 오지 않는다 — 실패는 **관리 세션 jsonl 의 Bash
+tool_result(is_error=true)** 에만 남는다. 오케스트레이션에서 제일 먼저 알고 싶은 사건이 이것.
+
+**설계 — `monwatch.py`(Host 데몬 스레드 1개)**
+- 대상 = 저장 그룹 중 `notify.error` 켜진 그룹의 **관리 세션 파일 하나씩만**(하위 N 개는 tail 안 함).
+  2초 폴링, `Tailer.seek_end()` 부터(과거 오류 재알림 없음), 완성된 줄만 오프셋 증분(읽기 전용 —
+  불가침 원칙). 그룹 목록은 폴링마다 다시 읽어 저장·삭제·플래그 변경이 즉시 반영. 파일이 아직
+  없으면 30초마다 재탐색.
+- 상관: tool_use(Bash) 의 **원본 command**(뷰어 절삭 없이)에서 `parse_calllines` 로 그룹 하위 UUID
+  를 뽑아 `pending{tool_use_id → 하위}` 에 두고, 같은 id 의 tool_result 가 is_error 면
+  `push.send("mon-error", 하위sid, "[그룹] 라벨 호출 실패", 오류 앞 120자, {gid})`. 그룹 밖 UUID·
+  비-claude 명령의 오류는 무시(타임라인과 같은 우아한 저하). 60초 dedupe 는 push.send 공통.
+- `notify.error` 기본 on(기존 저장 파일은 `norm_notify` 가 보정), PWA 피커 토글 '🔔 하위 호출 실패'.
+  `[push] monitor` 마스터 스위치가 여기도 적용. 알림 클릭 → gid 딥링크(2-1 과 동일 경로).
+
+**검증**: 단위 9건(`test_monwatch.py`), 전체 284 passed. 실제 jsonl 의 tool_result 블록은
+`{type, tool_use_id, is_error(bool 항상 존재), content(str)}` 형태임을 로컬 세션 400개에서 확인.

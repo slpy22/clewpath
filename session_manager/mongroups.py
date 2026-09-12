@@ -17,7 +17,9 @@ from datetime import datetime, timezone
 from session_manager import config
 
 # 그룹 알림 기본값. sub_start 는 호출이 잦으면 시끄러워 기본 off.
-DEFAULT_NOTIFY = {"manager_stop": True, "sub_stop": True, "sub_start": False}
+# error = 관리 세션의 하위 호출(claude -p --resume)이 오류로 끝남 — 훅이 아니라
+# monwatch(관리 jsonl tail)가 감지한다. 기존 저장 파일에 키가 없으면 기본 on.
+DEFAULT_NOTIFY = {"manager_stop": True, "sub_stop": True, "sub_start": False, "error": True}
 _MAX_GROUPS = 50
 
 
