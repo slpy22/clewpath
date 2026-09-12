@@ -4,7 +4,25 @@
 설계 근거: `docs/2026-09-03-multi-session-monitoring-design.md`,
 `docs/2026-09-10-multi-terminal-tabs-design.md`
 
-## 진행중 기능: 탭 즉시 전환 — 탭별 xterm 보유 + 화면 커서 델타 리플레이 (v0.8.0)
+## 진행중 기능: 관제 그룹 저장 + 관제 알림 (v0.8.1)
+
+모니터링 Phase 2 승격(2026-09-12, 우선순위 1 "알림"). 알림은 앱이 닫혀 있어도 와야 하므로 Host 가
+그룹을 알아야 한다 → "그룹 저장" 이 기반. 알림 소스 = 이미 모든 세션에서 오는 훅(Stop/Notification)
+우선 재사용, 에러는 관제 tail(tool_result is_error) 보강. 발송은 push.py(웹푸시 직발송·dedupe) 재사용.
+
+### Phase 1 (이번 사이클) — 구현 완료(2026-09-12), 푸시 실수신 e2e 는 게시 후
+- [x] **실증**: `claude -p` 헤드리스 세션도 훅(UserPromptSubmit→thinking, Stop→ready, SessionEnd→ended)이 Host 에 도달(hooktest 2건) → 하위 "응답 완료"는 tail 없이 훅으로 정확
+- [x] 저장소 `mongroups.py`: `monitor_groups.json`(labels 사이드카 패턴, 원자 저장, 손상 내성) — {id, name, manager, subs[], labels{}, notify{manager_stop✓, sub_stop✓, sub_start✗}, created/updated_at}, 상한 50. 테스트 8건
+- [x] API(relay 프록시가 GET/POST 만이라 POST 변형): `GET/POST /api/owner/monitor/groups`, `POST …/{id}/notify`, `POST …/{id}/delete`. 테스트 2건
+- [x] 알림 엔진 `push._notify_groups`: 소속 세션은 그룹 설정이 결정(관리 Stop→`[그룹] 관리 에이전트 턴 종료`, 하위 Stop→`[그룹] X 응답 완료`, 하위 UserPromptSubmit→`작업 시작`(기본 off)), 일반 '작업 완료' 중복 방지, 권한요청은 항상 일반, `[push] monitor=false` 면 일반으로 폴백. payload `gid`. 테스트 8건
+- [x] PWA: 피커에 저장된 그룹(열기·🔔 토글 3개·삭제) + 이름 입력 + "💾 저장하고 관전". sw.js `gid`→`#monitor=<gid>` 딥링크·`open-monitor` 메시지, PWA `PENDING_OPEN_GID`→`consumePendingMonitor`(목록 준비 후 오버레이)
+- [ ] 푸시 실수신 e2e: 0.8.1 적용 후 테스트 그룹 생성 → 합성 Stop 훅 이벤트 → 폰 수신·알림 클릭이 관제 오버레이로 가는지(사장님 확인)
+
+### Phase 2 (고도화) — 대기
+- [ ] 에러 감지: 관리 세션 tail 에서 `claude -p --resume` tool_result is_error → "호출 실패" push(훅으론 못 봄)
+- [ ] 관제 오버레이 안에서 "💾 저장" 버튼(피커 밖에서 열었을 때)
+
+## 참고(완료): 탭 즉시 전환 — 탭별 xterm 보유 + 화면 커서 델타 리플레이 (v0.8.0)
 
 멀티탭 Phase 2 승격(2026-09-11, 우선순위 1). 목표: 탭 전환이 즉시(깜빡임·재그리기 없음), 스크롤백
 보존, 배경 탭이 놓친 출력은 정확히 이어 붙음. 라이브 WS 는 여전히 전경 1개(모바일 안전).

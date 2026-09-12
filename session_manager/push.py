@@ -149,8 +149,11 @@ def _webpush_send(sub: dict, body: str) -> None:
         print(f"[push] 발송 오류: {e}", flush=True)
 
 
-def send(kind: str, session_id: str, title: str, body: str) -> int:
-    """모든 구독 기기에 발송(스레드, 논블로킹). 반환: 시도한 구독 수."""
+def send(kind: str, session_id: str, title: str, body: str, extra: dict | None = None) -> int:
+    """모든 구독 기기에 발송(스레드, 논블로킹). 반환: 시도한 구독 수.
+
+    extra: 페이로드에 얹을 짧은 문자열 필드(예: 관제 그룹 gid → 알림 클릭 시 관제 딥링크).
+    """
     now = time.time()
     with _lock:
         last = _dedupe.get((session_id, kind), 0)
@@ -164,9 +167,13 @@ def send(kind: str, session_id: str, title: str, body: str) -> int:
     subs = _load_subs()
     if not subs:
         return 0
-    payload = json.dumps({"title": title, "body": body, "kind": kind,
-                          "sid": session_id, "tag": f"{session_id}:{kind}"},
-                         ensure_ascii=False)
+    p = {"title": title, "body": body, "kind": kind,
+         "sid": session_id, "tag": f"{session_id}:{kind}"}
+    if isinstance(extra, dict):
+        for k, v in extra.items():
+            if isinstance(k, str) and isinstance(v, (str, int)) and k not in p:
+                p[k] = str(v)[:64]
+    payload = json.dumps(p, ensure_ascii=False)
     for sub in subs:
         threading.Thread(target=_webpush_send, args=(sub, payload),
                          daemon=True).start()
@@ -184,6 +191,11 @@ def notify_from_event(payload: dict) -> None:
     cwd = str(payload.get("cwd") or "")
     proj = Path(cwd).name if cwd else "세션"
 
+    # 관제 그룹 소속 세션은 그룹의 알림 설정이 결정한다(일반 '작업 완료' 대신 그룹 맥락으로).
+    # 권한요청(Notification)은 그룹과 무관하게 항상 일반 처리 — 승인은 어디서든 급하다.
+    if ev in ("Stop", "UserPromptSubmit") and _notify_groups(sid, ev):
+        return
+
     if ev == "Notification":
         from session_manager import hooks
         kind = hooks._classify_notification(str(payload.get("message") or ""))
@@ -195,3 +207,36 @@ def notify_from_event(payload: dict) -> None:
             send("waiting", sid, f"[{proj}] 입력 대기", "세션이 입력을 기다립니다")
     elif ev == "Stop" and appconfig.get_bool("push", "ready", True):
         send("ready", sid, f"[{proj}] 작업 완료", "턴이 끝났습니다 - 확인해 주세요")
+
+
+def _notify_groups(sid: str, ev: str) -> bool:
+    """관제 그룹 알림. 이 세션이 어떤 그룹에도 없으면 False(일반 알림으로 폴백).
+
+    소속이면 그룹마다 역할·플래그대로 발송하고 True — 같은 Stop 으로 일반 '작업 완료'까지
+    두 번 울리지 않게 한다. [push] monitor=false 면 그룹 알림을 끄고 일반 알림으로 돌아간다.
+    훅은 `claude -p` 하위 세션에서도 온다(실증) — 관리 에이전트가 부른 하위의 응답 완료를
+    tail 감시 없이 안다. 페이로드의 gid 로 알림 클릭 → 관제 오버레이 딥링크.
+    """
+    try:
+        from session_manager import mongroups
+        memberships = mongroups.groups_for_session(sid)
+    except Exception:  # noqa: BLE001
+        return False
+    if not memberships or not appconfig.get_bool("push", "monitor", True):
+        return False
+    for g, role in memberships:
+        n = mongroups.norm_notify(g.get("notify"))
+        name = str(g.get("name") or "관제")
+        label = mongroups.label_of(g, sid)
+        extra = {"gid": str(g.get("id") or "")}
+        if ev == "Stop":
+            if role == "manager" and n["manager_stop"]:
+                send("mon-stop", sid, f"[{name}] 관리 에이전트 턴 종료",
+                     f"{label} 이(가) 이번 턴을 마쳤습니다 - 결과를 확인해 주세요", extra)
+            elif role == "sub" and n["sub_stop"]:
+                send("mon-done", sid, f"[{name}] {label} 응답 완료",
+                     "하위 세션이 응답을 마쳤습니다", extra)
+        elif ev == "UserPromptSubmit" and role == "sub" and n["sub_start"]:
+            send("mon-start", sid, f"[{name}] {label} 작업 시작",
+                 "관리 에이전트의 호출을 받았습니다", extra)
+    return True

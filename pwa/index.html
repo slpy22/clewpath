@@ -995,6 +995,7 @@ async function loadList(q){
     rerender();
     consumePendingOpen();          // 알림 클릭으로 진입한 경우 해당 세션 자동 열기
     restoreTabsOnce();             // 저장된 터미널 탭 워킹셋 복원(1회, 화면 탈취 없이 목록만)
+    consumePendingMonitor();       // 관제 알림 클릭으로 진입한 경우 그 그룹 오버레이 열기
     LIST_CTX={rerender};           // 자동 갱신(뱃지 실시간화)이 쓸 컨텍스트
   }catch(e){ listWrap.innerHTML=''; listWrap.appendChild(el('div','empty','목록 실패: '+e.message)); }
 }
@@ -1021,6 +1022,9 @@ document.addEventListener('visibilitychange',()=>{ if(!document.hidden) reattach
 // ---- 알림 클릭 -> 세션 열기 (푸시에서 sid 전달) ----
 let PENDING_OPEN_SID = (location.hash.match(/#open=([^&]+)/)||[])[1] || '';
 if(PENDING_OPEN_SID){ try{ history.replaceState(null,'',location.pathname); }catch(e){} }
+// 관제 알림 클릭 → #monitor=<gid>: 목록이 준비되면 그 그룹의 관제 오버레이를 연다(consumePendingMonitor)
+let PENDING_OPEN_GID = (location.hash.match(/#monitor=([^&]+)/)||[])[1] || '';
+if(PENDING_OPEN_GID){ try{ history.replaceState(null,'',location.pathname); }catch(e){} }
 let CURRENT_TERM_SID=null;   // 지금 터미널 화면으로 보고 있는 세션(알림 클릭 시 화면 보존용)
 function openSessionById(sid){
   if(!sid) return;
@@ -1040,6 +1044,7 @@ function consumePendingOpen(){
 if('serviceWorker' in navigator){
   navigator.serviceWorker.addEventListener('message',(e)=>{
     if(e.data && e.data.type==='open-session') openSessionById(e.data.sid);
+    if(e.data && e.data.type==='open-monitor') openMonitorGroupById(e.data.gid);
   });
 }
 
@@ -2528,8 +2533,59 @@ function openModal(title, bodyEl, footChildren){
 // ---- 오케스트레이션 관제(멀티 세션 실시간 관전) ----
 function monSessName(s){ return s.title||s.label_name||s.slug||s.session_id.slice(0,8); }
 
+// ---- 저장된 관제 그룹(Host 사이드카) — 앱이 닫혀 있어도 관제 알림을 받는 근거 ----
+// 그룹은 Host 의 monitor_groups.json 에 산다. 알림 소스는 훅(관리 Stop/하위 Stop/하위 시작),
+// 발송은 Host 의 웹푸시. 알림 클릭 → #monitor=<gid> → 그 그룹 오버레이.
+async function fetchMonGroups(){ try{ const r=await T.api('GET','/api/owner/monitor/groups'); return (r&&r.groups)||[]; }catch(e){ return []; } }
+function openMonitorGroup(g){
+  const ids=[g.manager].concat((g.subs||[]).filter(s=>s!==g.manager));
+  openMonitor(ids, g.manager, Object.assign({}, g.labels||{}));
+}
+async function openMonitorGroupById(gid){
+  if(!gid) return;
+  const g=(await fetchMonGroups()).find(x=>x.id===gid);
+  if(!g){ toast('저장된 관제 그룹을 찾을 수 없습니다'); return; }
+  if(document.getElementById('mon-ov')) return;   // 이미 관제 중이면 갈아엎지 않는다
+  openMonitorGroup(g);
+}
+function consumePendingMonitor(){
+  if(!PENDING_OPEN_GID) return;
+  const gid=PENDING_OPEN_GID; PENDING_OPEN_GID='';
+  openMonitorGroupById(gid);
+}
+const MON_NOTIFY_LABELS={manager_stop:'관리 턴 종료', sub_stop:'하위 응답 완료', sub_start:'하위 작업 시작'};
+
 function showMonitorPicker(){
   const body=el('div');
+  // ── 저장된 그룹 ──
+  const savedWrap=el('div'); savedWrap.style.marginBottom='10px'; body.appendChild(savedWrap);
+  const renderSaved=(groups)=>{
+    savedWrap.innerHTML='';
+    if(!groups.length) return;
+    savedWrap.appendChild(el('div','cwd','저장된 관제 그룹 — 열거나, 알림을 켜고 끄거나, 지웁니다. 알림은 앱을 닫아도 옵니다(훅 기반).'));
+    groups.forEach(g=>{
+      const row=el('div','mpick'); row.style.flexWrap='wrap';
+      const nm=el('div','mp-name',`${g.name}  ·  ${1+(g.subs||[]).length}개 세션`); nm.style.flex='1 1 100%';
+      const open=el('button','btn','열기'); open.style.padding='6px 12px';
+      open.onclick=()=>{ closeModal(); openMonitorGroup(g); };
+      row.appendChild(nm); row.appendChild(open);
+      Object.keys(MON_NOTIFY_LABELS).forEach(k=>{
+        const lab=el('label','mp-mgr'); const cb=el('input'); cb.type='checkbox'; cb.checked=!!(g.notify&&g.notify[k]);
+        cb.onchange=async()=>{ try{ await T.api('POST',`/api/owner/monitor/groups/${encodeURIComponent(g.id)}/notify`,{body:{notify:{[k]:cb.checked}}}); toast('알림 설정 저장됨'); }
+          catch(e){ cb.checked=!cb.checked; toast('저장 실패: '+e.message); } };
+        lab.appendChild(cb); lab.appendChild(document.createTextNode('🔔 '+MON_NOTIFY_LABELS[k]));
+        row.appendChild(lab);
+      });
+      const del=el('button','btn ghost','삭제'); del.style.cssText='padding:6px 10px;color:#e66';
+      del.onclick=async()=>{ if(!confirm(`'${g.name}' 그룹을 지울까요? (세션은 그대로, 알림만 멈춥니다)`)) return;
+        try{ await T.api('POST',`/api/owner/monitor/groups/${encodeURIComponent(g.id)}/delete`); renderSaved(await fetchMonGroups()); toast('그룹 삭제됨'); }
+        catch(e){ toast('삭제 실패: '+e.message); } };
+      row.appendChild(del);
+      savedWrap.appendChild(row);
+    });
+  };
+  fetchMonGroups().then(renderSaved);
+  // ── 새 그룹 고르기 ──
   body.appendChild(el('div','cwd','관리 에이전트 1개 + 하위 세션들을 골라 실시간 관전합니다. 관리는 하위를 claude -p 로 호출하는 세션입니다. 읽기전용이라 세션에 영향을 주지 않습니다.'));
   const list=el('div'); list.style.margin='10px 0'; body.appendChild(list);
   const rows=[];
@@ -2544,18 +2600,25 @@ function showMonitorPicker(){
     list.appendChild(row); rows.push({cb,mr,s});
   });
   if(!rows.length) list.appendChild(el('div','empty','세션이 없습니다.'));
-  const go=el('button','btn','관전 시작');
-  go.onclick=()=>{
+  const nameIn=inputEl(''); nameIn.placeholder='그룹 이름(저장할 때만, 비우면 관리 세션 이름)';
+  body.appendChild(field('저장 이름', nameIn));
+  const pick=()=>{
     const picked=rows.filter(r=>r.cb.checked);
-    if(picked.length<1){ toast('세션을 1개 이상 선택하세요'); return; }
+    if(picked.length<1){ toast('세션을 1개 이상 선택하세요'); return null; }
     const mgrRow=rows.find(r=>r.mr.checked);
     const mgr=mgrRow?mgrRow.s.session_id:picked[0].s.session_id;
     if(!picked.some(r=>r.s.session_id===mgr)) picked.unshift(rows.find(r=>r.s.session_id===mgr));
     const labels={}; picked.forEach(r=>{ labels[r.s.session_id]=monSessName(r.s); });
-    closeModal();
-    openMonitor(picked.map(r=>r.s.session_id), mgr, labels);
+    return {ids:picked.map(r=>r.s.session_id), mgr, labels};
   };
-  openModal('🎬 오케스트레이션 관제 — 그룹 선택', body, [go]);
+  const go=el('button','btn','관전 시작');
+  go.onclick=()=>{ const p=pick(); if(!p) return; closeModal(); openMonitor(p.ids, p.mgr, p.labels); };
+  const save=el('button','btn','💾 저장하고 관전'); save.title='Host 에 그룹을 저장해 앱을 닫아도 관제 알림을 받습니다';
+  save.onclick=async()=>{ const p=pick(); if(!p) return;
+    try{ await T.api('POST','/api/owner/monitor/groups',{body:{name:nameIn.value.trim(), manager:p.mgr, subs:p.ids.filter(s=>s!==p.mgr), labels:p.labels}}); toast('관제 그룹 저장됨 — 알림이 켜졌습니다'); }
+    catch(e){ toast('저장 실패: '+e.message); return; }
+    closeModal(); openMonitor(p.ids, p.mgr, p.labels); };
+  openModal('🎬 오케스트레이션 관제 — 그룹 선택', body, [go, save]);
 }
 
 function openMonitor(ids, manager, labels){

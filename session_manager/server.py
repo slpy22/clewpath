@@ -881,6 +881,36 @@ def create_app() -> FastAPI:
         await webterm.run_terminal(websocket, session_id,
                                    skip_permissions=skip, fork_id=fork_id, screen_id=screen_id)
 
+    # ---- 관제 그룹 저장 (앱이 닫혀 있어도 관제 알림을 받기 위한 Host 측 그룹) ----
+    # 릴레이 api 프록시가 GET/POST 만 중계하므로 수정·삭제도 POST 변형으로 둔다(기기 API 와 동일 관례).
+    @app.get("/api/owner/monitor/groups")
+    def monitor_groups_list():
+        from session_manager import mongroups
+        return {"groups": mongroups.list_groups()}
+
+    @app.post("/api/owner/monitor/groups")
+    def monitor_groups_save(body: dict = Body(...)):
+        from session_manager import mongroups
+        try:
+            return mongroups.save(name=body.get("name") or "", manager=body.get("manager") or "",
+                                  subs=body.get("subs") or [], labels=body.get("labels") or {},
+                                  notify=body.get("notify"), gid=body.get("id"))
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+
+    @app.post("/api/owner/monitor/groups/{gid}/notify")
+    def monitor_groups_notify(gid: str, body: dict = Body(...)):
+        from session_manager import mongroups
+        g = mongroups.update(gid, name=body.get("name"), notify=body.get("notify"))
+        if not g:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        return g
+
+    @app.post("/api/owner/monitor/groups/{gid}/delete")
+    def monitor_groups_delete(gid: str):
+        from session_manager import mongroups
+        return {"deleted": mongroups.delete(gid)}
+
     # ---- 오케스트레이션 관제 (여러 세션 실시간 관전, 읽기전용·무침습) ----
     # ?ids=<uuid1>,<uuid2>,...  &manager=<uuid>  (manager 미지정 시 첫 세션)
     @app.websocket("/ws/monitor")

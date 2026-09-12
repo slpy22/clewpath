@@ -238,3 +238,26 @@ picker_hidden=False 로 뜸(정상 세션처럼, 흐리지 않게) — 관제엔
 - **VERDICT:** ENG CLEARED — 아키텍처 5개 결정 확정, 크리티컬 갭 0. 구현 착수 가능(단 파서 실측 스파이크 최선두).
 
 NO UNRESOLVED DECISIONS
+
+## Phase 2-1. 관제 그룹 저장 + 관제 알림 (v0.8.1, 2026-09-12)
+
+**왜 묶었나**: 관제 그룹은 WS 연결 단위(서버 메모리)라 앱을 닫으면 사라진다. 앱이 닫혀 있어도
+"관리 턴 종료·하위 응답 완료" 푸시를 받으려면 Host 가 그룹을 알아야 한다 → 저장이 알림의 기반.
+
+**알림 소스 = 훅(실증)**: `claude -p` 로 호출된 헤드리스 하위 세션도 UserPromptSubmit/Stop/SessionEnd
+훅이 Host 에 도달한다(2026-09-12 hooktest 2건: thinking→ready→ended). 따라서 상시 tail 감시 없이
+훅만으로 하위 "응답 완료"를 정확히 안다. 에러(호출 실패)는 훅으로 못 보므로 Phase 2-2(관리 tail 의
+tool_result is_error)로 미룸.
+
+**설계**
+- `mongroups.py`: 데이터 폴더 `monitor_groups.json`(labels 사이드카와 같은 원자 저장·손상 내성).
+  {id, name, manager, subs[], labels{}, notify{manager_stop, sub_stop, sub_start}}. 상한 50.
+- `push._notify_groups`: 훅 Stop/UserPromptSubmit 수신 시 소속 그룹·역할로 라우팅. **소속 세션은
+  그룹 설정이 알림을 결정**(일반 '작업 완료' 중복 방지, sub_stop 끄면 조용). 권한요청은 항상 일반.
+  `[push] monitor=false` 면 그룹 알림을 끄고 일반으로 폴백. 페이로드에 `gid`.
+- API 는 릴레이 api 프록시가 GET/POST 만 중계하므로 `…/{id}/notify`, `…/{id}/delete` POST 변형.
+- 클릭 경로: sw.js `gid` → `#monitor=<gid>`(또는 열린 창에 `open-monitor` 메시지) → PWA 가 목록
+  준비 후 저장 그룹의 관제 오버레이를 연다.
+- PWA 피커: 저장된 그룹(열기·🔔 토글 3·삭제) + 이름 + "💾 저장하고 관전".
+
+**검증**: 단위 18건(저장소 8·라우팅 8·API 2), 전체 275 passed. 푸시 실수신은 게시 후 폰으로.

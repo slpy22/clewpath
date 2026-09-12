@@ -16,21 +16,24 @@ self.addEventListener("push", (e) => {
     renotify: false,
     icon: "vendor/icon-192.png",
     badge: "vendor/badge-96.png",     // 안드로이드 상태바용 단색(흰/투명) 마크
-    data: { sid: p.sid || "", kind: p.kind || "" },
+    data: { sid: p.sid || "", kind: p.kind || "", gid: p.gid || "" },   // gid: 관제 그룹 딥링크
   }));
 });
 
 self.addEventListener("notificationclick", (e) => {
   e.notification.close();
   const sid = (e.notification.data && e.notification.data.sid) || "";
+  const gid = (e.notification.data && e.notification.data.gid) || "";
   // SW 파일 위치가 앱 루트다: 로컬=/sw.js -> /,  릴레이=/relay/sw.js -> /relay/app
   const base = self.location.pathname.replace(/sw\.js$/, "");
-  const url = (base === "/" ? "/" : base + "app") + (sid ? "#open=" + encodeURIComponent(sid) : "");
+  // 관제 알림(gid)은 그 그룹의 관제 오버레이로, 그 외는 세션으로 연다
+  const frag = gid ? "#monitor=" + encodeURIComponent(gid) : (sid ? "#open=" + encodeURIComponent(sid) : "");
+  const url = (base === "/" ? "/" : base + "app") + frag;
   e.waitUntil((async () => {
     const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
     for (const w of wins) {
       if (w.url.indexOf(self.location.origin) === 0) {
-        try { await w.focus(); w.postMessage({ type: "open-session", sid }); return; } catch (_) {}
+        try { await w.focus(); w.postMessage(gid ? { type: "open-monitor", gid } : { type: "open-session", sid }); return; } catch (_) {}
       }
     }
     await self.clients.openWindow(url);
