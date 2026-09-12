@@ -315,6 +315,14 @@
   .term-tabs .lchip .lname{overflow:hidden;text-overflow:ellipsis}
   .term-tabs .lchip.dead{opacity:.55}
   .term-tabs .lchip.dead .ldot{background:var(--muted)!important}
+  /* 상태 밑줄(v0.8.3): 목록 뱃지와 같은 색 의미(파랑 작업 중·주황 권한/입력 대기·초록 완료).
+     세션 식별색(.ldot)과 겹치지 않게 칩 안쪽 하단 3px 바(::after). 진행형 상태는 깜빡임.
+     밑줄 자리를 위해 탭 칩은 범례 칩보다 아래 여백을 조금 더 둔다(모든 칩 동일 높이). */
+  .term-tabs .lchip{position:relative;padding:4px 10px 6px}
+  .term-tabs .lchip.st::after{content:'';position:absolute;left:10px;right:10px;bottom:2px;height:3px;
+    border-radius:2px;background:var(--st)}
+  .term-tabs .lchip.st.stpulse::after{animation:stblink 1.4s ease-in-out infinite}
+  @keyframes stblink{0%,100%{opacity:1}50%{opacity:.2}}
   /* 탭 즉시 전환(v0.8.0): 터미널 영역(wrap)이 grid 1fr 행을 차지하고, 그 안에 탭별 host 를
      절대배치로 보유한다. 전경(.on)만 표시 — 숨은 탭의 xterm 버퍼는 그대로 남는다. */
   #paneDetail.term-mode>.term-wrap{position:relative;min-height:0;overflow:hidden;background:#0d1117}
@@ -434,7 +442,8 @@
      범례 규칙(.mon-legend .lchip)과 특이성이 같아 반드시 그 뒤에 와야 이긴다. */
   @media (max-width:879px), (pointer: coarse){
     .term-tabs{padding:6px 10px;gap:8px}
-    .term-tabs .lchip{font-size:.92rem;padding:8px 12px;min-height:40px;gap:7px;max-width:70vw}
+    .term-tabs .lchip{font-size:.92rem;padding:8px 12px 10px;min-height:40px;gap:7px;max-width:70vw}
+    .term-tabs .lchip.st::after{left:12px;right:12px;bottom:3px}
     .term-tabs .lchip.sel{font-weight:650;background:var(--surface2);outline-width:2px}
     .term-tabs .lchip .ldot{width:10px;height:10px}
     .term-tabs .lchip .lact{width:9px;height:9px}
@@ -993,6 +1002,7 @@ async function loadList(q){
     SESSIONS=data.sessions||[];
     if(typeof data.now==='number') CLOCK_SKEW=data.now-Date.now()/1000;
     rerender();
+    if(paneDetail().classList.contains('term-mode')) renderTabBarSoon();   // 살아있는 탭 스트립의 상태 갱신
     consumePendingOpen();          // 알림 클릭으로 진입한 경우 해당 세션 자동 열기
     restoreTabsOnce();             // 저장된 터미널 탭 워킹셋 복원(1회, 화면 탈취 없이 목록만)
     consumePendingMonitor();       // 관제 알림 클릭으로 진입한 경우 그 그룹 오버레이 열기
@@ -1012,6 +1022,8 @@ setInterval(async()=>{
     const pl=$('#paneList'); const st=pl?pl.scrollTop:0;
     LIST_CTX.rerender();
     if(pl) pl.scrollTop=st;
+    // 터미널 탭 칩의 상태 밑줄도 같은 훅 상태를 쓴다 — 목록과 함께 갱신(term-mode 일 때만 의미)
+    if(paneDetail().classList.contains('term-mode')) renderTabBarSoon();
   }catch(e){}
 }, 20000);
 
@@ -1874,16 +1886,29 @@ function restoreTabsOnce(){
   saveTabs();
 }
 // 탭 스트립을 그린다(termView.strip). 모니터 범례 칩 CSS 재사용(lchip/ldot/lx/ladd/sel).
+// 배지 이벤트 종류(툴팁용): 모니터 이벤트의 role/tools/tool_results 로 사람이 읽을 한 줄.
+function tabEvKind(ev){
+  if(ev.role==='assistant'){ const tl=ev.tools||[]; return tl.length? '도구 실행('+tl.slice(0,3).join(', ')+(tl.length>3?' 외':'')+')' : '응답'; }
+  if(ev.role==='user') return (ev.tool_results&&ev.tool_results.length)? '도구 결과' : '프롬프트 입력';
+  return '이벤트';
+}
+function relIso(iso){ const sec=Date.parse(iso||'')/1000; return isNaN(sec)?'':relTs(sec); }
 function renderTabBar(){
   const strip=termView.strip; if(!strip) return;
   strip.innerHTML='';
   TABS.list.forEach(t=>{
-    const s=t.s, on=(t.key===TABS.active);
+    // 표시는 목록의 최신 객체로(제목·훅 상태 변동 반영). t.s 자체는 switchTab 이 갱신한다.
+    const s=(SESSIONS||[]).find(x=>x.session_id===t.s.session_id)||t.s, on=(t.key===TABS.active);
     const chip=el('span','lchip'+(on?' sel':'')+(t.dead?' dead':''));
-    chip.title=(t.dead?'[중지됨 — 열면 새로 시작] ':'')+sessLabel(s)+'\n'+s.session_id;
+    const lines=[(t.dead?'[중지됨 — 열면 새로 시작] ':'')+sessLabel(s), s.session_id];
     const dot=el('span','ldot'); dot.style.background=tabColor(s.session_id); chip.appendChild(dot);
     chip.appendChild(el('span','lname',sessLabel(s)));
-    if(t.act&&!on){ const a=el('span','lact'); a.title='새 출력 있음'; chip.appendChild(a); chip.title+='\n● 새 출력 있음'; }
+    // 상태 밑줄 — 목록 뱃지(훅 상태, 신선도 게이트 포함)와 같은 판정·색. 중지된 탭은 상태 없음.
+    const st=t.dead?null:sessionBadge(s);
+    if(st){ chip.classList.add('st'); if(st.pulse) chip.classList.add('stpulse'); chip.style.setProperty('--st',st.c); lines.push('상태: '+st.text); }
+    if(t.act&&!on){ const a=el('span','lact'); a.title='새 출력 있음'; chip.appendChild(a);
+      lines.push('● 새 출력 '+(t.actN||1)+'건'+(t.last?' · 최근: '+t.last.what+' ('+relIso(t.last.at)+')':'')); }
+    chip.title=lines.join('\n');
     const x=el('span','lx','×'); x.title='탭 닫기';
     x.onclick=(ev)=>{ ev.stopPropagation(); closeTab(t.key); };
     chip.appendChild(x);
@@ -1892,11 +1917,15 @@ function renderTabBar(){
   });
   const add=el('button','ladd','+ 탭'); add.title='다른 세션을 터미널 탭으로 추가';
   add.onclick=openTabPicker; strip.appendChild(add);
-  // 활성 칩이 보이도록 스크롤(모바일 가로 스트립)
+  // 활성 칩이 보이도록 스크롤(모바일 가로 스트립) — 활성 탭이 바뀐 렌더에서만(주기 재렌더가
+  // 사용자가 넘겨 둔 스트립 스크롤을 되돌리지 않게)
   const sel=strip.querySelector('.lchip.sel');
-  if(sel&&sel.scrollIntoView){ try{ sel.scrollIntoView({inline:'nearest',block:'nearest'}); }catch(e){} }
+  if(sel&&sel.scrollIntoView&&strip._sel!==TABS.active){ strip._sel=TABS.active; try{ sel.scrollIntoView({inline:'nearest',block:'nearest'}); }catch(e){} }
   tabBadge.sync();   // 탭 집합이 바뀔 때마다 배지 구독을 맞춘다(생성/차분/재구독)
 }
+// 이벤트마다 스트립을 갈아엎지 않게 300ms 로 모아 렌더(툴팁 건수·상태 갱신용).
+let _tabBarTimer=null;
+function renderTabBarSoon(){ if(_tabBarTimer) return; _tabBarTimer=setTimeout(()=>{ _tabBarTimer=null; renderTabBar(); },300); }
 // ---- 배경 탭 활동 배지: 모니터 tail 스트림 1개 재사용 (설계 §4) ----
 // 열린 탭 sid 들을 모니터 그룹으로 구독한다(라이브 터미널 WS 1 + 모니터 WS 1 = 총 2).
 // 배경 탭에 '구독 이후' 새 이벤트가 오면 칩에 점(.lact). webmonitor 는 snapshot 뿐 아니라
@@ -1929,9 +1958,11 @@ const tabBadge={
       const t=TABS.list.find(x=>x.s.session_id===sid);
       if(!t||t.key===TABS.active) continue;                    // 전경 탭은 눈으로 보고 있다
       const arm=this.armedAt[sid]; if(!arm||!ev.ts||ev.ts<=arm) continue;   // 프라임/과거 이벤트
-      if(!t.act){ t.act=true; changed=true; }
+      if(!t.act){ t.act=true; t.actN=0; }
+      t.actN=(t.actN||0)+1; t.last={what:tabEvKind(ev), at:ev.ts};        // 툴팁: 건수·최근 종류
+      changed=true;
     }
-    if(changed) renderTabBar();
+    if(changed) renderTabBarSoon();
   },
   close(){ if(this.h){ try{this.h.close();}catch(e){} } this.h=null; this.subs=new Set(); this.armedAt={}; },
 };
@@ -2145,7 +2176,7 @@ async function loadTerminal(s, safe){
   // wasDead: 복원 시점에 PTY 가 없던 탭(다시 열면 새 스폰). attach 가 보유 xterm 을 비울지 정하는
   // 근거 — 20초 폴링의 SESSIONS.live_terminal 은 stale 해서(e2e 실측: 살아난 뒤에도 false) 못 쓴다.
   const wasDead=!!(t0&&t0.dead);
-  if(t0){ t0.s=s; t0.safe=!!safe; t0.dead=false; t0.act=false; }   // 보는 순간 배지 소거
+  if(t0){ t0.s=s; t0.safe=!!safe; t0.dead=false; t0.act=false; t0.actN=0; t0.last=null; }   // 보는 순간 배지 소거
   else TABS.list.push({key, s, safe:!!safe, dead:false, act:false});
   TABS.active=key;
   CURRENT_TERM_SID=s.session_id;           // 알림 클릭이 이 화면을 갈아엎지 않게 표시
