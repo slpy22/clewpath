@@ -22,7 +22,9 @@
 - [x] `monwatch.py`: Host 백그라운드 워처 1스레드. 저장 그룹 중 `notify.error` 켜진 그룹의 **관리 세션 jsonl 만** Tailer 로 2초 폴링(seek_end 부터 — 과거 오류 재알림 없음). tool_use(Bash `claude -p --resume <하위>`, parse_calllines, 원본 command 무절삭) 를 pending{tool_use_id→target} 에 두고, 같은 id 의 tool_result 가 is_error 면 push `mon-error` "[그룹] X 호출 실패"(본문 앞 120자). 그룹 목록은 폴링마다 재로드(저장·삭제·플래그 즉시 반영), 파일 없음→30초 재탐색, 회전 내성(Tailer)
 - [x] `notify.error` 플래그(기본 on, 기존 저장 파일은 norm_notify 로 보정) — mongroups DEFAULT_NOTIFY·PWA 토글 라벨 '하위 호출 실패'. server lifespan 에서 start()/stop() (daemon, 기동 비블로킹)
 - [x] 테스트 `test_monwatch.py` 9건: 오류→1건(gid·대상·본문), 정상→무발송, 그룹 밖 UUID·비-claude 오류 무시, 과거 이력 미재생, 그룹 없음/플래그 off/삭제 시 tail 없음, 파일 없다가 생김, 3000자 넘는 프롬프트 뒤 UUID, 페이로드+마스터 스위치, 스레드 start/stop. 전체 284 passed
-- [ ] 실측: 실제 jsonl 의 `claude --resume` 실패 tool_result 형태 확인(is_error 키 존재·content 문자열) → 0.8.2 적용 후 저장 그룹에서 일부러 없는 하위 UUID 호출해 '호출 실패' 푸시 수신(사장님 확인)
+- [x] 실측: 실제 jsonl 의 `claude --resume` 실패 tool_result = `{is_error:true, content:"Exit code 1\nNo conversation found with session ID: …"}` 확인(로컬 세션 400개 + 직접 발생). 0.8.2 게시·이 PC 적용(헬스체크 통과)
+- [ ] 푸시 실수신(사장님 확인 대기): 임시 그룹 `ecdec71f`(관리=이 세션 97aeef21, 하위=없는 UUID, 알림은 error 만) 만들고 없는 UUID 호출 → Host 로그에 push 실패 없음. 이 PC Chrome 에 "[e2e-호출실패] 없는하위 호출 실패" 알림 떴는지 확인 후 그룹 삭제
+- [x] e2e 발견 버그 수정(커밋, 다음 릴리스에 포함): 그룹 API 가 저장 형태 그대로 반환 → 옛 그룹은 error 키 없어 PWA 토글이 꺼진 듯 표시. 읽기 경로 3곳 norm_notify 사본 반환(파일 무수정) + PWA 기본값 폴백(즉시 라이브)
 
 ### Phase 2 (고도화) — 대기
 - [ ] 관제 오버레이 안에서 "💾 저장" 버튼(피커 밖에서 열었을 때)
