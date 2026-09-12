@@ -408,6 +408,17 @@
   .mon-legend .lchip .lx:hover{color:var(--danger,#e5534b)}
   .mon-legend .ladd{cursor:pointer;font-size:.72rem;padding:3px 10px;border-radius:999px;
     border:1px dashed var(--line2);color:var(--accent);background:none}
+  /* 타임라인 필터 바(v0.8.4): 종류 단일 선택 + 세션별 숨김. 행은 .fhid 로만 숨긴다(재렌더 없음). */
+  .mon-filter{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:6px 14px;
+    border-bottom:1px solid var(--line);background:var(--surface);font-size:.72rem}
+  .mon-filter .fsep{width:1px;height:16px;background:var(--line2);margin:0 2px}
+  .mon-filter .fchip{cursor:pointer;display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:999px;
+    border:1px solid var(--line2);background:none;color:var(--ink2);font-size:.72rem;font-family:inherit}
+  .mon-filter .fchip.on{background:var(--accent-wash);color:var(--accent);border-color:var(--accent)}
+  .mon-filter .fchip.off{opacity:.45;text-decoration:line-through}
+  .mon-filter .fchip .ldot{width:8px;height:8px;border-radius:50%;flex:none}
+  .mon-filter .fcount{margin-left:auto;color:var(--muted);font-family:var(--mono);font-size:.68rem;white-space:nowrap}
+  .mrow.fhid{display:none}
   /* 뷰어 실시간 배지 */
   .vlive{display:inline-flex;align-items:center;gap:5px;font-size:.7rem;font-family:var(--mono);
     color:var(--muted);margin-left:auto;white-space:nowrap}
@@ -449,6 +460,7 @@
     .term-tabs .lchip .lact{width:9px;height:9px}
     .term-tabs .lchip .lx{font-size:1.1rem;padding:6px 8px;margin:-6px -8px -6px -2px;min-width:32px;text-align:center}
     .term-tabs .ladd{font-size:.92rem;padding:8px 14px;min-height:40px}
+    .mon-filter .fchip{font-size:.85rem;padding:6px 12px;min-height:36px}
   }
   @media(max-width:760px){ .mon-viewer{position:absolute;inset:0;width:auto;min-width:0;max-width:none;z-index:3}
     .mon-resizer{display:none} }
@@ -2663,6 +2675,7 @@ function openMonitor(ids, manager, labels){
   const vtoggle=el('button','mon-vtoggle','◨'); vtoggle.title='뷰어 패널 접기/펼치기'; head.appendChild(vtoggle);
   const x=el('button','x','✕'); head.appendChild(x);
   const legend=el('div','mon-legend');
+  const fbar=el('div','mon-filter');   // 타임라인 필터(종류 + 세션별 숨김)
   // 분할: 좌 타임라인(bodyW) / 우 선택세션 뷰어(viewer)
   const split=el('div','mon-split');
   const bodyW=el('div','mon-body');
@@ -2674,7 +2687,7 @@ function openMonitor(ids, manager, labels){
   viewer.appendChild(vhead); viewer.appendChild(vwrap);
   const rez=el('div','mon-resizer'); rez.title='드래그로 좌우 폭 조절 · 더블클릭 초기화';
   split.appendChild(bodyW); split.appendChild(rez); split.appendChild(viewer);
-  ov.appendChild(head); ov.appendChild(legend); ov.appendChild(split);
+  ov.appendChild(head); ov.appendChild(legend); ov.appendChild(fbar); ov.appendChild(split);
   document.body.appendChild(ov);
   vtoggle.onclick=()=>{ const hid=viewer.classList.toggle('hide'); rez.classList.toggle('gone',hid); };
   // 좌우 폭 드래그 조절(저장·복원, 더블클릭 초기화). 폰(오버레이)은 CSS 로 숨김.
@@ -2760,6 +2773,43 @@ function openMonitor(ids, manager, labels){
   }
 
   let handle=null;
+  // ---- 타임라인 필터: 종류 단일 선택 + 세션별 숨김. 행은 렌더 시 data-sid·종류 클래스를 갖고,
+  //      필터는 .fhid 토글만 한다(재렌더 없음). 우측 뷰어·자동 추적·활동점은 필터와 무관(표시만 거름).
+  let fKind='all'; const fHide=new Set(); let fTotal=0, fShown=0;
+  const F_KINDS=[['all','전체'],['call','→ 호출선'],['text','💬 대화'],['err','⚠ 오류']];
+  const rowMatches=(row)=>{
+    if(fHide.has(row.dataset.sid)) return false;
+    return fKind==='all' || row.classList.contains('has-'+fKind);
+  };
+  const fcount=el('span','fcount');
+  function renderFilterCount(){ fcount.textContent=(fKind!=='all'||fHide.size)?`표시 ${fShown} / 전체 ${fTotal}`:`전체 ${fTotal}`; }
+  function applyFilter(){
+    const stick=nearBottom();
+    fShown=0;
+    for(const row of bodyW.children){ if(!row.classList.contains('mrow')) continue;
+      const ok=rowMatches(row); row.classList.toggle('fhid',!ok); if(ok) fShown++; }
+    renderFilterCount();
+    if(stick) bodyW.scrollTop=bodyW.scrollHeight;
+  }
+  function renderFilterBar(){
+    fbar.innerHTML='';
+    F_KINDS.forEach(([k,label])=>{
+      const b=el('button','fchip'+(fKind===k?' on':''),label); b.title='이 종류의 이벤트만 표시';
+      b.onclick=()=>{ fKind=k; renderFilterBar(); applyFilter(); };
+      fbar.appendChild(b);
+    });
+    const sids=Object.keys(group);
+    if(sids.length){ fbar.appendChild(el('span','fsep')); }
+    sids.forEach(sid=>{
+      const g=group[sid]; const hid=fHide.has(sid);
+      const b=el('button','fchip'+(hid?' off':'')); b.title=hid?'이 세션 다시 표시':'이 세션 숨기기';
+      const dot=el('span','ldot'); dot.style.background=g.color||'var(--muted)'; b.appendChild(dot);
+      b.appendChild(document.createTextNode((hid?'':'👁 ')+(g.role==='manager'?'★ ':'')+(g.label||sid.slice(0,8))));
+      b.onclick=()=>{ if(hid) fHide.delete(sid); else fHide.add(sid); renderFilterBar(); applyFilter(); };
+      fbar.appendChild(b);
+    });
+    fbar.appendChild(fcount); renderFilterCount();
+  }
   function renderLegend(){
     legend.innerHTML='';
     Object.keys(group).forEach(sid=>{
@@ -2777,6 +2827,7 @@ function openMonitor(ids, manager, labels){
     const add=el('button','ladd','+ 세션 추가');
     add.onclick=()=>showAddSessionPicker(group, sid=>{ if(handle) handle.add(sid,'sub'); });
     legend.appendChild(add);
+    renderFilterBar();   // 세션 집합·색·라벨 변동을 필터 토글에도 반영
   }
   renderLegend();
   const fmtT=(ts)=>{ try{ return ts?new Date(ts).toLocaleTimeString():''; }catch(e){ return ''; } };
@@ -2792,6 +2843,14 @@ function openMonitor(ids, manager, labels){
     const row=el('div','mrow'+(ev.session_role==='sub'?' sub':''));
     row.style.cursor='pointer'; row.onclick=()=>selectSession(ev.session_id);   // 행 클릭 → 뷰어
     if(ev.color) row.style.borderLeftColor=ev.color;
+    // 필터용 표식: 세션 + 종류(호출선/대화/도구/오류). 필터는 이 표식만 보고 .fhid 를 토글한다.
+    row.dataset.sid=ev.session_id;
+    if((ev.calls_out||[]).length) row.classList.add('has-call');
+    if(ev.text) row.classList.add('has-text');
+    if((ev.tools||[]).length) row.classList.add('has-tool');
+    if((ev.tool_results||[]).some(r=>r.is_error)) row.classList.add('has-err');
+    fTotal++; if(rowMatches(row)) fShown++; else row.classList.add('fhid');
+    renderFilterCount();
     const h=el('div','mrow-h');
     const lab=el('span','mlab',ev.session_label||ev.session_id.slice(0,8)); if(ev.color)lab.style.color=ev.color;
     h.appendChild(lab);
