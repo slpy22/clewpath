@@ -1054,20 +1054,33 @@ if(PENDING_OPEN_SID){ try{ history.replaceState(null,'',location.pathname); }cat
 let PENDING_OPEN_GID = (location.hash.match(/#monitor=([^&]+)/)||[])[1] || '';
 if(PENDING_OPEN_GID){ try{ history.replaceState(null,'',location.pathname); }catch(e){} }
 let CURRENT_TERM_SID=null;   // 지금 터미널 화면으로 보고 있는 세션(알림 클릭 시 화면 보존용)
-function openSessionById(sid){
+// 알림 클릭 → 세션으로 점프(v0.8.6). 탭이 있으면 그 탭, 우리 PTY 가 살아 있으면(live_terminal)
+// 바로 그 터미널(=탭 추가), 아니면 상세 화면 — 재개 방식·동시 재개 경고는 거기 있으므로 알림으로
+// 새 claude 를 띄우지 않는다. 설계 §9 의 "복원 시 터미널 자동 열기 금지"는 *자동* 복원 얘기고,
+// 알림 클릭은 사용자의 명시 동작이라 '🖥 터미널로 돌아가기' 버튼과 같은 등급으로 본다.
+function jumpToSession(s){
+  const t=TABS.list.find(x=>x.s.session_id===s.session_id);
+  if(t){ switchTab(t.key); return; }
+  if(s.live_terminal){ loadTerminal(s); return; }
+  loadDetail(s);
+}
+const _findSess=(sid)=>(SESSIONS||[]).find(x=>x.session_id===sid || (x.session_id||'').startsWith(sid));
+async function openSessionById(sid){
   if(!sid) return;
   if(CURRENT_TERM_SID===sid) return;   // 이미 그 세션 터미널을 보는 중 - 화면 갈아엎지 않음
   // 배경 탭으로 열려 있는 세션이면 새 화면을 만들지 않고 그 탭으로 전환한다
   const t=TABS.list.find(x=>x.s.session_id===sid || (x.s.session_id||'').startsWith(sid));
   if(t){ switchTab(t.key); return; }
-  const s=(SESSIONS||[]).find(x=>x.session_id===sid || (x.session_id||'').startsWith(sid));
-  if(s){ loadDetail(s); } else { PENDING_OPEN_SID=sid; }
+  // 목록은 20초 폴링이라 live_terminal 이 stale 일 수 있다 → 판단 전에 새로 받는다(실패 시 캐시)
+  try{ const d=await T.list({limit:0}); if(d&&d.sessions){ SESSIONS=d.sessions; if(typeof d.now==='number') CLOCK_SKEW=d.now-Date.now()/1000; } }catch(e){}
+  const s=_findSess(sid);
+  if(s){ jumpToSession(s); } else { PENDING_OPEN_SID=sid; }
 }
 function consumePendingOpen(){
   if(!PENDING_OPEN_SID) return;
   const sid=PENDING_OPEN_SID; PENDING_OPEN_SID='';
-  const s=(SESSIONS||[]).find(x=>x.session_id===sid || (x.session_id||'').startsWith(sid));
-  if(s) loadDetail(s);
+  const s=_findSess(sid);
+  if(s) jumpToSession(s);   // 콜드 스타트(#open=)도 같은 규칙 — 목록은 방금 받은 것
 }
 if('serviceWorker' in navigator){
   navigator.serviceWorker.addEventListener('message',(e)=>{
@@ -1984,7 +1997,9 @@ const tabBadge={
 };
 function switchTab(key){
   const t=findTab(key); if(!t) return;
-  if(key===TABS.active&&termView.sid===t.s.session_id&&!termView.disconnected) return;   // 이미 전경
+  // 이미 전경 — 단 터미널 화면이 실제로 떠 있을 때만(상세/목록으로 나간 뒤엔 탭이 '활성'이어도
+  // 화면이 없다 → 다시 구축해야 한다. 알림→탭 점프 e2e 에서 발견)
+  if(key===TABS.active&&termView.sid===t.s.session_id&&!termView.disconnected&&paneDetail().classList.contains('term-mode')) return;
   // 목록의 최신 세션 객체로 갱신(제목·live_terminal 변동 반영)
   const fresh=(SESSIONS||[]).find(s=>s.session_id===t.s.session_id); if(fresh) t.s=fresh;
   loadTerminal(t.s, t.safe);   // 뷰가 떠 있으면 fast-path(attach 만), 아니면 구축
