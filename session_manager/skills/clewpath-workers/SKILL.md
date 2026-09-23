@@ -58,6 +58,8 @@ cd <워커 작업 폴더> && claude -p --output-format json "너는 '<역할>' �
                 실패: 409 cap(터미널 상한) / 409 bg_hold(백그라운드 에이전트 점유) / 404 no_cwd
 3. 뜰 때까지     3초 간격으로 1단계를 최대 10회 (레지스트리에 이름이 나타나면 됨)
 4. 보낸다        SendMessage(to=<peer.name>, message=<일감>, notify_when_idle=true)
+                ※ 이름은 **매번 1단계에서 새로 읽는다** — 제목이 없는 세션의 파생 이름(예: worker2-7f)은
+                  프로세스를 다시 띄울 때마다 바뀐다(실측). 등록부에는 UUID 만 믿는다.
                 첫 줄에 일감 제목, 본문에 요구사항·산출물 위치·완료 시 답장 형식을 쓴다.
 5. 기록          등록부의 last_dispatch, state=working
 ```

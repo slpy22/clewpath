@@ -20,6 +20,11 @@ from session_manager import config
 _CACHE_TTL = 2.0
 _lock = threading.Lock()
 _cache: dict = {"at": 0.0, "list": []}
+# 한 번이라도 본 이름/파이프 → 세션(Host 수명 동안). 워커가 죽으면 레지스트리 항목이 사라져
+# "No agent named … is reachable" 실패를 세션으로 못 잇는다(e2e 실측) → 마지막으로 본 매핑으로 해석.
+_seen_name: dict[str, str] = {}
+_seen_sock: dict[str, str] = {}
+_MAX_SEEN = 500
 _REF_RE = re.compile(r"\s*\[[0-9a-f]{4,}\]\s*$")   # "이름 [f0c2da]" 의 꼬리표
 
 
@@ -53,12 +58,25 @@ def _read_all() -> list[dict]:
     return out
 
 
+def _remember(peers: list[dict]) -> None:
+    for p in peers:
+        if p["name"]:
+            _seen_name[p["name"]] = p["session_id"]
+        if p["socket"]:
+            _seen_sock[_norm_pipe(p["socket"])] = p["session_id"]
+    for d in (_seen_name, _seen_sock):
+        if len(d) > _MAX_SEEN:
+            for k in list(d)[: len(d) - _MAX_SEEN]:
+                d.pop(k, None)
+
+
 def snapshot(max_age: float = _CACHE_TTL) -> list[dict]:
     with _lock:
         now = time.time()
         if now - _cache["at"] > max_age:
             _cache["list"] = _read_all()
             _cache["at"] = now
+            _remember(_cache["list"])
         return list(_cache["list"])
 
 
@@ -82,9 +100,11 @@ def resolve(ref: str | None) -> str | None:
         for p in peers:
             if p["socket"] and _norm_pipe(p["socket"]) == want:
                 return p["session_id"]
-        return None
+        return _seen_sock.get(want)          # 지금은 죽었지만 전에 본 파이프
     name = _REF_RE.sub("", ref)
     hits = [p for p in peers if p["name"] == name]
     if len(hits) == 1:
         return hits[0]["session_id"]
-    return None
+    if not hits:
+        return _seen_name.get(name)          # 죽은 워커의 이름(실패 감지용)
+    return None                              # 동명 2개 이상은 모호 — 해석 안 함

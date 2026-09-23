@@ -46,6 +46,33 @@ def test_peer_dir_missing_is_empty(fake_claude_home):
     assert peers.peer_map() == {}
 
 
+def test_resolve_remembers_dead_peer(fake_claude_home):
+    # 워커가 죽으면 레지스트리 항목이 사라진다 — "No agent named … reachable" 실패를 세션으로 잇기 위해
+    # 마지막으로 본 이름/파이프는 Host 수명 동안 기억한다(e2e 실측으로 발견).
+    _peer(fake_claude_home, 111, W, "worker2-40")
+    assert peers.resolve("worker2-40") == W
+    (fake_claude_home / "sessions" / "111.json").unlink()
+    peers._cache["at"] = 0.0
+    assert peers.peer_map() == {}
+    assert peers.resolve("worker2-40") == W and peers.resolve("uds:" + PIPE) == W
+    _peer(fake_claude_home, 112, M, "worker2-40"); peers._cache["at"] = 0.0     # 살아 있는 동명이 우선
+    assert peers.resolve("worker2-40") == M
+
+
+def test_monwatch_sendmessage_label_fallback(fake_claude_home):
+    # 레지스트리도 기억도 없을 때(Host 재기동 뒤 등) 그룹 라벨과 같은 이름이면 그 하위로
+    peers._seen_name.clear()
+    path = write_session(fake_claude_home, "F--m", M, [])
+    mongroups.save("포털", M, [W], labels={W: "포털워커"})
+    got = []
+    w = monwatch.Watcher(notify=lambda g, target, text: got.append(target) or 1)
+    w.poll()
+    with open(path, "a", encoding="utf-8") as f:
+        for o in (_use_sendmsg("t1", "포털워커"), _res("t1", '{"success":false,"message":"No agent named \'포털워커\' is reachable."}')):
+            f.write(json.dumps(o, ensure_ascii=False) + "\n")
+    assert w.poll() == 1 and got == [W]
+
+
 # ---------------------------------------------------------------- start_terminal
 
 class _FakeProc:

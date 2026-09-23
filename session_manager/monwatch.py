@@ -133,10 +133,13 @@ class Watcher:
                         continue
                     target = None
                     if b.get("name") == "SendMessage":
-                        # 워커 방식(v0.9.0): to=이름|uds:파이프 → 피어 레지스트리로 세션 해석
-                        target = resolve_peer(inp.get("to"))
+                        # 워커 방식(v0.9.0): to=이름|uds:파이프 → 피어 레지스트리(+마지막으로 본 이름)로
+                        # 세션 해석. 그래도 모르면 그룹 라벨과 같은 이름으로(사용자가 붙인 워커 이름).
+                        to = str(inp.get("to") or "")
+                        target = resolve_peer(to)
                         if target not in subs:
-                            target = None
+                            lbl = (t.group.get("labels") or {})
+                            target = next((s for s in subs if lbl.get(s) == to), None)
                     else:
                         # 원본 command 그대로(뷰어의 절삭 없이) — 긴 프롬프트 뒤 UUID 도 잡는다
                         cmd = inp.get("command")
