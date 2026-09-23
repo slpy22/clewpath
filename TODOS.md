@@ -11,14 +11,15 @@
 **"세션을 살려 둔다"** 하나만 맡는다. **기존 `-p --resume` 경로는 무변경(추가만)**, **세션 하나는 한 방식만**
 (워커로 띄운 세션에 `-p --resume` 금지 — 프로세스 2개 = 대화 분기).
 
-### Phase 1 (이번 사이클)
-- [ ] `POST /api/sessions/{id}/terminal/start` — 화면 없는 PTY 기동, **멱등**(이미 살아 있으면 `already_live`), `skip` 파라미터, 로컬 전용(스킬은 같은 PC). 상한 `SM_MAX_TERMINALS` 준수. 테스트: 두 번 호출해도 프로세스 1개, 상한 초과 거부
-- [ ] 라이브 판정 확장: `~/.claude/sessions/<pid>.json` 레지스트리(읽기 전용)를 세션 목록에 조인 → `peer:{name, status(idle/busy), pid}`. 우리 PTY 가 아닌 대화형 세션도 "떠 있음"으로. PWA 목록·탭에 표시(기존 `live_terminal` 의미는 그대로)
-- [ ] 관제 호출선: `tool_use SendMessage(to=이름|uds 파이프)` → 레지스트리로 세션 해석 → `→` 화살표. 수신 레코드 `<cross-session-message from-name=…>` 는 텍스트 정리(태그 제거·발신자 표시)
-- [ ] monwatch 실패 감지: `SendMessage` tool_result 의 `success:false`("No agent named … is reachable") → `[그룹] X 호출 실패` 푸시(기존 Bash 경로와 병행)
-- [ ] 스킬 `clewpath-workers`(리포 `skills/clewpath-workers/SKILL.md`): 살아 있나 → start → 대기 → SendMessage / 워커 등록부 `.clewpath/workers.json` / 새 워커는 `claude -p --output-format json` 1회로 UUID / 답장 형식(요약 5줄+산출물 경로) / `notify_when_idle` 로 완료 대기(폴링 금지) / 캐시 1시간 케이던스 / 워커 교체(인수인계) / 관제 그룹 자동 저장(`POST /api/owner/monitor/groups`) / 권한 모드 일치(기본 YOLO) / Host 업데이트로 PTY 꺼지면 규칙 1이 재기동 / 세션당 한 방식
-- [ ] 스킬 설치: 설정 화면 "📦 워커 스킬 설치" 버튼 + 확인창 → `~/.claude/skills/clewpath-workers/SKILL.md` **새 파일만 생성**(기존 파일 무접촉, 있으면 덮어쓰기 전 확인). CLAUDE.md 예외 목록 추가(사장님 승인 2026-09-23). 회귀 가드: 버튼 경유 외 자동 생성 없음
-- [ ] e2e: 스파이크 시나리오 재현(워커 생성 → start API → SendMessage 2건 큐잉 → 답장 → 관제 타임라인에 호출선·수신 표시 → PTY 종료 → `success:false` 푸시), 기존 `-p` 그룹(048f244c) 타임라인 회귀 없음
+### Phase 1 (이번 사이클) — 구현·게시(0.9.0 + 핫픽스 0.9.1)·이 PC e2e 완료(2026-09-23)
+- [x] `POST /api/sessions/{id}/terminal/start` — `webterm._spawn`(스폰 본체를 run_terminal 과 공유) + `start_terminal` **멱등**. 로컬 전용, 409 cap/bg_hold·404 no_cwd. e2e: started(pid 90684) → 재호출 already_live(같은 pid) → 7초 내 피어 등장(`live_terminal` true) → stop → 피어 소멸 → 재기동 OK
+- [x] 라이브 판정 확장 `peers.py`: `~/.claude/sessions/*.json` 읽기 전용, 2초 캐시 → 세션 목록 `peer{name,status,pid,socket}`, PWA 목록 `🔗 이름 · 작업 중` 칩, `externallyActive` 1차-b 근거. `resolve(to)`: 이름 / `이름 [ref]` / `uds:파이프`(이스케이프 변형 정규화)
+- [x] 관제 호출선: `SendMessage` → `calls_out{via:"message"}`(PWA `✉ →`), 수신 래퍼 → `from_peer`/`from_peer_session_id` + 본문 정리(PWA `📨 발신자`). e2e(설치본 0.9.0, 모니터 WS 클라): 관리 `✉ → e2e워커` / 워커 `📨 021-3-ax-65` 본문 정리 / 워커 답장 `✉ →` 관리 — 3건 모두 표시
+- [x] monwatch 실패 감지: pending 에 SendMessage 대상 추가, `"success":false` 도 실패. **e2e 가 잡은 버그**: 죽은 워커는 레지스트리에서 사라져 이름을 못 풀어 푸시 0건 → 0.9.1: peers 가 마지막으로 본 이름/파이프→세션 기억(살아 있는 동명 우선) + 그룹 라벨 폴백. 재검증: `[monwatch] [e2e-workers] e2e워커 호출 실패 감지 → 알림 1건`
+- [x] 스킬 `session_manager/skills/clewpath-workers/SKILL.md` 동봉(패키지 zip 포함 확인). 실측 반영: 파생 이름은 프로세스마다 바뀜(worker2-7f → 40 → 94) → 매번 레지스트리에서 읽고 등록부는 UUID 만
+- [x] 스킬 설치: `skillinstall.py` + `GET /api/owner/skills/workers` / `POST …/install`(로컬 전용, overwrite 재확인) + 설정 "📦 워커 스킬 설치" 확인창. CLAUDE.md 예외 등록. 가드 `test_no_skill_install_on_startup`(기동·상태 조회는 파일 생성 없음). ⚠ 실제 설치는 사장님이 설정 화면에서 버튼으로(원칙상 제가 대신 누르지 않음) — 설치본 상태 조회 `bundled:true, installed:false` 확인
+- [x] e2e 전체 통과. 테스트 11건(`test_workers_dispatch.py`), 전체 296 passed. 정리: e2e 그룹 ab7832fe 삭제, 워커 세션 휴지통
+- [ ] 사장님 확인: 설정 → 📦 워커 스킬 설치 → 새 세션에서 `/clewpath-workers` 로 실제 오케스트레이션 1회(관제 그룹 자동 저장·폰 알림까지)
 
 ### Phase 2 (고도화) — 대기
 - [ ] 원격(릴레이) 경로에서 start API — stop 과 대칭 2FA

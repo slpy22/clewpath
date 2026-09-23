@@ -65,4 +65,10 @@
 - 스킬 `session_manager/skills/clewpath-workers/SKILL.md` 동봉 + `skillinstall.py` + 설정 화면
   "📦 워커 스킬 설치"(확인창, 덮어쓰기 재확인, 로컬 전용). CLAUDE.md 예외 등록. 기동·상태 조회는 파일을 만들지
   않는다(회귀 가드 `test_no_skill_install_on_startup`).
-- 테스트 9건(`test_workers_dispatch.py`), 전체 294 passed.
+- 테스트 11건(`test_workers_dispatch.py`), 전체 296 passed.
+
+**e2e(설치본, 2026-09-23)**: start 멱등(같은 pid)·피어 7초 내 등장·stop 후 소멸·재기동, 관제 타임라인에
+`✉ →`/`📨`/답장 3건 표시, 죽은 워커 SendMessage → 호출 실패 푸시. e2e 가 잡은 버그 → **0.9.1 핫픽스**:
+죽은 워커는 레지스트리에서 사라져 `to` 를 세션으로 못 풀었음 → peers 가 마지막으로 본 이름/파이프를
+기억(살아 있는 동명 우선) + monwatch 그룹 라벨 폴백. 실측 하나 더: 제목 없는 세션의 파생 이름은
+프로세스마다 바뀐다(worker2-7f → 40 → 94) → 스킬은 매번 레지스트리에서 이름을 읽는다.
