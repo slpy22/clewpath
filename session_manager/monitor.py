@@ -39,6 +39,20 @@ _RESUME_RE = re.compile(
     r"-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})")
 # 프롬프트: UUID 뒤 첫 따옴표 문자열(표시용, best-effort).
 _PROMPT_RE = re.compile(r'"([^"]*)"' r"|'([^']*)'")
+# 세션 간 메시지 수신 래퍼(실측 2026-09-23): user 텍스트
+#   Another Claude session sent a message:\n<cross-session-message from="uds:…" from-name="이름" from-mode="…">본문</cross-session-message>
+_XSESS_RE = re.compile(
+    r'<cross-session-message\s+from="([^"]*)"\s+from-name="([^"]*)"[^>]*>\s*(.*?)\s*</cross-session-message>',
+    re.S)
+
+
+def resolve_peer(ref) -> str | None:
+    """SendMessage 의 to / 수신 래퍼의 from 을 세션 UUID 로(피어 레지스트리). 실패는 None."""
+    try:
+        from session_manager import peers
+        return peers.resolve(ref)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def parse_calllines(command: str, group_uuids: set[str]) -> list[dict]:
@@ -171,11 +185,19 @@ class MonitorGroup:
         out["session_role"] = sess.role
         out["seq"] = self._seq
         out["ts"] = ev.get("timestamp")
-        # 호출선(→): 이 이벤트의 tool_calls 중 그룹 멤버를 부른 것
+        # 호출선(→): 이 이벤트의 tool_calls 중 그룹 멤버를 부른 것.
+        # ① Bash `claude -p --resume <UUID>`(기존)  ② SendMessage(to=이름|uds:파이프, v0.9.0 워커 방식)
         calls_out: list[dict] = []
         for tc in ev.get("tool_calls") or []:
-            cmd = ((tc.get("input") or {}).get("command")
-                   if isinstance(tc.get("input"), dict) else None)
+            inp = tc.get("input") if isinstance(tc.get("input"), dict) else {}
+            if tc.get("name") == "SendMessage":
+                target = resolve_peer(inp.get("to"))
+                if target and target in self.uuids:
+                    calls_out.append({"target_session_id": target,
+                                      "prompt": str(inp.get("summary") or inp.get("message") or "")[:120],
+                                      "tool_use_id": tc.get("id"), "via": "message"})
+                continue
+            cmd = inp.get("command")
             if not cmd:
                 continue
             for edge in parse_calllines(cmd, self.uuids):
@@ -183,6 +205,13 @@ class MonitorGroup:
                                   "prompt": edge["prompt"],
                                   "tool_use_id": tc.get("id")})
         out["calls_out"] = calls_out
+        # 수신(📨): 다른 세션이 SendMessage 로 보낸 메시지는 user 텍스트에 래퍼로 남는다 —
+        # 래퍼를 벗기고 발신자를 따로 준다(타임라인이 '누가 보낸 일감'으로 그린다).
+        m = _XSESS_RE.search(ev.get("text") or "")
+        if m:
+            out["from_peer"] = m.group(2)
+            out["from_peer_session_id"] = resolve_peer(m.group(1))
+            out["text"] = m.group(3).strip()
         return out
 
     def _push(self, ev: dict) -> None:

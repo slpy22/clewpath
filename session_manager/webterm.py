@@ -453,6 +453,88 @@ def _start_reader(sess: _TermSession) -> None:
     threading.Thread(target=reader, name=f"pty-{sess.key[:8]}", daemon=True).start()
 
 
+class TermStartError(Exception):
+    """스폰 불가 사유(code) + 사람용 안내. tty_text 는 웹터미널에 그대로 찍는 ANSI 문구."""
+
+    def __init__(self, code: str, message: str, tty_text: str):
+        super().__init__(message)
+        self.code = code
+        self.tty_text = tty_text
+
+
+def _spawn(session_id: str, skip_permissions: bool = True,
+           fork_id: str | None = None) -> _TermSession:
+    """세션의 claude PTY 를 새로 띄워 등록한다(화면은 안 붙임). 실패는 TermStartError.
+
+    run_terminal(화면 있음)과 start_terminal(화면 없음 — 워커 기동 API)이 공유한다.
+    호출 전에 살아 있는지(_get_live)는 호출자가 확인한다 — 같은 세션에 프로세스가
+    2개 생기면 대화가 갈라지므로, 여기 오는 건 '없음' 이 확정된 뒤여야 한다.
+    """
+    from winpty import PtyProcess
+    key = fork_id or session_id
+    # 서버측 PTY 상한(진짜 안전 밸브). 재접속은 프로세스를 안 늘리니 새 스폰만 막는다.
+    cap = _max_live_pty()
+    if _live_count() >= cap:
+        raise TermStartError(
+            "cap", f"동시에 열 수 있는 터미널 상한({cap}개)에 도달했습니다",
+            f"\r\n\x1b[33m[ClewPath] 동시에 열 수 있는 터미널 상한({cap}개)에 "
+            f"도달했습니다.\x1b[0m\r\n"
+            "다른 터미널을 종료(탭 닫기 → 세션 종료)한 뒤 다시 여세요. "
+            "이미 열려 있는 세션에 다시 붙는 것은 상한과 무관합니다.\r\n")
+    meta = scan_one(session_id)
+    cwd = resolve_launch_cwd(meta) if meta else None
+    if not cwd or not os.path.isdir(cwd):
+        raise TermStartError(
+            "no_cwd", f"세션 작업 폴더를 찾을 수 없습니다: {cwd or '(미상)'}",
+            f"\r\n\x1b[31m[오류] 세션 작업 폴더를 찾을 수 없습니다: {cwd or '(미상)'}\x1b[0m\r\n"
+            f"이 세션은 다른 PC에서 만들어졌거나 폴더가 이동/삭제된 것 같습니다.\r\n")
+    # bg 에이전트 점유 사전 차단: claude 가 어차피 거부할 스폰("still running
+    # as a background agent")을 시도하지 않고, 구조화된 안내로 대체한다.
+    # 포크는 원본 무접촉이라 통과. (판정 실패 시엔 그냥 진행 - 기능 축소 없음)
+    if not fork_id:
+        try:
+            from session_manager import agents as _agents
+            hold = _agents.holder_of(session_id)
+        except Exception:  # noqa: BLE001
+            hold = None
+        if hold and hold.get("kind") == "background":
+            nm = hold.get("name") or "(이름 없음)"
+            raise TermStartError(
+                "bg_hold", f"백그라운드 에이전트 '{nm}' 가 이 세션을 사용 중입니다",
+                f"\r\n\x1b[33m── 이 세션은 백그라운드 에이전트 '{nm}' 가 사용 중입니다 ──\x1b[0m\r\n"
+                "포크로 재개하거나, PC 터미널의 claude agents 에서 해당 "
+                "에이전트를 확인·종료한 뒤 다시 재개하세요.\r\n")
+    argv = _claude_argv(session_id, skip_permissions, fork_id)
+    try:
+        proc = PtyProcess.spawn(argv, cwd=cwd, dimensions=(24, 80))
+    except Exception as e:  # noqa: BLE001
+        raise TermStartError("spawn_failed", f"터미널 시작 실패: {e}",
+                             f"\r\n\x1b[31m[오류] 터미널 시작 실패: {e}\x1b[0m\r\n")
+    sess = _TermSession(key, proc, persist=not fork_id)
+    # 고아 방지 3중: ① Job Object(커널 동반 종료 - Host 가 어떻게 죽든)
+    # ② 자기 등록부(① 실패 대비 부팅 청소) ③ 정상 종료 shutdown_all
+    from session_manager import jobguard
+    jobguard.guard(getattr(proc, "pid", None))
+    _registry_add(getattr(proc, "pid", None), session_id)
+    _ACTIVE[key] = sess
+    _start_reader(sess)
+    return sess
+
+
+def start_terminal(session_id: str, skip_permissions: bool = True) -> dict:
+    """화면 없이 세션 PTY 를 띄운다(워커 기동 API, v0.9.0). **멱등**.
+
+    이미 살아 있으면 새로 띄우지 않고 already_live — 같은 세션에 프로세스 2개는
+    대화 분기 사고라 절대 만들지 않는다. 띄운 PTY 는 여느 persist 터미널과 같은
+    객체라, 나중에 탭으로 열면(재접속) 화면이 붙고 닫아도 계속 산다.
+    """
+    live = _get_live(session_id)
+    if live is not None:
+        return {"status": "already_live", "pid": getattr(live.proc, "pid", None)}
+    sess = _spawn(session_id, skip_permissions, None)
+    return {"status": "started", "pid": getattr(sess.proc, "pid", None)}
+
+
 async def run_terminal(ws, session_id: str, skip_permissions: bool = True,
                        fork_id: str | None = None, screen_id: str | None = None) -> None:
     """WebSocket 한 개를 세션 PTY 에 붙인다(없으면 스폰, 있으면 재접속).
@@ -498,63 +580,16 @@ async def run_terminal(ws, session_id: str, skip_permissions: bool = True,
             pass
         rejoined = True
     else:
-        # ---- 새 스폰 ----
-        # 서버측 PTY 상한(진짜 안전 밸브). 재접속은 프로세스를 안 늘리니 위에서
-        # 이미 통과했고, 여기(새 스폰)만 막는다 — 이미 열린 세션에 다시 붙는 것은
-        # 상한과 무관. 상한 도달 시 스폰 대신 구조화된 안내로 대체한다.
-        cap = _max_live_pty()
-        if _live_count() >= cap:
-            await ws.send_text(
-                f"\r\n\x1b[33m[ClewPath] 동시에 열 수 있는 터미널 상한({cap}개)에 "
-                f"도달했습니다.\x1b[0m\r\n"
-                "다른 터미널을 종료(탭 닫기 → 세션 종료)한 뒤 다시 여세요. "
-                "이미 열려 있는 세션에 다시 붙는 것은 상한과 무관합니다.\r\n")
-            await _safe_close(ws)
-            return
-        meta = scan_one(session_id)
-        cwd = resolve_launch_cwd(meta) if meta else None
-        if not cwd or not os.path.isdir(cwd):
-            await ws.send_text(
-                f"\r\n\x1b[31m[오류] 세션 작업 폴더를 찾을 수 없습니다: {cwd or '(미상)'}\x1b[0m\r\n"
-                f"이 세션은 다른 PC에서 만들어졌거나 폴더가 이동/삭제된 것 같습니다.\r\n"
-            )
-            await _safe_close(ws)
-            return
-        # bg 에이전트 점유 사전 차단: claude 가 어차피 거부할 스폰("still running
-        # as a background agent")을 시도하지 않고, 구조화된 안내로 대체한다.
-        # 포크는 원본 무접촉이라 통과. (판정 실패 시엔 그냥 진행 - 기능 축소 없음)
-        if not fork_id:
-            try:
-                from session_manager import agents as _agents
-                hold = _agents.holder_of(session_id)
-            except Exception:  # noqa: BLE001
-                hold = None
-            if hold and hold.get("kind") == "background":
-                await ws.send_text(
-                    f"\r\n\x1b[33m── 이 세션은 백그라운드 에이전트 "
-                    f"'{hold.get('name') or '(이름 없음)'}' 가 사용 중입니다 ──\x1b[0m\r\n"
-                    "포크로 재개하거나, PC 터미널의 claude agents 에서 해당 "
-                    "에이전트를 확인·종료한 뒤 다시 재개하세요.\r\n")
-                await _safe_close(ws)
-                return
-        argv = _claude_argv(session_id, skip_permissions, fork_id)
+        # ---- 새 스폰(화면 있음) — 스폰 본체는 _spawn(화면 없는 start_terminal 과 공유) ----
         try:
-            proc = PtyProcess.spawn(argv, cwd=cwd, dimensions=(24, 80))
-        except Exception as e:  # noqa: BLE001
-            await ws.send_text(f"\r\n\x1b[31m[오류] 터미널 시작 실패: {e}\x1b[0m\r\n")
+            sess = _spawn(session_id, skip_permissions, fork_id)
+        except TermStartError as e:
+            await ws.send_text(e.tty_text)
             await _safe_close(ws)
             return
-        sess = _TermSession(key, proc, persist=not fork_id)
         sess.client = (ws, loop)
         sess.client_screen = screen_id     # 첫 화면: 커서 0 부터 reader 가 전진시킨다
         sess.mark_sent(screen_id, 0)
-        # 고아 방지 3중: ① Job Object(커널 동반 종료 - Host 가 어떻게 죽든)
-        # ② 자기 등록부(① 실패 대비 부팅 청소) ③ 정상 종료 shutdown_all
-        from session_manager import jobguard
-        jobguard.guard(getattr(proc, "pid", None))
-        _registry_add(getattr(proc, "pid", None), session_id)
-        _ACTIVE[key] = sess
-        _start_reader(sess)
         rejoined = False
 
     me = (ws, loop)

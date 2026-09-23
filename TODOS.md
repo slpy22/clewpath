@@ -4,7 +4,28 @@
 설계 근거: `docs/2026-09-03-multi-session-monitoring-design.md`,
 `docs/2026-09-10-multi-terminal-tabs-design.md`
 
-## 진행중 기능: 알림 → 탭 점프 (v0.8.6 PWA)
+## 진행중 기능: 워커 세션 분배 — start API + SendMessage + 동봉 스킬 (v0.9.0)
+
+스파이크 `docs/2026-09-23-worker-dispatch-spike.md`(2026-09-23) 로 확정. 상위 세션이 하위 워커들에 오래
+일감을 나눠 주는 운영을 claude 표준 세션 간 통신(`ListAgents`/`SendMessage`)으로 하고, ClewPath 는
+**"세션을 살려 둔다"** 하나만 맡는다. **기존 `-p --resume` 경로는 무변경(추가만)**, **세션 하나는 한 방식만**
+(워커로 띄운 세션에 `-p --resume` 금지 — 프로세스 2개 = 대화 분기).
+
+### Phase 1 (이번 사이클)
+- [ ] `POST /api/sessions/{id}/terminal/start` — 화면 없는 PTY 기동, **멱등**(이미 살아 있으면 `already_live`), `skip` 파라미터, 로컬 전용(스킬은 같은 PC). 상한 `SM_MAX_TERMINALS` 준수. 테스트: 두 번 호출해도 프로세스 1개, 상한 초과 거부
+- [ ] 라이브 판정 확장: `~/.claude/sessions/<pid>.json` 레지스트리(읽기 전용)를 세션 목록에 조인 → `peer:{name, status(idle/busy), pid}`. 우리 PTY 가 아닌 대화형 세션도 "떠 있음"으로. PWA 목록·탭에 표시(기존 `live_terminal` 의미는 그대로)
+- [ ] 관제 호출선: `tool_use SendMessage(to=이름|uds 파이프)` → 레지스트리로 세션 해석 → `→` 화살표. 수신 레코드 `<cross-session-message from-name=…>` 는 텍스트 정리(태그 제거·발신자 표시)
+- [ ] monwatch 실패 감지: `SendMessage` tool_result 의 `success:false`("No agent named … is reachable") → `[그룹] X 호출 실패` 푸시(기존 Bash 경로와 병행)
+- [ ] 스킬 `clewpath-workers`(리포 `skills/clewpath-workers/SKILL.md`): 살아 있나 → start → 대기 → SendMessage / 워커 등록부 `.clewpath/workers.json` / 새 워커는 `claude -p --output-format json` 1회로 UUID / 답장 형식(요약 5줄+산출물 경로) / `notify_when_idle` 로 완료 대기(폴링 금지) / 캐시 1시간 케이던스 / 워커 교체(인수인계) / 관제 그룹 자동 저장(`POST /api/owner/monitor/groups`) / 권한 모드 일치(기본 YOLO) / Host 업데이트로 PTY 꺼지면 규칙 1이 재기동 / 세션당 한 방식
+- [ ] 스킬 설치: 설정 화면 "📦 워커 스킬 설치" 버튼 + 확인창 → `~/.claude/skills/clewpath-workers/SKILL.md` **새 파일만 생성**(기존 파일 무접촉, 있으면 덮어쓰기 전 확인). CLAUDE.md 예외 목록 추가(사장님 승인 2026-09-23). 회귀 가드: 버튼 경유 외 자동 생성 없음
+- [ ] e2e: 스파이크 시나리오 재현(워커 생성 → start API → SendMessage 2건 큐잉 → 답장 → 관제 타임라인에 호출선·수신 표시 → PTY 종료 → `success:false` 푸시), 기존 `-p` 그룹(048f244c) 타임라인 회귀 없음
+
+### Phase 2 (고도화) — 대기
+- [ ] 원격(릴레이) 경로에서 start API — stop 과 대칭 2FA
+- [ ] 관제 화면에 워커 큐 상태(대기/실행/실패) 패널
+- [ ] 기존 `-p` 관리 세션의 새 방식 이전 가이드(세션별 선택)
+
+## 참고(완료): 알림 → 탭 점프 (v0.8.6 PWA)
 
 멀티탭 Deferred 승격(2026-09-15). 지금은 알림 클릭이 세션 **상세 화면**으로 가고(탭이 이미 있으면 그 탭),
 거기서 "🖥 터미널로 돌아가기"를 한 번 더 눌러야 한다. 우리 PTY 가 살아 있는 세션(`live_terminal`)이면

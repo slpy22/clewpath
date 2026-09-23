@@ -1069,6 +1069,21 @@ def create_app() -> FastAPI:
             return JSONResponse({"error": "no_terminal"}, status_code=404)
         return {"ok": True}
 
+    # ---- 화면 없는 터미널 기동(워커 기동 API, v0.9.0): 세션을 '살려 두는' 유일한 역할 ----
+    #      상위 세션이 하위 워커를 SendMessage 로 부리기 전에 부른다. 멱등(살아 있으면
+    #      already_live). 로컬 전용 — 스킬은 같은 PC 에서 돈다(원격은 Phase 2, stop 과 대칭 2FA).
+    @app.post("/api/sessions/{session_id}/terminal/start")
+    def terminal_start(session_id: str, request: Request, skip: bool = Body(True, embed=True)):
+        from session_manager import webterm
+        if not _is_local(request):
+            return JSONResponse({"error": "이 PC(로컬)에서만 워커를 띄울 수 있습니다."},
+                                status_code=403)
+        try:
+            return webterm.start_terminal(session_id, skip_permissions=skip)
+        except webterm.TermStartError as e:
+            status = {"cap": 409, "bg_hold": 409, "no_cwd": 404}.get(e.code, 500)
+            return JSONResponse({"error": e.code, "message": str(e)}, status_code=status)
+
     # ---- 원격 권한 승인: 실행 중인 ClewPath 터미널의 권한 프롬프트에 키 주입 ----
     @app.post("/api/owner/sessions/{session_id}/respond")
     async def owner_session_respond(session_id: str, request: Request):
@@ -1088,6 +1103,26 @@ def create_app() -> FastAPI:
                 status_code=409)
         return {"ok": True, "sent": action}
 
+    # ---- 동봉 스킬 설치(워커 분배 스킬, v0.9.0) — 사용자 명시 동작(설정 버튼+확인창) 경유만 ----
+    #      ~/.claude/skills 에 새 파일 생성: 불가침 원칙 예외(2026-09-23 승인). 로컬 전용.
+    @app.get("/api/owner/skills/workers")
+    def skills_workers_status():
+        from session_manager import skillinstall
+        return skillinstall.status()
+
+    @app.post("/api/owner/skills/workers/install")
+    def skills_workers_install(request: Request, overwrite: bool = Body(False, embed=True)):
+        from session_manager import skillinstall
+        if not _is_local(request):
+            return JSONResponse({"error": "이 PC(로컬)에서만 설치할 수 있습니다."}, status_code=403)
+        try:
+            r = skillinstall.install(overwrite=overwrite)
+        except FileNotFoundError:
+            return JSONResponse({"error": "bundled_missing"}, status_code=500)
+        if r.get("exists"):
+            return JSONResponse(r, status_code=409)
+        return r
+
     @app.post("/api/owner/push/test")
     def push_test():
         # 전달 경로(브라우저/OS 알림 설정 포함)를 사용자가 즉석 검증하는 용도.
@@ -1100,10 +1135,12 @@ def create_app() -> FastAPI:
     @app.get("/api/v1/sessions")
     def api_v1_sessions(q: str | None = None, label: str | None = None,
                         limit: int = 0):
-        from session_manager import agents, hooks, webterm
+        from session_manager import agents, hooks, peers, webterm
         runtime = hooks.status_map()   # 훅이 채운 세션별 '지금' 상태
         # claude 공식 실시간 점유(대화형·bg) - 재개 잠금 예고/동시재개 판정의 1차 근거
         occupancy = agents.occupancy_map()
+        # 피어 레지스트리(~/.claude/sessions): 우리 PTY 가 아닌 대화형 세션도 '떠 있음'(이름·idle/busy)
+        peer_of = peers.peer_map()
         sessions = scanner.scan_all()
         recs = labels.all_records()  # 라벨 1회 로드
         out = []
@@ -1145,6 +1182,8 @@ def create_app() -> FastAPI:
                 "agent": occupancy.get(s.session_id),
                 # 이 세션의 PTY 가 지금 살아있는가(화면 유무 무관 - 재접속 대상)
                 "live_terminal": webterm.has_terminal(s.session_id),
+                # 살아 있는 claude 세션(어디서 띄웠든): {name, status(idle|busy), pid} — SendMessage 대상
+                "peer": peer_of.get(s.session_id),
             })
         out.sort(key=lambda x: x["ended_at"] or "", reverse=True)
         if limit and limit > 0:

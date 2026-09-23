@@ -12,10 +12,17 @@
 """
 from __future__ import annotations
 
+import re
 import threading
 
 from session_manager import appconfig, mongroups, push
-from session_manager.monitor import Tailer, parse_calllines
+from session_manager.monitor import Tailer, parse_calllines, resolve_peer
+
+_SENDMSG_FAIL_RE = re.compile(r'"success"\s*:\s*false')
+
+
+def _sendmsg_failed(text: str) -> bool:
+    return bool(_SENDMSG_FAIL_RE.search(text or ""))
 
 POLL_INTERVAL_S = 2.0
 _PATH_RETRY_POLLS = 15           # 관리 세션 파일이 아직 없으면 30초마다 재탐색
@@ -120,21 +127,37 @@ class Watcher:
                     continue
                 bt = b.get("type")
                 if bt == "tool_use":
-                    # 원본 command 그대로(뷰어의 절삭 없이) — 긴 프롬프트 뒤 UUID 도 잡는다
-                    inp = b.get("input")
-                    cmd = inp.get("command") if isinstance(inp, dict) else None
+                    inp = b.get("input") if isinstance(b.get("input"), dict) else {}
                     tid = b.get("id")
-                    if isinstance(cmd, str) and tid:
-                        calls = parse_calllines(cmd, subs)
-                        if calls:
-                            t.pending[str(tid)] = calls[0]["target"]
-                            if len(t.pending) > _MAX_PENDING:
-                                for k in list(t.pending)[:len(t.pending) - _MAX_PENDING]:
-                                    t.pending.pop(k, None)
+                    if not tid:
+                        continue
+                    target = None
+                    if b.get("name") == "SendMessage":
+                        # 워커 방식(v0.9.0): to=이름|uds:파이프 → 피어 레지스트리로 세션 해석
+                        target = resolve_peer(inp.get("to"))
+                        if target not in subs:
+                            target = None
+                    else:
+                        # 원본 command 그대로(뷰어의 절삭 없이) — 긴 프롬프트 뒤 UUID 도 잡는다
+                        cmd = inp.get("command")
+                        if isinstance(cmd, str):
+                            calls = parse_calllines(cmd, subs)
+                            if calls:
+                                target = calls[0]["target"]
+                    if target:
+                        t.pending[str(tid)] = target
+                        if len(t.pending) > _MAX_PENDING:
+                            for k in list(t.pending)[:len(t.pending) - _MAX_PENDING]:
+                                t.pending.pop(k, None)
                 elif bt == "tool_result":
                     target = t.pending.pop(str(b.get("tool_use_id") or ""), None)
-                    if target and b.get("is_error"):
-                        n += int(self._notify(t.group, target, _result_text(b)) or 0)
+                    if not target:
+                        continue
+                    text = _result_text(b)
+                    # Bash 실패는 is_error, SendMessage 실패는 200 결과 안의 "success":false
+                    # (죽은 워커: "No agent named … is reachable")
+                    if b.get("is_error") or _sendmsg_failed(text):
+                        n += int(self._notify(t.group, target, text) or 0)
         return n
 
 

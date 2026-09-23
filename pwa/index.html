@@ -1202,6 +1202,8 @@ function externallyActive(s){
   // 대화형 세션이 우리 PTY(live_terminal) 밖에서 열려 있으면 충돌 확정.
   // (bg 점유는 별도의 잠금 게이트 showBgHold 가 처리)
   if(s.agent&&s.agent.kind==='interactive'&&!s.live_terminal) return true;
+  // 1차-b(확정): 피어 레지스트리(~/.claude/sessions) — 살아 있는 대화형 세션은 여기 반드시 있다
+  if(s.peer&&!s.live_terminal) return true;
   // 2차(폴백): 훅 신선도 휴리스틱 - agents 데이터가 없는 환경(구 CLI 등)용
   const rt=s.runtime;
   if(!rt||!rt.phase||s.live_terminal) return false;   // PTY 소유 시 재개=재접속이라 무관
@@ -1586,6 +1588,12 @@ function renderRows(wrap,q){
       if(s.agent&&s.agent.kind==='background'){
         const g=el('span','schip agentbg','🤖 '+(s.agent.name||'에이전트'));
         g.title='백그라운드 에이전트가 이 세션 사용 중 - 이어재개 잠김(포크는 가능)';
+        r1.appendChild(g);
+      }
+      if(s.peer&&!s.live_terminal){
+        // 피어 레지스트리(~/.claude/sessions): 우리 PTY 는 아니지만 어딘가 터미널에서 떠 있는 세션
+        const g=el('span','schip agentbg','🔗 '+(s.peer.name||'실행 중')+(s.peer.status==='busy'?' · 작업 중':''));
+        g.title='다른 터미널에서 열려 있는 세션(SendMessage 주소: '+(s.peer.name||'')+'). 여기서 다시 재개하면 대화가 두 갈래로 갈라집니다';
         r1.appendChild(g);
       }
       if(s.picker_hidden&&!s.picker_expose){
@@ -2911,11 +2919,14 @@ function openMonitor(ids, manager, labels, opts){
     const lab=el('span','mlab',ev.session_label||ev.session_id.slice(0,8)); if(ev.color)lab.style.color=ev.color;
     h.appendChild(lab);
     if(ev.role) h.appendChild(el('span','mtool',ev.role));
+    if(ev.from_peer){   // 다른 세션이 SendMessage 로 보낸 일감(v0.9.0 워커 방식) — 발신자 표시
+      const fp=el('span','mcall'); fp.appendChild(el('b',null,'📨 '+ev.from_peer)); fp.title='SendMessage 로 받은 메시지'; h.appendChild(fp); }
     h.appendChild(el('span','mtime',fmtT(ev.ts)));
     row.appendChild(h);
     (ev.calls_out||[]).forEach(c=>{
       const tl=(gmap[c.target_session_id]&&gmap[c.target_session_id].label)||c.target_session_id.slice(0,8);
-      const call=el('div','mcall'); call.appendChild(el('b',null,'→ '+tl));
+      const call=el('div','mcall'); call.appendChild(el('b',null,(c.via==='message'?'✉ → ':'→ ')+tl));
+      if(c.via==='message') call.title='SendMessage 로 보낸 일감';
       if(c.prompt) call.appendChild(el('span',null,'“'+c.prompt+'”'));
       row.appendChild(call);
     });
@@ -3491,6 +3502,7 @@ function showSettings(){
   sec('데이터');
   row('📥','세션 가져오기','내보낸 세션 파일 불러오기',importSession);
   row('🗑','휴지통','삭제한 세션 복구 (30일 보관)',showTrash,{local:true});
+  row('📦','워커 스킬 설치','하위 세션 분배 스킬(clewpath-workers)을 ~/.claude/skills 에 설치',installWorkersSkill,{local:true});
 
   sec('정보 · 진단');
   row('⬆','업데이트',
@@ -3501,6 +3513,24 @@ function showSettings(){
   row('🩺','진단','설치 상태 · 세션 수 · 설정 파일 위치',showDiagnostics,{local:true});
 
   openModal('⚙ 설정', body, []);
+}
+// 동봉 스킬 설치(v0.9.0) — claude 가 읽는 ~/.claude/skills 에 새 파일을 만드는 행위라 반드시
+// 확인창을 거친다(불가침 원칙 예외, 2026-09-23). 이미 있으면 덮어쓰기를 다시 묻는다.
+async function installWorkersSkill(){
+  let st={}; try{ st=await T.api('GET','/api/owner/skills/workers'); }catch(e){ toast('상태 조회 실패: '+e.message); return; }
+  const body=el('div');
+  body.appendChild(el('p',null,'상위 세션이 하위 워커 세션들에 일감을 나눠 주는 운영 규칙(clewpath-workers 스킬)을 설치합니다. 관리 세션에서 /clewpath-workers 로 부릅니다.'));
+  const why=el('div','cwd'); why.style.whiteSpace='pre-line';
+  why.textContent='설치 위치: '+(st.path||'~/.claude/skills/clewpath-workers/SKILL.md')
+    +'\n· claude 가 읽는 폴더에 파일 1개를 새로 만듭니다(다른 파일은 건드리지 않음)'
+    +(st.installed?('\n· 이미 설치돼 있습니다'+(st.up_to_date?' (최신)':' (동봉본과 다름 — 덮어씁니다)')):'');
+  body.appendChild(why);
+  const ok=el('button','btn', st.installed?'📦 덮어쓰기 설치':'📦 설치');
+  ok.onclick=async()=>{ ok.disabled=true;
+    try{ const r=await T.api('POST','/api/owner/skills/workers/install',{body:{overwrite:!!st.installed}});
+         closeModal(); toast('스킬 설치됨 — 새 claude 세션부터 /clewpath-workers 사용 가능'); }
+    catch(e){ ok.disabled=false; toast('설치 실패: '+e.message); } };
+  openModal('📦 워커 스킬 설치', body, [ok]);
 }
 async function showDiagnostics(){
   const body=el('div'); const st=el('p',null,'불러오는 중…'); body.appendChild(st);
