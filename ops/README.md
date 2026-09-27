@@ -17,7 +17,18 @@
 | `dist/` | 패키징·서명 산출물 | 재생성 가능 |
 | `logs/` | 운영자 006 stdout/err | 재생성 가능 |
 
-## 릴리스 절차 (요약)
+## 릴리스 절차 — 한 방 (권장)
+
+```powershell
+# pyproject 버전 bump + 커밋 후:
+pwsh -File ops/release.ps1 -Version X.Y.Z -Notes "사용자용 변경 요약"                  # 패키지 + 서명 + 검증
+pwsh -File ops/release.ps1 -Version X.Y.Z -Notes "..." -Publish                     # + CP 게시(토큰은 -EnvFile 에서)
+pwsh -File ops/release.ps1 -Version X.Y.Z -Notes "..." -Publish -Apply              # + 이 PC 적용·헬스·조용한 재기동 확인
+```
+사전점검(버전 일치·작업 트리·서명 키·pytest)에서 걸리면 즉시 중단. 로그 `ops/logs/release-<ver>.log`(토큰 없음).
+아래 수동 절차는 스크립트가 하는 일의 설명이다.
+
+## 릴리스 절차 (수동, 참고)
 
 ```powershell
 pwsh -File ops/package-for-user.ps1                      # → ops/dist/clewpath-host-<날짜>.zip

@@ -21,7 +21,19 @@
 - [x] e2e 전체 통과. 테스트 11건(`test_workers_dispatch.py`), 전체 296 passed. 정리: e2e 그룹 ab7832fe 삭제, 워커 세션 휴지통
 - [ ] 사장님 확인: 설정 → 📦 워커 스킬 설치 → 새 세션에서 `/clewpath-workers` 로 실제 오케스트레이션 1회(관제 그룹 자동 저장·폰 알림까지)
 
-## 진행중 기능: PWA 자동 테스트 인프라 (retro 레벨업 #1, 2026-09-27)
+## 진행중 기능: 릴리스 스크립트 통합 (retro 개선 #1, 2026-09-28)
+
+손으로 7단계(package → rename → sign → verify → publish → apply → poll)를 11회 반복 — 순서·이름 규칙·토큰
+취급이 매번 손에 달려 있었다. `ops/release.ps1 -Version X.Y.Z -Notes "…" [-Publish] [-Apply]` 하나로 고정.
+
+### Phase 1 (이번 사이클) — 완료(2026-09-28)
+- [x] `ops/release.ps1`: 사전점검(버전 형식·pyproject 일치·작업 트리 깨끗·서명 키 존재·pytest) → 패키징+이름 규칙+zip 안 pyproject 버전 확인 → 서명·verify → `-Publish`(토큰은 env 파일에서 읽어 인자로만, 출력 마스킹, 게시 sha == 로컬 sha) → `-Apply`(latest==버전 확인 → apply → 150초 폴링 → apply 로그 → incidents 불변=조용한 재기동 확인). 로그 `ops/logs/release-<ver>.log`
+- [x] 안전 게이트: 같은 날 같은 버전 재패키징 거부, `-Apply` 는 `-Publish` 필수, 실패 시 즉시 중단(exit 1)
+- [x] 테스트 `tests/test_release_script.py` 3건: 단계 순서·게이트 계약, 토큰이 Log/Write-Host 에 안 실림(+마스킹·소거), pwsh 파서 통과 + 잘못된 버전 거부 실행. 전체 314 passed
+- [x] 드라이런: 0.9.3 을 임시 OutDir 에 패키지+서명+검증 5초, exit 0(게시 없음). `-Publish -Apply` 경로는 다음 실제 릴리스에서 첫 사용
+- [x] ops/README.md 한 방 절차 추가, 메모리 "릴리스는 release.ps1 로만"
+
+## 참고(완료): PWA 자동 테스트 인프라 (retro 레벨업 #1, 2026-09-27)
 
 `pwa/index.html` 3,800줄 단일 파일에 자동 테스트 0 — 14회 수정이 전부 `node --check` + 수동 e2e 였다. 파일을
 쪼개면 릴레이 라이브 서빙(index.html+sw.js)과 충돌하므로 **제품 코드 무변경**으로 로더 쪽에서 해결한다.
