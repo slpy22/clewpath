@@ -30,13 +30,13 @@ svcmon(사장님 모니터)이 13:07 `up → down` 을 기록했으나 복구 �
 
 ### Phase 1 (이번 사이클, 크로스체크로 확정 2026-09-27) — 자기 회복 0.9.2
 크로스체크: Gemini=B(목록 성능) 우선, Codex·Claude=A(자기 회복) 우선, Copilot 무응답 → A 먼저, B 는 바로 다음 사이클.
-- [ ] `start-connector.ps1` 멱등화: `/api/health` **짧은 타임아웃**으로 확인 → 응답하면 즉시 종료. 기동 구간 **잠금 파일**로 동시 실행 방지. health 실패만으로 기존 프로세스를 죽이지 않음(Codex). 유지보수 중지 표식(`maintenance.flag`)이 있으면 재기동 안 함
-- [ ] `ClewPathHost` 작업에 **5분 반복 트리거**(로그온 트리거 유지, MultipleInstances=IgnoreNew, 반복 종료 조건 없음) — 새 설치 install.ps1, 기존 설치는 업데이트 적용 시 재등록. 복구 목표 5분+기동
-- [ ] 기동 시 "이전 프로세스 비정상 소멸 **의심**" 감지: runtime.json 의 pid 가 없고 정상 종료 표식(`shutdown.json`)이 없으면 → host.log 기록 + 푸시 1건, **종료 직전 host.log 마지막 10줄 동봉**(Gemini 진단형 알림). 정상 종료(업데이트 재기동 포함)는 표식을 남겨 오탐 방지
-- [ ] health 경로가 스캔·무거운 작업에 의존하지 않음을 확인(B 의 지연이 A 오탐으로 이어지지 않게 — Codex)
-- [ ] 검증: 강제 종료(taskkill) → 5분 내 자동 복구 + 복구 푸시(마지막 로그 포함) / 정상 실행 중 반복 트리거가 중복 기동 안 함 / 유지보수 표식 시 재기동 안 함 / 정상 재기동(업데이트)은 푸시 없음
-- [ ] 이 PC 조치: 작업 재등록으로 5분 반복 적용(업데이트 적용 경로로 자동)
-- [ ] 한계 기록: Host 가 못 뜨거나 PC 가 꺼지면 알림 불가 → SaaS 단계에서 릴레이 heartbeat 단절 감지(Phase 2)
+- [x] `start-connector.template.ps1`(v2, 정본) 멱등화: health 3초 → ok 면 종료, runtime pid 가 python 으로 살아 있으면 종료(죽이지 않음·launcher.log 기록), `maintenance.flag` 존중, `launcher.lock`(2분), 기동 사유 `launcher.log`. install.ps1 은 템플릿에서 생성(옛 zip 은 v1 폴백)
+- [x] `ClewPathHost` 작업 5분 반복 트리거(로그온 유지, IgnoreNew) — install.ps1(v2 일 때만) + 기존 설치는 `ensure_task.ps1`(런처 v2 재생성 **후에만** 트리거 추가)을 Host 가 기동 시 버전당 1회 실행. 이 PC: 적용 직후 `launcher: regenerated (v2) | task: repetition trigger added (5m)`, 트리거 = 로그온 + PT5M
+- [x] `liveness.py`: runtime pid 소멸 + `shutdown.json` 표식 없음 → 의심 기록(incidents.jsonl, 마지막 로그 10줄 ANSI 제거) + 푸시 `host-recovered`. 표식은 lifespan 종료(normal)·updater.apply(update). 다른 인스턴스 생존 시 제외. 1회성 오탐: 0.9.1→0.9.2 재기동(옛 프로세스가 표식을 모름) — 이후 업데이트는 조용
+- [x] health 경로 확인: `/api/health` 는 상수 응답(스캔 무관) — 성능 이슈가 오탐을 만들지 않음
+- [x] 검증(이 PC, 설치본 0.9.2): `taskkill /F` 18:45:18 → 반복 트리거 18:45:56 기동(launcher.log "이전 pid 100768 없음 → 기동") → 18:46:01 health OK = **43초 복구**, incidents.jsonl 기록 + 복구 푸시 1건 / 살아 있는 Host 앞에서 런처 실행 → 중복 기동 0 / 단위: 표식 있으면 조용·다른 인스턴스 제외. ⚠ 미검증: maintenance.flag 실기(코드 경로 단순), 다음 정기 업데이트가 조용한지(새 updater 표식 — 0.9.3 적용 때 확인)
+- [x] 이 PC 조치: 0.9.2 적용 시 Host 가 자동으로 런처 v2 재생성 + 작업 5분 반복 등록(로그온 + PT5M, IgnoreNew)
+- [x] 한계 기록(설계 문서 §한계): Host 가 못 뜨거나 PC 가 꺼지면 알림 주체 없음 → Phase 2 릴레이 heartbeat; 스케줄러 차단 PC(HKCU Run 폴백)는 로그온 1회뿐
 
 ### Phase 2 (고도화) — 대기
 - [ ] 릴레이가 Host heartbeat 단절을 감지해 폰 알림(Host 가 죽어도 알 수 있게)
