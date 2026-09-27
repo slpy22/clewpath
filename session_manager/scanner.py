@@ -47,123 +47,196 @@ class SessionMeta:
         return asdict(self)
 
 
-# 파일 경로 → (mtime, size, SessionMeta) 캐시.
-# 파일이 안 바뀌면(mtime+size 동일) 다시 읽지 않는다 → 재조회가 매우 빨라짐.
-_CACHE: dict[str, tuple[float, int, "SessionMeta"]] = {}
+class _Fold:
+    """jsonl 을 한 줄씩 접어 메타를 만드는 누적기(v0.9.3 증분 파싱의 핵심).
+
+    모든 필드가 '처음 값'(cwd/slug/gitBranch/version/started_at) 또는 '마지막 값·카운트'
+    (제목/모델/timestamp/대화형 마커/줄 수)라, 파일 끝에 붙은 줄만 이어서 접으면 처음부터
+    다시 읽은 것과 같은 결과가 된다. 오프셋은 **완성된 줄의 끝**에만 두고, 개행 없는 부분 줄은
+    다음 스캔으로 미룬다(claude 가 쓰는 중인 줄을 반만 읽지 않게).
+    """
+    __slots__ = ("meta", "started_at", "last_ts", "line_count", "message_count", "custom_title",
+                 "interactive_markers", "ai_title", "agent_name", "last_model", "offset", "sig")
+
+    def __init__(self):
+        # 메타 필드는 첫 줄에 없을 수 있다(사이드체인 메시지 등) → '처음 등장하는 값'
+        self.meta: dict[str, str | None] = {"cwd": None, "slug": None, "gitBranch": None, "version": None}
+        self.started_at: str | None = None
+        self.last_ts: str | None = None      # 마지막으로 본 timestamp(마지막 줄이 아님)
+        self.line_count = 0
+        self.message_count = 0
+        self.custom_title: str | None = None  # 네이티브 이름 — '마지막 값'(rename 마다 append)
+        # 대화형 세션 마커: mode/permission-mode/system 레코드는 대화형 UI 를 거친 세션에만
+        # 생긴다(헤드리스 -p/에이전트 dispatch 산물엔 0). claude --resume 픽커 기준과 일치
+        # (실측 2026-08-26: gitBranch 동일한 세 세션에서 이 마커 유무만이 표시 여부를 갈랐다).
+        self.interactive_markers = 0
+        self.ai_title: str | None = None
+        self.agent_name: str | None = None
+        self.last_model: str | None = None    # 마지막 실사용 모델(재개 시 계승)
+        self.offset = 0                       # 접은 바이트 수(완성된 줄 끝)
+        self.sig = b""                        # 오프셋 직전 64바이트 — 앞부분 재작성 감지용
+
+    def feed(self, line: str) -> None:
+        line = line.strip()
+        if not line:
+            return
+        self.line_count += 1
+        try:
+            obj = json.loads(line)
+        except Exception:
+            return
+        self.message_count += 1
+        ts = obj.get("timestamp")
+        if ts:
+            self.last_ts = ts
+            if self.started_at is None:
+                self.started_at = ts
+        for key in self.meta:
+            if self.meta[key] is None and obj.get(key):
+                self.meta[key] = obj[key]
+        t = obj.get("type")
+        if t == "custom-title" and obj.get("customTitle"):
+            self.custom_title = obj["customTitle"]
+        elif t == "ai-title" and obj.get("aiTitle"):
+            self.ai_title = obj["aiTitle"]
+        elif t == "agent-name" and obj.get("agentName"):
+            self.agent_name = obj["agentName"]
+        elif t in ("mode", "permission-mode", "system"):
+            self.interactive_markers += 1
+        # 마지막 실사용 모델: assistant 레코드의 message.model(계속 덮어써 마지막값).
+        # <synthetic>(시스템 생성)는 실모델이 아니라 제외 → 재개 계승 모델과 일치.
+        if t == "assistant":
+            _m = obj.get("message")
+            if isinstance(_m, dict):
+                _mdl = _m.get("model")
+                if _mdl and _mdl != "<synthetic>":
+                    self.last_model = _mdl
+
+    def feed_bytes(self, chunk: bytes) -> int:
+        """완성된 줄만 접고, 접은 바이트 수를 돌려준다(부분 줄은 접지 않음)."""
+        nl = chunk.rfind(b"\n")
+        if nl == -1:
+            return 0
+        done = chunk[:nl + 1]
+        for bline in done.split(b"\n"):
+            if bline:
+                self.feed(bline.decode("utf-8", "replace"))
+        self.offset += len(done)
+        self.sig = done[-_SIG_BYTES:] if len(done) >= _SIG_BYTES else (self.sig + done)[-_SIG_BYTES:]
+        return len(done)
+
+    def to_meta(self, jsonl_path: Path, stat) -> "SessionMeta":
+        session_id = jsonl_path.stem
+        return SessionMeta(
+            session_id=session_id,
+            project_folder=jsonl_path.parent.name,
+            jsonl_path=str(jsonl_path),
+            cwd=self.meta["cwd"],
+            slug=self.meta["slug"],
+            custom_title=self.custom_title,
+            ai_title=self.ai_title,
+            agent_name=self.agent_name,
+            last_model=self.last_model,
+            git_branch=self.meta["gitBranch"],
+            version=self.meta["version"],
+            started_at=self.started_at,
+            # 마지막 줄이 custom-title/snapshot(타임스탬프 없음)일 수 있으므로 last_ts 사용
+            ended_at=self.last_ts,
+            message_count=self.message_count,
+            line_count=self.line_count,
+            size_bytes=stat.st_size,
+            mtime=stat.st_mtime,
+            has_side_dir=(jsonl_path.parent / session_id).is_dir(),
+            # 픽커 표시 규칙(실측 확정 2026-08-26, E:\004·E:\020 교차검증):
+            # claude --resume 픽커는 (대화형 마커 mode/permission-mode/system) 또는
+            # (agent-name 레코드)가 있으면 나열한다. agent-name 만 있고 대화 내용이
+            # 없는 스텁 세션(fork/named 산물)도 픽커에 뜬다 - 이 케이스를 놓쳐 흐리게
+            # 오판하던 버그. 둘 다 없는 순수 헤드리스(-p) 세션만 미표시.
+            picker_hidden=(self.interactive_markers == 0 and self.agent_name is None
+                           and self.line_count > 0),
+        )
+
+
+_SIG_BYTES = 64
+_READ_CHUNK = 1 << 20
+
+# 파일 경로 → (mtime, size, SessionMeta, 누적기) 캐시.
+# 안 바뀌면(mtime+size 동일) 그대로, 자랐으면 새 바이트만 접는다(증분), 그 외는 전체 재파싱.
+_CACHE: dict[str, tuple[float, int, "SessionMeta", _Fold]] = {}
+# 증분/전체 횟수(진단·테스트용)
+STATS = {"incremental": 0, "full": 0}
+
+
+def invalidate(jsonl_path) -> None:
+    """이 파일을 **재작성**한 코드(세션 이사 cwd 치환·복구·가져오기)는 반드시 부른다 —
+    append-only 전제가 깨진 파일을 증분으로 접으면 옛 상태 위에 새 줄을 얹는다."""
+    _CACHE.pop(str(jsonl_path), None)
+
+
+def _read_tail_sig(f, offset: int) -> bytes:
+    if offset <= 0:
+        return b""
+    start = max(0, offset - _SIG_BYTES)
+    f.seek(start)
+    return f.read(offset - start)
+
+
+def _fold_from(jsonl_path: Path, fold: _Fold) -> _Fold:
+    """fold.offset 부터 파일 끝까지 완성된 줄을 접는다(증분·전체 공용)."""
+    with jsonl_path.open("rb") as f:
+        f.seek(fold.offset)
+        pending = b""
+        while True:
+            chunk = f.read(_READ_CHUNK)
+            if not chunk:
+                break
+            buf = pending + chunk
+            used = fold.feed_bytes(buf)
+            pending = buf[used:]
+        # pending = 개행 없는 마지막 부분 줄 → 접지 않고 다음 스캔으로(오프셋도 그 앞)
+    return fold
 
 
 def _scan_one(jsonl_path: Path) -> SessionMeta:
-    """단일 jsonl 파일에서 메타를 추출한다(변경 없으면 캐시 반환)."""
+    """단일 jsonl 파일에서 메타를 추출한다(변경 없으면 캐시, 자랐으면 증분, 아니면 전체)."""
     stat = jsonl_path.stat()
     key = str(jsonl_path)
     cached = _CACHE.get(key)
     if cached and cached[0] == stat.st_mtime and cached[1] == stat.st_size:
         return cached[2]
-    meta = _parse_meta(jsonl_path, stat)
-    _CACHE[key] = (stat.st_mtime, stat.st_size, meta)
+    fold: _Fold | None = None
+    if cached and stat.st_size >= cached[3].offset > 0:
+        # 증분 후보. 오프셋 직전 서명이 그대로여야 '뒤에만 붙은' 파일이다(축소·교체·앞부분
+        # 재작성은 전체 재파싱 — Gemini·Codex 지적: mtime 만 믿으면 정합성이 깨진다).
+        try:
+            with jsonl_path.open("rb") as f:
+                same = _read_tail_sig(f, cached[3].offset) == cached[3].sig
+        except OSError:
+            same = False
+        if same:
+            fold = cached[3]
+            STATS["incremental"] += 1
+    if fold is None:
+        fold = _Fold()
+        STATS["full"] += 1
+    try:
+        _fold_from(jsonl_path, fold)
+    except Exception:
+        # 파일 읽기 자체가 실패하면 지금까지의 누적으로 최소 정보만 반환
+        pass
+    meta = fold.to_meta(jsonl_path, stat)
+    _CACHE[key] = (stat.st_mtime, stat.st_size, meta, fold)
     return meta
 
 
 def _parse_meta(jsonl_path: Path, stat) -> SessionMeta:
-    """단일 jsonl 파일에서 메타데이터를 추출한다. 스트리밍 1-pass."""
-    session_id = jsonl_path.stem
-    project_folder = jsonl_path.parent.name
-
-    # 메타 필드는 첫 줄에 없을 수 있다(사이드체인 메시지 등).
-    # 각 필드를 '처음 등장하는 값'으로 채운다. 1-pass 유지.
-    meta: dict[str, str | None] = {
-        "cwd": None, "slug": None, "gitBranch": None, "version": None,
-    }
-    last_line: str = ""
-    started_at: str | None = None
-    last_ts: str | None = None   # 마지막으로 본 timestamp(마지막 줄이 아님)
-    line_count = 0
-    message_count = 0
-    # 네이티브 이름 레코드 — '마지막 값'이 유효(rename 시마다 append 되므로)
-    custom_title: str | None = None
-    # 대화형 세션 마커: mode/permission-mode/system 레코드는 대화형 UI 를
-    # 거친 세션에만 생긴다(헤드리스 -p/에이전트 dispatch 산물엔 0). claude 의
-    # --resume 픽커가 나열하는 기준과 정확히 일치(실측 2026-08-26: gitBranch
-    # 동일한 세 세션에서 이 마커 유무만이 픽커 표시 여부를 갈랐다).
-    interactive_markers = 0
-    ai_title: str | None = None
-    agent_name: str | None = None
-    last_model: str | None = None   # 마지막 실사용 모델(재개 시 계승)
-
+    """단일 jsonl 파일에서 메타데이터를 처음부터 추출한다(캐시 무관, 테스트·비교용)."""
+    fold = _Fold()
     try:
-        with jsonl_path.open(encoding="utf-8", errors="replace") as f:
-            for raw in f:
-                line = raw.strip()
-                if not line:
-                    continue
-                line_count += 1
-                last_line = line
-                try:
-                    obj = json.loads(line)
-                except Exception:
-                    continue
-                message_count += 1
-                ts = obj.get("timestamp")
-                if ts:
-                    last_ts = ts
-                    if started_at is None:
-                        started_at = ts
-                for key in meta:
-                    if meta[key] is None and obj.get(key):
-                        meta[key] = obj[key]
-                t = obj.get("type")
-                if t == "custom-title" and obj.get("customTitle"):
-                    custom_title = obj["customTitle"]
-                elif t == "ai-title" and obj.get("aiTitle"):
-                    ai_title = obj["aiTitle"]
-                elif t == "agent-name" and obj.get("agentName"):
-                    agent_name = obj["agentName"]
-                elif t in ("mode", "permission-mode", "system"):
-                    interactive_markers += 1
-                # 마지막 실사용 모델: assistant 레코드의 message.model(계속 덮어써 마지막값).
-                # <synthetic>(시스템 생성)는 실모델이 아니라 제외 → 재개 계승 모델과 일치.
-                if t == "assistant":
-                    _m = obj.get("message")
-                    if isinstance(_m, dict):
-                        _mdl = _m.get("model")
-                        if _mdl and _mdl != "<synthetic>":
-                            last_model = _mdl
+        _fold_from(jsonl_path, fold)
     except Exception:
-        # 파일 읽기 자체가 실패하면 최소 정보만 반환
         pass
-
-    # 마지막 줄이 custom-title/snapshot(타임스탬프 없음)일 수 있으므로 last_ts 사용
-    ended_at: str | None = last_ts
-
-    side_dir = jsonl_path.parent / session_id
-
-    return SessionMeta(
-        session_id=session_id,
-        project_folder=project_folder,
-        jsonl_path=str(jsonl_path),
-        cwd=meta["cwd"],
-        slug=meta["slug"],
-        custom_title=custom_title,
-        ai_title=ai_title,
-        agent_name=agent_name,
-        last_model=last_model,
-        git_branch=meta["gitBranch"],
-        version=meta["version"],
-        started_at=started_at,
-        ended_at=ended_at,
-        message_count=message_count,
-        line_count=line_count,
-        size_bytes=stat.st_size,
-        mtime=stat.st_mtime,
-        has_side_dir=side_dir.is_dir(),
-        # 픽커 표시 규칙(실측 확정 2026-08-26, E:\004·E:\020 교차검증):
-        # claude --resume 픽커는 (대화형 마커 mode/permission-mode/system) 또는
-        # (agent-name 레코드)가 있으면 나열한다. agent-name 만 있고 대화 내용이
-        # 없는 스텁 세션(fork/named 산물)도 픽커에 뜬다 - 이 케이스를 놓쳐 흐리게
-        # 오판하던 버그. 둘 다 없는 순수 헤드리스(-p) 세션만 미표시.
-        picker_hidden=(interactive_markers == 0 and agent_name is None
-                       and line_count > 0),
-    )
+    return fold.to_meta(jsonl_path, stat)
 
 
 def scan_all() -> list[SessionMeta]:

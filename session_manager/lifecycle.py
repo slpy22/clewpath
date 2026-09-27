@@ -224,6 +224,8 @@ def change_cwd(session_id: str, new_cwd: str, dry_run: bool = True) -> dict:
     shutil.copy2(jsonl, backup)
     with jsonl.open("w", encoding="utf-8") as f:
         f.write("\n".join(new_lines) + "\n")
+    from session_manager import scanner as _sc
+    _sc.invalidate(jsonl)                   # 재작성 — 증분 캐시 무효(append-only 전제 깨짐)
 
     return {"dry_run": False, "session_id": session_id,
             "old_cwd": old_cwd, "new_cwd": new_cwd,
@@ -324,6 +326,8 @@ def move_session(session_id: str, new_cwd: str, move_content: bool = False,
                 out_lines.append(line)
         target = src_jsonl if same_folder else dst_jsonl
         target.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
+        from session_manager import scanner as _sc
+        _sc.invalidate(src_jsonl); _sc.invalidate(target)   # 재작성 — 증분 캐시 무효
         if not same_folder:
             src_jsonl.unlink()
             moved_ops.append(f"세션 파일 → {dst_jsonl}")
