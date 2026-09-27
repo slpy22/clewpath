@@ -494,7 +494,15 @@ auto_apply = false
 # 재설치할 때마다 이 파일을 덮어써도 사용자 설정이 날아가지 않는다.
 # 신규 설치는 room 을 지정하지 않는다 → 커넥터가 컨트롤플레인이 발급한 room 을 그대로 채택.
 $startPs = Join-Path $Root "start-connector.ps1"
-$cfg = @"
+# v0.9.2: 멱등 런처는 패키지 템플릿(session_manager\start-connector.template.ps1)이 정본 —
+# Host 도 같은 템플릿으로 기존 설치본을 재생성하므로 한 곳만 고치면 된다. 템플릿이 없는
+# 옛 zip 이면 아래 인라인(v1) 으로 폴백한다.
+$tplPath = Join-Path $Root "session_manager\start-connector.template.ps1"
+$cfg = $null
+if (Test-Path $tplPath) {
+    $cfg = (Get-Content $tplPath -Raw).Replace("{{DATA_DIR}}", $dataDir).Replace("{{CONF_FILE}}", $confFile).Replace("{{PORT}}", "$Port")
+}
+if (-not $cfg) { $cfg = @"
 # 자동 생성됨 (install.ps1) — 재설치하면 덮어써집니다.
 # 설정을 바꾸려면 이 파일이 아니라 아래 파일을 고치세요:
 #   $confFile
@@ -516,7 +524,8 @@ foreach (`$f in @(`$log, `$err)) {
 Start-Process -FilePath "`$PSScriptRoot\.venv\Scripts\python.exe" ``
     -ArgumentList "-m","session_manager.server" ``
     -WindowStyle Hidden -RedirectStandardOutput `$log -RedirectStandardError `$err
-"@
+"@ }
+$launcherV2 = ($cfg -match "clewpath-launcher v2")
 if ($DryRun) {
     Warn "DryRun: $startPs 생성 건너뜀"
 } else {
@@ -588,13 +597,25 @@ if ($DryRun) {
             $action    = New-ScheduledTaskAction -Execute $pwsh `
                           -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$startPs`""
             $trigger   = New-ScheduledTaskTrigger -AtLogOn -User $me
+            $triggers  = @($trigger)
+            # v0.9.2 자기 회복: 5분 반복 트리거 — 런처가 멱등(v2)일 때만. 서버가 떠 있으면
+            # 런처는 즉시 끝나고, 죽어 있으면 5분 안에 되살린다(MultipleInstances=IgnoreNew).
+            if ($launcherV2) {
+                if ($PSVersionTable.PSVersion.Major -ge 7) {
+                    $rep = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5)
+                } else {
+                    $rep = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration ([TimeSpan]::MaxValue)
+                }
+                $triggers += $rep
+            }
             $principal = New-ScheduledTaskPrincipal -UserId $me `
                           -LogonType Interactive -RunLevel Limited
             $set       = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
-                          -DontStopIfGoingOnBatteries -StartWhenAvailable
-            Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
+                          -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew
+            Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $triggers `
                         -Principal $principal -Settings $set -Force | Out-Null
-            Ok "자동시작 등록 ($taskName, 이 사용자 로그온 시)"
+            if ($launcherV2) { Ok "자동시작 등록 ($taskName, 로그온 시 + 5분마다 생존 확인)" }
+            else { Ok "자동시작 등록 ($taskName, 이 사용자 로그온 시)" }
             $registered = $true
         } catch {
             Warn "작업 스케줄러 등록 실패: $($_.Exception.Message)"

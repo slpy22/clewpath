@@ -307,6 +307,13 @@ async def _lifespan(app: FastAPI):
     except Exception as e:  # noqa: BLE001
         print(f"[monwatch] 시작 실패: {e}", flush=True)
 
+    # 자기 회복(0.9.2): 비정상 종료 의심이면 복구 푸시(마지막 로그 동봉), 설치본이면 런처 v2·5분 반복 보장
+    from session_manager import liveness as _liveness, updater as _updater_mod
+    try:
+        _liveness.on_startup_async(_updater_mod.BOUND_PORT)
+    except Exception as e:  # noqa: BLE001
+        print(f"[liveness] 시작 실패: {e}", flush=True)
+
     upd_task = None
     if appconfig.get_bool("update", "auto_check", True):
         upd_task = asyncio.create_task(_update_watch())
@@ -323,6 +330,7 @@ async def _lifespan(app: FastAPI):
     try:
         yield
     finally:
+        _liveness.mark_shutdown("normal")   # 정상 종료 표식 — 다음 기동이 '비정상 종료 의심'으로 안 본다
         # 정상 종료(업데이트 재기동 포함) 시 우리가 띄운 PTY 를 함께 내린다 -
         # 살려두면 고아→claude bg 승격→세션 잠금("already running as background
         # agent")이 재기동마다 재발한다(실사고). 재기동 후엔 등록을 잃어
@@ -1455,6 +1463,15 @@ def main():
     else:
         print("[auth] password gate OFF - local only. Set SM_PASSWORD before public exposure.")
     print(f"[serve] http://{host}:{port}")
+    # 자기 회복(0.9.2): runtime.json 을 덮어쓰기 전에 이전 프로세스의 종료가 정상이었는지 본다.
+    from session_manager import liveness as _live
+    try:
+        _inc = _live.check_previous_exit()
+        if _inc:
+            print(f"[liveness] 이전 Host(pid {_inc['prev_pid']}) 가 정상 종료 기록 없이 사라짐(의심) - "
+                  f"incidents.jsonl 기록", flush=True)
+    except Exception as e:  # noqa: BLE001
+        print(f"[liveness] 점검 실패(무시): {e}", flush=True)
     _write_runtime(host, port)
     # 업데이트 헬스체크가 '이 프로세스가 실제로 연 포트'를 쓰게 한다. runtime.json 은
     # 다른 인스턴스가 덮어쓸 수 있어 권위가 아니다(updater.BOUND_PORT 주석 참조).
