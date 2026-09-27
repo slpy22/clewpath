@@ -1,0 +1,42 @@
+{
+  "date": "2026-09-27",
+  "window": "21d",
+  "metrics": {
+    "commits": 27,
+    "contributors": 1,
+    "prs_merged": null,
+    "insertions": 4577,
+    "deletions": 512,
+    "net_loc": 4065,
+    "logical_sloc_added": 3423,
+    "test_loc": 1290,
+    "test_ratio": 0.28,
+    "active_days": 7,
+    "sessions": 12,
+    "deep_sessions": 2,
+    "avg_session_minutes": 15,
+    "loc_per_session_hour": 1500,
+    "feat_pct": 0.44,
+    "fix_pct": 0.15,
+    "docs_pct": 0.30,
+    "peak_hour": 11,
+    "ai_assisted_commits": 27,
+    "releases": 11
+  },
+  "authors": {
+    "slpy22": { "commits": 27, "insertions": 4577, "deletions": 512, "test_ratio": 0.28, "top_area": "session_manager/" }
+  },
+  "version_range": ["0.7.0", "0.9.3"],
+  "streak_days": 1,
+  "user_streak_days": 1,
+  "tweetable": "3주(9/6~9/27): 27 commits(1인), 4.6k LOC, 28% tests, 릴리스 11회(0.7.0→0.9.3), 활동일 7, peak 11시",
+  "test_health": {
+    "total_test_files": 42,
+    "regression_test_commits": 0,
+    "test_files_changed": 12
+  },
+  "backlog": {
+    "total_open": 25,
+    "completed_total": 90
+  }
+}

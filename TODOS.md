@@ -21,7 +21,22 @@
 - [x] e2e 전체 통과. 테스트 11건(`test_workers_dispatch.py`), 전체 296 passed. 정리: e2e 그룹 ab7832fe 삭제, 워커 세션 휴지통
 - [ ] 사장님 확인: 설정 → 📦 워커 스킬 설치 → 새 세션에서 `/clewpath-workers` 로 실제 오케스트레이션 1회(관제 그룹 자동 저장·폰 알림까지)
 
-## 진행중 기능: 세션 목록 API 성능 — 증분 파싱 (v0.9.3)
+## 진행중 기능: PWA 자동 테스트 인프라 (retro 레벨업 #1, 2026-09-27)
+
+`pwa/index.html` 3,800줄 단일 파일에 자동 테스트 0 — 14회 수정이 전부 `node --check` + 수동 e2e 였다. 파일을
+쪼개면 릴레이 라이브 서빙(index.html+sw.js)과 충돌하므로 **제품 코드 무변경**으로 로더 쪽에서 해결한다.
+
+### Phase 1 (이번 사이클) — 완료(2026-09-27), 제품 코드 무변경
+- [x] `tests/pwa/harness.mjs`: 인라인 스크립트를 `node:vm` 에 통째로 부트 — Proxy 기반 DOM 스텁(어떤 프로퍼티든 읽기 가능·대입 기억·classList/style/dataset 실동작), localStorage/location/history/fetch/WebSocket/Notification/Terminal 스텁. 최상위 `let/const` 는 `ev(ctx, code)` 로 같은 컨텍스트에서 평가. 첫 시도에 3,256줄 스크립트가 예외 없이 부트
+- [x] `tests/pwa/pwa.test.mjs`(node:test) 8건: 부트·sessionBadge 신선도·externallyActive 순서·tabEvKind/relIso·jumpToSession 라우팅·openSessionById(재조회/무동작/보류)·tabBadge._on(전경·구독 전 무시, 건수·종류)·알림 기본값 — 0.5초
+- [x] `tests/test_pwa_js.py`: pytest 가 `node --test --test-reporter=tap` 을 감싼다(node 없으면 skip) → `pytest -q` = 311 passed(Python 310 + JS 묶음 1)
+- [x] 함정 기록: vm realm 이 달라 `deepStrictEqual` 이 프로토타입에서 갈림(JSON 비교) / `node --test 디렉토리/` 는 Windows 에서 경로로 해석돼 실패(파일 지정) / 기본 리포터가 TTY 여부로 spec·tap 갈림(`--test-reporter=tap` 고정) / `const` 바인딩은 `ctx.x` 로 안 보임(`ev`)
+
+### Phase 2 (고도화) — 대기
+- [ ] 다음 PWA 변경부터 "테스트 먼저": 관제 필터 판정(`rowMatches` — openMonitor 클로저 안이라 지금은 못 닿음 → 순수 함수로 끌어내기), `consumePendingMonitor`, `saveTabs/restoreTabsOnce`
+- [ ] 스텁 DOM 위에서 `renderTabBar()` 를 실제로 돌려 칩 클래스(`st/stpulse/dirty`)까지 검증(termView.strip 을 stubEl 로 주입)
+
+## 참고(완료): 세션 목록 API 성능 — 증분 파싱 (v0.9.3)
 
 크로스체크(2026-09-27)로 자기 회복 다음 사이클 확정. 실측: 이 세션 jsonl 63MB 가 바뀔 때마다(매 턴) 목록 API
 첫 호출 2.9초(전체 재파싱), 이후 0.02초(캐시). 원격 UI 의 20초 폴링·알림 점프·새로고침이 전부 그만큼 느림.
