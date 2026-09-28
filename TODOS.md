@@ -31,7 +31,8 @@
 - [x] `pwa/index.html` 로컬: `onLocalTermMessage`(같은 origin 만) → 탭 `taken` + 점선 칩 / `shouldConfirmTakeover` 는 로컬에서 **통지로만** 판단(목록 `screen` 은 내 iframe 인지 못 가림) / 확인 후 `attach(..., wasTaken)` → iframe 리로드로 재접속(서버 tail 리플레이). 자동 되찾기 없음(핑퐁 차단). 릴레이 경로 무변경
 - [x] 테스트 `tests/pwa/local-takeover.test.mjs` 3건(terminal.html 을 부모 있는 샌드박스에 부트 + 앱 로컬 흐름), 하네스 `__winListeners`. node 37건
 - [x] 릴리스 0.9.6(2026-09-28 15:41, `-Publish -Apply` 27초, 조용한 재기동 incidents 4 유지, 설치본 `/app`·`/terminal` 새 코드 확인). 007 동기화는 **불필요** — `007/pwa/index.html` 은 006 파일의 하드링크(git 미추적)라 릴레이가 요청마다 읽어 이미 라이브에 반영됨(`onLocalTermMessage` 확인)
-- [ ] 사장님 재실기: PC 로컬 + 폰 왕복(점선 칩·확인창·되찾기)
+- [x] 사장님 재실기(2026-09-28 16:00): PC 로컬 + 폰 왕복 — 노란 줄·확인창·되찾기 ✅. 발견: 전경 탭의 `.sel` 실선 outline 이 1px 점선 테두리를 가려 **점선이 안 보임** → 0.9.7: `.taken.sel` outline 을 주황 점선으로, 글자 주황 + 👀 접두, CSS 가드 테스트(node 38건). 게시·적용 완료
+- [ ] 사장님 육안: 0.9.7 에서 빼앗긴 탭이 한눈에 구분되는지(PC 로컬 새로고침 후)
 
 ## 진행중 기능: 자기 회복 Phase 2 — 릴레이 heartbeat 단절 알림 (Host 0.9.5 + 서버 007)
 
