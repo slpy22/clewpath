@@ -30,7 +30,7 @@
 - [x] relay: `_DOWN[room].since`(단절 시작 epoch, down 을 이미 알린 뒤 재예약돼도 최초 시각 유지) → agent-down 에 `since`, agent-up 에 `down_since` 동봉
 - [x] CP: `notify_room(..., down_since)` → up 본문 "…다시 붙었습니다. (11:59 부터 6분 끊김)" — `outage_phrase`(Asia/Seoul, `SM_CP_NOTICE_TZ`, 분 반올림, 1시간 이상은 시간·분). 구 릴레이가 since 를 안 주면 `last_down_at - grace` 폴백. **스키마 무변경**
 - [x] 테스트: CP 2건(문구·API 왕복+폴백) + relay 1건(since 유지) → 007 92 passed
-- [ ] 배포: 007 main 병합·push → `docker restart util-session-cp util-session-relay` → 다음 실제 단절 때 폰/PC 에서 본문 확인(쿨다운 6h 라 인위 e2e 불가)
+- [x] 배포(2026-09-28 17:20): 007 main 484907a push → `docker restart util-session-cp util-session-relay` → Host 1초 만에 재접속(host.log `relay 연결됨 … e2ee=on`, grace 안이라 무알림). ⚠ 본문 실확인은 다음 실제 단절 때(쿨다운 6h 라 인위 e2e 불가) — 기대 문구 "…다시 붙었습니다. (HH:MM 부터 N분 끊김)"
 
 ## 진행중 기능: 로컬 모드 화면 인계 UX (v0.9.6)
 
