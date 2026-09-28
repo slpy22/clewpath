@@ -19,7 +19,7 @@
 - [x] 스킬 `session_manager/skills/clewpath-workers/SKILL.md` 동봉(패키지 zip 포함 확인). 실측 반영: 파생 이름은 프로세스마다 바뀜(worker2-7f → 40 → 94) → 매번 레지스트리에서 읽고 등록부는 UUID 만
 - [x] 스킬 설치: `skillinstall.py` + `GET /api/owner/skills/workers` / `POST …/install`(로컬 전용, overwrite 재확인) + 설정 "📦 워커 스킬 설치" 확인창. CLAUDE.md 예외 등록. 가드 `test_no_skill_install_on_startup`(기동·상태 조회는 파일 생성 없음). ⚠ 실제 설치는 사장님이 설정 화면에서 버튼으로(원칙상 제가 대신 누르지 않음) — 설치본 상태 조회 `bundled:true, installed:false` 확인
 - [x] e2e 전체 통과. 테스트 11건(`test_workers_dispatch.py`), 전체 296 passed. 정리: e2e 그룹 ab7832fe 삭제, 워커 세션 휴지통
-- [ ] 사장님 확인: 설정 → 📦 워커 스킬 설치 → 새 세션에서 `/clewpath-workers` 로 실제 오케스트레이션 1회(관제 그룹 자동 저장·폰 알림까지)
+- [x] 실사용 1회(2026-09-28 19:23, 사장님 설치 → 이 세션이 관리 세션으로 `/clewpath-workers`): `claude -p` 로 워커 생성($0.33) → 등록부 `.clewpath/workers.json`(gitignore) → start API `started` → **6초** 뒤 피어 `worker-test-50` → 관제 그룹 `85d91464` 저장 → SendMessage 일감 1(인벤토리) 답장 검증 → 의존 일감 2(pytest 7건) 답장·독립 재실행 통과. 스킬 절차 이탈 0. 관찰: 유휴 통지가 일감 2 발송 뒤에 도착(지연) → 스킬에 '답장을 믿고 통지는 참고' 명시 필요 / 등록부 콘솔 출력 cp949 깨짐(파일은 정상)
 
 ## 진행중 기능: '다시 연결됨' 알림에 끊김 이력 (서버 007, 2026-09-28)
 
@@ -86,7 +86,7 @@ Host 가 `bye` 프레임으로 예고해 오탐을 막는다.
 - [x] 즉시 전환(2026-09-28): 버퍼 초과 폴백을 실제 `/ws/terminal?screen=` 라우트로(`test_webterm_overflow_route.py` 2건: tail+'생략' 안내 / 정확한 델타·배너 없음 / 처음 보는 화면 tail+재연결 배너) · 로컬 모드(/app)는 하네스 `MODE=local` 부트로 탭별 iframe 보유·전환 시 `.on` 토글만(src 재대입 0)·dead 탭만 리로드·닫으면 about:blank 검증. ⚠ 남은 것: 로컬 /app 육안(iframe 그리드) — 낮음
 - [x] 2FA on OTP 경로(2026-09-28): PWA `ensurePriv`(취소 null·OTP→grace 캐시·재요청 없음·불일치 toast·`2fa_invalid` 시 grace 소거) + 터미널 스트림 2fa 오류 → grace 소거·안내 문구 + 커넥터 실 TOTP 비밀로 grant→grace→terminal start 통과/거부·비밀 재설정 시 grace 무효(`test_connector_stop_2fa.py`). ⚠ 실기 OTP 입력(폰 인증앱)은 이 Host 2FA 를 켤 때 — **(사장님)** 선택
 - [ ] 모바일 실기기 육안: 탭 밑줄·필터 바·💾·🔗 칩 **(사장님)**
-- [ ] 워커 스킬: 📦 설치 → `/clewpath-workers` 실사용 1회 → 관제 그룹 자동 저장·폰 알림 **(사장님)**
+- [x] 워커 스킬 실사용 1회 — 2026-09-28 완료(위 워커 분배 섹션). 폰 알림은 iPhone 홈 화면 추가 뒤
 
 ## 참고(완료): CHANGELOG.md 도입 (retro 개선 #2, 2026-09-28)
 
