@@ -57,6 +57,10 @@ Host 가 죽으면 알릴 주체가 없었다(CP 의 FCM 경로는 모바일 앱
 배포: 007 docker restart(테이블은 create_all) → Host 0.9.5(`release.ps1 -Publish -Apply` 2회째, 22초). 기동 로그
 `[push] CP 미러: {'ok': True, 'count': 1}`, CP DB 에 room 행 1(구독 'Windows').
 
+**e2e(2026-09-28)**: maintenance.flag + taskkill 11:59:55 → 릴레이 `agent offline → 600s 뒤 단절 확인` → CP 미러
+`last_down_at = 12:09:55`(정확히 +600s), `down_pending = true`(연결 끊김 발송) → 플래그 제거 → 12:16 복구 →
+`down_pending = false`(다시 연결됨 발송). 0.9.4→0.9.5 업데이트 재기동은 bye 없이 끊겼지만 20초 내 복귀라 무알림.
+
 한계: PC 전원 꺼짐도 bye 가 안 나가면 10분 뒤 알림 1건(쿨다운 6h) — 정상 종료는 lifespan bye 로 억제. 릴레이
 자체가 죽으면 아무도 못 알림(운영측 모니터 몫). maintenance.flag + taskkill 은 bye 가 없어 알림이 나간다(의도적
 중지엔 설정 화면의 '종료' 경로가 생기면 bye 를 붙일 것).

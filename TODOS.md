@@ -31,8 +31,8 @@ Host 가 `bye` 프레임으로 예고해 오탐을 막는다.
 - [x] **007 CP**: `webpush.py` — pywebpush 없이(컨테이너 재빌드 금지) RFC 8291 aes128gcm + RFC 8292 VAPID 를 cryptography·pyjwt 로 구현, **RFC 8291 부록 A 벡터 통과**. `WebPushMirror` 테이블(room 당 PEM+구독), `POST /push/webpush-mirror`(agent JWT), `POST /internal/rooms/{room}/agent-down|agent-up`. down 은 6h 쿨다운, up 은 down 뒤 1회, 404/410 구독 청소. 테스트 5건
 - [x] **007 relay**: agent 가 `bye` 없이 끊기면 `RELAY_DOWN_GRACE_S`(600) 뒤에도 없을 때만 CP 에 down 통지, 복귀 시 down 을 보냈으면 up 통지. bye 프레임은 중계하지 않고 표식만. 릴레이 재시작으로 전원 끊겨도 grace 뒤 재접속돼 있으면 무알림. 테스트 4건. 007 전체 89 passed. main a683fab push·`docker restart` 완료(테이블 create_all 확인)
 - [x] **006 Host**: `push.mirror_to_cp()`(구독 추가/삭제·기동 시, 스레드, CP 미설정 no-op) / `connector.bye()` + `request_bye()`(lifespan 종료·updater.apply 에서) / 테스트 4건, 324 passed. Host 0.9.5 `release.ps1 -Publish -Apply` 22초 → 기동 로그 `CP 미러 ok count 1`, CP DB room 행 1(구독 Windows)
-- [ ] 배포: 007 `docker restart util-session-cp util-session-relay`(bind-mount, DB 는 create_all 로 테이블 추가) → Host 0.9.5 `release.ps1 -Publish -Apply` → e2e: 미러 등록 확인(CP DB) → Host 강제 종료(maintenance 없이) → 10분 뒤 폰/PC 에 "연결 끊김" 푸시 → 자기 회복 후 "다시 연결됨" 푸시 / 업데이트 재기동은 무알림(bye)
-- [ ] 한계 기록: PC 전원 꺼짐(의도적)도 bye 없이 끊기면 10분 뒤 알림 1건(쿨다운 6h) — 정상 종료 시 lifespan bye 가 나가므로 대부분 억제됨. 릴레이가 죽은 경우는 아무도 못 알림(운영측 모니터 몫)
+- [x] 배포·e2e(2026-09-28): 007 restart(테이블 create_all) → Host 0.9.5 → CP DB 미러 1행 → maintenance.flag + taskkill 11:59:55 → 릴레이 `→ 600s 뒤 단절 확인` → CP `last_down_at`=**12:09:55(정확히 +600s)**, `down_pending` true(= '연결 끊김' 웹푸시 발송) → 플래그 제거 12:13 → 12:16 복구 → `down_pending` false(= '다시 연결됨' 발송). 0.9.4→0.9.5 업데이트 재기동은 옛 Host 라 bye 없이 끊겼지만 20초 내 복귀라 무알림(grace 설계대로). ⚠ 확인: 이 PC Chrome 에 '연결 끊김'(12:10)·'다시 연결됨'(12:16) 알림 **(사장님)** / 다음 업데이트(0.9.5→)부터 bye 로 릴레이 감시 자체가 안 걸리는지
+- [x] 한계 기록(설계 문서 §Phase 2): PC 전원 꺼짐도 bye 없이 끊기면 10분 뒤 알림 1건(쿨다운 6h) — 정상 종료는 lifespan bye 로 억제. 릴레이 자체 사망은 못 알림(운영측 모니터 몫). maintenance+taskkill 은 알림 나감
 
 ## 참고(완료): 화면 소유권 인계 UX (v0.9.4)
 
