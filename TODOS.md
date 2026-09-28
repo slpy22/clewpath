@@ -21,6 +21,18 @@
 - [x] e2e 전체 통과. 테스트 11건(`test_workers_dispatch.py`), 전체 296 passed. 정리: e2e 그룹 ab7832fe 삭제, 워커 세션 휴지통
 - [ ] 사장님 확인: 설정 → 📦 워커 스킬 설치 → 새 세션에서 `/clewpath-workers` 로 실제 오케스트레이션 1회(관제 그룹 자동 저장·폰 알림까지)
 
+## 진행중 기능: 로컬 모드 화면 인계 UX (v0.9.6)
+
+사장님 실기(2026-09-28): PC **로컬 127.0.0.1:5100** + 폰이 실제 주 사용 형태인데, 로컬은 iframe(terminal.html)이라
+0.9.4 의 인계 UX(점선 칩·확인창)가 없고 서버 통지 문구만 보였다. 릴레이와 같은 결과를 iframe 경유로 만든다.
+
+### Phase 1 (이번 사이클)
+- [x] `static/terminal.html`: 서버 `TAKEOVER_NOTE` 감지 → 상태 "다른 화면이 보는 중" + 부모에 `postMessage({type:'clewpath-term', event:'taken', id, fork}, origin)`(붙을 때 `attached` 도) → 끊길 때 노란 "다른 기기에서 보는 중 — 탭/재연결" 안내(회색 '연결 끊김' 대신)
+- [x] `pwa/index.html` 로컬: `onLocalTermMessage`(같은 origin 만) → 탭 `taken` + 점선 칩 / `shouldConfirmTakeover` 는 로컬에서 **통지로만** 판단(목록 `screen` 은 내 iframe 인지 못 가림) / 확인 후 `attach(..., wasTaken)` → iframe 리로드로 재접속(서버 tail 리플레이). 자동 되찾기 없음(핑퐁 차단). 릴레이 경로 무변경
+- [x] 테스트 `tests/pwa/local-takeover.test.mjs` 3건(terminal.html 을 부모 있는 샌드박스에 부트 + 앱 로컬 흐름), 하네스 `__winListeners`. node 37건
+- [ ] 릴리스 0.9.6(Host: terminal.html + 로컬 index.html) + 007 `pwa/index.html` 동기화·relay restart(릴레이 쪽은 동작 무변경, 파일 동일성 유지)
+- [ ] 사장님 재실기: PC 로컬 + 폰 왕복(점선 칩·확인창·되찾기)
+
 ## 진행중 기능: 자기 회복 Phase 2 — 릴레이 heartbeat 단절 알림 (Host 0.9.5 + 서버 007)
 
 사장님 결정(2026-09-28): **A) Host 가 웹푸시 구독을 CP 에 미러**. 폰 알림은 Host 웹푸시(구독·VAPID 키가 Host 에만)라
@@ -53,8 +65,10 @@ Host 가 `bye` 프레임으로 예고해 오탐을 막는다.
 - [x] 자기 회복: `maintenance.flag` 실기(2026-09-28) — 플래그 두고 taskkill 11:12:13 → 330초 동안 안 살아남(11:15 틱이 플래그를 존중) → 플래그 제거 11:17:51 → 다음 틱 11:20:54 기동, 11:20:57 health OK(launcher.log "이전 pid 95824 없음 → 기동")
 - [x] 자기 회복: 정기 업데이트 재기동이 조용한지 — 0.9.3 적용에서 확인(incidents 불변)
 - [x] 릴리스 스크립트 `-Publish -Apply` 경로 첫 실사용 — 0.9.4 에서 49초 exit 0(2026-09-28)
-- [ ] 화면 인계: 폰+PC 실기기 왕복(확인창·점선 칩·배너 육안) **(사장님)**
-- [ ] 알림→탭 점프: 실제 서비스워커 알림 클릭 경로(`open-session` 메시지) — 폰에서 알림 클릭 1회면 됨 **(사장님)**
+- [x] 화면 인계 실기(2026-09-28 사장님): PC **로컬 127.0.0.1:5100** + 폰 → PC 에 노란 통지만 보이고 점선 칩·툴팁·확인창 없음, 창 오갈 때 소유자 불변(핑퐁 없음 ✅). = 로컬 iframe 모드의 알려진 한계가 **실제 주 사용 형태**(PC 로컬 + 폰)에서 그대로 노출 → 다음 사이클 "로컬 모드 화면 인계 UX" 로 승격(아래 진행중 기능)
+- [ ] 알림→탭 점프: 실제 서비스워커 알림 클릭 경로 — **iPhone 은 Safari → 공유 → 홈 화면에 추가 → 홈 아이콘으로 실행해야 웹푸시 가능**(iOS 16.4+, 브라우저 탭에서는 불가 → ⚙ 설정 → 알림에 "지원하지 않습니다" 표시). 🔔 은 상단이 아니라 ⚙ 설정 → 알림 안 **(사장님)**
+- [x] 자기 회복 푸시 수신(2026-09-28 사장님): '비정상 종료 복구'·'다시 연결됨' 은 봄, '연결 끊김' 은 못 봄 — 원인: down/up 이 같은 `tag:"host-down"` 이라 12:16 up 이 12:10 down 을 **조용히 대체**(renotify:false, 설계상 '끊김' 이 복구 뒤 남지 않게). 개선 후보: up 본문에 끊긴 시각·지속시간을 넣어 이력이 보이게(007 `webpush.notify_room`, 소) → Deferred
+- [ ] 모바일 터미널 모드 하단 입력 영역 높이 이상(사장님, 2026-09-28) — 다음에 스크린샷과 함께
 - [x] 관제 타임라인 필터: 실시간 증분 행에 필터 적용 — 헤드리스 하네스로 `openMonitor` 를 실제로 열어 스냅샷 3행 → '오류' 필터 → 증분 2행(텍스트 숨김·오류 표시) → 세션 숨김 토글 → 복원까지 검증(`tests/pwa/monitor.test.mjs`, 2026-09-28)
 - [x] 탭 배지 주기 재렌더(2026-09-28, 하네스 `tests/pwa/unverified.test.mjs`): 터미널 뷰 마운트 + 탭 2개 fast-path 상태에서 20초 틱 3회 → 목록은 3회 재렌더, 스트립은 300ms 코얼레싱으로 1회, 활성 칩 `scrollIntoView` 0(사용자 스크롤 보존), xterm 포커스 0·인스턴스/스트림 동일·전송 0. 하네스에 `setInterval` 기록(`__intervals`) 추가
 - [x] 즉시 전환(2026-09-28): 버퍼 초과 폴백을 실제 `/ws/terminal?screen=` 라우트로(`test_webterm_overflow_route.py` 2건: tail+'생략' 안내 / 정확한 델타·배너 없음 / 처음 보는 화면 tail+재연결 배너) · 로컬 모드(/app)는 하네스 `MODE=local` 부트로 탭별 iframe 보유·전환 시 `.on` 토글만(src 재대입 0)·dead 탭만 리로드·닫으면 about:blank 검증. ⚠ 남은 것: 로컬 /app 육안(iframe 그리드) — 낮음

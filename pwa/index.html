@@ -1816,7 +1816,7 @@ const termView={
     this.tabs[key]=t; return t;
   },
   // 전경 탭을 세션 s 로 바꾼다. 이전 전경은 화면(tc)만 뗀다(PTY·xterm 버퍼 유지).
-  attach(s, cred, safe, wasDead){
+  attach(s, cred, safe, wasDead, wasTaken){
     const key=tabKey(s);
     if(this.active && this.active!==key){
       const p=this.tabs[this.active];
@@ -1830,7 +1830,8 @@ const termView={
     // SESSIONS.live_terminal 은 20초 폴링이라 stale — 이걸 쓰면 살아있는 탭까지 비워 델타가 무너진다(실측).
     const fresh=!!wasDead||t.ended;
     if(MODE==='local'){
-      if(fresh&&t.frame){ t.frame.src=t.frame.src; t.ended=false; }
+      // 빼앗겼던 iframe 은 WS 가 이미 끊겨 있다 → 리로드로 다시 붙는다(서버가 tail 리플레이). 릴레이는 델타 재접속이라 해당 없음
+      if((fresh||wasTaken)&&t.frame){ t.frame.src=t.frame.src; t.ended=false; }
       try{ t.frame&&t.frame.contentWindow&&t.frame.contentWindow.dispatchEvent(new Event('resize')); }catch(e){}
       return;
     }
@@ -1912,6 +1913,8 @@ const TAKEOVER_NOTE='다른 화면이 이 세션을 가져갔습니다';
 // 다른 화면이 붙어 있는 세션을 가져오기 전 확인(v0.9.4). t0 = 이 페이지의 탭(있으면), s.screen = 목록의 참고값.
 function shouldConfirmTakeover(s, t0){
   if(t0&&t0.taken) return true;                                   // 우리 화면이 밀려난 걸 확실히 안다
+  // 로컬(iframe)은 화면 id 가 없어 목록의 screen 이 '내 iframe' 인지 남인지 못 가린다 → 통지(taken)로만 판단
+  if(MODE==='local') return false;
   const sc=s&&s.screen; if(!sc||!sc.attached) return false;      // 붙은 화면 없음(또는 stale false — 상대 통지가 메운다)
   const mine=t0&&termView.tabs&&termView.tabs[t0.key]&&termView.tabs[t0.key].screenId;
   return !(mine&&sc.screen_id===mine);                            // 붙은 화면이 내 것이면 그냥 재접속
@@ -2233,8 +2236,9 @@ async function loadTerminal(s, safe){
   // wasDead: 복원 시점에 PTY 가 없던 탭(다시 열면 새 스폰). attach 가 보유 xterm 을 비울지 정하는
   // 근거 — 20초 폴링의 SESSIONS.live_terminal 은 stale 해서(e2e 실측: 살아난 뒤에도 false) 못 쓴다.
   const wasDead=!!(t0&&t0.dead);
-  // 화면 소유권 인계(v0.9.4): 다른 기기가 보고 있으면 가져가기 전에 묻는다 — 그쪽은 통지를 받고 입력이 막힌다
-  if(MODE==='relay'&&shouldConfirmTakeover(s,t0)){
+  const wasTaken=!!(t0&&t0.taken);           // 로컬 iframe 은 되찾을 때 리로드가 필요(스트림이 이미 끊김)
+  // 화면 소유권 인계(v0.9.4, 로컬은 0.9.6): 다른 기기가 보고 있으면 가져가기 전에 묻는다 — 그쪽은 통지를 받고 입력이 막힌다
+  if(shouldConfirmTakeover(s,t0)){
     if(!confirm('다른 기기(화면)에서 이 세션을 보고 있습니다.\n여기로 가져오면 그쪽 화면은 입력이 막히고 "다른 기기에서 보는 중" 으로 바뀝니다.\n\n가져올까요?')) return;
   }
   if(t0){ t0.s=s; t0.safe=!!safe; t0.dead=false; t0.act=false; t0.actN=0; t0.last=null; t0.taken=false; }   // 보는 순간 배지 소거
@@ -2247,7 +2251,7 @@ async function loadTerminal(s, safe){
   // showDetailPane 필수: 재연결 흐름(loadList)이나 알림 클릭이 data-view 를 list 로 돌려놓았을 수
   // 있고, term-mode pane 은 그 상태에서 display:none 이다 — 붙이기만 하면 '보이지 않는 터미널에
   // 재접속'이 된다(relay e2e 실측 2026-09-10: 화면은 비고 클릭은 허공).
-  if(termView.mounted(main)){ showDetailPane(); termView.attach(s, cred, safe, wasDead); renderTabBar(); saveTabs(); return; }
+  if(termView.mounted(main)){ showDetailPane(); termView.attach(s, cred, safe, wasDead, wasTaken); renderTabBar(); saveTabs(); return; }
   termView.dispose();                       // 이전 화면(있으면) 전부 해체 후 새로 구축
   main.classList.remove('term-mode'); main.innerHTML='';
   // 바의 버튼들은 '지금 전경인 탭'에 작동해야 한다 — 구축 시점의 s 를 붙들면 탭 전환 뒤
@@ -2281,7 +2285,7 @@ async function loadTerminal(s, safe){
     main.classList.remove('term-mode'); main.innerHTML='';
     main.appendChild(el('div','term-note','xterm 로드 실패: '+e.message)); return; }
   termView.strip=strip;
-  termView.attach(s, cred, safe, wasDead);
+  termView.attach(s, cred, safe, wasDead, wasTaken);
   renderTabBar(); saveTabs();
 }
 
@@ -3672,6 +3676,15 @@ function syncRelayPcs(){
   if(!w) toast('팝업이 차단됐습니다 — 팝업 허용 후 다시 시도하세요.');
 }
 // 팝업(릴레이)에서 넘어온 PC 목록 수신 — 릴레이 origin 만 신뢰, room+name 만 저장.
+// 로컬 iframe 터미널의 화면 인계 통지(v0.9.6): terminal.html 이 서버 통지를 감지하면 같은 origin 으로
+// {type:'clewpath-term', event:'taken', id, fork} 를 보낸다 → 그 탭을 '빼앗김'으로(릴레이 모드의 스트림 감지와 동일 결과).
+// 되찾기는 탭 클릭 → 확인창 → iframe 리로드(attach 의 wasTaken). 자동으로 되찾지 않는다(핑퐁 차단).
+function onLocalTermMessage(ev){
+  if(ev.origin!==location.origin) return;
+  const d=ev.data; if(!d||d.type!=='clewpath-term'||d.event!=='taken') return;
+  const rec=findTab(d.fork||d.id); if(!rec||rec.taken) return;
+  rec.taken=true; renderTabBarSoon();
+}
 function onRelayPcsMessage(ev){
   try{
     if(ev.origin !== new URL(RELAY_APP_URL).origin) return;
@@ -3795,6 +3808,7 @@ if(_pcexport){
   doExport(_pcexport);
 }else if(MODE==='local'){
   window.addEventListener('message', onRelayPcsMessage);   // 팝업 동기화 수신
+  window.addEventListener('message', onLocalTermMessage);  // 탭 iframe(terminal.html) → 화면 인계 통지
   refreshConnBadge();                            // 접속 인증 모드 배지(JWT/fallback)
   setInterval(refreshConnBadge, 60000);
   refreshVer();                                  // 버전 + 새 버전 알림

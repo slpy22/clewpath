@@ -104,8 +104,12 @@ export function makeSandbox() {
     } },
     FitAddon: { FitAddon: class { fit() {} } },
   };
-  // window 이벤트(resize 등)·ResizeObserver 는 no-op — termView.mount 가 등록/해제한다
-  sandbox.addEventListener = () => {}; sandbox.removeEventListener = () => {}; sandbox.dispatchEvent = () => true;
+  // window 이벤트는 기록만(테스트가 `__winListeners.message` 등을 직접 호출) — termView.mount 가 등록/해제한다
+  const winListeners = {};
+  sandbox.__winListeners = winListeners;
+  sandbox.addEventListener = (t, f) => { (winListeners[t] ||= []).push(f); };
+  sandbox.removeEventListener = (t, f) => { if (winListeners[t]) winListeners[t] = winListeners[t].filter((x) => x !== f); };
+  sandbox.dispatchEvent = () => true;
   sandbox.ResizeObserver = class { observe() {} disconnect() {} unobserve() {} };
   sandbox.window = sandbox; sandbox.self = sandbox; sandbox.globalThis = sandbox;
   return sandbox;

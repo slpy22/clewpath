@@ -141,13 +141,32 @@
   // 초기 레이아웃 정착 보증(ResizeObserver 미지원 환경 대비).
   setTimeout(sendResize, 60); setTimeout(sendResize, 300);
 
+  // 화면 소유권 인계(v0.9.6, 로컬 iframe): 서버(webterm.TAKEOVER_NOTE)가 이 화면을 밀어내면 부모(앱)에
+  // 알려 탭 칩을 '빼앗김'으로 그리게 한다. 부모가 없으면(단독 창) 안내 문구만 남는다.
+  const TAKEOVER_NOTE = "다른 화면이 이 세션을 가져갔습니다";
+  let taken = false;
+  function tellParent(event){
+    try{ if(window.parent && window.parent !== window)
+      window.parent.postMessage({type:"clewpath-term", event, id, fork}, location.origin); }catch(_){}
+  }
   ws.onopen = () => {
     dot.className = "dot on"; statusEl.textContent = "연결됨";
-    sendResize(); term.focus();
+    sendResize(); term.focus(); tellParent("attached");
   };
-  ws.onmessage = (e) => { term.write(e.data); };
+  ws.onmessage = (e) => {
+    term.write(e.data);
+    if(!taken && typeof e.data === "string" && e.data.indexOf(TAKEOVER_NOTE) >= 0){
+      taken = true; statusEl.textContent = "다른 화면이 보는 중"; tellParent("taken");
+    }
+  };
   ws.onclose = () => {
-    dot.className = "dot off"; statusEl.textContent = "연결 종료";
+    dot.className = "dot off";
+    if(taken){
+      statusEl.textContent = "다른 화면이 보는 중";
+      term.write("\r\n\x1b[93m── 다른 기기에서 보는 중 — 다시 가져오려면 탭을 누르거나 '재연결'을 누르세요 ──\x1b[0m\r\n");
+      return;
+    }
+    statusEl.textContent = "연결 종료";
     term.write("\r\n\x1b[90m── 연결이 끊겼습니다. '재연결'을 누르세요(세션이 끝났다면 새로 시작됩니다). ──\x1b[0m\r\n");
   };
   ws.onerror = () => { dot.className = "dot off"; statusEl.textContent = "오류"; };
