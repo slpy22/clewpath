@@ -103,9 +103,13 @@ Host 가 `bye` 프레임으로 예고해 오탐을 막는다.
 - [x] `tests/pwa/unverified.test.mjs` 4건(미검증 소화): 20초 틱 재렌더 무해성·2FA OTP 경로·로컬 iframe 즉시 전환. 하네스: `__intervals`(setInterval 기록)·`load({location})` 로 MODE 전환
 - [x] 함정 추가: 하네스 `$('#paneDetail')` 은 매번 새 스텁이라 `termView.mounted` 가 참이 안 됨 → 테스트에서 `document.querySelector` 를 그 id 만 고정 / attach 의 resize 타이머(80·300ms)가 `tc.send` 를 부르니 전송 카운터는 400ms 뒤 리셋 / vm 배열은 JSON 비교(`same`)
 
-### Phase 3 (대기)
-- [ ] 목록 렌더(`rerender`/세션 카드) 헤드리스 검증 — 카드 뱃지·🔗 피어 칩·`screen` 칩이 목록 객체와 1:1 인지
-- [ ] 서비스워커(`sw.js`) 알림 클릭 → `open-session`/`open-monitor` postMessage 계약 테스트(sw 는 별도 파일이라 부트 가능)
+### Phase 3 — 완료(2026-09-28), `tests/pwa/phase3.test.mjs` 4건, node 27건
+- [x] `renderRows` 목록 카드: 폴더 그룹 최신순·건수·대표 cwd(최단) / 상태 점(pulse·색)·문구 / 🔗 피어 칩은 `peer && !live_terminal` 일 때만(우리 PTY 면 없음) / 🤖 배경 에이전트·⚙ 피커 미표시(`picker_expose` 면 없음)·#라벨·🧠 모델(`set`) / 🖥 vs ▶ / 권한 대기 → ✋ + 클릭 가능 문구 / msgs·bytes·상대시간 / 경로 줄은 대표와 다를 때만 / 접기(검색 중 무시)·제목/경로 검색·라벨 필터·빈 문구 2종. (목록엔 `screen` 칩이 없다 — 화면 점유는 터미널 탭·확인창에서만)
+- [x] `sw.js` 를 vm 에 부트: push → `showNotification(title 기본값·tag·data{sid,kind,gid})`, 깨진 JSON/빈 data 도 알림. notificationclick → 같은 origin 창 focus + `postMessage({type:'open-session',sid}|{type:'open-monitor',gid})`, 다른 origin 건너뜀, focus 실패 시 다음 창→`openWindow`, 창 없음 → `/relay/app#open=…`·`#monitor=`(encodeURIComponent)·로컬 `/sw.js` 는 `/#open=`. 페이지 쪽: `navigator.serviceWorker` message → `openSessionById`/`openMonitorGroupById`, 그 외 무시 — **sw ↔ 페이지 계약 양쪽 고정**(하네스 `load({navigator})`)
+
+### Phase 4 (대기)
+- [ ] `loadDetail` 상세 화면(재개 방식 버튼·동시 재개 경고·🖥 돌아가기) 헤드리스 검증
+- [ ] `conn`(릴레이 WS RPC) 재연결·pending 요청 거부·stream eof 라우팅 — `WebSocket` 스텁을 이벤트 구동형으로
 
 ## 참고(완료): 세션 목록 API 성능 — 증분 파싱 (v0.9.3)
 
