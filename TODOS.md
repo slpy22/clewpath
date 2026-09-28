@@ -21,6 +21,17 @@
 - [x] e2e 전체 통과. 테스트 11건(`test_workers_dispatch.py`), 전체 296 passed. 정리: e2e 그룹 ab7832fe 삭제, 워커 세션 휴지통
 - [ ] 사장님 확인: 설정 → 📦 워커 스킬 설치 → 새 세션에서 `/clewpath-workers` 로 실제 오케스트레이션 1회(관제 그룹 자동 저장·폰 알림까지)
 
+## 진행중 기능: '다시 연결됨' 알림에 끊김 이력 (서버 007, 2026-09-28)
+
+사장님 실기 ①: down/up 이 같은 tag 라 복구 알림이 '연결 끊김'을 조용히 대체 → 끊김을 못 본 사람은 무슨 일이
+있었는지 모른다. 태그를 나누면 복구 뒤에도 '끊김'이 남으니, 대신 **up 본문에 이력**을 싣는다.
+
+### Phase 1 (이번 사이클)
+- [x] relay: `_DOWN[room].since`(단절 시작 epoch, down 을 이미 알린 뒤 재예약돼도 최초 시각 유지) → agent-down 에 `since`, agent-up 에 `down_since` 동봉
+- [x] CP: `notify_room(..., down_since)` → up 본문 "…다시 붙었습니다. (11:59 부터 6분 끊김)" — `outage_phrase`(Asia/Seoul, `SM_CP_NOTICE_TZ`, 분 반올림, 1시간 이상은 시간·분). 구 릴레이가 since 를 안 주면 `last_down_at - grace` 폴백. **스키마 무변경**
+- [x] 테스트: CP 2건(문구·API 왕복+폴백) + relay 1건(since 유지) → 007 92 passed
+- [ ] 배포: 007 main 병합·push → `docker restart util-session-cp util-session-relay` → 다음 실제 단절 때 폰/PC 에서 본문 확인(쿨다운 6h 라 인위 e2e 불가)
+
 ## 진행중 기능: 로컬 모드 화면 인계 UX (v0.9.6)
 
 사장님 실기(2026-09-28): PC **로컬 127.0.0.1:5100** + 폰이 실제 주 사용 형태인데, 로컬은 iframe(terminal.html)이라
