@@ -106,3 +106,10 @@ test("앱(로컬): iframe 의 taken 통지 → 탭 taken(점선) → 탭 클릭 
   fire("http://127.0.0.1:5100", { type: "clewpath-term", event: "taken", id: "nope", fork: "" });
   assert.equal(rec().taken, false);
 });
+
+test("CSS 가드: 빼앗긴 탭은 전경(.sel)일 때도 점선·주황이 보여야 한다(실선 outline 에 가려진 사고, 0.9.7)", () => {
+  const css = readFileSync(join(here, "..", "..", "pwa", "index.html"), "utf-8");
+  assert.match(css, /\.term-tabs \.lchip\.taken\{[^}]*border:1px dashed var\(--warn\)/);
+  assert.match(css, /\.term-tabs \.lchip\.taken\.sel\{[^}]*outline:2px dashed var\(--warn\)/, "전경 outline 도 점선");
+  assert.match(css, /\.lchip\.taken \.lname::before\{content:'👀 '\}/);
+});

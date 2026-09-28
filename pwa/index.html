@@ -314,7 +314,13 @@
   .term-tabs .lchip{flex:none;max-width:46vw}
   .term-tabs .lchip .lname{overflow:hidden;text-overflow:ellipsis}
   .term-tabs .lchip.dead{opacity:.55}
-  .term-tabs .lchip.taken{border-style:dashed;opacity:.75}   /* 다른 기기가 가져간 탭(v0.9.4) — 누르면 가져오기 */
+  /* 다른 기기가 가져간 탭(v0.9.4) — 누르면 가져오기. 0.9.7: 전경 탭의 .sel 실선 outline 이 1px 점선 테두리를
+     가려 안 보였다(사장님 실기) → outline 자체를 주황 점선으로, 글자도 주황 + 👀 접두로 한눈에 */
+  .term-tabs .lchip.taken{border:1px dashed var(--warn);color:var(--warn);
+    background:color-mix(in srgb,var(--warn) 10%,transparent);opacity:.95}
+  .term-tabs .lchip.taken.sel{outline:2px dashed var(--warn);font-weight:650}
+  .term-tabs .lchip.taken .lname::before{content:'👀 '}
+  .term-tabs .lchip.taken .lx{color:var(--warn)}
   .term-tabs .lchip.dead .ldot{background:var(--muted)!important}
   /* 상태 밑줄(v0.8.3): 목록 뱃지와 같은 색 의미(파랑 작업 중·주황 권한/입력 대기·초록 완료).
      세션 식별색(.ldot)과 겹치지 않게 칩 안쪽 하단 3px 바(::after). 진행형 상태는 깜빡임.
