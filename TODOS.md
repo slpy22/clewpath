@@ -21,7 +21,19 @@
 - [x] e2e 전체 통과. 테스트 11건(`test_workers_dispatch.py`), 전체 296 passed. 정리: e2e 그룹 ab7832fe 삭제, 워커 세션 휴지통
 - [ ] 사장님 확인: 설정 → 📦 워커 스킬 설치 → 새 세션에서 `/clewpath-workers` 로 실제 오케스트레이션 1회(관제 그룹 자동 저장·폰 알림까지)
 
-## 진행중 기능: 릴리스 스크립트 통합 (retro 개선 #1, 2026-09-28)
+## 진행중 기능: CHANGELOG.md 도입 (retro 개선 #2, 2026-09-28)
+
+릴리스 이력이 CP DB(매니페스트 notes)와 커밋 메시지에만 있었다. 서명 매니페스트 41개에서 notes 를 복원해
+`CHANGELOG.md` 를 만들고, release.ps1 이 "이 버전 항목이 있어야 릴리스" 게이트 + `-PrepareChangelog` 로 항목을 써 준다.
+
+### Phase 1 (이번 사이클) — 완료(2026-09-28)
+- [x] `CHANGELOG.md`: 0.3.0 → 0.9.3 전 버전 41개 — 매니페스트 notes 우선(서명 JWT 페이로드 디코드), 비어 있던 0.3.20~0.6.6 은 커밋 제목으로 복원(0.6.3/0.6.5 는 상세 기록 없음 표기)
+- [x] `release.ps1`: 사전점검 맨 앞에 "CHANGELOG.md 에 `## <ver>` 항목 존재" 게이트. `-PrepareChangelog` 모드(`-Notes` 필수, 중복 거부, 맨 위 삽입 후 종료). `-Notes` 생략 시 CHANGELOG 항목 본문이 매니페스트 notes 가 됨(한 문장을 한 곳에만)
+- [x] 테스트 3건(`test_changelog.py`): 현재 버전 항목+본문, 41개 이상·내림차순·중복 없음·끝은 0.3.0, 게이트가 bump 확인보다 앞. 전체 317 passed
+- [x] 실행 검증: 항목 없는 버전 → FAIL 게이트 / Prepare → 항목 삽입(복원) / 중복 Prepare → FAIL / 0.9.3 드라이런에서 매니페스트 notes == CHANGELOG 본문
+- [x] ops/README 절차 갱신: `-PrepareChangelog` → bump 와 커밋 → `-Publish -Apply`
+
+## 참고(완료): 릴리스 스크립트 통합 (retro 개선 #1, 2026-09-28)
 
 손으로 7단계(package → rename → sign → verify → publish → apply → poll)를 11회 반복 — 순서·이름 규칙·토큰
 취급이 매번 손에 달려 있었다. `ops/release.ps1 -Version X.Y.Z -Notes "…" [-Publish] [-Apply]` 하나로 고정.

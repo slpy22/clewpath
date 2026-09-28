@@ -13,6 +13,7 @@
 param(
     [Parameter(Mandatory = $true)][string]$Version,
     [string]$Notes = "",
+    [switch]$PrepareChangelog,
     [switch]$Publish,
     [switch]$Apply,
     [switch]$SkipTests,
@@ -34,10 +35,31 @@ $LogFile = Join-Path $PSScriptRoot "logs\release-$Version.log"
 function Log($m) { $line = "[{0}] {1}" -f (Get-Date -Format "HH:mm:ss"), $m; Write-Host $line; Add-Content -Path $LogFile -Value $line -Encoding UTF8 }
 function Fail($m) { Log "FAIL: $m"; exit 1 }
 
-Log "=== release $Version 시작 (publish=$Publish apply=$Apply) ==="
+Log "=== release $Version 시작 (publish=$Publish apply=$Apply prepare=$PrepareChangelog) ==="
 
 # ── 0) 사전점검 ─────────────────────────────────────────────
 if ($Version -notmatch '^\d+\.\d+\.\d+$') { Fail "버전 형식은 X.Y.Z 여야 합니다: $Version" }
+$Changelog = Join-Path $Root "CHANGELOG.md"
+$clText = if (Test-Path $Changelog) { Get-Content $Changelog -Raw } else { "" }
+$hasEntry = $clText -match "(?m)^## $([regex]::Escape($Version)) \("
+if ($PrepareChangelog) {
+    # 항목만 써 주고 끝난다 — bump 와 함께 커밋한 뒤 실제 릴리스를 돌린다(트리 깨끗 게이트와 순서 맞춤)
+    if (-not $Notes) { Fail "-PrepareChangelog 에는 -Notes 가 필요합니다" }
+    if ($hasEntry) { Fail "CHANGELOG.md 에 이미 ## $Version 항목이 있습니다" }
+    $entry = "## $Version ($(Get-Date -Format 'yyyy-MM-dd'))`n$Notes`n`n"
+    $idx = $clText.IndexOf("`n## ")
+    $new = if ($idx -ge 0) { $clText.Substring(0, $idx + 1) + $entry + $clText.Substring($idx + 1) } else { $clText.TrimEnd() + "`n`n" + $entry }
+    Set-Content -Path $Changelog -Value $new -Encoding UTF8 -NoNewline
+    Log "CHANGELOG.md 에 ## $Version 항목 추가 — pyproject bump 와 함께 커밋한 뒤 -Publish 로 릴리스하세요"
+    exit 0
+}
+if (-not $hasEntry) { Fail "CHANGELOG.md 에 ## $Version 항목이 없습니다 — 먼저 `pwsh -File ops/release.ps1 -Version $Version -Notes `"…`" -PrepareChangelog` 후 커밋" }
+if (-not $Notes) {
+    # -Notes 생략 시 CHANGELOG 항목 본문을 매니페스트 notes 로 쓴다(한 문장 정본)
+    $m = [regex]::Match($clText, "(?ms)^## $([regex]::Escape($Version)) \([^)]*\)\r?\n(.*?)(?=\r?\n## |\z)")
+    $Notes = $m.Groups[1].Value.Trim()
+    if (-not $Notes) { Fail "CHANGELOG.md 의 ## $Version 항목이 비어 있습니다" }
+}
 $pyver = (Select-String -Path (Join-Path $Root "pyproject.toml") -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
 if ($pyver -ne $Version) { Fail "pyproject.toml 버전($pyver) 과 -Version($Version) 이 다릅니다 — 먼저 bump 하고 커밋하세요" }
 $dirty = (git status --porcelain 2>$null | Where-Object { $_ -notmatch '^\?\? (003_crosscheck|\.context)' })

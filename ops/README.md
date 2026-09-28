@@ -20,12 +20,14 @@
 ## 릴리스 절차 — 한 방 (권장)
 
 ```powershell
-# pyproject 버전 bump + 커밋 후:
-pwsh -File ops/release.ps1 -Version X.Y.Z -Notes "사용자용 변경 요약"                  # 패키지 + 서명 + 검증
-pwsh -File ops/release.ps1 -Version X.Y.Z -Notes "..." -Publish                     # + CP 게시(토큰은 -EnvFile 에서)
-pwsh -File ops/release.ps1 -Version X.Y.Z -Notes "..." -Publish -Apply              # + 이 PC 적용·헬스·조용한 재기동 확인
+pwsh -File ops/release.ps1 -Version X.Y.Z -Notes "사용자용 변경 요약" -PrepareChangelog   # 1) CHANGELOG.md 에 항목 추가
+#   → pyproject version bump 와 함께 커밋
+pwsh -File ops/release.ps1 -Version X.Y.Z                                            # 2) 패키지 + 서명 + 검증 (notes = CHANGELOG 항목)
+pwsh -File ops/release.ps1 -Version X.Y.Z -Publish                                   #    + CP 게시(토큰은 -EnvFile 에서)
+pwsh -File ops/release.ps1 -Version X.Y.Z -Publish -Apply                            #    + 이 PC 적용·헬스·조용한 재기동 확인
 ```
-사전점검(버전 일치·작업 트리·서명 키·pytest)에서 걸리면 즉시 중단. 로그 `ops/logs/release-<ver>.log`(토큰 없음).
+사전점검(CHANGELOG 항목·버전 일치·작업 트리·서명 키·pytest)에서 걸리면 즉시 중단. 로그 `ops/logs/release-<ver>.log`(토큰 없음).
+CHANGELOG 항목 본문이 곧 매니페스트 notes(업데이트 화면 문구) — 한 문장을 한 곳에만 쓴다.
 아래 수동 절차는 스크립트가 하는 일의 설명이다.
 
 ## 릴리스 절차 (수동, 참고)
