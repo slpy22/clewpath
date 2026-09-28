@@ -97,9 +97,15 @@ Host 가 `bye` 프레임으로 예고해 오탐을 막는다.
 - [x] `tests/test_pwa_js.py`: pytest 가 `node --test --test-reporter=tap` 을 감싼다(node 없으면 skip) → `pytest -q` = 311 passed(Python 310 + JS 묶음 1)
 - [x] 함정 기록: vm realm 이 달라 `deepStrictEqual` 이 프로토타입에서 갈림(JSON 비교) / `node --test 디렉토리/` 는 Windows 에서 경로로 해석돼 실패(파일 지정) / 기본 리포터가 TTY 여부로 spec·tap 갈림(`--test-reporter=tap` 고정) / `const` 바인딩은 `ctx.x` 로 안 보임(`ev`)
 
-### Phase 2 (고도화) — 대기
-- [ ] 다음 PWA 변경부터 "테스트 먼저": 관제 필터 판정(`rowMatches` — openMonitor 클로저 안이라 지금은 못 닿음 → 순수 함수로 끌어내기), `consumePendingMonitor`, `saveTabs/restoreTabsOnce`
-- [ ] 스텁 DOM 위에서 `renderTabBar()` 를 실제로 돌려 칩 클래스(`st/stpulse/dirty`)까지 검증(termView.strip 을 stubEl 로 주입)
+### Phase 2 (고도화) — 완료(2026-09-28), 제품 코드 무변경, node 23건
+- [x] `rowMatches` 는 끌어내지 않아도 됨 — `monitor.test.mjs` 가 openMonitor 를 스텁 DOM 에 실제로 열어 스냅샷·증분·세션 숨김까지 검증(미검증 소화 때 해결)
+- [x] `tests/pwa/phase2.test.mjs` 5건: `saveTabs/restoreTabsOnce`(저장 형태·삭제 세션 버림·PTY 없으면 dead·활성 소실·1회 가드·깨진 JSON) / `#monitor=` 콜드 스타트 → `consumePendingMonitor` 1회 / `openMonitorGroupById`(관리 앞·중복 제거·gid 갱신 모드·없으면 toast·관제 중이면 무시) / `#open=` → `consumePendingOpen` 접두 일치·없으면 버림 / `renderTabBar` 칩 클래스 `sel/st/stpulse/dead/taken`·`--st` 색·툴팁·`lact`·`+ 탭`·활성 변경 때만 scrollIntoView
+- [x] `tests/pwa/unverified.test.mjs` 4건(미검증 소화): 20초 틱 재렌더 무해성·2FA OTP 경로·로컬 iframe 즉시 전환. 하네스: `__intervals`(setInterval 기록)·`load({location})` 로 MODE 전환
+- [x] 함정 추가: 하네스 `$('#paneDetail')` 은 매번 새 스텁이라 `termView.mounted` 가 참이 안 됨 → 테스트에서 `document.querySelector` 를 그 id 만 고정 / attach 의 resize 타이머(80·300ms)가 `tc.send` 를 부르니 전송 카운터는 400ms 뒤 리셋 / vm 배열은 JSON 비교(`same`)
+
+### Phase 3 (대기)
+- [ ] 목록 렌더(`rerender`/세션 카드) 헤드리스 검증 — 카드 뱃지·🔗 피어 칩·`screen` 칩이 목록 객체와 1:1 인지
+- [ ] 서비스워커(`sw.js`) 알림 클릭 → `open-session`/`open-monitor` postMessage 계약 테스트(sw 는 별도 파일이라 부트 가능)
 
 ## 참고(완료): 세션 목록 API 성능 — 증분 파싱 (v0.9.3)
 

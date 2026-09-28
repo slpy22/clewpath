@@ -17,4 +17,4 @@ def test_pwa_node_tests_pass():
     r = subprocess.run([shutil.which("node"), "--test", "--test-reporter=tap", *files], cwd=ROOT,
                        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
     assert r.returncode == 0, "node --test 실패:\n" + r.stdout[-3000:] + "\n" + r.stderr[-2000:]
-    assert "# fail 0" in r.stdout and "# pass 18" in r.stdout
+    assert "# fail 0" in r.stdout and "# pass 23" in r.stdout
