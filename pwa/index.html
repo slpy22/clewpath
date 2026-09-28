@@ -314,6 +314,7 @@
   .term-tabs .lchip{flex:none;max-width:46vw}
   .term-tabs .lchip .lname{overflow:hidden;text-overflow:ellipsis}
   .term-tabs .lchip.dead{opacity:.55}
+  .term-tabs .lchip.taken{border-style:dashed;opacity:.75}   /* 다른 기기가 가져간 탭(v0.9.4) — 누르면 가져오기 */
   .term-tabs .lchip.dead .ldot{background:var(--muted)!important}
   /* 상태 밑줄(v0.8.3): 목록 뱃지와 같은 색 의미(파랑 작업 중·주황 권한/입력 대기·초록 완료).
      세션 식별색(.ldot)과 겹치지 않게 칩 안쪽 하단 3px 바(::after). 진행형 상태는 깜빡임.
@@ -1861,14 +1862,22 @@ const termView={
       openModal('세션이 잠겨 있습니다', body, [go]);
     };
     // screen: 서버가 이 화면에 보낸 오프셋을 기억 → 재접속 때 못 본 델타만 리플레이(배너 없음)
+    const tabRec=findTab(key); if(tabRec) tabRec.taken=false;   // 붙는 순간 '빼앗김' 해제
     t.tc=T.terminal(s.session_id,(data,eof,err)=>{
       if(eof){ const dead=t.tc; t.tc=null;
         if(dead){ try{dead.close();}catch(e){} }         // 핸들러 제거(eof 뒤 남으면 conn.streams 누수)
+        const rec=findTab(key);
+        if(rec&&rec.taken){
+          // 다른 화면이 가져간 것(v0.9.4): 장애가 아니므로 자동 재접속(disconnected) 대상에서 뺀다 —
+          // 화면 복귀 때 다시 빼앗아 핑퐁이 나지 않게. 가져오려면 사용자가 탭을 누른다(확인창).
+          term.write('\r\n\x1b[93m── 다른 기기에서 보는 중 — 다시 가져오려면 탭을 누르세요 ──\x1b[0m\r\n');
+          renderTabBarSoon(); return; }
         if(this.active===key) this.disconnected=true;   // 재연결·화면 복귀 시 reattachForegroundTab 의 근거
         if(err==='2fa_invalid'||err==='2fa_required') clearGrace();
         term.write('\r\n\x1b[91m── '+(err?otpErrMsg(err):'연결 종료')+' ──\x1b[0m\r\n'); }
       else { _detectBgLock(data);
         if(data.indexOf('세션이 종료되었습니다')>=0) t.ended=true;   // 다음 attach 는 새 스폰 → 화면 비움
+        if(data.indexOf(TAKEOVER_NOTE)>=0){ const rec=findTab(key); if(rec) rec.taken=true; }   // 서버 인계 통지
         term.write(data); } }, Object.assign({}, cred||{}, {screen:t.screenId}));
     setTimeout(()=>this.resize(),80); setTimeout(()=>this.resize(),300); term.focus();
   },
@@ -1898,6 +1907,15 @@ function removeTab(key){ TABS.list=TABS.list.filter(t=>t.key!==key); if(TABS.act
 // ---- 멀티탭 동작: 탭 스트립·전환·닫기·추가·저장/복원·재접속 ----
 const TAB_SOFT_CAP=6;   // 클라 경고선. 서버 하드 상한(SM_MAX_TERMINALS, 기본 8)은 webterm 이 따로 막는다.
 function sessLabel(s){ return s.title||s.label_name||s.slug||(s.session_id||'').slice(0,8); }
+// 서버(webterm.TAKEOVER_NOTE)가 밀려나는 화면에 보내는 인계 통지 문구 — 스트림에서 감지해 탭을 taken 으로
+const TAKEOVER_NOTE='다른 화면이 이 세션을 가져갔습니다';
+// 다른 화면이 붙어 있는 세션을 가져오기 전 확인(v0.9.4). t0 = 이 페이지의 탭(있으면), s.screen = 목록의 참고값.
+function shouldConfirmTakeover(s, t0){
+  if(t0&&t0.taken) return true;                                   // 우리 화면이 밀려난 걸 확실히 안다
+  const sc=s&&s.screen; if(!sc||!sc.attached) return false;      // 붙은 화면 없음(또는 stale false — 상대 통지가 메운다)
+  const mine=t0&&termView.tabs&&termView.tabs[t0.key]&&termView.tabs[t0.key].screenId;
+  return !(mine&&sc.screen_id===mine);                            // 붙은 화면이 내 것이면 그냥 재접속
+}
 // 세션 색: 모니터 색은 서버(webmonitor)가 주지만 터미널엔 없다 → 클라에서 결정적 hash→hsl.
 function tabColor(sid){ let h=0; for(const c of String(sid)) h=(h*31+c.charCodeAt(0))>>>0; return `hsl(${h%360},62%,58%)`; }
 function saveTabs(){
@@ -1936,8 +1954,8 @@ function renderTabBar(){
   TABS.list.forEach(t=>{
     // 표시는 목록의 최신 객체로(제목·훅 상태 변동 반영). t.s 자체는 switchTab 이 갱신한다.
     const s=(SESSIONS||[]).find(x=>x.session_id===t.s.session_id)||t.s, on=(t.key===TABS.active);
-    const chip=el('span','lchip'+(on?' sel':'')+(t.dead?' dead':''));
-    const lines=[(t.dead?'[중지됨 — 열면 새로 시작] ':'')+sessLabel(s), s.session_id];
+    const chip=el('span','lchip'+(on?' sel':'')+(t.dead?' dead':'')+(t.taken?' taken':''));
+    const lines=[(t.dead?'[중지됨 — 열면 새로 시작] ':'')+(t.taken?'[다른 기기에서 보는 중 — 누르면 가져오기] ':'')+sessLabel(s), s.session_id];
     const dot=el('span','ldot'); dot.style.background=tabColor(s.session_id); chip.appendChild(dot);
     chip.appendChild(el('span','lname',sessLabel(s)));
     // 상태 밑줄 — 목록 뱃지(훅 상태, 신선도 게이트 포함)와 같은 판정·색. 중지된 탭은 상태 없음.
@@ -2007,7 +2025,7 @@ function switchTab(key){
   const t=findTab(key); if(!t) return;
   // 이미 전경 — 단 터미널 화면이 실제로 떠 있을 때만(상세/목록으로 나간 뒤엔 탭이 '활성'이어도
   // 화면이 없다 → 다시 구축해야 한다. 알림→탭 점프 e2e 에서 발견)
-  if(key===TABS.active&&termView.sid===t.s.session_id&&!termView.disconnected&&paneDetail().classList.contains('term-mode')) return;
+  if(key===TABS.active&&termView.sid===t.s.session_id&&!termView.disconnected&&!t.taken&&paneDetail().classList.contains('term-mode')) return;
   // 목록의 최신 세션 객체로 갱신(제목·live_terminal 변동 반영)
   const fresh=(SESSIONS||[]).find(s=>s.session_id===t.s.session_id); if(fresh) t.s=fresh;
   loadTerminal(t.s, t.safe);   // 뷰가 떠 있으면 fast-path(attach 만), 아니면 구축
@@ -2068,7 +2086,7 @@ function reattachForegroundTab(){
   // pane 을 갈아엎었으면 전체 재구축 — 어느 쪽이든 복원한다. relay e2e 실측(2026-09-10):
   // mounted() 를 요구하면 재연결 뒤 목록 화면에 갇힌 채 아무것도 복원되지 않았다.
   if(MODE!=='relay'||!termView.disconnected||!TABS.active) return;
-  const t=findTab(TABS.active); if(!t) return;
+  const t=findTab(TABS.active); if(!t||t.taken) return;   // 빼앗긴 탭은 자동으로 되찾지 않는다(핑퐁 차단)
   switchTab(t.key);
 }
 let _xtermP=null;
@@ -2215,7 +2233,11 @@ async function loadTerminal(s, safe){
   // wasDead: 복원 시점에 PTY 가 없던 탭(다시 열면 새 스폰). attach 가 보유 xterm 을 비울지 정하는
   // 근거 — 20초 폴링의 SESSIONS.live_terminal 은 stale 해서(e2e 실측: 살아난 뒤에도 false) 못 쓴다.
   const wasDead=!!(t0&&t0.dead);
-  if(t0){ t0.s=s; t0.safe=!!safe; t0.dead=false; t0.act=false; t0.actN=0; t0.last=null; }   // 보는 순간 배지 소거
+  // 화면 소유권 인계(v0.9.4): 다른 기기가 보고 있으면 가져가기 전에 묻는다 — 그쪽은 통지를 받고 입력이 막힌다
+  if(MODE==='relay'&&shouldConfirmTakeover(s,t0)){
+    if(!confirm('다른 기기(화면)에서 이 세션을 보고 있습니다.\n여기로 가져오면 그쪽 화면은 입력이 막히고 "다른 기기에서 보는 중" 으로 바뀝니다.\n\n가져올까요?')) return;
+  }
+  if(t0){ t0.s=s; t0.safe=!!safe; t0.dead=false; t0.act=false; t0.actN=0; t0.last=null; t0.taken=false; }   // 보는 순간 배지 소거
   else TABS.list.push({key, s, safe:!!safe, dead:false, act:false});
   TABS.active=key;
   CURRENT_TERM_SID=s.session_id;           // 알림 클릭이 이 화면을 갈아엎지 않게 표시

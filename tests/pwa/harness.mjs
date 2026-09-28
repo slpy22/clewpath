@@ -66,8 +66,13 @@ class MemStorage {
 export function makeSandbox() {
   const byId = new Map();
   const document = stubEl("document");
+  // <head> 에 붙는 <script>/<link> 는 다음 틱에 onload 를 쏜다 — loadXterm() 같은 동적 로더가 영원히
+  // 기다리지 않게(실제 파일은 안 읽는다; Terminal/FitAddon 은 샌드박스 스텁이 대신한다).
+  const head = stubEl("head");
+  const headAppend = head.appendChild;
+  head.appendChild = (c) => { headAppend(c); setTimeout(() => { if (typeof c.onload === "function") c.onload(); }, 0); return c; };
   Object.assign(document, {
-    hidden: false, body: stubEl("body"), documentElement: stubEl("html"), head: stubEl("head"),
+    hidden: false, body: stubEl("body"), documentElement: stubEl("html"), head,
     getElementById: (id) => byId.get(id) ?? null,
     createElement: (tag) => stubEl(tag), createTextNode: (t) => ({ textContent: t, nodeType: 3 }),
     addEventListener() {}, removeEventListener() {}, cookie: "",
@@ -88,9 +93,17 @@ export function makeSandbox() {
     URL, URLSearchParams, TextEncoder, TextDecoder, crypto: globalThis.crypto, btoa, atob, structuredClone, performance,
     Intl, AbortController, Blob, FormData: class {}, Event: class { constructor(t) { this.type = t; } }, CustomEvent: class { constructor(t, o) { this.type = t; this.detail = o?.detail; } },
     HTMLElement: class {}, Element: class {}, Node: class {}, Image: class {}, Audio: class { play() { return Promise.resolve(); } },
-    Terminal: class { constructor() {} open() {} write() {} loadAddon() {} onData() {} onResize() {} dispose() {} reset() {} focus() {} },
+    // xterm 스텁: 어떤 메서드든 no-op(이벤트 등록은 disposable 반환), 쓴 내용은 written 에 쌓는다
+    Terminal: class { constructor() {
+      const t = { rows: 24, cols: 80, options: {}, element: stubEl(), written: [], buffer: { active: { length: 0, cursorY: 0, baseY: 0 } },
+                  write(s) { t.written.push(String(s)); }, reset() { t.written.push("\u0000RESET"); } };
+      return new Proxy(t, { get: (o, k) => (k in o ? o[k] : () => ({ dispose() {} })) });
+    } },
     FitAddon: { FitAddon: class { fit() {} } },
   };
+  // window 이벤트(resize 등)·ResizeObserver 는 no-op — termView.mount 가 등록/해제한다
+  sandbox.addEventListener = () => {}; sandbox.removeEventListener = () => {}; sandbox.dispatchEvent = () => true;
+  sandbox.ResizeObserver = class { observe() {} disconnect() {} unobserve() {} };
   sandbox.window = sandbox; sandbox.self = sandbox; sandbox.globalThis = sandbox;
   return sandbox;
 }

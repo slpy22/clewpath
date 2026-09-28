@@ -1190,6 +1190,8 @@ def create_app() -> FastAPI:
                 "agent": occupancy.get(s.session_id),
                 # 이 세션의 PTY 가 지금 살아있는가(화면 유무 무관 - 재접속 대상)
                 "live_terminal": webterm.has_terminal(s.session_id),
+                # 지금 화면이 붙어 있는가 + 그 screen_id(v0.9.4 인계 확인창의 근거; 20초 폴링이라 참고값)
+                "screen": webterm.screen_info(s.session_id),
                 # 살아 있는 claude 세션(어디서 띄웠든): {name, status(idle|busy), pid} — SendMessage 대상
                 "peer": peer_of.get(s.session_id),
             })

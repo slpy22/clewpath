@@ -165,6 +165,36 @@ def has_terminal(session_id: str) -> bool:
     return _get_live(session_id) is not None
 
 
+# 화면 인계 통지(v0.9.4). PWA 가 이 문구를 스트림에서 감지해 탭을 '빼앗김' 상태로 둔다(자동 재접속 제외).
+TAKEOVER_NOTE = "다른 화면이 이 세션을 가져갔습니다"
+
+
+def screen_info(session_id: str) -> dict | None:
+    """살아 있는 PTY 에 지금 화면이 붙어 있는가 + 그 화면 id(같은 페이지가 자기 것인지 판별용)."""
+    sess = _get_live(session_id)
+    if sess is None:
+        return None
+    return {"attached": sess.client is not None, "screen_id": sess.client_screen}
+
+
+async def _push_out(old_client) -> None:
+    """이전 화면을 밀어낸다: 인계 통지 한 줄을 보낸 뒤 소켓을 닫는다(입력 권한은 종료로 회수).
+
+    통지가 없으면 밀려난 쪽은 '연결 종료' 로만 보여 장애로 오해하고, 화면 복귀 시 자동 재접속이
+    다시 빼앗아 핑퐁이 난다(크로스체크 D 리스크). 전송 실패는 무시 — 닫기가 본질.
+    """
+    if old_client is None:
+        return
+    ws = old_client[0]
+    try:
+        await asyncio.wait_for(ws.send_text(
+            f"\r\n\x1b[93m[ClewPath] {TAKEOVER_NOTE} — 여기서는 더 입력할 수 없습니다. "
+            f"다시 가져오려면 탭을 누르세요.\x1b[0m\r\n"), timeout=2)
+    except Exception:  # noqa: BLE001
+        pass
+    await _safe_close(ws)
+
+
 def stop_terminal(session_id: str) -> bool:
     """열려 있는 터미널의 claude 프로세스를 명시 종료한다(화면 유무 무관).
 
@@ -560,8 +590,8 @@ async def run_terminal(ws, session_id: str, skip_permissions: bool = True,
                 replay, end_off, fallback = sess.tail_since(cursor)
             else:
                 replay, end_off, fallback = sess.tail(), sess.total_len, False
-        if old is not None:              # 점유 규칙: 이전 화면은 밀어낸다
-            await _safe_close(old[0])
+        if old is not None:              # 점유 규칙: 이전 화면은 밀어낸다(통지 후 종료)
+            await _push_out(old)
         # 델타 리플레이(탭 즉시 전환): 이 화면이 본 뒤의 출력만 보내고 배너는 없다 — 끊김
         # 없이 이어져야 하니까. 커서가 없으면(첫 접속·구버전 클라) 기존처럼 tail+배너,
         # 버퍼를 넘겨 델타를 못 만들면 tail+생략 안내.
