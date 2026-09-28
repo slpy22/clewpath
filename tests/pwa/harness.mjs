@@ -40,10 +40,16 @@ export function stubEl(tag = "div") {
     addEventListener() {}, removeEventListener() {}, setAttribute(k, v) { store[k] = v; }, getAttribute(k) { return store[k] ?? null; },
     removeAttribute() {}, focus() {}, blur() {}, click() {}, scrollIntoView() {}, contains() { return false; },
     get className() { return [...classes].join(" "); }, set className(v) { classes.clear(); String(v).split(/\s+/).filter(Boolean).forEach((c) => classes.add(c)); },
+    // 텍스트 노드까지 합친 표시 문자열(테스트가 칩 라벨을 찾을 때) — 브라우저 textContent 와 같은 의미
+    get text() { return (store.textContent || "") + store.children.map((c) => (c.nodeType === 3 ? c.textContent : (c.text ?? ""))).join(""); },
   };
   return new Proxy(store, {
     get(t, k) { if (k in t) return t[k]; if (typeof k === "symbol") return undefined; return () => stubEl(); },
-    set(t, k, v) { t[k] = v; return true; },
+    set(t, k, v) {
+      // innerHTML/textContent 대입은 브라우저처럼 자식을 비운다(재렌더 패턴 `x.innerHTML=''` 지원)
+      if (k === "innerHTML" || k === "textContent") { t.children.length = 0; }
+      t[k] = v; return true;
+    },
   });
 }
 
