@@ -26,20 +26,21 @@
 크로스체크 3순위(D). 지금은 다른 기기가 같은 세션 터미널을 열면 이전 화면이 **말없이** 끊긴다(`webterm` 점유 규칙:
 마지막 접속이 이김). 게다가 끊긴 쪽이 화면 복귀(`visibilitychange`)로 자동 재접속하면 다시 빼앗아 **핑퐁**이 난다.
 
-### Phase 1 (이번 사이클)
-- [ ] 서버 `webterm`: 새 화면이 붙을 때 이전 화면에 **인계 통지 한 줄**(`[ClewPath] 다른 화면이 이 세션을 가져갔습니다 …`)을 보낸 뒤 닫는다. 입력 권한 회수는 소켓 종료로 이미 보장(Codex 지적 확인). 세션 목록에 `screen_attached`·`screen_id` 노출
-- [ ] PWA(릴레이 xterm): 스트림에서 통지 감지 → 탭 `taken` — 자동 재접속(`reattachForegroundTab`)에서 제외(핑퐁 차단), 배너 "다른 기기에서 보는 중 — 탭을 눌러 가져오기", 칩에 표시. 탭 클릭·재개로 가져올 때는 **확인창**("그쪽 화면은 입력이 막힙니다")
-- [ ] 새 기기 쪽: `screen_attached` 이고 붙은 `screen_id` 가 내 탭의 것이 아니면 접속 전 확인창(목록 20초 stale 이라 true 일 때만 묻는다 — false 오판은 상대 통지가 메운다)
-- [ ] 로컬 모드(iframe terminal.html)는 통지 문구만 보임(자동 재접속 없음) — 범위 밖 기록
-- [ ] 테스트: webterm 인계 통지·`screen_attached`(가짜 ws) / PWA 하네스: taken 플래그·재접속 제외·확인 경로
-- [ ] 릴리스 0.9.4 = `release.ps1 -PrepareChangelog` → bump 커밋 → `-Publish -Apply` **첫 실사용** → 설치본 e2e: WS 클라 2개로 같은 세션 붙여 통지·종료 순서 확인
+### Phase 1 (이번 사이클) — 구현·게시(0.9.4)·e2e 완료(2026-09-28)
+- [x] 서버 `webterm._push_out`: 새 화면이 붙을 때 이전 화면에 `TAKEOVER_NOTE` 한 줄(2초 타임아웃) → 종료. `screen_info` → 세션 목록 `screen{attached, screen_id}`
+- [x] PWA: 통지 감지 → 탭 `taken`(점선 칩 + 툴팁 "[다른 기기에서 보는 중 — 누르면 가져오기]"), eof 를 `disconnected` 로 안 봐 `reattachForegroundTab` 이 되빼앗지 않음(핑퐁 차단), 배너. `shouldConfirmTakeover`: taken 탭 또는 남의 화면이 붙어 있으면 확인창, 내 화면(`screen_id` == 내 탭 screenId)이면 그냥 재접속. `switchTab` 조기 반환에 `!t.taken`
+- [x] 로컬 모드(iframe): 통지 문구만 보임(자동 재접속 없음) — 범위 밖
+- [x] 테스트: `test_webterm_takeover.py` 3건(통지 후 종료·전송 실패해도 종료·screen_info) + 하네스 `takeover.test.mjs` 3건(판정·통지→taken→eof 비장애·재접속 제외·확인창 취소/수락). 하네스 보강: `<head>` script onload 발화, window 이벤트·ResizeObserver, Proxy xterm → `loadTerminal→attach` 실경로 헤드리스 검증. 전체 320 passed
+- [x] 릴리스 0.9.4: `-PrepareChangelog` → bump 커밋 → **`-Publish -Apply` 첫 실사용 49초 exit 0**(pytest 320 → 패키지 675KB → 서명 → 게시 sha 일치 → apply → 0.9.4 → 조용한 재기동 incidents 3 유지)
+- [x] 설치본 e2e(WS 2개): A 붙음 → `screen{attached:true, screen_id:screenA}` → B 붙음 → A 가 통지 1줄 수신 후 `closed code=1000` → `screen_id:screenB` → B 닫음 → `attached:false`. ⚠ 미검증: 폰+PC 실기기 왕복(확인창 문구·점선 칩 육안)
 
 ## 미검증 항목 모음 (retro 개선 #3, 2026-09-28 — 각 사이클 앞머리에서 2개씩 소화)
 
 흩어져 있던 "⚠ 미검증"을 한 곳에. 통과하면 여기서 지우고 원 항목에 한 줄 남긴다.
 - [x] 자기 회복: `maintenance.flag` 실기(2026-09-28) — 플래그 두고 taskkill 11:12:13 → 330초 동안 안 살아남(11:15 틱이 플래그를 존중) → 플래그 제거 11:17:51 → 다음 틱 11:20:54 기동, 11:20:57 health OK(launcher.log "이전 pid 95824 없음 → 기동")
 - [x] 자기 회복: 정기 업데이트 재기동이 조용한지 — 0.9.3 적용에서 확인(incidents 불변)
-- [ ] 릴리스 스크립트 `-Publish -Apply` 경로 첫 실사용(다음 Host 릴리스에서)
+- [x] 릴리스 스크립트 `-Publish -Apply` 경로 첫 실사용 — 0.9.4 에서 49초 exit 0(2026-09-28)
+- [ ] 화면 인계: 폰+PC 실기기 왕복(확인창·점선 칩·배너 육안) **(사장님)**
 - [ ] 알림→탭 점프: 실제 서비스워커 알림 클릭 경로(`open-session` 메시지) — 폰에서 알림 클릭 1회면 됨 **(사장님)**
 - [x] 관제 타임라인 필터: 실시간 증분 행에 필터 적용 — 헤드리스 하네스로 `openMonitor` 를 실제로 열어 스냅샷 3행 → '오류' 필터 → 증분 2행(텍스트 숨김·오류 표시) → 세션 숨김 토글 → 복원까지 검증(`tests/pwa/monitor.test.mjs`, 2026-09-28)
 - [ ] 탭 배지: 실제 터미널 탭 마운트 상태에서 20초 주기 재렌더가 스트립 스크롤·입력을 방해하지 않는지
