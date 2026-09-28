@@ -105,3 +105,52 @@ async def test_nonprivileged_post_not_gated(monkeypatch):
 
     await conn._handle_api("r3", {"verb": "POST", "path": "/api/sessions/abc/rename"})
     assert posted["n"] == 1                       # 특권 아님 → 2FA 없이 통과
+
+
+# ---- 2FA on 상태의 OTP 실경로(미검증 소화 2026-09-28): grant → grace → 터미널 start 통과/거부 ----
+# 이 PC Host 는 2FA off 라 실측이 없었다. 진짜 TOTP 비밀로 owner2fa 를 돌려 커넥터 디스패치까지 검증.
+
+@pytest.mark.asyncio
+async def test_grant_then_grace_gates_terminal_start(monkeypatch):
+    import time
+    from session_manager import owner2fa
+    secret = "JBSWY3DPEHPK3PXP"
+    monkeypatch.setattr(owner2fa, "_data", lambda: {"secret": secret, "enforced": True})
+    monkeypatch.setattr(owner2fa, "_save", lambda d: None)
+    # 기기 페어링 계층(devices.enforced)은 별도 테스트 몫 — 여기선 2FA 계층만 본다
+    monkeypatch.setattr("session_manager.devices.enforced", lambda: False)
+    conn = _conn()
+    res, streams = [], []
+
+    async def _res(rid, ok, data=None, error=None):
+        res.append((rid, ok, data, error))
+    async def _stream_send(rid, **kw):
+        streams.append((rid, kw))
+    async def _pipe(rid, url):
+        streams.append((rid, {"pipe": url}))
+    monkeypatch.setattr(conn, "_res", _res)
+    monkeypatch.setattr(conn, "_stream_send", _stream_send)
+    monkeypatch.setattr(conn, "_pipe_terminal", _pipe)
+
+    sid = "59f9577b-0d25-47be-994b-29009cf0fba3"
+    # 자격 없이 터미널 → eof + 2fa_invalid(비밀은 있음)
+    await conn._handle_req({"id": "t0", "method": "terminal", "params": {"session_id": sid}})
+    assert streams[-1] == ("t0", {"eof": True, "error": "2fa_invalid"})
+    # 틀린 OTP → grant 거부
+    await conn._handle_req({"id": "g0", "method": "grant", "params": {"otp": "000000"}})
+    assert res[-1][1] is False and res[-1][3] == "2fa_invalid"
+    # 맞는 OTP → grace 발급
+    code = owner2fa._hotp(secret, int(time.time()) // 30)
+    await conn._handle_req({"id": "g1", "method": "grant", "params": {"otp": code}})
+    assert res[-1][1] is True and res[-1][2]["grace"]
+    grace = res[-1][2]["grace"]
+    # grace 로 터미널 start 통과(screen 커서까지 URL 에 실림) / stop 도 통과
+    await conn._handle_req({"id": "t1", "method": "terminal", "params": {"session_id": sid, "grace": grace, "screen": "S1"}})
+    import asyncio
+    await asyncio.sleep(0)                      # create_task 된 파이프가 한 틱 돌게
+    assert streams[-1][0] == "t1" and "screen=S1" in streams[-1][1]["pipe"]
+    conn.streams["t1"].cancel()
+    assert C._priv_ok({"grace": grace}) and not C._priv_ok({"grace": grace[:-2] + "xx"})
+    # 비밀 재설정 → 기존 grace 전부 무효(다시 물어야 한다)
+    monkeypatch.setattr(owner2fa, "_data", lambda: {"secret": "GEZDGNBVGY3TQOJQ", "enforced": True})
+    assert not C._priv_ok({"grace": grace})

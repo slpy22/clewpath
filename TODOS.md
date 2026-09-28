@@ -56,9 +56,9 @@ Host 가 `bye` 프레임으로 예고해 오탐을 막는다.
 - [ ] 화면 인계: 폰+PC 실기기 왕복(확인창·점선 칩·배너 육안) **(사장님)**
 - [ ] 알림→탭 점프: 실제 서비스워커 알림 클릭 경로(`open-session` 메시지) — 폰에서 알림 클릭 1회면 됨 **(사장님)**
 - [x] 관제 타임라인 필터: 실시간 증분 행에 필터 적용 — 헤드리스 하네스로 `openMonitor` 를 실제로 열어 스냅샷 3행 → '오류' 필터 → 증분 2행(텍스트 숨김·오류 표시) → 세션 숨김 토글 → 복원까지 검증(`tests/pwa/monitor.test.mjs`, 2026-09-28)
-- [ ] 탭 배지: 실제 터미널 탭 마운트 상태에서 20초 주기 재렌더가 스트립 스크롤·입력을 방해하지 않는지
-- [ ] 즉시 전환: 버퍼 초과 폴백(단위 테스트만) · 로컬 모드(/app) 즉시 전환 e2e
-- [ ] 2FA on 상태의 OTP 프롬프트 경로(원격 세션 종료·워커 API) — 이 Host 는 2FA off 라 미실측
+- [x] 탭 배지 주기 재렌더(2026-09-28, 하네스 `tests/pwa/unverified.test.mjs`): 터미널 뷰 마운트 + 탭 2개 fast-path 상태에서 20초 틱 3회 → 목록은 3회 재렌더, 스트립은 300ms 코얼레싱으로 1회, 활성 칩 `scrollIntoView` 0(사용자 스크롤 보존), xterm 포커스 0·인스턴스/스트림 동일·전송 0. 하네스에 `setInterval` 기록(`__intervals`) 추가
+- [x] 즉시 전환(2026-09-28): 버퍼 초과 폴백을 실제 `/ws/terminal?screen=` 라우트로(`test_webterm_overflow_route.py` 2건: tail+'생략' 안내 / 정확한 델타·배너 없음 / 처음 보는 화면 tail+재연결 배너) · 로컬 모드(/app)는 하네스 `MODE=local` 부트로 탭별 iframe 보유·전환 시 `.on` 토글만(src 재대입 0)·dead 탭만 리로드·닫으면 about:blank 검증. ⚠ 남은 것: 로컬 /app 육안(iframe 그리드) — 낮음
+- [x] 2FA on OTP 경로(2026-09-28): PWA `ensurePriv`(취소 null·OTP→grace 캐시·재요청 없음·불일치 toast·`2fa_invalid` 시 grace 소거) + 터미널 스트림 2fa 오류 → grace 소거·안내 문구 + 커넥터 실 TOTP 비밀로 grant→grace→terminal start 통과/거부·비밀 재설정 시 grace 무효(`test_connector_stop_2fa.py`). ⚠ 실기 OTP 입력(폰 인증앱)은 이 Host 2FA 를 켤 때 — **(사장님)** 선택
 - [ ] 모바일 실기기 육안: 탭 밑줄·필터 바·💾·🔗 칩 **(사장님)**
 - [ ] 워커 스킬: 📦 설치 → `/clewpath-workers` 실사용 1회 → 관제 그룹 자동 저장·폰 알림 **(사장님)**
 

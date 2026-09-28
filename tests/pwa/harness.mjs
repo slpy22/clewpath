@@ -78,8 +78,11 @@ export function makeSandbox() {
     addEventListener() {}, removeEventListener() {}, cookie: "",
     _register: (id, el) => byId.set(id, el),
   });
+  // setInterval 은 돌리지 않고 기록만 — 테스트가 주기 콜백(목록 20초 갱신 등)을 골라 직접 호출한다
+  const intervals = [];
   const sandbox = {
-    document, console, setTimeout, clearTimeout, setInterval: () => 1, clearInterval() {},
+    document, console, setTimeout, clearTimeout, clearInterval() {},
+    setInterval: (f, ms) => { intervals.push({ f, ms }); return intervals.length; }, __intervals: intervals,
     queueMicrotask, requestAnimationFrame: (f) => setTimeout(f, 0), cancelAnimationFrame() {},
     navigator: { userAgent: "node-test", language: "ko", onLine: true, platform: "Win32" },   // serviceWorker 없음
     location: { hash: "", pathname: "/relay/app", search: "", origin: "https://test.local", href: "https://test.local/relay/app", protocol: "https:", host: "test.local", reload() {} },
@@ -108,10 +111,12 @@ export function makeSandbox() {
   return sandbox;
 }
 
-export async function load({ hash = "" } = {}) {
+// location 을 덮어쓰면 MODE 추론이 바뀐다(기본 /relay/app = relay, `{pathname:'/app'}` = local)
+export async function load({ hash = "", location = null } = {}) {
   const html = readFileSync(INDEX, "utf-8");
   const js = extractScript(html);
   const sandbox = makeSandbox();
+  if (location) Object.assign(sandbox.location, location);
   sandbox.location.hash = hash;
   const ctx = vm.createContext(sandbox);
   vm.runInContext(js, ctx, { filename: "index.html" });
