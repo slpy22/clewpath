@@ -107,9 +107,15 @@ Host 가 `bye` 프레임으로 예고해 오탐을 막는다.
 - [x] `renderRows` 목록 카드: 폴더 그룹 최신순·건수·대표 cwd(최단) / 상태 점(pulse·색)·문구 / 🔗 피어 칩은 `peer && !live_terminal` 일 때만(우리 PTY 면 없음) / 🤖 배경 에이전트·⚙ 피커 미표시(`picker_expose` 면 없음)·#라벨·🧠 모델(`set`) / 🖥 vs ▶ / 권한 대기 → ✋ + 클릭 가능 문구 / msgs·bytes·상대시간 / 경로 줄은 대표와 다를 때만 / 접기(검색 중 무시)·제목/경로 검색·라벨 필터·빈 문구 2종. (목록엔 `screen` 칩이 없다 — 화면 점유는 터미널 탭·확인창에서만)
 - [x] `sw.js` 를 vm 에 부트: push → `showNotification(title 기본값·tag·data{sid,kind,gid})`, 깨진 JSON/빈 data 도 알림. notificationclick → 같은 origin 창 focus + `postMessage({type:'open-session',sid}|{type:'open-monitor',gid})`, 다른 origin 건너뜀, focus 실패 시 다음 창→`openWindow`, 창 없음 → `/relay/app#open=…`·`#monitor=`(encodeURIComponent)·로컬 `/sw.js` 는 `/#open=`. 페이지 쪽: `navigator.serviceWorker` message → `openSessionById`/`openMonitorGroupById`, 그 외 무시 — **sw ↔ 페이지 계약 양쪽 고정**(하네스 `load({navigator})`)
 
-### Phase 4 (대기)
-- [ ] `loadDetail` 상세 화면(재개 방식 버튼·동시 재개 경고·🖥 돌아가기) 헤드리스 검증
-- [ ] `conn`(릴레이 WS RPC) 재연결·pending 요청 거부·stream eof 라우팅 — `WebSocket` 스텁을 이벤트 구동형으로
+### Phase 4 — 완료(2026-09-28), `tests/pwa/phase4.test.mjs` 7건, node 34건
+- [x] `Conn`(릴레이 WS RPC) 을 이벤트 구동 WebSocket 스텁으로: connect/hello → 상태 콜백·cid / req id 매칭(순서 뒤바뀜·모르는 id 무시)·연결 전 즉시 `disconnected`(seq 미소모) / `api()` HTTP 상태 → 예외 / 터미널·모니터 스트림 라우팅(safe→skip:false, screen 커서 동봉, eof+error, stream_in/add/remove, 터미널 close → `stream_close`) / 소켓 끊김 → waiter 전부 disconnected + 스트림 전부 eof + `_scheduleReconnect(code)` / 기기 인증(hello 뒤 auth 완료까지 connect 보류, ver 표시, pv 상위 경고 1회, `auth_required` → onauth(false)) / 재연결 백오프 1·2·4·8·16·30·30s(6회 상한)·타이머 중복 없음·4403/4426 중단·4402 는 JWT 강제 갱신·성공 시 `loadList`+`reattachForegroundTab`·로그아웃 뒤 무예약 / **E2EE**: 룸 키 로드 → `_tx` 는 `a1` 봉투만(평문 메서드 유출 없음), 봉투 수신 복호 → waiter, 키 없이 온 봉투 무시
+- [x] `loadDetail`: 정보 카드 kv(ID 8자·폴더·메시지·크기·생성·마지막(상대)) / ⚙ 안내 카드 토글 → `POST picker-expose {expose}` → 문구·toast 반전 / 통계 카드 성공·실패 문구 / 버튼 8개 문구·순서, 실행 중이면 `🖥 터미널로 돌아가기` / 상세 진입 시 `CURRENT_TERM_SID` 해제
+- [x] `showResumeChooser`: 실행 중 → 바로 터미널 / ⚙ 사전 확인(취소면 모달 없음, `picker_expose` 면 생략) / bg 잠금 → `showBgHold` / 피어 활동 → ⚠ 동시 재개 경고 / 기본 web+YOLO → `loadResume(s,true,false)`, term+일반 → `loadTerminal(s,true)`, 세그먼트 버튼으로 바꾼 조합이 `sm_resume_pref` 에 저장
+- 함정: 수신 디스패치는 `_rxq` 직렬화(비동기) → `push` 뒤 한 틱 기다릴 것 / `setTimeout` 을 컨텍스트에서 바꿔치기해 백오프를 즉시 검증(끝나면 복원)
+
+### Phase 5 (대기)
+- [ ] `loadResume`(웹 재개 스트림) 프레임 렌더·입력·eof 처리 / `showApprove` 원격 승인 모달
+- [ ] 설정 화면(`showSettings`)의 🔔 구독 토글·📦 스킬 설치 확인창 흐름
 
 ## 참고(완료): 세션 목록 API 성능 — 증분 파싱 (v0.9.3)
 
