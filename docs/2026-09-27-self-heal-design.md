@@ -41,7 +41,27 @@ Gemini(B 목록 성능 우선) vs Codex·Claude(A 자기 회복 우선), Copilot
   실행(launcher.log `start: 이전 pid 100768 없음(health 없음) → 기동`) → 18:46:01 health OK. **43초**(트리거 주기 안에서
   운이 좋았고, 최악은 5분+기동). 새 Host 가 `[liveness] 비정상 종료 의심(pid 100768) → 복구 알림 1건`, incidents.jsonl 2건째.
 
-## 한계 (Phase 2)
+## Phase 2 — 릴레이 heartbeat 단절 알림 (Host 0.9.5 + 서버 007, 2026-09-28)
+
+**결정(사장님)**: A) Host 가 웹푸시 구독을 CP 에 미러. 폰 알림은 Host 웹푸시(구독·VAPID 키가 Host 에만)라
+Host 가 죽으면 알릴 주체가 없었다(CP 의 FCM 경로는 모바일 앱·키 미준비). 내용 없는 고정 문구라 blind
+원칙(세션 내용 무접촉)과 무관. 저장 범위: room 당 VAPID PEM + 구독 endpoint/keys.
+
+| 구성 | 역할 |
+|---|---|
+| 007 `control_plane/webpush.py` | pywebpush 없이(컨테이너 재빌드 금지) RFC 8291 aes128gcm + RFC 8292 VAPID 를 cryptography·pyjwt 로 구현 — RFC 부록 A 벡터로 검증. `WebPushMirror` 테이블, `mirror_upsert/get`, `notify_room(kind)`: down 은 6h 쿨다운, up 은 down 뒤 1회, 404/410 구독 청소 |
+| 007 API | `POST /push/webpush-mirror`(agent JWT, 자기 room), `POST /internal/rooms/{room}/agent-down|agent-up`(릴레이 → CP, 내부망) |
+| 007 relay | agent 가 **bye 없이** 끊기면 `RELAY_DOWN_GRACE_S`(600) 뒤에도 없을 때만 down 통지, 복귀 시 down 을 보냈으면 up 통지. bye 프레임은 표식만(중계 안 함). 릴레이 재시작으로 전원이 끊겨도 grace 뒤 재접속돼 있으면 무알림 |
+| 006 Host | `push.mirror_to_cp()`(구독 추가/삭제·기동 시, CP 미설정 no-op) / `connector.bye()`·`request_bye()`(lifespan 종료·updater.apply) |
+
+배포: 007 docker restart(테이블은 create_all) → Host 0.9.5(`release.ps1 -Publish -Apply` 2회째, 22초). 기동 로그
+`[push] CP 미러: {'ok': True, 'count': 1}`, CP DB 에 room 행 1(구독 'Windows').
+
+한계: PC 전원 꺼짐도 bye 가 안 나가면 10분 뒤 알림 1건(쿨다운 6h) — 정상 종료는 lifespan bye 로 억제. 릴레이
+자체가 죽으면 아무도 못 알림(운영측 모니터 몫). maintenance.flag + taskkill 은 bye 가 없어 알림이 나간다(의도적
+중지엔 설정 화면의 '종료' 경로가 생기면 bye 를 붙일 것).
+
+## 한계 (Phase 1)
 
 - Host 가 아예 못 뜨거나 PC 가 꺼지면 알림을 보낼 주체가 없다 → SaaS 단계에서 **릴레이가 heartbeat 단절을 감지**해 알림.
 - 반복 트리거는 "PC 켜짐 + 사용자 로그온 + 스케줄러 정상" 전제. 회사 정책으로 스케줄러가 막힌 PC(HKCU Run 폴백)는
