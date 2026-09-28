@@ -95,7 +95,8 @@ def add_subscription(subscription: dict, name: str = "") -> bool:
         subs.append({"endpoint": ep, "keys": keys, "name": name,
                      "added_at": int(time.time())})
         _save_subs(subs)
-        return True
+    mirror_to_cp_async()             # CP 미러 갱신(자기 회복 Phase 2)
+    return True
 
 
 def _sub_id(endpoint: str) -> str:
@@ -113,7 +114,56 @@ def remove_subscription(endpoint_or_id: str) -> bool:
         if len(kept) == len(subs):
             return False
         _save_subs(kept)
-        return True
+    mirror_to_cp_async()             # CP 미러 갱신(자기 회복 Phase 2)
+    return True
+
+
+# ---------------------------------------------------------------- CP 미러(자기 회복 Phase 2)
+# Host 가 죽으면 폰에 알릴 주체가 없다 → 구독 endpoint + VAPID 개인키를 CP 에 미러해 두면,
+# 릴레이가 "agent 단절 N분" 을 알릴 때 CP 가 같은 키로 '연결 끊김' 고정 문구를 보낸다.
+# 구독 변경·기동 시 전체를 덮어쓴다(빈 목록 = 알림 없음). CP 미설정이면 no-op.
+
+def mirror_payload() -> dict | None:
+    pem = _vapid_pem()
+    if not pem.is_file():
+        return None
+    subs = [{"endpoint": s.get("endpoint"), "keys": s.get("keys"), "name": s.get("name", "")}
+            for s in _load_subs() if s.get("endpoint") and s.get("keys")]
+    return {"vapid_private_pem": pem.read_text(encoding="utf-8"), "subscriptions": subs}
+
+
+def mirror_to_cp() -> dict:
+    """CP 에 미러 등록. 반환: {"ok", "count"|"skipped"|"error"}. 어떤 실패도 예외로 새지 않는다."""
+    try:
+        from session_manager import cp_client
+        base = cp_client.cp_url()
+        if not base:
+            return {"ok": False, "skipped": "no_cp"}
+        payload = mirror_payload()
+        if payload is None:
+            return {"ok": False, "skipped": "no_vapid"}
+        jwt = cp_client.fetch_jwt("")
+        if not jwt or not jwt.get("token"):
+            return {"ok": False, "skipped": "no_jwt"}
+        import httpx
+        with httpx.Client(timeout=10) as client:
+            r = client.post(f"{base}/push/webpush-mirror", json=payload,
+                            headers={"Authorization": f"Bearer {jwt['token']}"})
+        if r.status_code != 200:
+            return {"ok": False, "error": f"http_{r.status_code}"}
+        return {"ok": True, "count": len(payload["subscriptions"])}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": type(e).__name__}
+
+
+def mirror_to_cp_async() -> None:
+    """구독 변경 직후·기동 시 스레드로(요청 경로·기동을 막지 않게)."""
+    def run():
+        r = mirror_to_cp()
+        if r.get("ok") or r.get("error"):
+            print(f"[push] CP 미러: {r}", flush=True)
+    # (기존 테스트가 Thread 를 (target,args,daemon) 시그니처로 가로채므로 name 은 넘기지 않는다)
+    threading.Thread(target=run, args=(), daemon=True).start()
 
 
 def list_subscriptions() -> list[dict]:

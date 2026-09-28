@@ -151,6 +151,23 @@ def relay_config_from_env() -> dict | None:
             "local_base": local_base}
 
 
+# 실행 중인 커넥터(서버당 1개). 업데이트 적용(다른 스레드)이 bye 를 예약할 때 쓴다.
+CURRENT = None
+
+
+def request_bye(reason: str, wait_s: float = 1.5) -> bool:
+    """서버 밖 스레드(업데이트 apply 등)에서 bye 를 보내고 잠깐 기다린다. 커넥터 없으면 False."""
+    c = CURRENT
+    loop = getattr(c, "loop", None) if c is not None else None
+    if c is None or loop is None or getattr(c, "ws", None) is None:
+        return False
+    try:
+        fut = asyncio.run_coroutine_threadsafe(c.bye(reason), loop)
+        return bool(fut.result(timeout=wait_s))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 class Connector:
     def __init__(self, relay_url: str, room: str, token: str,
                  local_base: str | None = None):
@@ -658,8 +675,24 @@ class Connector:
             pass
         return f"{self.relay_url}?{urlencode(params)}", mode
 
+    # ---- 정상 종료 예고(자기 회복 Phase 2) ----
+    async def bye(self, reason: str = "shutdown") -> bool:
+        """릴레이에 bye 프레임을 보낸다 — 업데이트·종료·유지보수 같은 의도된 단절에 릴레이가
+        '연결 끊김' 알림을 내지 않게. 소켓이 없거나 실패해도 조용히 False."""
+        ws = self.ws
+        if ws is None:
+            return False
+        try:
+            await asyncio.wait_for(ws.send(json.dumps({"v": 1, "type": "bye", "reason": reason})), timeout=2)
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
     # ---- 접속 + 재연결 루프 ----
     async def run(self) -> None:
+        global CURRENT
+        CURRENT = self
+        self.loop = asyncio.get_running_loop()
         backoff = 1
         while True:
             try:

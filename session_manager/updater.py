@@ -339,9 +339,15 @@ def apply(manifest: dict[str, Any], staged: Path, restart_cmd: str | None = None
     if sys.platform == "win32":
         flags = 0x08000000 | 0x00000200
     # runner 가 우리를 강제 종료하므로 lifespan 의 표식이 안 남을 수 있다 → 미리 '업데이트' 표식
+    # + 릴레이에 bye(의도된 단절 — '연결 끊김' 알림 억제)
     try:
         from session_manager import liveness
         liveness.mark_shutdown("update")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from session_manager import connector
+        connector.request_bye("update")
     except Exception:  # noqa: BLE001
         pass
     subprocess.Popen(args, close_fds=True, creationflags=flags,

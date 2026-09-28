@@ -21,7 +21,20 @@
 - [x] e2e 전체 통과. 테스트 11건(`test_workers_dispatch.py`), 전체 296 passed. 정리: e2e 그룹 ab7832fe 삭제, 워커 세션 휴지통
 - [ ] 사장님 확인: 설정 → 📦 워커 스킬 설치 → 새 세션에서 `/clewpath-workers` 로 실제 오케스트레이션 1회(관제 그룹 자동 저장·폰 알림까지)
 
-## 진행중 기능: 화면 소유권 인계 UX (v0.9.4)
+## 진행중 기능: 자기 회복 Phase 2 — 릴레이 heartbeat 단절 알림 (Host 0.9.5 + 서버 007)
+
+사장님 결정(2026-09-28): **A) Host 가 웹푸시 구독을 CP 에 미러**. 폰 알림은 Host 웹푸시(구독·VAPID 키가 Host 에만)라
+Host 가 죽으면 알릴 주체가 없었다. 내용 없는 고정 문구 알림이라 blind 원칙과 무관. 의도된 단절(업데이트·종료)은
+Host 가 `bye` 프레임으로 예고해 오탐을 막는다.
+
+### Phase 1 (이번 사이클)
+- [ ] **007 CP**: `webpush.py` — pywebpush 없이(컨테이너 재빌드 금지) RFC 8291 aes128gcm + RFC 8292 VAPID 를 cryptography·pyjwt 로 구현, **RFC 8291 부록 A 벡터 통과**. `WebPushMirror` 테이블(room 당 PEM+구독), `POST /push/webpush-mirror`(agent JWT), `POST /internal/rooms/{room}/agent-down|agent-up`. down 은 6h 쿨다운, up 은 down 뒤 1회, 404/410 구독 청소. 테스트 5건
+- [ ] **007 relay**: agent 가 `bye` 없이 끊기면 `RELAY_DOWN_GRACE_S`(600) 뒤에도 없을 때만 CP 에 down 통지, 복귀 시 down 을 보냈으면 up 통지. bye 프레임은 중계하지 않고 표식만. 릴레이 재시작으로 전원 끊겨도 grace 뒤 재접속돼 있으면 무알림. 테스트 4건. 007 전체 89 passed
+- [ ] **006 Host**: `push.mirror_to_cp()`(구독 추가/삭제·기동 시, 스레드, CP 미설정 no-op) / `connector.bye()` + `request_bye()`(lifespan 종료·updater.apply 에서) / 테스트 4건
+- [ ] 배포: 007 `docker restart util-session-cp util-session-relay`(bind-mount, DB 는 create_all 로 테이블 추가) → Host 0.9.5 `release.ps1 -Publish -Apply` → e2e: 미러 등록 확인(CP DB) → Host 강제 종료(maintenance 없이) → 10분 뒤 폰/PC 에 "연결 끊김" 푸시 → 자기 회복 후 "다시 연결됨" 푸시 / 업데이트 재기동은 무알림(bye)
+- [ ] 한계 기록: PC 전원 꺼짐(의도적)도 bye 없이 끊기면 10분 뒤 알림 1건(쿨다운 6h) — 정상 종료 시 lifespan bye 가 나가므로 대부분 억제됨. 릴레이가 죽은 경우는 아무도 못 알림(운영측 모니터 몫)
+
+## 참고(완료): 화면 소유권 인계 UX (v0.9.4)
 
 크로스체크 3순위(D). 지금은 다른 기기가 같은 세션 터미널을 열면 이전 화면이 **말없이** 끊긴다(`webterm` 점유 규칙:
 마지막 접속이 이김). 게다가 끊긴 쪽이 화면 복귀(`visibilitychange`)로 자동 재접속하면 다시 빼앗아 **핑퐁**이 난다.

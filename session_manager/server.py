@@ -322,15 +322,24 @@ async def _lifespan(app: FastAPI):
     cfg = _connector.relay_config_from_env()
     task = None
     if cfg:
-        task = asyncio.create_task(_connector.Connector(**cfg).run())
+        conn = _connector.Connector(**cfg)
+        task = asyncio.create_task(conn.run())
         print(f"[relay] mode ON → {cfg['relay_url']} room={cfg['room']} "
               f"(local {cfg['local_base']})")
+        # 웹푸시 구독을 CP 에 미러(자기 회복 Phase 2) — Host 가 죽어도 CP 가 '연결 끊김'을 보낼 수 있게
+        from session_manager import push as _push
+        _push.mirror_to_cp_async()
     else:
         print("[relay] mode OFF (SM_RELAY_URL/ROOM/AGENT_TOKEN 미설정)")
     try:
         yield
     finally:
         _liveness.mark_shutdown("normal")   # 정상 종료 표식 — 다음 기동이 '비정상 종료 의심'으로 안 본다
+        if task is not None:                 # 릴레이에 정상 종료 예고 — '연결 끊김' 알림 억제
+            try:
+                await asyncio.wait_for(conn.bye("shutdown"), timeout=2)
+            except Exception:  # noqa: BLE001
+                pass
         # 정상 종료(업데이트 재기동 포함) 시 우리가 띄운 PTY 를 함께 내린다 -
         # 살려두면 고아→claude bg 승격→세션 잠금("already running as background
         # agent")이 재기동마다 재발한다(실사고). 재기동 후엔 등록을 잃어
