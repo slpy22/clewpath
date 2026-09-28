@@ -30,7 +30,7 @@
 - [x] `static/terminal.html`: 서버 `TAKEOVER_NOTE` 감지 → 상태 "다른 화면이 보는 중" + 부모에 `postMessage({type:'clewpath-term', event:'taken', id, fork}, origin)`(붙을 때 `attached` 도) → 끊길 때 노란 "다른 기기에서 보는 중 — 탭/재연결" 안내(회색 '연결 끊김' 대신)
 - [x] `pwa/index.html` 로컬: `onLocalTermMessage`(같은 origin 만) → 탭 `taken` + 점선 칩 / `shouldConfirmTakeover` 는 로컬에서 **통지로만** 판단(목록 `screen` 은 내 iframe 인지 못 가림) / 확인 후 `attach(..., wasTaken)` → iframe 리로드로 재접속(서버 tail 리플레이). 자동 되찾기 없음(핑퐁 차단). 릴레이 경로 무변경
 - [x] 테스트 `tests/pwa/local-takeover.test.mjs` 3건(terminal.html 을 부모 있는 샌드박스에 부트 + 앱 로컬 흐름), 하네스 `__winListeners`. node 37건
-- [ ] 릴리스 0.9.6(Host: terminal.html + 로컬 index.html) + 007 `pwa/index.html` 동기화·relay restart(릴레이 쪽은 동작 무변경, 파일 동일성 유지)
+- [x] 릴리스 0.9.6(2026-09-28 15:41, `-Publish -Apply` 27초, 조용한 재기동 incidents 4 유지, 설치본 `/app`·`/terminal` 새 코드 확인). 007 동기화는 **불필요** — `007/pwa/index.html` 은 006 파일의 하드링크(git 미추적)라 릴레이가 요청마다 읽어 이미 라이브에 반영됨(`onLocalTermMessage` 확인)
 - [ ] 사장님 재실기: PC 로컬 + 폰 왕복(점선 칩·확인창·되찾기)
 
 ## 진행중 기능: 자기 회복 Phase 2 — 릴레이 heartbeat 단절 알림 (Host 0.9.5 + 서버 007)
