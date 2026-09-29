@@ -20,7 +20,7 @@ Input: docs/2026-09-29-pc-pairing-ux-plan.md (현재 구현 인벤토리)
 
 ## 최종 범위 (사장님 결정 반영)
 
-### P1 — 선행 보안 핫픽스 (Host 0.9.8, 이 플랜과 별도 릴리스 가능)
+### P1 — 선행 보안 핫픽스 (Host 0.9.8 — **2026-09-29 게시·적용 완료**, 설치본 실측 403)
 | # | 내용 | 근거 |
 |---|---|---|
 | T1-a | 커넥터 `_handle_api` 가 로컬 프록시 요청에 `X-ClewPath-Via: relay` 헤더를 붙이고, `/api/owner/devices*`·`/api/owner/2fa*`·`/api/owner/skills*` 등 **로컬 전용 경로 덴리스트** → 403 `local_only`. 서버 `_is_local()` 은 그 헤더가 있으면 False | Codex #1 검증: 폰이 프록시로 기기 등록·삭제 가능(P1 보안) |

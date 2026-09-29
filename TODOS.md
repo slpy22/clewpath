@@ -27,8 +27,8 @@
 `docs/2026-09-29-pc-pairing-ux-plan.md`. 다음 게이트: `/plan-eng-review` → `/plan-design-review` → 구현.
 
 ### Phase 0 — P1 보안 핫픽스 (선행, Host 0.9.8)
-- [ ] T1 커넥터 프록시에 `X-ClewPath-Via: relay` 헤더 + 로컬 전용 경로 덴리스트(`/api/owner/devices*`·`2fa*`·`skills*` … → 403 `local_only`), 서버 `_is_local` 은 그 헤더면 False — **Codex 발견: 페어링된 폰이 프록시로 기기 등록·삭제 가능(코드 확인)**
-- [ ] T2 기기 삭제/재발급/revoke 시 그 cid 스트림 전부 해체 + `_handle_stream_in` authed 검사 + 재접속 시 `authed` 초기화
+- [x] T1 (0.9.8, 2026-09-29) 커넥터 프록시 `X-ClewPath-Via: relay` 헤더 + 덴리스트(`/api/owner/devices*` 전 동사, `2fa/(provision|toggle)`·`skills/*/install`·`trash/*`·`update/apply`·`sessions/*/terminal/start` POST → `local_only`), 서버 `_is_local` 은 헤더면 False. 설치본 실측: via-relay POST 403 / 로컬 200 / `2fa/status` GET 200 유지. 테스트 25건(`test_connector_local_only.py`)
+- [x] T2 (0.9.8) `connector.drop_device` + `request_drop_device`(서버 스레드에서, delete/reissue/revoke 핸들러가 호출) → 그 기기 cid 의 스트림 cancel·authed·enc_cids 정리 / `_handle_stream_in` 은 enforced 면 살아 있는 인증(`devices.is_active`)만 통과, 아니면 파이프 해체 / `_on_connected()` 가 authed·enc_cids·req_cid 초기화
 
 ### Phase 1 (이번 사이클) — 설계 문서 §최종 범위
 - [ ] T3 007: `POST /client/revoke-self`, `GET /client/status`(agent JWT) + nginx `limit_req` `/cp/client/(token|revoke-self)` (**/deploy-request 의뢰**)
