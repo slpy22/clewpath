@@ -819,7 +819,12 @@ def create_app() -> FastAPI:
     @app.post("/api/sessions/{session_id}/delete")
     def delete(session_id: str, dry_run: bool = Body(True, embed=True)):
         # 하드 삭제가 아니라 휴지통으로 이동 — restore 로 복구 가능.
-        return lifecycle.delete_session(session_id, dry_run=dry_run)
+        # 살아 있는 세션은 409(session_live): 파일을 옮겨도 프로세스가 같은 경로에 새 파일을 만들어
+        # 기록이 둘로 갈라진다(타 PC 실사고 2026-09-29). 이름 변경과 같은 규칙.
+        r = lifecycle.delete_session(session_id, dry_run=dry_run)
+        if r.get("error") == "session_live":
+            return JSONResponse(r, status_code=409)
+        return r
 
     @app.post("/api/sessions/{session_id}/picker-expose")
     def picker_expose(session_id: str, expose: bool = Body(..., embed=True)):
@@ -1113,7 +1118,7 @@ def create_app() -> FastAPI:
         try:
             return webterm.start_terminal(session_id, skip_permissions=skip)
         except webterm.TermStartError as e:
-            status = {"cap": 409, "bg_hold": 409, "no_cwd": 404}.get(e.code, 500)
+            status = {"cap": 409, "bg_hold": 409, "continued": 409, "no_cwd": 404}.get(e.code, 500)
             return JSONResponse({"error": e.code, "message": str(e)}, status_code=status)
 
     # ---- 원격 권한 승인: 실행 중인 ClewPath 터미널의 권한 프롬프트에 키 주입 ----
@@ -1195,6 +1200,8 @@ def create_app() -> FastAPI:
                 "custom_title": s.custom_title,
                 "ai_title": s.ai_title,
                 "agent_name": s.agent_name,
+                # 이 대화가 이어진 새 세션 id(있으면 '옛 줄' — 화면은 접고 재개는 그쪽으로)
+                "continued_in": s.continued_in,
                 "picker_hidden": s.picker_hidden,   # ⚙ 배지 - v1(폰·릴레이) 누락 버그 수정
                 "title": _display_title(md, rec),
                 "git_branch": s.git_branch,

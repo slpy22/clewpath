@@ -151,3 +151,35 @@ test("페이지 쪽 계약: serviceWorker message open-session/open-monitor → 
   handlers.message({ data: null });
   same(ev(ctx, "globalThis.__calls"), [["s", A], ["m", "g1"]]);
 });
+
+// ---------------------------------------------------------------- 이어받기(continued-in, 0.9.9)
+test("renderRows: 옛 줄은 ⏩ 이어받음 칩+dim, 열기/재개는 이어받은 세션으로, 🏷 agent_name 칩, 삭제 409 안내", async () => {
+  const ctx = await load();
+  const OLD = "aaaaaaaa-1111-2222-3333-444444444444", NEW = "bbbbbbbb-1111-2222-3333-444444444444", MISS = "cccccccc-0000-0000-0000-000000000000";
+  ev(ctx, `SESSIONS = [
+    {session_id:${JSON.stringify(OLD)}, title:'총괄', project_folder:'F--p', cwd:'F:/p', continued_in:${JSON.stringify(NEW)}, ended_at:'2026-09-29T00:00:00Z'},
+    {session_id:${JSON.stringify(NEW)}, title:'총괄', project_folder:'F--p', cwd:'F:/p', agent_name:'dbcommon', ended_at:'2026-09-29T01:00:00Z'},
+    {session_id:'dddddddd-1111-2222-3333-444444444444', title:'고아', project_folder:'F--p', cwd:'F:/p', continued_in:${JSON.stringify(MISS)}, ended_at:'2026-09-29T00:30:00Z'}
+  ]; SELECTED_ID=null; ACTIVE_LABEL=''; COLLAPSED.clear(); globalThis.__calls=[];
+  loadDetail = (s) => globalThis.__calls.push(['detail', s.session_id]); showResumeChooser = (s) => globalThis.__calls.push(['resume', s.session_id]);`);
+  const wrap = stubEl("div"); ctx.__wrap = wrap;
+  ev(ctx, "renderRows(globalThis.__wrap, '')");
+  const r = rows(wrap); const byId = Object.fromEntries(r.map((row) => [row.dataset.sid, row]));
+  const old = byId[OLD];
+  assert.ok(old.classList.contains("dim"), "옛 줄은 흐리게");
+  same(chipsOf(old), ["⏩ 이어받음"]);
+  assert.ok(old.children[0].children[0].children.find((k) => cls(k) === "schip cont").title.includes("열면 그 세션으로"));
+  same(chipsOf(byId[NEW]), ["🏷 dbcommon"], "메시지 주소 이름 표시");
+  old.children[0].onclick();                                        // 정보 클릭 → 이어받은 세션 상세
+  old.children.at(-2).onclick();                                    // ▶ → 이어받은 세션 재개
+  same(ev(ctx, "globalThis.__calls"), [["detail", NEW], ["resume", NEW]]);
+  const orphan = byId["dddddddd-1111-2222-3333-444444444444"];
+  assert.ok(chipsOf(orphan)[0].includes("이어받음"));
+  orphan.children[0].onclick();
+  same(ev(ctx, "globalThis.__calls").at(-1), ["detail", "dddddddd-1111-2222-3333-444444444444"], "목록에 없으면 원래 것");
+  // 삭제 409 → 실행 중 안내
+  ev(ctx, "globalThis.__toasts = []; toast = (m) => globalThis.__toasts.push(m); T.api = async () => { const e = new Error('HTTP 409'); e.status = 409; throw e; }");
+  ctx.confirm = () => true;
+  await ctx.doDelete({ session_id: NEW });
+  assert.ok(ev(ctx, "globalThis.__toasts").at(-1).includes("실행 중인 세션은 삭제할 수 없습니다"));
+});

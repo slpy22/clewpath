@@ -47,7 +47,25 @@ def _related_paths(session_id: str) -> list[Path]:
     return paths
 
 
-def delete_session(session_id: str, dry_run: bool = True) -> dict:
+def _live_reason(session_id: str) -> str | None:
+    """살아 있는 세션이면 사유('terminal' = 우리 PTY, 'busy'/'idle'/… = claude 레지스트리), 아니면 None."""
+    try:
+        from session_manager import webterm
+        if webterm.has_terminal(session_id):
+            return "terminal"
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from session_manager import native_title
+        st = native_title.session_status(session_id)
+        if st:
+            return str(st)
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def delete_session(session_id: str, dry_run: bool = True, force: bool = False) -> dict:
     """세션과 연관 파일을 삭제한다 — 하드 삭제가 아니라 **휴지통으로 이동**해 복구 가능.
 
     실수로 지워도 restore_session 으로 되살릴 수 있다(중요 세션 유실 방지).
@@ -68,6 +86,14 @@ def delete_session(session_id: str, dry_run: bool = True) -> dict:
     if not targets:
         return {"dry_run": False, "session_id": session_id,
                 "deleted": [], "error": "세션을 찾을 수 없습니다."}
+    # 살아 있는 세션 보호(0.9.9): 파일을 옮겨도 프로세스는 계속 쓰므로 4초 뒤 같은 경로에 새 파일이
+    # 생겨 기록이 둘로 갈라진다. 이름 변경(session_live)과 같은 규칙 — 먼저 종료해야 한다.
+    if not force:
+        live = _live_reason(session_id)
+        if live:
+            return {"dry_run": False, "session_id": session_id, "deleted": [],
+                    "error": "session_live", "reason": live,
+                    "hint": "실행 중인 세션입니다. 터미널/프로세스를 먼저 종료한 뒤 삭제하세요."}
 
     # 휴지통 버킷으로 '이동'(rmtree/unlink 아님). 같은 이름 충돌 방지 위해 인덱스 접두사.
     stamp = time.strftime("%Y%m%d-%H%M%S")

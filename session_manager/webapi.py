@@ -32,7 +32,7 @@ import subprocess
 import threading
 import uuid
 
-from session_manager.scanner import scan_one, resolve_launch_cwd
+from session_manager.scanner import scan_one, resolve_launch_cwd, latest_session_id
 
 
 # ---- 고아 스트림 청소 (Host 기동 시 1회) ----
@@ -172,6 +172,14 @@ async def run_resume_api(ws, session_id: str, skip_permissions: bool = True,
                          "message": f"세션 작업 폴더를 찾을 수 없습니다: {cwd or '(미상)'}"})
         await _safe_close(ws)
         return
+
+    if not fork_id:
+        latest = latest_session_id(session_id)
+        if latest != session_id:      # 옛 줄(continued-in) 재개 금지 — 새 줄과 갈라진다(0.9.9)
+            await _send(ws, {"type": "error", "error": "continued", "continued_in": latest,
+                             "message": f"이 세션은 {latest[:8]}… 로 이어졌습니다. 이어받은 세션을 여세요."})
+            await _safe_close(ws)
+            return
 
     argv = _claude_argv(session_id, skip_permissions, fork_id, guardrails)
     try:

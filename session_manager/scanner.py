@@ -42,6 +42,8 @@ class SessionMeta:
     # 판정: (대화형 마커 mode/permission-mode/system) 또는 (agent-name) 유무
     # - 피커 표시 여부와 일치(실측 확정 2026-08-26). _parse_meta 참조.
     picker_hidden: bool = False
+    # claude 가 이 대화를 이어간 새 세션 id(continued-in 레코드). 있으면 이 파일은 '옛 줄'.
+    continued_in: str | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -56,7 +58,7 @@ class _Fold:
     다음 스캔으로 미룬다(claude 가 쓰는 중인 줄을 반만 읽지 않게).
     """
     __slots__ = ("meta", "started_at", "last_ts", "line_count", "message_count", "custom_title",
-                 "interactive_markers", "ai_title", "agent_name", "last_model", "offset", "sig")
+                 "interactive_markers", "ai_title", "agent_name", "last_model", "continued_in", "offset", "sig")
 
     def __init__(self):
         # 메타 필드는 첫 줄에 없을 수 있다(사이드체인 메시지 등) → '처음 등장하는 값'
@@ -73,6 +75,7 @@ class _Fold:
         self.ai_title: str | None = None
         self.agent_name: str | None = None
         self.last_model: str | None = None    # 마지막 실사용 모델(재개 시 계승)
+        self.continued_in: str | None = None  # continued-in 레코드: 이 대화가 이어진 새 세션 id
         self.offset = 0                       # 접은 바이트 수(완성된 줄 끝)
         self.sig = b""                        # 오프셋 직전 64바이트 — 앞부분 재작성 감지용
 
@@ -101,6 +104,10 @@ class _Fold:
             self.ai_title = obj["aiTitle"]
         elif t == "agent-name" and obj.get("agentName"):
             self.agent_name = obj["agentName"]
+        elif t == "continued-in" and obj.get("continuedInSessionId"):
+            # claude 가 대화를 새 세션 파일로 이어간 표식(옛 파일 끝에 남는다). 이 세션은 '옛 줄' —
+            # 목록에선 접고, 재개는 새 id 로 보내야 대화가 두 갈래로 갈라지지 않는다(0.9.9).
+            self.continued_in = str(obj["continuedInSessionId"])
         elif t in ("mode", "permission-mode", "system"):
             self.interactive_markers += 1
         # 마지막 실사용 모델: assistant 레코드의 message.model(계속 덮어써 마지막값).
@@ -154,6 +161,7 @@ class _Fold:
             # 오판하던 버그. 둘 다 없는 순수 헤드리스(-p) 세션만 미표시.
             picker_hidden=(self.interactive_markers == 0 and self.agent_name is None
                            and self.line_count > 0),
+            continued_in=self.continued_in,
         )
 
 
@@ -273,6 +281,25 @@ def scan_one(session_id: str) -> SessionMeta | None:
         if candidate.is_file():
             return _scan_one(candidate)
     return None
+
+
+def latest_session_id(session_id: str, max_hops: int = 8) -> str:
+    """continued-in 체인을 따라 '지금 살아 있는 줄' 의 세션 id 를 돌려준다.
+
+    이어받은 파일이 없으면(삭제·다른 PC) 마지막으로 확인된 id 에서 멈춘다. 순환·과다 홉은 끊는다.
+    재개·중복 검사·bg 점유 검사는 전부 이 id 기준이어야 옛 줄에 프로세스가 붙어 대화가 갈라지는
+    사고(2026-09-29 타 PC 실측)를 막는다.
+    """
+    cur = session_id
+    seen = {cur}
+    for _ in range(max_hops):
+        m = scan_one(cur)
+        nxt = m.continued_in if m else None
+        if not nxt or nxt in seen or scan_one(nxt) is None:
+            break
+        seen.add(nxt)
+        cur = nxt
+    return cur
 
 
 def resolve_launch_cwd(meta: SessionMeta) -> str | None:

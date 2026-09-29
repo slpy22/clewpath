@@ -1548,6 +1548,14 @@ function showApprove(s){
   body.appendChild(status);
   openModal('✋ 권한 승인', body, [b1,b2,b3]);
 }
+// 옛 줄(continued-in) → 목록에 있는 이어받은 세션으로 따라간다(최대 8홉, 없으면 원래 것)
+function continuedTarget(s){
+  let cur=s, hops=0;
+  while(cur&&cur.continued_in&&hops<8){
+    const n=(SESSIONS||[]).find(x=>x.session_id===cur.continued_in); if(!n) break; cur=n; hops++;
+  }
+  return cur;
+}
 function renderRows(wrap,q){
   q=(q||'').toLowerCase().trim();
   const rows=SESSIONS.filter(s=>{
@@ -1609,6 +1617,16 @@ function renderRows(wrap,q){
         g.title='claude 재개 목록(피커)에 없는 세션 - 에이전트/포크 산물. 상세에서 설명 보기';
         r1.appendChild(g);
       }
+      if(s.continued_in){
+        // 옛 줄(continued-in): claude 가 대화를 새 세션으로 이어갔다. 열면 그 세션으로 보낸다(0.9.9)
+        const tgt=(SESSIONS||[]).find(x=>x.session_id===s.continued_in);
+        const g=el('span','schip cont','⏩ 이어받음');
+        g.title='이 세션은 '+s.continued_in.slice(0,8)+'… 로 이어졌습니다'+(tgt?' — 열면 그 세션으로 갑니다':' (이어받은 세션이 목록에 없음)');
+        r1.appendChild(g); srow.classList.add('dim');
+      }
+      if(s.agent_name&&s.agent_name!==(s.title||s.label_name||s.slug)){
+        const g=el('span','schip','🏷 '+s.agent_name); g.title='에이전트 이름(agent-name)'; r1.appendChild(g);
+      }
       if(s.labels&&s.labels.length)r1.appendChild(el('span','schip','#'+s.labels[0]));
       if(s.resume_model){
         const mc=el('span','schip model'+(s.model_override?' set':''),'🧠 '+modelShort(s.resume_model));
@@ -1623,7 +1641,7 @@ function renderRows(wrap,q){
       { const rt=relFrom(s); if(rt)meta.appendChild(el('span',null,rt)); }
       info.appendChild(meta);
       if(s.cwd&&s.cwd!==repr) info.appendChild(el('div','spath',s.cwd));
-      info.onclick=()=>loadDetail(s);
+      info.onclick=()=>loadDetail(continuedTarget(s));
       // 큰 터치 버튼: (권한대기면 승인) / 재개 / 이름
       if(bd&&bd.text==='권한 대기'){
         const bA=el('button','sbtn resume','✋'); bA.title='원격 승인';
@@ -1632,7 +1650,7 @@ function renderRows(wrap,q){
       } else { srow.appendChild(info); }
       const bR=el('button','sbtn resume', s.live_terminal?'🖥':'▶');
       bR.title=s.live_terminal?'실행 중 - 터미널로 돌아가기':'재개 (웹/터미널 선택)';
-      bR.onclick=()=>showResumeChooser(s);
+      bR.onclick=()=>showResumeChooser(continuedTarget(s));
       const bN=el('button','sbtn rename','✎'); bN.title='이름 변경'; bN.onclick=()=>renameNative(s);
       srow.appendChild(bR); srow.appendChild(bN);
       glist.appendChild(srow);
@@ -1658,6 +1676,7 @@ async function loadDetail(s){
     const kv=el('div','kv');
     const add=(k,v)=>{kv.appendChild(el('div','k',k));kv.appendChild(el('div','v',v));};
     add('ID',s.session_id.slice(0,8)); add('폴더',s.project_folder||'-');
+    if(s.continued_in) add('이어받음','⏩ '+s.continued_in.slice(0,8)+'… 로 이어짐 (이 파일은 옛 줄)');
     add('메시지',(s.message_count||0)+''); add('크기',fmtBytes(s.size_bytes));
     { const ct=absTime(s.started_at); if(ct)add('생성',ct); }
     { const rt=relFrom(s), at=absTime(s.ended_at)||absTime(s.mtime);
@@ -2526,7 +2545,9 @@ async function doDelete(s){
     toast(r&&r.recoverable ? '휴지통으로 이동됨 (복구 가능)' : '삭제됨');
     if(SELECTED_ID===s.session_id){SELECTED_ID=null; detailPlaceholder('삭제됨');}
     loadList();
-  }catch(e){ toast('삭제 실패: '+e.message); }
+  }catch(e){
+    if(e.status===409) toast('실행 중인 세션은 삭제할 수 없습니다 — 터미널/프로세스를 먼저 종료하세요');
+    else toast('삭제 실패: '+e.message); }
 }
 // ---- 휴지통: 복구 가능한 삭제 세션 ----
 async function showTrash(){

@@ -26,7 +26,7 @@ import os
 import threading
 from collections import deque
 
-from session_manager.scanner import scan_one, resolve_launch_cwd
+from session_manager.scanner import scan_one, resolve_launch_cwd, latest_session_id
 
 # 화면 없이 도는 동안 모아두는 출력 상한(문자). 재접속 시 마지막 부분을 되감는다.
 _BUF_CAP = 200_000
@@ -518,6 +518,15 @@ def _spawn(session_id: str, skip_permissions: bool = True,
             "no_cwd", f"세션 작업 폴더를 찾을 수 없습니다: {cwd or '(미상)'}",
             f"\r\n\x1b[31m[오류] 세션 작업 폴더를 찾을 수 없습니다: {cwd or '(미상)'}\x1b[0m\r\n"
             f"이 세션은 다른 PC에서 만들어졌거나 폴더가 이동/삭제된 것 같습니다.\r\n")
+    # 이어받은 세션(continued-in) 보호(0.9.9): 옛 줄에 프로세스를 붙이면 새 줄과 대화가 갈라진다.
+    # 포크는 원본 무접촉이라 통과. 화면은 새 id 로 다시 열게 안내한다.
+    if not fork_id:
+        latest = latest_session_id(session_id)
+        if latest != session_id:
+            raise TermStartError(
+                "continued", f"이 세션은 {latest[:8]} 로 이어졌습니다 — 그 세션을 여세요",
+                f"\r\n\x1b[33m── 이 세션은 {latest[:8]}… 로 이어졌습니다 ──\x1b[0m\r\n"
+                "옛 줄을 열면 대화가 두 갈래로 갈라집니다. 목록에서 이어받은 세션(⏩)을 여세요.\r\n")
     # bg 에이전트 점유 사전 차단: claude 가 어차피 거부할 스폰("still running
     # as a background agent")을 시도하지 않고, 구조화된 안내로 대체한다.
     # 포크는 원본 무접촉이라 통과. (판정 실패 시엔 그냥 진행 - 기능 축소 없음)

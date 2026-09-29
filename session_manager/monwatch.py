@@ -112,10 +112,28 @@ class Watcher:
             sent += self._drain(t)
         return sent
 
+    def _follow_continuation(self, t: _GroupTail, new_id: str) -> None:
+        """관리 세션이 새 세션으로 이어졌다(continued-in) → 그룹의 manager 를 갱신하고 새 파일을 tail.
+        (이걸 안 하면 그룹이 죽은 id 를 가리켜 관제·알림이 멈춘다 — 타 PC 실측 2026-09-29)"""
+        try:
+            mongroups.set_manager(t.group.get("id"), new_id)
+        except Exception:  # noqa: BLE001
+            return
+        t.manager = new_id
+        t.group["manager"] = new_id
+        t.path = _path_of(new_id)
+        t.tailer = Tailer(t.path)
+        t.tailer.seek_end()
+        t.pending = {}
+        print(f"[monwatch] [{t.group.get('name')}] 관리 세션 이어받음 → {new_id[:8]} 로 추적 전환")
+
     def _drain(self, t: _GroupTail) -> int:
         n = 0
         subs = t.subs
         for obj in t.tailer.read_new():
+            if isinstance(obj, dict) and obj.get("type") == "continued-in" and obj.get("continuedInSessionId"):
+                self._follow_continuation(t, str(obj["continuedInSessionId"]))
+                break                                     # 새 파일은 다음 폴링부터
             if not isinstance(obj, dict) or obj.get("type") not in ("user", "assistant"):
                 continue
             msg = obj.get("message")

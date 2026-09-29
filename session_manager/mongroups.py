@@ -124,6 +124,20 @@ def save(name: str, manager: str, subs, labels=None, notify=None, gid: str | Non
     return g
 
 
+def set_manager(gid: str, manager: str) -> dict | None:
+    """관리 세션 교체(이어받기 추적용). subs 에서 새 manager 는 빼고 옛 manager 는 그대로 둔다."""
+    manager = str(manager or "").strip()
+    data = _load()
+    g = data["groups"].get(str(gid or ""))
+    if g is None or not manager:
+        return None
+    g["manager"] = manager
+    g["subs"] = _clean_sids(g.get("subs") or [], manager)
+    g["updated_at"] = _now()
+    _save(data)
+    return g
+
+
 def update(gid: str, name: str | None = None, notify=None) -> dict | None:
     """이름·알림 플래그만 바꾼다(부분 갱신). 없으면 None."""
     data = _load()
