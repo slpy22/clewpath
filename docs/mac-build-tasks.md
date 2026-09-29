@@ -3,7 +3,17 @@
 > 이 문서는 Windows 측(주 개발)에서 맥 측 Claude 에게 전달하는 작업 지시서다.
 > 위에서부터 순서대로 실행하면 된다. 완료 후 결과를 사용자에게 보고할 것.
 
-## ★★★★★ 업데이트 5 (다음 배포 = 1.6(6) — 앱 안 QR 스캔 입구, 2026-09-29)
+## ★★★★★★ 업데이트 6 (2026-09-29 — 1.9 배포 확인, 버전 규칙 변경, Team ID 반영 완료)
+
+- 맥이 자체 버전업으로 **1.9** 를 TestFlight 에 올렸다(사장님 확인). 앞으로 **앱 버전의 정본은 맥**이다 — 저장소의
+  pbxproj 버전(1.6/6)은 무시하고, **업로드한 뒤 그 pbxproj 를 커밋·push** 해서 저장소가 실제 배포 버전을 따라오게 할 것.
+  Windows 측은 더 이상 pbxproj 버전을 고정 커밋하지 않는다.
+- Team ID `7789R34LHR` 은 서버에 반영됐다: `https://clewpath.pyongso.com/.well-known/apple-app-site-association` → 200.
+  Associated Domains(`applinks:clewpath.pyongso.com`)가 1.9 에 들어갔으면 카메라 앱 스캔이 ClewPath 로 열린다.
+  1.9 가 02:31(KST) 이전에 빌드·설치됐어도 무방하나, 폰에서 안 열리면 **앱 삭제 후 재설치**(iOS 가 설치 시점에 AASA 검증).
+- Podfile 의 CapacitorBarcodeScanner 반영 커밋(cf40dfe) 확인. 감사.
+
+## ★★★★★ 업데이트 5 (2026-09-29 — 앱 안 QR 스캔 입구) — 1.9 로 배포됨
 
 사장님 실기: 폰 카메라 앱으로 PC 의 QR 을 찍으면 Safari(웹 릴레이 앱)가 열려 **네이티브 앱에는 PC 를
 추가할 방법이 없었다**. 앱의 네이티브 스캐너는 첫 실행 오버레이에만 있었다 → 이번 커밋으로

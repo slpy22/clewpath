@@ -31,20 +31,21 @@
 - [x] `index.html`: 페어링 화면 `#p-scan`(앱이면 노출) + ⚙ PC 전환·관리에 `📷 QR 스캔으로 PC 추가`(앱이면 버튼, 웹은 기존 문구) → `appScanPair()`(취소 조용히, 오류는 브리지 문구 toast). 브리지 캡슐화 유지(앱 여부는 브리지 함수 유무로만)
 - [x] 테스트 `tests/pwa/app-scan.test.mjs` 5건 — **native-bridge.js 첫 헤드리스 부트**(Capacitor 플러그인 프록시 스텁): pairFromUrl 계약·오버레이 조건·웹/앱 입구. 하네스 `load({setup})` + `$('#id')` 가 등록 요소를 찾음. node 43건
 - [x] pbxproj 1.6(6) 고정 + `docs/mac-build-tasks.md` 업데이트 5(Podfile 에 CapacitorBarcodeScanner 확인 필수)
-- [ ] 맥: pull → bundle → cap sync ios → Podfile 커밋 → 시뮬레이터 체크 → TestFlight 1.6(6) **(맥 측 Claude)**
-- [ ] 사장님 실기: 앱 📷 로 두 번째 PC 추가 → PC 목록에 추가·기존 유지
+- [x] 맥: Podfile 에 CapacitorBarcodeScanner 반영 커밋(cf40dfe) + TestFlight **1.9** 배포(2026-09-29)
+- [ ] 사장님 실기: 앱 📷 로 두 번째 PC 추가 → PC 목록에 추가·기존 유지 (위 1-b 실기와 함께)
 
 ### Phase 1-b — Universal Links / App Links (같은 QR 을 카메라 앱으로 찍어도 앱이 열림, 2026-09-29 승격)
 - [x] 007 CP: `GET /.well-known/apple-app-site-association`(applinks+webcredentials, `TEAM.com.pyongso.clewpath`, paths `/relay/app`) · `assetlinks.json`(SHA-256 지문). 설정은 `control_plane/applinks.json`(공개값, env `SM_CP_APPLE_TEAM_ID`/`SM_CP_ANDROID_SHA256` 우선). **미설정이면 404**(잘못된 파일을 주면 OS 가 실패를 캐시). 테스트 3건
 - [x] nginx(호스트 `D:\docker\infra
 ginx\default.conf`): clewpath 블록에 `location ^~ /.well-known/` → CP. 재생성 없이 reload
 - [x] iOS: `App.entitlements`(`applinks:clewpath.pyongso.com`) + pbxproj `CODE_SIGN_ENTITLEMENTS` · Android: `autoVerify` https intent-filter(`/relay/app`). 앱 쪽 링크 처리는 기존 `appUrlOpen → handlePairingUrl`
-- [ ] **Apple Team ID**(사장님/맥 Xcode Signing 화면) → `applinks.json` 에 기입 → `docker restart util-session-cp` → `curl https://clewpath.pyongso.com/.well-known/apple-app-site-association` 200 확인
-- [ ] 맥: 1.6(6) 빌드에 Associated Domains 포함 확인(지시서 업데이트 5) → TestFlight 설치 후 카메라 앱으로 QR → ClewPath 앱이 열리는지. 함정: AASA 는 Apple CDN 캐시(최대 1일)·앱 설치 시점 검증 → 안 되면 앱 삭제·재설치
+- [x] **Apple Team ID** `7789R34LHR`(맥 보고, 2026-09-29) → `applinks.json` 기입(007 push) → CP restart → AASA **200** `appID 7789R34LHR.com.pyongso.clewpath` 확인. 맥 쪽은 `applinks:clewpath.pyongso.com` 을 Xcode 에 적용해 **1.9 로 TestFlight 배포**(맥이 자체 버전업 — 저장소 pbxproj 1.6(6) 은 더 이상 정본 아님)
+- [ ] 사장님 실기(TestFlight 1.9): ① 앱 ⚙ 설정 → PC 전환·관리 → 📷 로 PC 추가 ② 카메라 앱으로 같은 QR → ClewPath 앱이 열리는지. 함정: AASA 는 Apple CDN 캐시(최대 1일)·앱 설치 시점 검증 → 안 되면 앱 삭제·재설치. 1.9 가 Team ID 반영(02:31) **전에** 설치됐으면 재설치가 거의 확실히 필요
 - [ ] Android: Play 서명 키 SHA-256 을 `applinks.json` 에(배포 때)
 
 ### Phase 2 (고도화) — 대기
-- [ ] 저장소 `Podfile` 을 sync 결과와 동기화(현재 스캐너 pod 누락 상태로 커밋돼 있음)
+- [x] 저장소 `Podfile` 동기화 — 맥 cf40dfe
+- [ ] 앱 버전 정본을 맥으로: 맥이 업로드한 버전(1.9)을 pbxproj 에 커밋해 두도록 지시서에 규칙화(저장소 1.6(6) 은 stale)
 
 ## 진행중 기능: '다시 연결됨' 알림에 끊김 이력 (서버 007, 2026-09-28)
 
