@@ -62,7 +62,7 @@ class ProfileReq(BaseModel):
 from session_manager import (
     scanner, viewer, search, stats, lifecycle, exporter, importer, resume,
     webterm, webapi, webmonitor, auth, labels, policy, profiles, native_title,
-    owner2fa, devices, appconfig, config,
+    owner2fa, devices, appconfig, config, connector,
 )
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -99,8 +99,18 @@ def _client_host(scope_or_ws) -> str | None:
     return c[0] if c else None
 
 
+def _via_relay(scope_or_ws) -> bool:
+    """커넥터가 릴레이 요청을 프록시할 때 붙이는 X-ClewPath-Via 헤더(connector.VIA_HEADER)."""
+    h = getattr(scope_or_ws, "headers", None)
+    try:
+        return bool(h and h.get("x-clewpath-via"))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _is_local(scope_or_ws) -> bool:
-    return TRUST_LOCAL and (_client_host(scope_or_ws) in _LOOPBACK)
+    # 루프백이라도 커넥터 프록시 경유(폰이 보낸 요청)면 로컬이 아니다 — 0.9.8 핫픽스.
+    return TRUST_LOCAL and (_client_host(scope_or_ws) in _LOOPBACK) and not _via_relay(scope_or_ws)
 
 
 def _display_title(md: dict, rec: dict | None = None) -> str:
@@ -730,6 +740,7 @@ def create_app() -> FastAPI:
         tok = devices.rotate_token(device_id)
         if not tok:
             return JSONResponse({"error": "not_found_or_revoked"}, status_code=404)
+        connector.request_drop_device(device_id)   # 옛 자격의 열린 연결·스트림 즉시 종료
         name = next((d["name"] for d in devices.list_devices()
                      if d["id"] == device_id), "")
         from session_manager import cp_client
@@ -756,7 +767,9 @@ def create_app() -> FastAPI:
         if not _is_local(request):
             return JSONResponse({"error": "이 PC(로컬)에서만 변경할 수 있습니다."},
                                 status_code=403)
-        return {"revoked": devices.revoke(device_id), **devices.status()}
+        r = {"revoked": devices.revoke(device_id), **devices.status()}
+        connector.request_drop_device(device_id)
+        return r
 
     @app.post("/api/owner/devices/{device_id}/delete")
     def owner_devices_delete(device_id: str, request: Request):
@@ -769,7 +782,9 @@ def create_app() -> FastAPI:
         if cpub:
             from session_manager import cp_client
             cp_client.revoke_client_credential(cpub)
-        return {"deleted": devices.remove(device_id), **devices.status()}
+        r = {"deleted": devices.remove(device_id), **devices.status()}
+        connector.request_drop_device(device_id)   # 폐기는 다음 JWT 부터, 열린 연결은 여기서 끊는다
+        return r
 
     @app.post("/api/owner/devices/{device_id}/rename")
     def owner_devices_rename(device_id: str, request: Request,

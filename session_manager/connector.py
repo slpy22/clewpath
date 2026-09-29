@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import json
 import os
 import sys
@@ -81,6 +82,25 @@ def _priv_ok(params: dict) -> bool:
     if not owner2fa.required():
         return True   # 2FA 강제 off → 코드 없이 허용(사용자 선택)
     return owner2fa.verify_grace(params.get("grace")) or owner2fa.verify(params.get("otp"))
+
+
+# 원격(릴레이) 경유 프록시 요청임을 서버에 알리는 헤더. 서버 _is_local() 은 이 헤더가 있으면
+# 루프백이라도 '로컬 아님' 으로 본다 — 커넥터가 127.0.0.1 로 호출하는 바람에 페어링된 폰이
+# 로컬 전용 API(기기 등록·삭제·재발급, 2FA 설정, 스킬 설치, 업데이트 적용…)를 부를 수 있던
+# 구멍(2026-09-29 발견, Host 0.9.8 핫픽스). 아래 덴리스트는 2중 방어(서버까지 안 보냄).
+VIA_HEADER = "X-ClewPath-Via"
+_LOCAL_ONLY_API = re.compile(
+    r"^/api/(owner/(devices(/|$|\?)|2fa/(provision|toggle)|skills/[^/]+/install|trash/|update/apply)"
+    r"|sessions/[^/]+/terminal/start)")
+
+
+def _is_local_only_api(path: str, verb: str) -> bool:
+    """릴레이 경유로는 절대 호출될 수 없는 경로. 기기 목록(GET)도 포함 — 이름·접속 시각 누출 방지."""
+    if not _LOCAL_ONLY_API.match(path or ""):
+        return False
+    if path.startswith("/api/owner/devices"):
+        return True                      # 모든 동사
+    return verb == "POST"
 
 
 def _otp_error() -> str:
@@ -153,6 +173,19 @@ def relay_config_from_env() -> dict | None:
 
 # 실행 중인 커넥터(서버당 1개). 업데이트 적용(다른 스레드)이 bye 를 예약할 때 쓴다.
 CURRENT = None
+
+
+def request_drop_device(device_id: str, wait_s: float = 1.5) -> int:
+    """서버 스레드(기기 삭제/재발급 API)에서 그 기기의 릴레이 연결을 즉시 끊는다. 커넥터 없으면 0."""
+    c = CURRENT
+    loop = getattr(c, "loop", None) if c is not None else None
+    if c is None or loop is None:
+        return 0
+    try:
+        fut = asyncio.run_coroutine_threadsafe(c.drop_device(device_id), loop)
+        return int(fut.result(timeout=wait_s))
+    except Exception:  # noqa: BLE001
+        return 0
 
 
 def request_bye(reason: str, wait_s: float = 1.5) -> bool:
@@ -350,6 +383,9 @@ class Connector:
         if not path.startswith("/api/") or ".." in path:
             await self._res(rid, False, error="path_not_allowed")
             return
+        if _is_local_only_api(path, verb):
+            await self._res(rid, False, error="local_only")
+            return
         # 특권/파괴적 경로(터미널 종료 등)는 start 와 대칭으로 2FA 를 요구한다.
         if verb == "POST" and _is_privileged_api(path):
             if not _priv_ok(params):
@@ -358,10 +394,11 @@ class Connector:
         url = f"{self.local_base}{path}"
         query = params.get("query") or {}
         body = params.get("body")
+        via = {VIA_HEADER: "relay"}          # 서버가 로컬 전용 경로를 스스로 거부하게(2중 방어)
         if verb == "GET":
-            r = await self.http.get(url, params=query)
+            r = await self.http.get(url, params=query, headers=via)
         elif verb == "POST":
-            r = await self.http.post(url, params=query, json=body)
+            r = await self.http.post(url, params=query, json=body, headers=via)
         else:
             await self._res(rid, False, error=f"verb_not_allowed:{verb}")
             return
@@ -552,8 +589,41 @@ class Connector:
     async def _handle_stream_in(self, frame: dict) -> None:
         rid = frame.get("id")
         q = self.stream_in.get(rid)
-        if q is not None:
-            await q.put(frame.get("data"))
+        if q is None:
+            return
+        # 기기 인증 강제 중이면 스트림 입력도 살아 있는 인증에 묶는다 — 기기를 삭제/재발급해도
+        # 이미 열린 터미널 입력이 계속 들어가던 구멍(0.9.8). 폐기된 기기의 프레임은 버리고 파이프를 끊는다.
+        from session_manager import devices
+        if devices.enforced():
+            cid = self.req_cid.get(rid)
+            dev = self.authed.get(cid) if cid is not None else None
+            if not dev or not devices.is_active(dev["id"]):
+                task = self.streams.get(rid)
+                if task is not None:
+                    _log(f"[stream] 인증 없는 기기 입력 거부 rid={rid} → 파이프 해체")
+                    task.cancel()
+                return
+        await q.put(frame.get("data"))
+
+    async def drop_device(self, device_id: str) -> int:
+        """기기 삭제/재발급/폐기 직후: 그 기기의 모든 연결(cid)을 인증 해제하고 스트림을 끊는다.
+
+        CP 의 자격 폐기는 '다음 JWT 발급' 부터 막을 뿐, 이미 열린 릴레이 연결·터미널 스트림은
+        별개다(0.9.8). 돌려주는 값은 끊은 연결 수.
+        """
+        n = 0
+        for cid, dev in list(self.authed.items()):
+            if dev.get("id") != device_id:
+                continue
+            for rid, task in list(self.streams.items()):
+                if self.req_cid.get(rid) == cid:
+                    task.cancel()
+            self.authed.pop(cid, None)
+            self.enc_cids.discard(cid)
+            n += 1
+        if n:
+            _log(f"[devices] 기기 {device_id} 연결 {n}개 해제(스트림 종료)")
+        return n
 
     # ---- 프레임 라우팅 ----
     async def _on_frame(self, raw: str) -> None:
@@ -688,6 +758,13 @@ class Connector:
         except Exception:  # noqa: BLE001
             return False
 
+    def _on_connected(self) -> None:
+        """릴레이 (재)접속 직후: cid 는 전부 새로 발급되므로 인증·암호화·라우팅 상태를 비운다.
+        (옛 cid 의 authed 가 남아 '접속 중' 으로 잘못 보이거나 스트림 입력이 통과하던 문제, 0.9.8)"""
+        self.enc_cids.clear()
+        self.authed.clear()
+        self.req_cid.clear()
+
     # ---- 접속 + 재연결 루프 ----
     async def run(self) -> None:
         global CURRENT
@@ -715,7 +792,7 @@ class Connector:
                 async with connect(uri, max_size=None) as ws:
                     self.ws = ws
                     backoff = 1
-                    self.enc_cids.clear()   # 재접속 시 cid 는 전부 새로 발급된다
+                    self._on_connected()
                     _log(f"[connector] relay 연결됨 room={self.room} mode={mode} "
                          f"e2ee={'on' if self.e2ee_key else 'off'} -> 로컬 {self.local_base}")
                     async for raw in ws:
