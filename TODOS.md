@@ -21,6 +21,29 @@
 - [x] e2e 전체 통과. 테스트 11건(`test_workers_dispatch.py`), 전체 296 passed. 정리: e2e 그룹 ab7832fe 삭제, 워커 세션 휴지통
 - [x] 실사용 1회(2026-09-28 19:23, 사장님 설치 → 이 세션이 관리 세션으로 `/clewpath-workers`): `claude -p` 로 워커 생성($0.33) → 등록부 `.clewpath/workers.json`(gitignore) → start API `started` → **6초** 뒤 피어 `worker-test-50` → 관제 그룹 `85d91464` 저장 → SendMessage 일감 1(인벤토리) 답장 검증 → 의존 일감 2(pytest 7건) 답장·독립 재실행 통과. 스킬 절차 이탈 0. 관찰: 유휴 통지가 일감 2 발송 뒤에 도착(지연) → 스킬에 '답장을 믿고 통지는 참고' 명시 필요 / 등록부 콘솔 출력 cp949 깨짐(파일은 정상)
 
+## 진행중 기능: 페어링 UX 통일 — 대칭 페어링 모델 (Host 0.9.8 핫픽스 + 0.10.0 + 007 + 앱, 2026-09-29 기획)
+
+`/plan-ceo-review`(SELECTIVE EXPANSION, Codex 외부 시각) 산출: `docs/designs/pc-pairing-ux.md`(정본), 입력 인벤토리
+`docs/2026-09-29-pc-pairing-ux-plan.md`. 다음 게이트: `/plan-eng-review` → `/plan-design-review` → 구현.
+
+### Phase 0 — P1 보안 핫픽스 (선행, Host 0.9.8)
+- [ ] T1 커넥터 프록시에 `X-ClewPath-Via: relay` 헤더 + 로컬 전용 경로 덴리스트(`/api/owner/devices*`·`2fa*`·`skills*` … → 403 `local_only`), 서버 `_is_local` 은 그 헤더면 False — **Codex 발견: 페어링된 폰이 프록시로 기기 등록·삭제 가능(코드 확인)**
+- [ ] T2 기기 삭제/재발급/revoke 시 그 cid 스트림 전부 해체 + `_handle_stream_in` authed 검사 + 재접속 시 `authed` 초기화
+
+### Phase 1 (이번 사이클) — 설계 문서 §최종 범위
+- [ ] T3 007: `POST /client/revoke-self`, `GET /client/status`(agent JWT) + nginx `limit_req` `/cp/client/(token|revoke-self)` (**/deploy-request 의뢰**)
+- [ ] T4 Host: CP 상태 동기화(5분·📱 목록, (device,cpub) 대조·파일 잠금) → revoked 반영, `bye_device`, auth `name` 검증·기록, `pairing-audit.jsonl`, E-3 웹푸시(첫 auth·self-revoke), `notice` 송신, 재발급 = 새 발급 후 옛 폐기, 삭제 시 CP 실패면 revoked 로 남기고 재시도, 🩺 진단 한 줄
+- [ ] T5 PWA 폰: (room,cpub) 식별·새 cpub 스캔 시 옛 self-revoke, 3상태 큐 `sm_revoke_queue`(초기화가 안 지움), `unpairPc`(터미널 detach→해체→자격→revoke→전환/#pair)·`resetDevice`(revoke 먼저·진행 표시), notice/CP401 → ⛔ 해제됨 + [다시 페어링][지우기]·재발급 배지, `#pair` 1벌(상황 줄), `pairRow/pcList/deviceList`, 이름 자동(hostname·기기 보고), E-2 앱에서 열기(`clewpath://pair?relay=`·fragment 소거 전 생성), E-4 팝업 동기화·`#btn-pcs` 제거, 💤 90일, 하네스 테스트
+- [ ] T6 PWA PC 로컬: 📱 "페어링된 기기" — 이름 없는 QR 즉시, 페어링 해제/QR 다시 만들기/✎, 📵 폰에서 해제됨·💤
+- [ ] T7 앱 브리지: `#cb-pair` 폐기, `pairFromUrl` relay 파라미터, auth name(기기 모델), 맥 지시서
+- [ ] T8 격리 Host(5199)+CP 새 room e2e(필수) → 설계 문서·CHANGELOG → 0.9.8/0.10.0 릴리스 → 앱 TestFlight. 배포 순서 CP·nginx(의뢰) → Host → 앱
+
+### Phase 2 (고도화) — 대기
+- [ ] **E-1 양쪽 목록 상태 표시**(폰: PC 켜짐/꺼짐·마지막, PC: 기기 접속 중) — 왜: 열어보기 전에 상태를 앎. 이번엔 연기(Codex: '켜짐' 은 데이터가 보증 못 함). 설계 필수 항목: 릴레이→CP 즉시 상태 보고(seq, 알림 grace 와 분리), CP TTL·역전 방지, 폰 갱신 주기, 마지막 성공값+'확인 N분 전'·1시간 넘으면 숨김, Host `authed` 재접속 초기화(T2 선행). M→S
+- [ ] **E-6 데모 둘러보기**(PC 0대 빈 상태) — 스토어 제출 사이클(M4)에서, 화면 확정 뒤. 완전 목 데이터(`demoT`), Host/CP 호출 0(불가침). M→S
+- [ ] **X-1 6자리 코드 페어링**(PC 가 코드 표시, 폰은 입력, CP 60초 코드↔room 중개) — 카메라·링크·앱 무관. CP 임시 보관 = 무저장 예외 확장이라 C 와 함께. M→S
+- [ ] **C) CP 를 페어링 정본으로**(목록·이름·상태를 CP 에, 양쪽이 같은 API 렌더, 팀 공유 PC) — 외부 사용자 생긴 뒤. 로컬 전용 보안 설계 재검토 필요. L→M
+
 ## 진행중 기능: 모바일 앱 — 앱 안 QR 스캔으로 PC 추가 (앱 1.6(6), 2026-09-29)
 
 사장님 실기: 폰 카메라로 QR 을 찍으면 Safari(웹 릴레이)가 열려 네이티브 앱엔 PC 를 못 넣는다. 앱의 네이티브
