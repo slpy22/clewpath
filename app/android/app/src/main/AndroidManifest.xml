@@ -26,6 +26,15 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="clewpath" />
             </intent-filter>
+
+            <!-- App Links(2026-09-29): 페어링 QR 의 https 링크를 카메라 앱으로 찍어도 이 앱이 연다.
+                 검증 파일 /.well-known/assetlinks.json 은 CP 가 서빙(서명 키 SHA-256 은 Play 배포 때 채움) -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="clewpath.pyongso.com" android:pathPrefix="/relay/app" />
+            </intent-filter>
         </activity>
 
         <provider

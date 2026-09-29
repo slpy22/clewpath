@@ -34,8 +34,16 @@
 - [ ] 맥: pull → bundle → cap sync ios → Podfile 커밋 → 시뮬레이터 체크 → TestFlight 1.6(6) **(맥 측 Claude)**
 - [ ] 사장님 실기: 앱 📷 로 두 번째 PC 추가 → PC 목록에 추가·기존 유지
 
+### Phase 1-b — Universal Links / App Links (같은 QR 을 카메라 앱으로 찍어도 앱이 열림, 2026-09-29 승격)
+- [x] 007 CP: `GET /.well-known/apple-app-site-association`(applinks+webcredentials, `TEAM.com.pyongso.clewpath`, paths `/relay/app`) · `assetlinks.json`(SHA-256 지문). 설정은 `control_plane/applinks.json`(공개값, env `SM_CP_APPLE_TEAM_ID`/`SM_CP_ANDROID_SHA256` 우선). **미설정이면 404**(잘못된 파일을 주면 OS 가 실패를 캐시). 테스트 3건
+- [x] nginx(호스트 `D:\docker\infra
+ginx\default.conf`): clewpath 블록에 `location ^~ /.well-known/` → CP. 재생성 없이 reload
+- [x] iOS: `App.entitlements`(`applinks:clewpath.pyongso.com`) + pbxproj `CODE_SIGN_ENTITLEMENTS` · Android: `autoVerify` https intent-filter(`/relay/app`). 앱 쪽 링크 처리는 기존 `appUrlOpen → handlePairingUrl`
+- [ ] **Apple Team ID**(사장님/맥 Xcode Signing 화면) → `applinks.json` 에 기입 → `docker restart util-session-cp` → `curl https://clewpath.pyongso.com/.well-known/apple-app-site-association` 200 확인
+- [ ] 맥: 1.6(6) 빌드에 Associated Domains 포함 확인(지시서 업데이트 5) → TestFlight 설치 후 카메라 앱으로 QR → ClewPath 앱이 열리는지. 함정: AASA 는 Apple CDN 캐시(최대 1일)·앱 설치 시점 검증 → 안 되면 앱 삭제·재설치
+- [ ] Android: Play 서명 키 SHA-256 을 `applinks.json` 에(배포 때)
+
 ### Phase 2 (고도화) — 대기
-- [ ] iOS Universal Links / Android App Links: 카메라 앱 스캔만으로 네이티브 앱이 열리게 — 007 에 `/.well-known/apple-app-site-association`·`assetlinks.json` + entitlement(Apple 팀 ID) + 앱 빌드
 - [ ] 저장소 `Podfile` 을 sync 결과와 동기화(현재 스캐너 pod 누락 상태로 커밋돼 있음)
 
 ## 진행중 기능: '다시 연결됨' 알림에 끊김 이력 (서버 007, 2026-09-28)

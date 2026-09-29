@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Universal Links: 페어링 QR(https://clewpath.pyongso.com/relay/app#…)을 카메라 앱으로 찍어도 ClewPath 가 열린다.
+	     서버의 /.well-known/apple-app-site-association(CP applinks.json 의 Team ID)과 짝. -->
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>applinks:clewpath.pyongso.com</string>
+	</array>
+</dict>
+</plist>

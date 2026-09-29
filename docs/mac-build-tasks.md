@@ -28,6 +28,15 @@ grep -n CapacitorBarcodeScanner ios/App/Podfile           # ★ 반드시 1줄 �
 실기기(TestFlight 1.6(6) 설치 후, 사장님): PC 로컬 웹 → 📱 → ＋새 기기 추가 QR → 앱의 📷 버튼으로 스캔 →
 리로드 뒤 세션 목록 + 설정의 PC 목록에 추가돼 있어야 한다(기존 PC 유지).
 
+**같이 태우는 것 — Universal Links(카메라 앱으로 QR 을 찍어도 앱이 열리게)**: 저장소에
+`ios/App/App/App.entitlements`(`applinks:clewpath.pyongso.com`) + pbxproj `CODE_SIGN_ENTITLEMENTS` 를 커밋해 뒀다.
+- [ ] Xcode → App 타깃 → Signing & Capabilities 에 **Associated Domains: applinks:clewpath.pyongso.com** 이 보이는지
+      (안 보이면 + Capability 로 추가 — entitlements 파일과 같은 값)
+- [ ] 같은 화면의 **Team** 옆 10자리 **Team ID 를 사용자에게 보고**(예: `Team: 홍길동 (AB12CD34EF)`) — 서버 AASA 파일에 넣어야
+      카메라 스캔이 앱으로 연결된다. Team ID 가 서버에 들어가기 전엔 이 기능은 조용히 비활성(Safari 폴백)이고 나머지는 정상.
+- Archive 시 "Provisioning profile doesn't include the associated-domains entitlement" 가 나오면 Xcode 의
+  자동 서명이 프로필을 재생성하도록 Signing 의 Team 을 한 번 껐다 켠다.
+
 통과 시 Archive → Upload **1.6(6)**.
 
 ## ★★★★ 업데이트 4 (다음 배포 = 1.5(5), 버전은 저장소에 고정됨)
