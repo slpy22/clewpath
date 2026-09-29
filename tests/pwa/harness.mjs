@@ -74,6 +74,7 @@ export function makeSandbox() {
   Object.assign(document, {
     hidden: false, body: stubEl("body"), documentElement: stubEl("html"), head,
     getElementById: (id) => byId.get(id) ?? null,
+    querySelector: (s) => (typeof s === "string" && s.startsWith("#") && byId.get(s.slice(1))) || stubEl(),
     createElement: (tag) => stubEl(tag), createTextNode: (t) => ({ textContent: t, nodeType: 3 }),
     addEventListener() {}, removeEventListener() {}, cookie: "",
     _register: (id, el) => byId.set(id, el),
@@ -116,12 +117,14 @@ export function makeSandbox() {
 }
 
 // location 을 덮어쓰면 MODE 추론이 바뀐다(기본 /relay/app = relay, `{pathname:'/app'}` = local)
-export async function load({ hash = "", location = null, navigator = null } = {}) {
+// setup(sandbox): 부트 전에 전역(예: ClewBridge)·id 요소를 심는 훅
+export async function load({ hash = "", location = null, navigator = null, setup = null } = {}) {
   const html = readFileSync(INDEX, "utf-8");
   const js = extractScript(html);
   const sandbox = makeSandbox();
   if (location) Object.assign(sandbox.location, location);
   if (navigator) Object.assign(sandbox.navigator, navigator);   // 예: serviceWorker 스텁(알림 클릭 message 계약)
+  if (setup) setup(sandbox);
   sandbox.location.hash = hash;
   const ctx = vm.createContext(sandbox);
   vm.runInContext(js, ctx, { filename: "index.html" });

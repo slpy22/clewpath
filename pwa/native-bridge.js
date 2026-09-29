@@ -29,7 +29,9 @@
              speak: noop, setAudioSession: noop }, // ④
     syncRoomKey: noop,                             // ⑤
     showLocalPcOption: function () { return true; }, // 앱=false(폰에 로컬 서비스 없음)
-    scanQr: null                                   // 앱에서만 구현(네이티브 카메라)
+    scanQr: null,                                  // 앱에서만 구현(네이티브 카메라)
+    pairFromUrl: null,                             // 앱에서만: 스캔/붙여넣은 페어링 링크 → 저장·리로드(아래 handlePairingUrl)
+    pairErrorText: function () { return ''; }      // pairFromUrl 의 오류 코드 → 사람이 읽을 문구
   };
   window.ClewBridge = B;
   if (!isApp) return;
@@ -137,6 +139,10 @@
     need_https: 'PC 화면(127.0.0.1) 주소가 아니라, 📱 새 기기 추가가 만든 외부 접속(https) 링크를 붙여넣어 주세요',
     no_frag: '이 링크에는 페어링 정보(#room=…)가 없습니다 - 📱 새 기기 추가에서 새 링크를 만들어 주세요'
   };
+  // 첫 실행 오버레이 밖(페어링 화면·PC 관리)에서도 같은 경로로 PC 를 추가할 수 있게 공개(2026-09-29).
+  // 'ok' 면 리로드가 뒤따르고, 부트 파서가 pcsUpsert 로 목록에 '추가'한다(기존 PC 는 유지).
+  B.pairFromUrl = handlePairingUrl;
+  B.pairErrorText = function (code) { return PAIR_ERR[code] || PAIR_ERR.bad_url; };
   function pairingOverlay() {
     if (localStorage.getItem('sm_relay_ws')) return;
     var ov = document.createElement('div');

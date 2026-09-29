@@ -526,6 +526,7 @@
       <b>QR을 스캔</b>하거나, 거기 표시된 <b>페어링 링크를 붙여넣으세요.</b></p>
   </div>
   <div id="p-pcs"></div>
+  <button class="btn" id="p-scan" hidden>📷 QR 스캔으로 연결</button>
   <div id="p-linkbox">
     <label>페어링 링크</label>
     <input id="p-link" autocomplete="off" autocapitalize="off" spellcheck="false"
@@ -3456,8 +3457,28 @@ function showPcs(){
   });
   if(!list.length) wrap.appendChild(el('div','cwd','아직 페어링한 PC 가 없습니다.'));
   body.appendChild(wrap);
-  body.appendChild(el('div','cwd','다른 PC 를 추가하려면 그 PC 의 로컬 웹에서 📱 → ＋새 기기 추가 로 QR 을 만들어 스캔하세요.'));
+  if(appScanAvailable()){
+    // 앱: 첫 실행 오버레이에만 있던 네이티브 QR 스캔을 여기서도(PC 추가·재페어링). 카메라 앱으로 스캔하면
+    // 브라우저가 열려 버려 네이티브 앱에는 PC 를 못 넣던 문제(사장님 실기 2026-09-29).
+    const sc=el('button','btn','📷 QR 스캔으로 PC 추가'); sc.style.marginTop='10px';
+    sc.onclick=()=>{ closeModal(); appScanPair(); };
+    body.appendChild(sc);
+    body.appendChild(el('div','cwd','추가할 PC 의 로컬 웹(127.0.0.1:5100) → 📱 → ＋새 기기 추가 의 QR 을 비추세요.'));
+  } else {
+    body.appendChild(el('div','cwd','다른 PC 를 추가하려면 그 PC 의 로컬 웹에서 📱 → ＋새 기기 추가 로 QR 을 만들어 스캔하세요.'));
+  }
   openModal('🖧 내 PC', body);
+}
+// ---- 앱 전용: 네이티브 QR 스캔 → 페어링 링크 처리(브리지 캡슐화: 앱 여부는 브리지 함수 유무로만 안다) ----
+function appScanAvailable(){ const B=window.ClewBridge; return !!(B&&B.scanQr&&B.pairFromUrl); }
+async function appScanPair(){
+  if(!appScanAvailable()) return false;
+  const B=window.ClewBridge;
+  let v=''; try{ v=await B.scanQr(); }catch(e){ v=''; }
+  if(!v) return false;                                   // 취소/실패 — 조용히
+  const r=B.pairFromUrl(v);                              // 'ok' 면 리로드로 이어진다(부트 파서가 PC 추가)
+  if(r!=='ok') toast(B.pairErrorText(r)||'링크를 인식하지 못했습니다');
+  return r==='ok';
 }
 
 // ---- 첫 실행 안내: 등록 기기가 없으면 '폰 연결' 방법을 알려준다 ----
@@ -3849,6 +3870,8 @@ if(_pcexport){
     try{ history.replaceState(null,'',location.pathname); }catch(e){}   // hash 도 함께 지워진다
   }
   $('#p-room').value=room; $('#p-token').value=token;
+  // 앱이면 페어링 화면에도 네이티브 QR 스캔 버튼(재페어링·기기 자격 해제 뒤 재연결 경로)
+  if(appScanAvailable()){ const sb=$('#p-scan'); if(sb){ sb.hidden=false; sb.onclick=appScanPair; } }
   // 저장된 자격이 있으면 자동 접속(기기 자격 cs 또는 구 공유 토큰)
   const hasCs=!!(LS.getItem('sm_cs')&&LS.getItem('sm_cp'));
   renderPairPcs();                       // 저장된 PC 가 있으면 페어링 화면에서 바로 고를 수 있게

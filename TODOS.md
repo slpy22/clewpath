@@ -21,6 +21,23 @@
 - [x] e2e 전체 통과. 테스트 11건(`test_workers_dispatch.py`), 전체 296 passed. 정리: e2e 그룹 ab7832fe 삭제, 워커 세션 휴지통
 - [x] 실사용 1회(2026-09-28 19:23, 사장님 설치 → 이 세션이 관리 세션으로 `/clewpath-workers`): `claude -p` 로 워커 생성($0.33) → 등록부 `.clewpath/workers.json`(gitignore) → start API `started` → **6초** 뒤 피어 `worker-test-50` → 관제 그룹 `85d91464` 저장 → SendMessage 일감 1(인벤토리) 답장 검증 → 의존 일감 2(pytest 7건) 답장·독립 재실행 통과. 스킬 절차 이탈 0. 관찰: 유휴 통지가 일감 2 발송 뒤에 도착(지연) → 스킬에 '답장을 믿고 통지는 참고' 명시 필요 / 등록부 콘솔 출력 cp949 깨짐(파일은 정상)
 
+## 진행중 기능: 모바일 앱 — 앱 안 QR 스캔으로 PC 추가 (앱 1.6(6), 2026-09-29)
+
+사장님 실기: 폰 카메라로 QR 을 찍으면 Safari(웹 릴레이)가 열려 네이티브 앱엔 PC 를 못 넣는다. 앱의 네이티브
+스캐너는 첫 실행 오버레이에만 있었다. Universal Links(카메라 스캔만으로 앱 열기)는 Phase 2.
+
+### Phase 1 (이번 사이클) — 코드 완료, 맥 빌드 대기
+- [x] `native-bridge.js`: `pairFromUrl`(=handlePairingUrl: https 만·릴레이 ws 유도·fragment→해시→리로드→부트 파서 `pcsUpsert` 로 목록에 추가)·`pairErrorText` 공개. 웹 기본형은 null/''
+- [x] `index.html`: 페어링 화면 `#p-scan`(앱이면 노출) + ⚙ PC 전환·관리에 `📷 QR 스캔으로 PC 추가`(앱이면 버튼, 웹은 기존 문구) → `appScanPair()`(취소 조용히, 오류는 브리지 문구 toast). 브리지 캡슐화 유지(앱 여부는 브리지 함수 유무로만)
+- [x] 테스트 `tests/pwa/app-scan.test.mjs` 5건 — **native-bridge.js 첫 헤드리스 부트**(Capacitor 플러그인 프록시 스텁): pairFromUrl 계약·오버레이 조건·웹/앱 입구. 하네스 `load({setup})` + `$('#id')` 가 등록 요소를 찾음. node 43건
+- [x] pbxproj 1.6(6) 고정 + `docs/mac-build-tasks.md` 업데이트 5(Podfile 에 CapacitorBarcodeScanner 확인 필수)
+- [ ] 맥: pull → bundle → cap sync ios → Podfile 커밋 → 시뮬레이터 체크 → TestFlight 1.6(6) **(맥 측 Claude)**
+- [ ] 사장님 실기: 앱 📷 로 두 번째 PC 추가 → PC 목록에 추가·기존 유지
+
+### Phase 2 (고도화) — 대기
+- [ ] iOS Universal Links / Android App Links: 카메라 앱 스캔만으로 네이티브 앱이 열리게 — 007 에 `/.well-known/apple-app-site-association`·`assetlinks.json` + entitlement(Apple 팀 ID) + 앱 빌드
+- [ ] 저장소 `Podfile` 을 sync 결과와 동기화(현재 스캐너 pod 누락 상태로 커밋돼 있음)
+
 ## 진행중 기능: '다시 연결됨' 알림에 끊김 이력 (서버 007, 2026-09-28)
 
 사장님 실기 ①: down/up 이 같은 tag 라 복구 알림이 '연결 끊김'을 조용히 대체 → 끊김을 못 본 사람은 무슨 일이

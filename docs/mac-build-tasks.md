@@ -3,6 +3,33 @@
 > 이 문서는 Windows 측(주 개발)에서 맥 측 Claude 에게 전달하는 작업 지시서다.
 > 위에서부터 순서대로 실행하면 된다. 완료 후 결과를 사용자에게 보고할 것.
 
+## ★★★★★ 업데이트 5 (다음 배포 = 1.6(6) — 앱 안 QR 스캔 입구, 2026-09-29)
+
+사장님 실기: 폰 카메라 앱으로 PC 의 QR 을 찍으면 Safari(웹 릴레이 앱)가 열려 **네이티브 앱에는 PC 를
+추가할 방법이 없었다**. 앱의 네이티브 스캐너는 첫 실행 오버레이에만 있었다 → 이번 커밋으로
+**페어링 화면(`📷 QR 스캔으로 연결`)과 ⚙ 설정 → PC 전환·관리(`📷 QR 스캔으로 PC 추가`)** 에도 입구를 냈다
+(브리지 `pairFromUrl` 공개, 웹 화면은 무변경). pbxproj 는 **1.6 / 6** 으로 고정 커밋됨 — Xcode 에서 버전을 손대지 말 것.
+
+```bash
+git checkout -- ios/App/App.xcodeproj/project.pbxproj   # 맥 로컬의 버전 수정 폐기
+git pull                                                 # feat/app-qr-entry 병합 커밋 이후
+cd app && npm install && npm run bundle && npx cap sync ios
+grep -n CapacitorBarcodeScanner ios/App/Podfile           # ★ 반드시 1줄 이상 나와야 함(없으면 스캔 버튼이 무반응)
+```
+
+`Podfile` 에 `pod 'CapacitorBarcodeScanner'` 가 생겼는지 확인하고(저장소의 Podfile 은 sync 이전 상태라
+없다 — sync 가 넣는다), 생긴 Podfile 은 **커밋해서 push** 해 달라. `Info.plist` 의 `NSCameraUsageDescription` 은 이미 있다.
+
+시뮬레이터 확인(카메라가 없어 스캔 자체는 실기기에서):
+- [ ] 페어링 화면(연결 안 된 상태 또는 설정 → 연결 해제 뒤)에 **📷 QR 스캔으로 연결** 버튼이 링크 입력창 위에 있다
+- [ ] ⚙ 설정 → PC 전환·관리 모달 하단에 **📷 QR 스캔으로 PC 추가** 버튼 + "…QR 을 비추세요" 문구
+- [ ] 버튼을 누르면 스캐너 화면이 뜨려다 카메라 없음으로 닫힘(오류 없이 조용히) — 앱이 죽지 않아야 함
+
+실기기(TestFlight 1.6(6) 설치 후, 사장님): PC 로컬 웹 → 📱 → ＋새 기기 추가 QR → 앱의 📷 버튼으로 스캔 →
+리로드 뒤 세션 목록 + 설정의 PC 목록에 추가돼 있어야 한다(기존 PC 유지).
+
+통과 시 Archive → Upload **1.6(6)**.
+
 ## ★★★★ 업데이트 4 (다음 배포 = 1.5(5), 버전은 저장소에 고정됨)
 
 다음 TestFlight 배포는 **1.5(5)** 로 확정(사장님 결정). pbxproj 에
