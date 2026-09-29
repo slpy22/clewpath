@@ -21,6 +21,18 @@
 - [x] e2e 전체 통과. 테스트 11건(`test_workers_dispatch.py`), 전체 296 passed. 정리: e2e 그룹 ab7832fe 삭제, 워커 세션 휴지통
 - [x] 실사용 1회(2026-09-28 19:23, 사장님 설치 → 이 세션이 관리 세션으로 `/clewpath-workers`): `claude -p` 로 워커 생성($0.33) → 등록부 `.clewpath/workers.json`(gitignore) → start API `started` → **6초** 뒤 피어 `worker-test-50` → 관제 그룹 `85d91464` 저장 → SendMessage 일감 1(인벤토리) 답장 검증 → 의존 일감 2(pytest 7건) 답장·독립 재실행 통과. 스킬 절차 이탈 0. 관찰: 유휴 통지가 일감 2 발송 뒤에 도착(지연) → 스킬에 '답장을 믿고 통지는 참고' 명시 필요 / 등록부 콘솔 출력 cp949 깨짐(파일은 정상)
 
+## 참고(완료): 이어받기(continued-in) 대응 (v0.9.9, 2026-09-29)
+
+타 PC 실사고 분석(사장님 전달) 검증: ①③④ 사실, ⑤ 부분 사실, ② "재개 시 이어받은 세션을 데몬으로 띄우고 앞 프로세스 종료" 는
+이 PC(CLI 2.1.284) 헤드리스 실측에서 **재현 안 됨**(옛 id 그대로 재개됨 = 두 갈래는 맞음). 한 번의 옛 줄 재개가 `total_cost_usd 98.78` 로 찍힘(누적치 여부 불명, 비용 주의).
+- [x] ① 스캐너 `continued-in` 파싱 → `SessionMeta.continued_in`, 목록 API 노출, PWA `⏩ 이어받음` 칩 + dim, 상세 카드 한 줄
+- [x] ② `scanner.latest_session_id()`(체인·순환·누락 파일 방어) → `webterm._spawn`·`webapi.run_resume_api` 가 옛 줄이면 `continued` 로 거부(포크는 통과), PWA 는 열기/재개를 이어받은 세션으로 보냄(`continuedTarget`)
+- [x] ③ `lifecycle.delete_session` 살아 있는 세션(우리 PTY 또는 claude 레지스트리) → `session_live`, API 409, PWA 안내. 설치본 실측: 이 세션 삭제 시도 409
+- [x] ④ `monwatch` 가 manager 파일의 `continued-in` 을 보면 `mongroups.set_manager` 로 갱신 + 새 파일 tail
+- [x] ⑤ 목록 `🏷 agent_name` 칩(제목과 다를 때). 파생 이름 충돌 자체는 claude 규칙이라 스킬은 UUID 기준(기존)
+- [x] 테스트 9(`test_continued_in.py`) + 하네스 1 → 361 passed. 0.9.9 게시·적용. ⚠ 이어받은 파일이 없는 옛 줄(다른 PC 에서 이어짐)은 여전히 재개 허용(설계: 마지막 확인 id) — 실측에서 d56d9dca 가 그 케이스
+- [ ] 후속: 하위(subs) 세션의 continued-in 추적, 그쪽 PC 의 `claude --version`·agents 근거 확보 후 ② 데몬 주장 재검토
+
 ## 진행중 기능: 페어링 UX 통일 — 대칭 페어링 모델 (Host 0.9.8 핫픽스 + 0.10.0 + 007 + 앱, 2026-09-29 기획)
 
 `/plan-ceo-review`(SELECTIVE EXPANSION, Codex 외부 시각) 산출: `docs/designs/pc-pairing-ux.md`(정본), 입력 인벤토리
