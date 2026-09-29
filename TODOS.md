@@ -37,25 +37,31 @@
 ## 진행중 기능: 페어링 UX 통일 — 대칭 페어링 모델 (Host 0.9.8 핫픽스 + 0.10.0 + 007 + 앱, 2026-09-29 기획)
 
 `/plan-ceo-review`(SELECTIVE EXPANSION, Codex 외부 시각) 산출: `docs/designs/pc-pairing-ux.md`(정본), 입력 인벤토리
-`docs/2026-09-29-pc-pairing-ux-plan.md`. 다음 게이트: `/plan-eng-review` → `/plan-design-review` → 구현.
+`docs/2026-09-29-pc-pairing-ux-plan.md`. `/plan-eng-review` 완료(2026-09-30, Codex 7건 수용) → 설계 문서 §엔지니어링 리뷰에
+**2단계 릴리스(0.10.0 UI/Host 무서버 → 0.11.0 self-revoke·동기화·CP)** + 아키텍처 규칙 13조 + 작업 T1~T15. 다음 게이트: `/plan-design-review` → 구현.
+아래 T3~T8 은 eng 리뷰의 T1~T15 로 대체(설계 문서 §Implementation Tasks 가 정본).
 
 ### Phase 0 — P1 보안 핫픽스 (선행, Host 0.9.8)
 - [x] T1 (0.9.8, 2026-09-29) 커넥터 프록시 `X-ClewPath-Via: relay` 헤더 + 덴리스트(`/api/owner/devices*` 전 동사, `2fa/(provision|toggle)`·`skills/*/install`·`trash/*`·`update/apply`·`sessions/*/terminal/start` POST → `local_only`), 서버 `_is_local` 은 헤더면 False. 설치본 실측: via-relay POST 403 / 로컬 200 / `2fa/status` GET 200 유지. 테스트 25건(`test_connector_local_only.py`)
 - [x] T2 (0.9.8) `connector.drop_device` + `request_drop_device`(서버 스레드에서, delete/reissue/revoke 핸들러가 호출) → 그 기기 cid 의 스트림 cancel·authed·enc_cids 정리 / `_handle_stream_in` 은 enforced 면 살아 있는 인증(`devices.is_active`)만 통과, 아니면 파이프 해체 / `_on_connected()` 가 authed·enc_cids·req_cid 초기화
 
-### Phase 1 (이번 사이클) — 설계 문서 §최종 범위
-- [ ] T3 007: `POST /client/revoke-self`, `GET /client/status`(agent JWT) + nginx `limit_req` `/cp/client/(token|revoke-self)` (**/deploy-request 의뢰**)
-- [ ] T4 Host: CP 상태 동기화(5분·📱 목록, (device,cpub) 대조·파일 잠금) → revoked 반영, `bye_device`, auth `name` 검증·기록, `pairing-audit.jsonl`, E-3 웹푸시(첫 auth·self-revoke), `notice` 송신, 재발급 = 새 발급 후 옛 폐기, 삭제 시 CP 실패면 revoked 로 남기고 재시도, 🩺 진단 한 줄
-- [ ] T5 PWA 폰: (room,cpub) 식별·새 cpub 스캔 시 옛 self-revoke, 3상태 큐 `sm_revoke_queue`(초기화가 안 지움), `unpairPc`(터미널 detach→해체→자격→revoke→전환/#pair)·`resetDevice`(revoke 먼저·진행 표시), notice/CP401 → ⛔ 해제됨 + [다시 페어링][지우기]·재발급 배지, `#pair` 1벌(상황 줄), `pairRow/pcList/deviceList`, 이름 자동(hostname·기기 보고), E-2 앱에서 열기(`clewpath://pair?relay=`·fragment 소거 전 생성), E-4 팝업 동기화·`#btn-pcs` 제거, 💤 90일, 하네스 테스트
-- [ ] T6 PWA PC 로컬: 📱 "페어링된 기기" — 이름 없는 QR 즉시, 페어링 해제/QR 다시 만들기/✎, 📵 폰에서 해제됨·💤
-- [ ] T7 앱 브리지: `#cb-pair` 폐기, `pairFromUrl` relay 파라미터, auth name(기기 모델), 맥 지시서
-- [ ] T8 격리 Host(5199)+CP 새 room e2e(필수) → 설계 문서·CHANGELOG → 0.9.8/0.10.0 릴리스 → 앱 TestFlight. 배포 순서 CP·nginx(의뢰) → Host → 앱
+### Phase 1-a — Host 0.10.0 (UI·용어·Host 내부 준비, 007 무변) — eng T1~T7
+- [ ] T1 devices `_mutate`+RLock·`clean_name` / T2 `Connector._auth()`+폰 이름 보고 / T3 재발급 재정렬(issue→revoke)·CP 설정 시 폴백 금지·구형 배지
+- [ ] T4 `connect()` auth 결과 / T5 `#pair` 1벌·용어·'PC 에서도 삭제' 문구·공용 함수·`sm_pcs_relay` 전부 삭제·pv 저장 / T6 브리지 `?relay=`+E-2 버튼+`persistSync`(다음 TestFlight) / T7 007 `test_cp_client_credentials.py`(revoke 4건, 배포 없음)
+- [ ] 회귀 테스트 5건(잠금·notice 순서·재정렬·브리지·로컬 select) → release.ps1 0.10.0
+
+### Phase 1-b — Host 0.11.0 + 007 (self-revoke·devsync·CP) — eng T8~T15
+- [ ] T8 007 `/client/status`(일괄·소유권)·`/client/revoke-self` + nginx limit_req (**/deploy-request 의뢰, 먼저**)
+- [ ] T9 devsync 스레드(기동+60s·5분·Event·점검중 건너뜀·잠금 밖·cp_pending·pending_cpub·meta.cp_synced)·📱 즉시 응답·`bye_device` / T10 `drop_device(notice=)` wait_for+finally·불명=pending·PROTOCOL_VERSION↑
+- [ ] T11 폰 큐 `{cp,public_id,secret}`·persistSync 순서·B-7 성공 후 폐기·pv 게이팅·⛔/배지 / T12 `jsonl_log` 회전+pairing-audit+🩺+E-3 / T13 💤 90일 / T14 `tests/e2e` `-m e2e` 게이트 / T15 앱 오버레이 폐기·기기 모델 이름 → TestFlight
 
 ### Phase 2 (고도화) — 대기
 - [ ] **E-1 양쪽 목록 상태 표시**(폰: PC 켜짐/꺼짐·마지막, PC: 기기 접속 중) — 왜: 열어보기 전에 상태를 앎. 이번엔 연기(Codex: '켜짐' 은 데이터가 보증 못 함). 설계 필수 항목: 릴레이→CP 즉시 상태 보고(seq, 알림 grace 와 분리), CP TTL·역전 방지, 폰 갱신 주기, 마지막 성공값+'확인 N분 전'·1시간 넘으면 숨김, Host `authed` 재접속 초기화(T2 선행). M→S
 - [ ] **E-6 데모 둘러보기**(PC 0대 빈 상태) — 스토어 제출 사이클(M4)에서, 화면 확정 뒤. 완전 목 데이터(`demoT`), Host/CP 호출 0(불가침). M→S
 - [ ] **X-1 6자리 코드 페어링**(PC 가 코드 표시, 폰은 입력, CP 60초 코드↔room 중개) — 카메라·링크·앱 무관. CP 임시 보관 = 무저장 예외 확장이라 C 와 함께. M→S
 - [ ] **C) CP 를 페어링 정본으로**(목록·이름·상태를 CP 에, 양쪽이 같은 API 렌더, 팀 공유 PC) — 외부 사용자 생긴 뒤. 로컬 전용 보안 설계 재검토 필요. L→M
+- [ ] **`policy.usage_summary` 회전 파일 이어 읽기**(eng E-D20) — 왜: T12 로 `api_audit.jsonl` 이 8MB 에서 `.1` 로 회전하면 회전 직후 '최근 n건' 목록이 짧아진다(오늘 한도는 별도 usage 파일이라 무영향). 무엇: `.1` 이 있으면 이어 읽어 recent_n 을 채운다(10줄). 시작점: `session_manager/policy.py:167`. 의존: T12. S
+- [ ] **iOS Safari(홈 화면 미설치) ITP 7일 저장소 삭제 안내**(eng E-D21) — 왜: 웹 탭은 localStorage 뿐이라 7일 미사용이면 폐기 큐·`sm_pcs` 가 통째 사라져 유령 cpub(E-5 90일)·'페어링이 저절로 사라짐' 이 된다. 무엇: 페어링 완료 화면/설정에 `navigator.standalone` 아니면 '홈 화면에 추가하면 알림과 페어링이 보존됩니다' 한 줄(푸시 안내와 같은 자리) + docs 에 제약 기록. 문구·위치는 /plan-design-review 에서. 의존: 없음(T5 B-2 화면 작업 때 후보). S
 
 ## 진행중 기능: 모바일 앱 — 앱 안 QR 스캔으로 PC 추가 (앱 1.6(6), 2026-09-29)
 

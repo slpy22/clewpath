@@ -80,3 +80,127 @@ paired ──(notice device_reissued)──▶ reissued(배지, 항목 유지) �
 
 ## 결정 기록
 D1 B / D2 SELECTIVE / D3.1~6 전부 담기 → 10-1 로 E-6 M4 이동, T4 로 E-1 연기 / 0E-1 큐 / 0E-2 해제됨 남김 / 0E-3 이름 보고 / 0E-4 CP 조회 / 1-1 bye_device+5분 / 1-2 (E-1 연기로 보류) / 1-3 이름 검증 / 2-1 E-5 로 충분 / 2-2 마지막값+시각(E-1 때) / 3-1 nginx limit / 3-6 감사 로그 / 4-2 해제 순서 / 4-7 초기화 순서 / 5-1 공용 행 / 6-1 e2e 게이트 / 9-1 순서 / T1~T4 Codex 수용
+
+---
+
+## 엔지니어링 리뷰 (/plan-eng-review 2026-09-29~30, Codex 외부 시각 반영)
+
+### 릴리스 2단계 (E-D1)
+| 단계 | 내용 | 서버(007) |
+|---|---|---|
+| **0.10.0** | UI·용어(B-2, B-3, B-6, B-9)·이름 자동(B-1)·E-2·E-4 + Host 내부 준비(devices 잠금, clean_name, `_auth()`, 재발급 재정렬, CP 설정 시 폴백 금지, `connect()` auth 결과) + 브리지(`?relay=`, persistSync) | **무변** (007 은 테스트 파일만) |
+| **0.11.0** | self-revoke(B-4)·notice(B-5)·(room,cpub)(B-7)·CP 동기화·감사(B-10)·E-3·E-5 + CP `/client/status`·`/client/revoke-self` + nginx limit_req + e2e 게이트 | 변경 (/deploy-request) |
+
+0.10.0 기간 폰 '이 PC 페어링 해제' 는 로컬 제거뿐 → 확인창에 **'이 폰에서만 제거됩니다 — PC 📱 기기 목록에서도 삭제하세요'** 를 항상 보인다(E-D4). 0.11.0 에서는 이 줄이 **구 Host(pv < 0.11.0)·공유토큰 항목**에만 남는다(E-D17, B-8).
+
+### 아키텍처 규칙 (구현 시 불변)
+1. **등록부 쓰기는 `devices._mutate(fn)` 만** — 모듈 RLock, 읽기-수정-쓰기 원자화. `touch/add/rename/rotate/revoke/remove/set_client_public_id` 전부 (E-D3). 네트워크 호출은 잠금 **밖** (E-D14).
+2. **CP 호출의 실패·타임아웃 = 결과 불명** (`cp_client` 는 둘을 False 로 합친다). 폐기는 등록부 행 `cp_pending:["revoke:<cpub>"]` 에 남기고 devsync 가 `/client/status` 로 확인 후 재폐기·정리. 재발급은 새 cpub 을 `pending_cpub` 로 **먼저 기록**하고 성공 후 확정, 기동 시 남은 pending_cpub 은 폐기 대상 (E-D7, E-D15).
+3. **재발급 순서**: issue 새 cpub → 성공 → revoke 옛 cpub(불명이면 pending) → 토큰 회전. issue 실패 = 503, 옛 자격·토큰 유지. **CP 가 설정된 환경에서 발급 실패는 오류**(공유토큰 폴백은 CP 미설정 구성에서만). 기존 cpub 없는 행은 📱 목록에 '공유 자격(구형) — QR 다시 만들기 권장' 배지 (E-D19).
+4. **notice → 스트림 해체 순서**: `drop_device(device_id, notice=kind)` 가 그 기기 cid 들에 notice 프레임을 `wait_for(1.0)` 로 보내고(실패는 로그) **finally 에서 무조건 해체**. `request_drop_device` 는 예외를 로그로 남긴다. 같은 WS 라 순서는 보장되나 수신은 보장 안 함 → 폰은 auth_invalid/401 폴백을 항상 가진다 (E-D5, E-D15).
+5. **devsync 스레드** (monwatch 패턴): 기동 +60초 첫 실행, 5분 주기, `Event` 로 깨우면 즉시(최소 간격 30초), `maintenance.flag`/업데이트 중 건너뜀. CP `POST /client/status {public_ids}` 1회(≤200) → 응답에 **없는** cpub 은 건드리지 않음(내 것 아님/없음 구별 불가) → `(device_id,cpub)` 재대조 후 `_mutate` 1회 반영 → `meta.cp_synced` 기록. 📱 목록 API 는 등록부만 읽어 즉시 응답 + Event set (E-D6, E-D13, E-D14).
+6. **CP `/client/status`·`/client/revoke-self`**: revoke 와 같은 connector 인증·소유권 필터(`cc.connector_id`), 남의 cpub 은 응답에서 제외, revoke-self 는 (public_id, secret) 검증·재폐기 멱등, nginx limit_req 에 `status` 도 포함 (E-D6).
+7. **폰 `connect()` 는 `auth:{ok,error}` 를 resolve 값에 싣는다**(reject 안 함, onauth 경로 유지). 페어링 경로는 auth.ok 일 때만 저장·진입(공유토큰 경로는 auth 생략). **B-7 은 새 자격 auth 성공 → 교체 저장 → 옛 cpub 큐 폐기**, 같은 cpub 재스캔은 폐기 없음 (E-D16).
+8. **폐기 큐 항목 = `{cp, public_id, secret, room, ts}`** — 플러시는 항목의 `cp` 로만(현재 cpBase 와 달라도). 앱은 `persistSync` 로 큐를 **먼저** 영속화한 뒤 자격 삭제·리로드, 복원은 sm_pcs 유무와 무관하게 큐 병합 (E-D18).
+9. **구 Host 게이팅**: PC 항목에 마지막 auth `pv` 저장. pv ≥ 0.11.0 이면 self-revoke+`bye_device` 후 '해제됨', 미만이면 self-revoke 는 하되 'CP 폐기됨(PC 미반영)' + E-D4 문구. 구 Host 는 모르는 type 을 조용히 버린다(`connector.py:659`) (E-D17).
+10. **이름 정규화는 `devices.clean_name(raw, fallback)` 하나**(strip·제어문자·연속공백·40자) — add/rename/폰 보고/`appconfig.machine_name()`. 커넥터 auth 는 `Connector._auth()` 메서드 (E-D9).
+11. **감사 로그는 공용 `jsonl_log.append(path, rec, max_bytes)`**(잠금 + `.1` 1세대 회전) — `policy.audit`(8MB)·`pairing-audit`. 페어링 사건은 authed 에 없던 기기의 **첫 auth 만**. 🩺 진단은 등록부 `meta` 만 읽는다 (E-D10).
+12. **E-2 브리지**: `handlePairingUrl` 이 `clewpath://pair?relay=<host>#<frag>` 의 relay 를 `wss://<host>/relay/ws` 로 저장. 같은 도메인 Universal Link 는 iOS 가 앱을 열지 않으므로 커스텀 스킴이 맞다. 앱 1.9 는 실패 → 웹 버튼 문구에 '최신 앱 필요' (E-D2).
+13. **E-4 는 `sm_pcs_relay` 저장소·`relayPcs*`·`syncRelayPcs`·`onRelayPcsMessage`·`?pcexport`·`'relay:'` 옵션 전부 삭제** + 부트 시 `LS.removeItem('sm_pcs_relay')` (E-D8).
+
+### 검증 기준 보강
+- **회귀 테스트(필수, 질문 없이)**: `_mutate` 동시 touch/revoke 무유실 · `drop_device` 프레임 순서(notice→해체, send 예외에도 해체) · 재발급 재정렬(CP 실패 시 옛 자격 유지) · 브리지 `?relay=` + 기존 https 경로 무변 · 로컬 헤더 select 옵션 = localhost 만.
+- **e2e 게이트(E-D11)**: `tests/e2e/test_pairing_flow.py` `@pytest.mark.e2e` — `SM_E2E_CP_URL`+어드민 토큰 env 있을 때만, CP 임시 room(`e2e-` 접두) 생성→흐름 전체→finally 정리. 커넥터·폰 역할은 인프로세스. `release.ps1` 게이트에 `-m e2e` 단계.
+- **007**: `tests/test_cp_client_credentials.py` — 0.10.0 사이클에 기존 revoke 4건(성공·소유권 불일치·이미 폐기·미인증), 0.11.0 에 status·revoke-self 확장 (E-D12).
+- 테스트 계획 산출물: `~/.gstack/projects/006_session_manager/slpy22-main-eng-review-test-plan-20260929-192949.md` (/qa 입력).
+
+### 실패 모드 (새 코드경로별: 테스트 / 처리 / 사용자 가시성)
+| 경로 | 실패 | 테스트 | 처리 | 가시성 |
+|---|---|---|---|---|
+| devsync CP 조회 | 타임아웃·5xx | 느린 CP 스텁 | 잠금 밖, 다음 주기 | 🩺 'CP 동기화 N분 전' |
+| 재발급 issue | CP 다운 | 스텁 None | 503, 옛 자격 유지 | 오류 문구 |
+| 재발급/삭제 revoke | 불명 | 스텁 예외 | cp_pending 재시도 | 📱 '폐기 대기' 회색 행 |
+| notice 전송 | send 예외 | 스텁 raise | finally 해체 | 폰은 auth_invalid 폴백 ⛔ |
+| 폰 큐 플러시 | 401/네트워크 | 하네스 fakeFetch | 401=완료, 네트워크=유지 | PC 항목 '폐기 대기' |
+| 폰 큐 영속화(앱) | Prefs 실패 | 하네스 Prefs 스텁 reject | 자격 삭제 중단 + 문구 | '해제 실패 — 다시 시도' |
+| B-7 재스캔 | 새 자격 auth 실패 | 하네스 | 아무것도 안 바꿈 | 페어링 화면 문구 |
+| 구 Host self-revoke | bye_device 무시 | 하네스 pv 분기 | pv 게이팅 | 'CP 폐기됨(PC 미반영)' + 삭제 안내 |
+| 감사 로그 | 디스크 가득 | 예외 스텁 | 로그 실패는 무시(기능 무영향) | 없음(무해) |
+| E-2 버튼 | fragment 이미 소거 | 하네스 | 소거 전 보관 | 버튼 비활성 대신 안내 |
+
+**critical gap: 0건** (모든 실패 모드에 테스트+처리+가시성이 있다). 의도된 한계: 0.10.0 기간 폰 해제는 로컬 제거뿐(E-D4 문구로 고지), 오프라인 폰은 사유(해제/재발급)를 모른다(플랜 B-5 그대로).
+
+### NOT in scope (검토 후 제외)
+- E-1 양쪽 목록 상태(켜짐/접속 중) — 다음 사이클(CEO T4/2-2), 데이터가 '켜짐' 을 보증 못 함.
+- E-6 데모 둘러보기 — M4 스토어 제출 사이클.
+- X-1 6자리 코드 페어링, C) CP 정본화 — TODOS.
+- 릴레이 코드 변경 — notice/bye_device 는 기존 cid 라우팅을 탄다(변경 0).
+- 다중 CP(서버) 지원 — 큐의 `cp` 필드는 혼선 방지용일 뿐, 단일 서버 운영.
+- `connect()` reject 시맨틱 전면 개편 — auth 필드 추가로 충분, 기존 onauth 경로 유지.
+- `policy.usage_summary` 회전 파일 이어 읽기 — TODOS(E-D20).
+- iOS Safari ITP 7일 저장소 삭제 안내 — TODOS(E-D21), design-review 에서 자리 결정.
+
+### What already exists (재사용)
+| 하위 문제 | 기존 코드 | 플랜 처리 |
+|---|---|---|
+| 기기 스트림 해체·재접속 초기화 | `connector.drop_device`/`request_drop_device`/`_on_connected` (0.9.8) | 재사용, notice 인자만 추가 |
+| CP 자격 발급·폐기·소유권 검사 | `store.issue/verify/revoke_client_credential`, `cp_client.*` | 재사용, status/revoke-self 는 같은 규칙 |
+| 주기 스레드 패턴 | `monwatch.start` | devsync 가 같은 패턴 |
+| 감사 append + 잠금 | `policy.audit` | 공용 헬퍼로 승격(회전 추가) |
+| 웹푸시 | `push.send(kind, sid, title, body, extra)` | E-3 그대로 호출 |
+| Host 능력 신호 | auth 응답 `pv`/`ver`/`hostname` | pv 게이팅·hostname 이름 자동 |
+| 앱 페어링 링크 처리 | `native-bridge.handlePairingUrl` | relay 파싱만 추가 |
+| PC 목록 저장 | `pcsLoad/pcsUpsert/pcsActivate/pcsRemove` | pcList()/unpairPc 가 감싼다; `sm_pcs_relay` 는 삭제 |
+| 로컬 전용 API 보호 | `connector._LOCAL_ONLY_API` | **새 로컬 전용 API 추가 시 덴리스트 갱신 필수**(학습 기록) |
+
+### 병렬 작업 레인
+| 레인 | 작업 | 모듈 | 의존 |
+|---|---|---|---|
+| A Host(py) | T1→T2→T3 (0.10.0) → T9→T10→T12 (0.11.0) | session_manager/ | — |
+| B PWA | T4→T5 (0.10.0) → T11→T13 (0.11.0) | pwa/index.html (단일 파일, 순차) | T5 pv 저장은 A 의 pv 값 합의 |
+| C 앱 브리지 | T6 (0.10.0) → T15 (0.11.0) | pwa/native-bridge.js, app/ | T11 이 persistSync 사용 |
+| D 007 | T7 (0.10.0) → T8 (0.11.0) | ../007 control_plane, tests | T9 가 T8 엔드포인트 사용 |
+| E e2e | T14 | tests/e2e, ops/release.ps1 | A·B·D 완료 후 |
+실행: 0.10.0 = A+B+C+D 병렬 → 머지 → 릴리스. 0.11.0 = D 먼저(/deploy-request) → A+B+C 병렬 → E → 릴리스 → 앱 TestFlight. 충돌 플래그: B 와 C 가 모두 `pwa/` 를 만지지만 파일이 다르다(index.html vs native-bridge.js); T6 의 E-2 버튼은 index.html 이므로 B 레인에서 처리.
+
+## Implementation Tasks
+Synthesized from this review's findings. Each task derives from a specific finding above. Run with Claude Code or Codex; checkbox as you ship. (JSONL: `~/.gstack/projects/006_session_manager/tasks-eng-review-20260930-074741.jsonl`)
+
+**0.10.0 (Host + PWA + 브리지, 007 무변)**
+- [ ] **T1 (P1, human: ~2h / CC: ~15min)** — devices — `_mutate(fn)`+RLock 로 쓰기 8함수 통일, `clean_name()` 헬퍼, 동시 touch/revoke 회귀 테스트 · Surfaced by: E-D3/E-D9 · Files: session_manager/devices.py, appconfig.py, tests/test_devices.py · Verify: pytest tests/test_devices.py
+- [ ] **T2 (P1, ~1.5h / ~8min)** — connector — `Connector._auth()` 추출 + 폰 auth `name` 보고(등록부 이름 비었을 때만) · E-D9/B-1 · connector.py, tests/test_connector_auth_name.py
+- [ ] **T3 (P1, ~2h / ~12min)** — server — 재발급 재정렬(issue→revoke, 실패 503 옛 자격 유지), CP 설정 시 발급 실패 503(폴백은 CP 미설정만), 📱 구형 배지 · E-D7/E-D19 · server.py, static/, tests/test_server_devices.py
+- [ ] **T4 (P1, ~2h / ~10min)** — pwa — `connect()` resolve 에 `auth:{ok,error}`, 페어링 경로 auth.ok 게이팅(공유토큰은 auth 생략) · E-D16 · pwa/index.html, tests/pwa/pairing.test.mjs
+- [ ] **T5 (P1, ~1d / ~40min)** — pwa — B-2 `#pair` 1벌·B-3 용어·E-D4 문구·B-9 공용 함수·B-6·E-4/E-D8 전부 삭제+LS 정리·PC '＋ 기기 추가' 이름 없이·PC 항목 pv 저장 · Files: pwa/index.html, tests/pwa/pairing.test.mjs, tests/test_pwa_js.py("# pass" 갱신) · Verify: node --test tests/pwa
+- [ ] **T6 (P2, ~2h / ~10min)** — app-bridge — `handlePairingUrl` `?relay=` 파싱 + E-2 버튼(fragment 소거 전 생성, 앱 1.9 문구) + `persistSync` 선탑재 → docs/mac-build-tasks.md 갱신 · E-D2/E-D18 · pwa/native-bridge.js, pwa/index.html, tests/pwa/app-scan.test.mjs
+- [ ] **T7 (P2, ~1h / ~10min)** — 007-tests — `tests/test_cp_client_credentials.py` revoke 4건(배포 불필요) · E-D12
+
+**0.11.0 (self-revoke·동기화·CP)**
+- [ ] **T8 (P1, ~4h / ~25min)** — 007-cp — `POST /client/status`(≤200, 소유권 필터)·`POST /client/revoke-self` + 테스트 확장 + nginx limit_req(token|revoke-self|status) **/deploy-request** · E-D6
+- [ ] **T9 (P1, ~1d / ~40min)** — host-devsync — 스레드(기동+60s·5분·Event·점검중 건너뜀·잠금 밖 조회·재대조·cp_pending·pending_cpub·meta.cp_synced), 📱 목록 즉시 응답+Event, `bye_device` → revoked+📵 · E-D6/E-D13/E-D14/E-D15 · session_manager/devsync.py, devices.py, server.py, connector.py, tests/test_devsync.py
+- [ ] **T10 (P1, ~3h / ~20min)** — connector — `drop_device(notice=)` wait_for+finally, `request_drop_device` 로그, 삭제/재발급 불명→cp_pending·pending_cpub, PROTOCOL_VERSION 증가 · E-D5/E-D15/E-D17 · connector.py, server.py, tests/test_connector_notice.py
+- [ ] **T11 (P1, ~1.5d / ~50min)** — pwa — 큐 `{cp,public_id,secret,room,ts}`·항목 cp 플러시·복원 병합, `unpairPc` 순서(persistSync→삭제→revoke-self/bye_device), B-7 성공 후 폐기, pv 게이팅 문구, notice/401/auth_invalid ⛔·배지, resetDevice 큐 보존 · E-D16/E-D17/E-D18 · pwa/index.html, native-bridge.js, tests/pwa/pairing.test.mjs
+- [ ] **T12 (P2, ~3h / ~15min)** — audit — `jsonl_log.py`(잠금+회전) → policy.audit·pairing-audit(첫 auth 만), 🩺 진단, E-3 웹푸시 · E-D10 · session_manager/jsonl_log.py, policy.py, devices.py, push.py, tests/test_jsonl_log.py
+- [ ] **T13 (P2, ~1h / ~6min)** — pwa — E-5 💤 90일 표시·정리 제안(cp_pending 영구 실패 포함) · E-5
+- [ ] **T14 (P1, ~1d / ~40min)** — e2e — `tests/e2e/test_pairing_flow.py` @e2e + release.ps1 `-m e2e` 게이트 · E-D11
+- [ ] **T15 (P2, ~2h / ~10min)** — app — `#cb-pair` 폐기, auth name(기기 모델), 맥 지시서 → TestFlight · B-2/B-1
+
+_No new tasks from Performance beyond T9 (E-D13/E-D14 folded)._
+
+### 리뷰 결정 기록 (eng)
+E-D1 A 2단계 / E-D2 A 브리지 relay 파싱 / E-D3 B 0.10.0 `_mutate`+RLock / E-D4 A 'PC 에서도 삭제' 문구 / E-D5 A notice→drop / E-D6 A 일괄 status+소유권 / E-D7 A 재정렬+cp_pending / E-D8 A sm_pcs_relay 전부 삭제 / E-D9 A clean_name+_auth() / E-D10 A 공용 jsonl_append / E-D11 A pytest -m e2e / E-D12 A 007 revoke 테스트 지금 / E-D13 A 목록 즉시 응답+Event / E-D14 A 잠금 밖 조회+기동 +60s / E-D15 A(Codex #1+#4) 불명=pending·pending_cpub·finally / E-D16 A(Codex #2) connect auth 결과·성공 후 폐기 / E-D17 A(Codex #3) pv 게이팅 / E-D18 A(Codex #5+#6) 큐 cp 고정·persistSync / E-D19 A(Codex #7) CP 설정 시 폴백 금지 / E-D20 A TODO usage_summary 회전 / E-D21 A TODO Safari ITP 안내. 미결 0.
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 1 | CLEAR (2026-09-29) | 7 proposals, 4 accepted, 3 deferred |
+| Codex Review | `/codex review` | Independent 2nd opinion | 2 (plan) | issues_found → 전부 결정에 반영 | CEO 단계 T1~T4 수용 / ENG 단계 7건(#1~#7) 모두 A 로 수용(E-D15~E-D19) |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR (2026-09-30, FULL_REVIEW) | 13 issues (arch 5·quality 4·test 2·perf 2), 0 critical gaps, 회귀 테스트 5건 필수, e2e 게이트 |
+| Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | — |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
+
+- **CROSS-MODEL:** Codex 가 리뷰가 놓친 실패 경로 5건(결과 불명·B-7 순서·구 Host 호환·큐 목적지/내구성·공유토큰 폴백)을 찾았고 모두 계획에 흡수. 리뷰와 Codex 가 충돌한 지점 없음(보강만).
+- **VERDICT:** CEO + ENG CLEARED — ready to implement. Design review 권장(페어링 화면 B-2·해제 문구·📵/⛔/배지 UI 가 이번 범위의 절반).
+
+NO UNRESOLVED DECISIONS
