@@ -31,6 +31,7 @@
 - [x] ④ `monwatch` 가 manager 파일의 `continued-in` 을 보면 `mongroups.set_manager` 로 갱신 + 새 파일 tail
 - [x] ⑤ 목록 `🏷 agent_name` 칩(제목과 다를 때). 파생 이름 충돌 자체는 claude 규칙이라 스킬은 UUID 기준(기존)
 - [x] 테스트 9(`test_continued_in.py`) + 하네스 1 → 361 passed. 0.9.9 게시·적용. ⚠ 이어받은 파일이 없는 옛 줄(다른 PC 에서 이어짐)은 여전히 재개 허용(설계: 마지막 확인 id) — 실측에서 d56d9dca 가 그 케이스
+- [x] 포크 점검(0.9.10, 사장님 질문 "포크가 데몬으로 뜨면?"): 실측 — 헤드리스 `-p` 도 실행 중엔 `~/.claude/sessions` 에 등록(kind interactive) → 0.9.9 삭제 보호가 **포크 자동 정리**(webapi 종료 시 delete, terminal.html 🗑)를 막을 수 있었음. 수정: 프로세스 `wait`/`kill` 뒤 `delete_session(..., wait_live_s=3)`(레지스트리 소멸을 최대 3초 대기), 그래도 살아 있으면(데몬 승격) **보류하고 안내**(전엔 살아 있는 채 파일을 옮겨 분기). API `wait_live_s`(상한 5초), terminal.html 은 409 를 안내로 표시. 재개 시 bg_hold 검사는 포크 id 에도 적용됨(기존)
 - [ ] 후속: 하위(subs) 세션의 continued-in 추적, 그쪽 PC 의 `claude --version`·agents 근거 확보 후 ② 데몬 주장 재검토
 
 ## 진행중 기능: 페어링 UX 통일 — 대칭 페어링 모델 (Host 0.9.8 핫픽스 + 0.10.0 + 007 + 앱, 2026-09-29 기획)
