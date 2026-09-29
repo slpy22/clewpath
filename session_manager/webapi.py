@@ -270,13 +270,21 @@ async def run_resume_api(ws, session_id: str, skip_permissions: bool = True,
             proc.terminate()
         except Exception:  # noqa: BLE001
             pass
-        # fork 로 열었으면 종료 시 fork 세션 삭제(원본은 원래 안 건드림)
+        # fork 로 열었으면 종료 시 fork 세션 삭제(원본은 원래 안 건드림). 프로세스가 진짜 끝난 뒤에만 —
+        # 살아 있으면(0.9.9 삭제 보호) 삭제가 보류되고 목록에 남는다(백그라운드 에이전트로 승격된 포크 등).
         if fork_id:
             try:
-                import time
                 from session_manager import lifecycle
-                time.sleep(0.5)  # 프로세스 종료/파일잠금 해제 대기
-                lifecycle.delete_session(fork_id, dry_run=False)
+                try:
+                    proc.wait(timeout=3)
+                except Exception:  # noqa: BLE001
+                    try:
+                        proc.kill(); proc.wait(timeout=2)
+                    except Exception:  # noqa: BLE001
+                        pass
+                d = lifecycle.delete_session(fork_id, dry_run=False, wait_live_s=3)
+                if d.get("error") == "session_live":
+                    print(f"[resume] fork {fork_id[:8]} 삭제 보류: 아직 살아 있음({d.get('reason')}); 목록에서 확인")
             except Exception:  # noqa: BLE001
                 pass
         # 누적 비용을 사용량 집계에 반영(멀티턴 실제 비용을 일일 한도에 잡히게)
@@ -339,9 +347,14 @@ def ephemeral_ask(session_id: str, prompt: str, skip_permissions: bool = True,
         is_error = True
         result_text = f"시간초과({timeout}s)"
     finally:
-        # fork 프로세스는 종료됐으므로 파일 잠금 없음 → 안전 삭제
+        # 프로세스가 끝난 뒤에만 삭제(시간초과로 살아 있으면 kill 뒤 대기). 그래도 살아 있으면 보류(0.9.9 보호).
         from session_manager import lifecycle
-        d = lifecycle.delete_session(fork_id, dry_run=False)
+        try:
+            if proc.poll() is None:
+                proc.kill(); proc.wait(timeout=3)
+        except Exception:  # noqa: BLE001
+            pass
+        d = lifecycle.delete_session(fork_id, dry_run=False, wait_live_s=3)
         fork_deleted = bool(d.get("deleted"))
 
     return {

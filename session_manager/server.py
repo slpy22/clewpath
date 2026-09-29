@@ -817,11 +817,14 @@ def create_app() -> FastAPI:
 
     # ---- 삭제 / 폴더변경 ----
     @app.post("/api/sessions/{session_id}/delete")
-    def delete(session_id: str, dry_run: bool = Body(True, embed=True)):
+    def delete(session_id: str, dry_run: bool = Body(True, embed=True),
+               wait_live_s: float = Body(0.0, embed=True)):
         # 하드 삭제가 아니라 휴지통으로 이동 — restore 로 복구 가능.
         # 살아 있는 세션은 409(session_live): 파일을 옮겨도 프로세스가 같은 경로에 새 파일을 만들어
         # 기록이 둘로 갈라진다(타 PC 실사고 2026-09-29). 이름 변경과 같은 규칙.
-        r = lifecycle.delete_session(session_id, dry_run=dry_run)
+        # wait_live_s: 방금 닫은 포크처럼 '곧 죽을' 세션은 잠깐(최대 5초) 기다려 준다.
+        r = lifecycle.delete_session(session_id, dry_run=dry_run,
+                                     wait_live_s=min(5.0, max(0.0, float(wait_live_s or 0))))
         if r.get("error") == "session_live":
             return JSONResponse(r, status_code=409)
         return r

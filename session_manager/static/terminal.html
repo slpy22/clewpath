@@ -110,10 +110,18 @@
     try{ ws.close(); }catch(_){}
     await new Promise(r=>setTimeout(r,700));  // claude 프로세스 종료 대기(파일 잠금 해제)
     try{
-      await fetch(`${BASE}/api/sessions/${encodeURIComponent(fork)}/delete`,
+      // 화면을 닫으면 Host 가 포크 프로세스를 끝낸다 — 레지스트리가 사라질 때까지(최대 3초) 기다렸다 삭제.
+      // 그래도 살아 있으면(백그라운드 에이전트로 승격 등) 서버가 409 로 보류한다 — 기록 분기 방지(0.9.9).
+      const r = await fetch(`${BASE}/api/sessions/${encodeURIComponent(fork)}/delete`,
         {method:"POST", headers:{"Content-Type":"application/json"},
-         body:JSON.stringify({dry_run:false})});
-      term.write("\r\n\x1b[33m── 포크가 삭제되었습니다. 원본은 그대로입니다. 이 탭을 닫으세요. ──\x1b[0m\r\n");
+         body:JSON.stringify({dry_run:false, wait_live_s:3})});
+      if(r.status===409){
+        term.write("\r\n\x1b[33m── 포크가 아직 실행 중이라 삭제를 보류했습니다(백그라운드 에이전트일 수 있음). 목록에서 확인 후 종료·삭제하세요. ──\x1b[0m\r\n");
+      }else if(!r.ok){
+        term.write("\r\n\x1b[31m포크 삭제 실패: HTTP "+r.status+"\x1b[0m\r\n");
+      }else{
+        term.write("\r\n\x1b[33m── 포크가 삭제되었습니다. 원본은 그대로입니다. 이 탭을 닫으세요. ──\x1b[0m\r\n");
+      }
     }catch(e){
       term.write("\r\n\x1b[31m포크 삭제 실패: "+e.message+"\x1b[0m\r\n");
     }

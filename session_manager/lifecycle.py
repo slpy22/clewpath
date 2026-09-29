@@ -65,7 +65,8 @@ def _live_reason(session_id: str) -> str | None:
     return None
 
 
-def delete_session(session_id: str, dry_run: bool = True, force: bool = False) -> dict:
+def delete_session(session_id: str, dry_run: bool = True, force: bool = False,
+                   wait_live_s: float = 0.0) -> dict:
     """세션과 연관 파일을 삭제한다 — 하드 삭제가 아니라 **휴지통으로 이동**해 복구 가능.
 
     실수로 지워도 restore_session 으로 되살릴 수 있다(중요 세션 유실 방지).
@@ -90,6 +91,12 @@ def delete_session(session_id: str, dry_run: bool = True, force: bool = False) -
     # 생겨 기록이 둘로 갈라진다. 이름 변경(session_live)과 같은 규칙 — 먼저 종료해야 한다.
     if not force:
         live = _live_reason(session_id)
+        # 방금 종료시킨 프로세스(포크 정리 등)는 레지스트리 파일이 몇 초 늦게 사라진다 → 잠깐 기다려 준다.
+        # 그래도 살아 있으면(예: 포크가 백그라운드 에이전트로 승격됨) 삭제하지 않는다 — 기록 분기 방지.
+        deadline = time.time() + max(0.0, float(wait_live_s or 0))
+        while live and time.time() < deadline:
+            time.sleep(0.25)
+            live = _live_reason(session_id)
         if live:
             return {"dry_run": False, "session_id": session_id, "deleted": [],
                     "error": "session_live", "reason": live,

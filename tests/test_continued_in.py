@@ -160,3 +160,35 @@ def test_monwatch_follows_manager_continuation(fake_claude_home):
         f.write(json.dumps(_use("t1", f'claude -p --resume {S1} "x"')) + "\n")
         f.write(json.dumps(_res("t1", "Error: boom", True)) + "\n")
     assert w.poll() == 1 and got == [(B, S1)], "새 줄의 호출 실패를 잡는다"
+
+
+# ---- 포크 정리 vs 삭제 보호(0.9.10): 방금 끝낸 프로세스는 레지스트리가 늦게 사라진다 ----
+
+def test_delete_waits_briefly_for_registry_to_clear(fake_claude_home, monkeypatch):
+    write_session(fake_claude_home, "F--p", A, _lines())
+    seq = iter(["idle", "idle", None])                      # 두 번은 살아 있다가 사라진다
+    monkeypatch.setattr("session_manager.native_title.session_status", lambda sid: next(seq, None))
+    monkeypatch.setattr("session_manager.webterm.has_terminal", lambda sid: False)
+    r = lifecycle.delete_session(A, dry_run=False, wait_live_s=2)
+    assert r.get("recoverable") is True                     # 기다린 뒤 삭제됨
+    write_session(fake_claude_home, "F--p", B, _lines())
+    monkeypatch.setattr("session_manager.native_title.session_status", lambda sid: "busy")
+    r = lifecycle.delete_session(B, dry_run=False, wait_live_s=0.6)
+    assert r["error"] == "session_live"                     # 끝내 살아 있으면 보류(데몬 승격 포크 등)
+
+
+def test_delete_endpoint_accepts_wait_live_s_capped(fake_claude_home, monkeypatch):
+    from fastapi.testclient import TestClient
+    for k in ("SM_RELAY_URL", "SM_RELAY_ROOM", "SM_RELAY_AGENT_TOKEN", "SM_CP_URL"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("SM_HOST", "127.0.0.1")
+    write_session(fake_claude_home, "F--p", A, _lines())
+    seen = {}
+    real = lifecycle.delete_session
+    def spy(sid, dry_run=True, force=False, wait_live_s=0.0):
+        seen["wait"] = wait_live_s; return real(sid, dry_run=dry_run, force=force, wait_live_s=0)
+    monkeypatch.setattr("session_manager.lifecycle.delete_session", spy)
+    from session_manager.server import create_app
+    with TestClient(create_app()) as c:
+        assert c.post(f"/api/sessions/{A}/delete", json={"dry_run": True, "wait_live_s": 99}).status_code == 200
+        assert seen["wait"] == 5.0                          # 상한 5초
