@@ -373,3 +373,24 @@ test("rowResumeIcon: 🖥 클루패스 실행 중 / 출처 아이콘(⌨·🧬·
   assert.equal(ev(ctx, "rowResumeIcon({})"), "▶");
   assert.ok(ev(ctx, "rowResumeTitle({peer:{status:'busy', origin:{origin:'terminal'}}})").startsWith("터미널에서 실행 중 · 작업 중"));
 });
+
+
+test("updateImpact/showUpdateApply: 열린·작업 중 클루패스 세션이 있으면 경고, 버튼 문구·색이 바뀐다", async () => {
+  const ctx = await load();
+  ev(ctx, "CLOCK_SKEW = 0");
+  const now = Date.now() / 1000;
+  const list = `[{session_id:'a', title:'알파', live_terminal:true, runtime:{phase:'thinking', thinking_at:${now - 5}}},
+                 {session_id:'b', title:'베타', live_terminal:true, runtime:{phase:'ready', ready_at:${now - 5}}},
+                 {session_id:'c', title:'감마', live_terminal:false, runtime:{phase:'thinking', thinking_at:${now - 5}}}]`;
+  const imp = ev(ctx, `updateImpact(${list})`);
+  assert.equal(JSON.stringify(imp), JSON.stringify({ open: ["알파", "베타"], busy: ["알파"] }), "작업 중 = 열린 터미널 중 진행형 phase 만");
+  ev(ctx, `loadList = async () => {}; SESSIONS = ${list}; openModal = (t, b, f) => { globalThis.__b = b; globalThis.__f = f; }`);
+  await ev(ctx, "showUpdateApply('0.10.7', '0.10.8')");
+  const warn = ev(ctx, "globalThis.__b").children[0];
+  assert.ok(warn.textContent.includes("작업 중인 세션 1개: 알파") && warn.textContent.includes("그 외 열린 터미널 1개"));
+  const go = ev(ctx, "globalThis.__f")[0];
+  assert.ok(go.textContent.startsWith("그래도 지금") && String(go.className).includes("danger"));
+  ev(ctx, "SESSIONS = []"); await ev(ctx, "showUpdateApply('0.10.7', '0.10.8')");
+  assert.ok(!String(ev(ctx, "globalThis.__b").children[0].className).includes("err"), "열린 세션 없으면 경고 없음");
+  assert.ok(ev(ctx, "globalThis.__f")[0].textContent.startsWith("지금 v0.10.8"));
+});

@@ -4084,8 +4084,27 @@ function showUpdateInfo(cur,latest){
   openModal('업데이트', body, []);
 }
 // 로컬: 실제 적용 버튼
-function showUpdateApply(cur,latest){
+// 업데이트(=Host 재기동)가 끊을 클루패스 세션: 열린 터미널(live_terminal) 중 작업 중(훅 phase 진행형)인 것 구분(2026-09-30 사장님)
+function updateImpact(list){
+  const open=(list||[]).filter(s=>s&&s.live_terminal);
+  const busy=open.filter(s=>{ const b=sessionBadge(s); return !!(b&&b.text!=='완료'); });
+  const name=(s)=>s.title||s.label_name||s.slug||String(s.session_id||'').slice(0,8);
+  return {open:open.map(name), busy:busy.map(name)};
+}
+async function showUpdateApply(cur,latest){
+  try{ await loadList(); }catch(e){}                 // 지금 열린·작업 중 세션을 최신으로
+  const imp=updateImpact(SESSIONS);
   const body=el('div');
+  if(imp.open.length){
+    const w=el('div','err');
+    w.style.cssText='border:1px solid color-mix(in srgb,var(--crit) 55%,transparent);border-radius:10px;padding:10px 12px;margin-bottom:10px;white-space:pre-line';
+    w.textContent=(imp.busy.length
+        ? '⚠ 작업 중인 세션 '+imp.busy.length+'개: '+imp.busy.join(', ')+'\n업데이트하면 진행 중인 작업이 중단됩니다.'
+        : '⚠ 클루패스 터미널로 열린 세션 '+imp.open.length+'개: '+imp.open.join(', ')+'\n업데이트하면 이 터미널들이 닫힙니다.')
+      +(imp.busy.length&&imp.open.length>imp.busy.length?'\n(그 외 열린 터미널 '+(imp.open.length-imp.busy.length)+'개도 닫힘)':'')
+      +'\n대화 기록은 남아 재개하면 이어집니다.';
+    body.appendChild(w);
+  }
   body.appendChild(el('p',null,`새 버전 ${latest} 이 나왔습니다 (현재 v${cur}).`));
   body.appendChild(el('p',null,'서명·해시를 검증한 뒤 적용하고, 실패하면 자동으로 이전 버전으로 되돌립니다. 설정·기기·페어링은 그대로 유지됩니다.'));
   // 업데이트 = 재기동: 영향 범위를 정확히 고지(실질 주의점은 열린 터미널의 진행 중 턴 하나뿐)
@@ -4094,7 +4113,8 @@ function showUpdateApply(cur,latest){
     +'작업 턴은 중단되니 끝난 뒤 업데이트를 권장합니다. (대화 이력은 보존되어 재개하면 '
     +'이어지고, 직접 연 터미널의 claude 는 영향받지 않습니다)'));
   const status=el('div'); status.style.cssText='margin-top:10px;color:var(--ink2)'; body.appendChild(status);
-  const go=el('button','btn full',`지금 v${latest} 로 업데이트`);
+  const goLabel=imp.open.length?`그래도 지금 v${latest} 로 업데이트`:`지금 v${latest} 로 업데이트`;
+  const go=el('button','btn full'+(imp.busy.length?' danger':''),goLabel);
   go.onclick=async()=>{
     let cred={};
     if(MODE==='relay'){ cred=await ensurePriv(); if(cred===null) return; }   // 원격 적용 = 특권(terminal/stop 과 같은 2FA)
@@ -4106,12 +4126,12 @@ function showUpdateApply(cur,latest){
         go.textContent='재기동 대기…';
         setTimeout(()=>location.reload(), 30000);
       } else {
-        go.disabled=false; go.textContent=`지금 v${latest} 로 업데이트`;
+        go.disabled=false; go.textContent=goLabel;
         status.textContent='적용하지 못했습니다: '+((j&&(j.error||j.reason))||'알 수 없는 오류');
       }
     }catch(e){
       if(e && e.json && (e.json.error||e.json.reason)){   // 서버가 명시적으로 거부(예: 개발 소스)
-        go.disabled=false; go.textContent=`지금 v${latest} 로 업데이트`;
+        go.disabled=false; go.textContent=goLabel;
         status.textContent='적용하지 못했습니다: '+(e.json.error||e.json.reason);
       } else {
         // 응답 전에 (원격이면 커넥터가) 재기동하며 연결이 끊긴 경우 — 정상 진행 신호.
