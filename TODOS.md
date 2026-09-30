@@ -45,7 +45,9 @@
 - [x] T1 (0.9.8, 2026-09-29) 커넥터 프록시 `X-ClewPath-Via: relay` 헤더 + 덴리스트(`/api/owner/devices*` 전 동사, `2fa/(provision|toggle)`·`skills/*/install`·`trash/*`·`update/apply`·`sessions/*/terminal/start` POST → `local_only`), 서버 `_is_local` 은 헤더면 False. 설치본 실측: via-relay POST 403 / 로컬 200 / `2fa/status` GET 200 유지. 테스트 25건(`test_connector_local_only.py`)
 - [x] T2 (0.9.8) `connector.drop_device` + `request_drop_device`(서버 스레드에서, delete/reissue/revoke 핸들러가 호출) → 그 기기 cid 의 스트림 cancel·authed·enc_cids 정리 / `_handle_stream_in` 은 enforced 면 살아 있는 인증(`devices.is_active`)만 통과, 아니면 파이프 해체 / `_on_connected()` 가 authed·enc_cids·req_cid 초기화
 
-### Phase 1-a — Host 0.10.0 (UI·용어·Host 내부 준비, 007 무변) — eng T1~T7
+`/plan-design-review` 완료(2026-09-30, 4/10→9/10, 크로스체크 Gemini·Codex 8건 채택) → 설계 문서 §디자인 리뷰(위계·상태 표·스토리보드·5기호 1칩·confirmSheet·문구·E-2·ITP 안내·QR 연결됨 전환·a11y) + DT1~DT7(T5/T6/T11 에 흡수). 승인 목업 `~/.gstack/projects/006_session_manager/designs/*-20260930/`.
+
+### Phase 1-a — Host 0.10.0 (UI·용어·Host 내부 준비, 007 무변) — eng T1~T7 + design DT1~DT7
 - [ ] T1 devices `_mutate`+RLock·`clean_name` / T2 `Connector._auth()`+폰 이름 보고 / T3 재발급 재정렬(issue→revoke)·CP 설정 시 폴백 금지·구형 배지
 - [ ] T4 `connect()` auth 결과 / T5 `#pair` 1벌·용어·'PC 에서도 삭제' 문구·공용 함수·`sm_pcs_relay` 전부 삭제·pv 저장 / T6 브리지 `?relay=`+E-2 버튼+`persistSync`(다음 TestFlight) / T7 007 `test_cp_client_credentials.py`(revoke 4건, 배포 없음)
 - [ ] 회귀 테스트 5건(잠금·notice 순서·재정렬·브리지·로컬 select) → release.ps1 0.10.0
@@ -61,7 +63,9 @@
 - [ ] **X-1 6자리 코드 페어링**(PC 가 코드 표시, 폰은 입력, CP 60초 코드↔room 중개) — 카메라·링크·앱 무관. CP 임시 보관 = 무저장 예외 확장이라 C 와 함께. M→S
 - [ ] **C) CP 를 페어링 정본으로**(목록·이름·상태를 CP 에, 양쪽이 같은 API 렌더, 팀 공유 PC) — 외부 사용자 생긴 뒤. 로컬 전용 보안 설계 재검토 필요. L→M
 - [ ] **`policy.usage_summary` 회전 파일 이어 읽기**(eng E-D20) — 왜: T12 로 `api_audit.jsonl` 이 8MB 에서 `.1` 로 회전하면 회전 직후 '최근 n건' 목록이 짧아진다(오늘 한도는 별도 usage 파일이라 무영향). 무엇: `.1` 이 있으면 이어 읽어 recent_n 을 채운다(10줄). 시작점: `session_manager/policy.py:167`. 의존: T12. S
-- [ ] **iOS Safari(홈 화면 미설치) ITP 7일 저장소 삭제 안내**(eng E-D21) — 왜: 웹 탭은 localStorage 뿐이라 7일 미사용이면 폐기 큐·`sm_pcs` 가 통째 사라져 유령 cpub(E-5 90일)·'페어링이 저절로 사라짐' 이 된다. 무엇: 페어링 완료 화면/설정에 `navigator.standalone` 아니면 '홈 화면에 추가하면 알림과 페어링이 보존됩니다' 한 줄(푸시 안내와 같은 자리) + docs 에 제약 기록. 문구·위치는 /plan-design-review 에서. 의존: 없음(T5 B-2 화면 작업 때 후보). S
+- [ ] **DESIGN.md 생성(`/design-consultation`)**(design DR-11) — 왜: 디자인 시스템 정본이 없어 리뷰마다 `index.html:16-27` 토큰을 사실상 기준으로 삼는다. 무엇: :root 토큰·타이포·컴포넌트(.btn/.devrow/.schip/openModal/confirmSheet) 어휘를 DESIGN.md 로. 다음 사이클. S
+- [ ] **접근성 규칙 전 화면 적용 + confirm() 나머지 9곳 confirmSheet 이전**(design DR-13/DR-7) — 왜: 이번엔 페어링 화면 3개만 44px·focus-visible·dialog·inert·aria-live 를 적용. 무엇: 세션 목록·터미널 탭·관제·설정에 같은 규칙, `grep confirm(` 9곳을 confirmSheet 로. 의존: DT2/DT4. M
+- [ ] **iOS Safari(홈 화면 미설치) ITP 7일 저장소 삭제 안내**(eng E-D21 → design DR-12 로 자리·문구 확정: 페어링 직후 .firstrun 1회 + 설정 1줄, '앱처럼 열어보세요') — 왜: 웹 탭은 localStorage 뿐이라 7일 미사용이면 폐기 큐·`sm_pcs` 가 통째 사라져 유령 cpub(E-5 90일)·'페어링이 저절로 사라짐' 이 된다. 무엇: 페어링 완료 화면/설정에 `navigator.standalone` 아니면 '홈 화면에 추가하면 알림과 페어링이 보존됩니다' 한 줄(푸시 안내와 같은 자리) + docs 에 제약 기록. 문구·위치는 /plan-design-review 에서. 의존: 없음(T5 B-2 화면 작업 때 후보). S
 
 ## 진행중 기능: 모바일 앱 — 앱 안 QR 스캔으로 PC 추가 (앱 1.6(6), 2026-09-29)
 

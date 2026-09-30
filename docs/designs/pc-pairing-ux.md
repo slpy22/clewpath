@@ -190,6 +190,122 @@ _No new tasks from Performance beyond T9 (E-D13/E-D14 folded)._
 ### 리뷰 결정 기록 (eng)
 E-D1 A 2단계 / E-D2 A 브리지 relay 파싱 / E-D3 B 0.10.0 `_mutate`+RLock / E-D4 A 'PC 에서도 삭제' 문구 / E-D5 A notice→drop / E-D6 A 일괄 status+소유권 / E-D7 A 재정렬+cp_pending / E-D8 A sm_pcs_relay 전부 삭제 / E-D9 A clean_name+_auth() / E-D10 A 공용 jsonl_append / E-D11 A pytest -m e2e / E-D12 A 007 revoke 테스트 지금 / E-D13 A 목록 즉시 응답+Event / E-D14 A 잠금 밖 조회+기동 +60s / E-D15 A(Codex #1+#4) 불명=pending·pending_cpub·finally / E-D16 A(Codex #2) connect auth 결과·성공 후 폐기 / E-D17 A(Codex #3) pv 게이팅 / E-D18 A(Codex #5+#6) 큐 cp 고정·persistSync / E-D19 A(Codex #7) CP 설정 시 폴백 금지 / E-D20 A TODO usage_summary 회전 / E-D21 A TODO Safari ITP 안내. 미결 0.
 
+## 디자인 리뷰 (/plan-design-review 2026-09-30, 크로스체크 Gemini·Codex 반영)
+
+초기 4/10 → 최종 9/10. 화면 3개(폰 `#pair`, 폰 🖧 내 PC, PC 📱 페어링된 기기) + 확인 시트 + 상태 칩. 목업은 `~/.gstack/projects/006_session_manager/designs/{pairing-screen,device-rows}-20260930/` (approved.json 포함).
+
+### 승인 목업
+| 화면 | 목업 | 방향 | 제약 |
+|---|---|---|---|
+| 폰 첫 페어링 `#pair` | `designs/pairing-screen-20260930/variant-C.png` (+ B 의 ⛔ 행) | 워드마크·상황 줄 1개·저장된 PC 행·틸 QR 버튼, 장식 없음 | 빈 상태 카드 없음(상황 줄이 맡음), 보안 문구 없음, 상황 줄은 1개만 |
+| PC 📱 페어링된 기기 | `designs/device-rows-20260930/variant-C.png` | 정상 행 칩 없음, 비활성 상태는 흐리게 | 행 전체 흐림 금지(비활성 버튼만), 작은 링크는 버튼으로 |
+
+### 화면 위계 (DR-1)
+```
+#pair (폰, 첫 진입/해제 뒤/초기화 뒤/자격 해제 뒤 — 1벌)          처음 3초: 상황 줄 + 틸 버튼
+  ClewPath (h1)
+  상황 줄 1개 (muted; ⛔ 줄만 crit)                                  ← 4 진입 상황을 이 줄 하나가 맡는다
+  [저장된 PC] 최근순 행 …(0대면 섹션 없음)
+    🖥 이름 / room rm_3f…·최근 2시간 전                 [전환]
+    🖥 이름 ⛔ PC 에서 해제됨 / …          [다시 페어링][지우기]   ← 본문 탭 불가
+  ▮ 📷 QR 스캔으로 연결 (앱)  |  ▮ 앱에서 열기 (Safari, E-2 조건)
+  페어링 링크 ── [https://…] [연결]
+  ▸ 직접 입력(고급)
+
+🖧 내 PC (폰 모달)                                                   처음 3초: 현재 PC ✅ 와 해제 버튼
+  행: 이름 + 칩(≤1) / room·최근 / [전환][✎][페어링 해제]            ← 현재 PC 도 해제 가능
+  0대: "아직 페어링한 PC 가 없습니다" + [📷 QR 스캔으로 PC 추가]
+
+📱 페어링된 기기 (PC 로컬 모달)                                       처음 3초: 🩺 한 줄 + [＋ 기기 추가]
+  제목 / 🩺 활성 n · 해제됨 m · CP 동기화 N분 전 (mono, muted)
+  행: 이름 #a1b2 + 칩(≤1) / 최근 / [페어링 해제][QR 다시 만들기]
+  푸터 ▮ ＋ 기기 추가 (이름 입력 없음 → 바로 QR)
+
+헤더 PC select: 옵션 ≤1 이면 select 숨기고 제목 텍스트만 (로컬·릴레이 공통, DR-3)
+해제 진입점(DR-2): 행 단위 = 행의 [페어링 해제] / 기기 단위 = 설정 ⚙ 맨 아래 [이 기기 초기화](danger) / 로그아웃 선택 모달 삭제.
+현재 PC 해제 후: 다른 PC 있으면 자동 전환 + 토스트, 없으면 #pair(상황 줄).
+```
+
+### 상태 표 (DR-4) — 사용자가 보는 것만
+| 기능 | 로딩 | 빈 | 오류 | 성공 | 부분 |
+|---|---|---|---|---|---|
+| #pair 연결 | 누른 버튼만 '연결 중…', 다른 버튼 disabled | — | 버튼 아래 `.err` 1줄, 자격 무접촉, 재시도 가능 | enterApp | auth 실패(E-D16): '이 QR 은 더 이상 유효하지 않습니다 — PC 에서 새 QR', 저장 안 함 |
+| 저장된 PC | — | 섹션 없음(상황 줄) | — | — | ⛔ 행: 칩+[다시 페어링][지우기] / 🔄 행: 탭하면 '새 QR 을 스캔하세요' |
+| PC 📱 목록 | 제목+🩺 먼저, 행 자리 스켈레톤 2줄 | '아직 페어링된 기기가 없습니다 — 폰으로 QR 을 찍으면 여기 나타납니다' + 푸터 강조 | 모달 안 `.err` + [다시 시도] | — | CP 미동기화: 🩺 '동기화 안 됨(오프라인)' 회색 |
+| 기기 추가 / QR 재발급 | 버튼 '만드는 중…', 이중 탭 차단 | — | 503(E-D19): 'CP 연결 실패 — 잠시 후 다시' + [다시 시도], 행 안 생김 | QR 모달 → ✅ 연결됨 전환(DR-11) | — |
+| 해제 / 삭제 / 초기화 | 시트 버튼 '해제 중…' | — | 시트 안 `.err`, 행 유지 | 토스트 + 행 제거(또는 ⏳ 회색) | 구 Host/0.10.0: 토스트 'CP 폐기됨 — PC 에서도 삭제하세요' |
+| 📷 스캔 / E-2 | — | — | 인식 실패 토스트(pairErrorText) | 리로드 → 부트 파서 | 앱 미실행(DR-8): '앱이 열리지 않았나요?' + [웹으로 계속] |
+
+### 감정 스토리보드 (DR-5)
+| 여정 | 장면 | 사용자 느낌 | 설계가 지원하는 것 |
+|---|---|---|---|
+| ① 첫 페어링 | PC 📱 빈 상태 → [＋ 기기 추가] → QR 모달 | 기대 '이거 찍으면 끝' | 이름 입력 없음, 모달에 '폰이 접속하면 이름이 채워집니다' |
+| | 폰 카메라 → 앱/Safari → '연결 중…' | 불안(1~2초) | 버튼 안 진행 표시, 오류는 자격 무접촉 |
+| | 세션 목록 + **PC QR 모달이 '✅ <기기> 연결됨' 으로 자동 전환** | 안도 | DR-11: 두 화면이 같은 순간 '됐다' |
+| ② 갑자기 ⛔ | 폰 열면 ⛔ 행 + 상황 줄 | 당혹 → '내 탓?' | 사실+다음 행동만: 'PC 에서 이 기기의 페어링이 해제됐습니다 — 새 QR 을 스캔하세요' [다시 페어링](주)[지우기](부) |
+| | 재발급이면 | 혼란 | 단정 없이 'QR 이 바뀌었습니다 — PC 에서 새 QR' + [다시 페어링] |
+| ③ 폰에서 해제 | 확인 시트 → '해제 중…' → 자동 전환/#pair | 통제감 | 빈 화면 없음, 후속 행동(QR)이 바로 보임 |
+시간 지평: 5초 = 상황 줄 하나로 내 상태 / 5분 = 해제·재페어링 두 탭 / 5년 = PC 여러 대도 목록 한 줄.
+
+### 기호 어휘·칩 (DR-6, DR-7)
+주체×상태 5기호, 🚫 폐지. 행당 칩 **최대 1개**(우선순위 ⛔/📵 > ⏳ > 🔄 > 🔗 > 💤), **항상 아이콘+텍스트**(색만으로 전달 금지).
+| 칩 | 어디 | 뜻 | 토큰(외곽선 1px, 배경 없음) | 행에서 가능한 동작 |
+|---|---|---|---|---|
+| 📵 폰에서 해제함 | PC 목록 | 폰이 self-revoke | crit 외곽선·crit 텍스트 | [삭제]만(해제·재발급 disabled) |
+| ⛔ PC 에서 해제함 | 폰 목록/#pair | PC 삭제·notice·401·auth_invalid | crit | [다시 페어링][지우기], 본문 탭 불가 |
+| 🔄 PC 가 QR 바꿈 | 폰 목록 | 재발급 notice | accent | [다시 페어링] |
+| ⏳ 폐기 대기 | PC 목록 | cp_pending(서버 확인 전) | warn | 없음(disabled, 툴팁 '다음 동기화에서 정리') |
+| 🔗 공유 자격(구형) | PC 목록 | cpub 없음(E-D19) | warn 외곽선·muted 텍스트 | [QR 다시 만들기] 강조(=cpub 발급) |
+| 💤 90일 미접속 | PC 목록 | E-5 | muted | [페어링 해제] 강조 |
+행 전체 opacity 금지 — 비활성 **버튼만** `.45`, 이름·meta·칩은 정상 대비 유지. 새 색 토큰 없음.
+
+### confirmSheet (DR-7 컴포넌트)
+`confirmSheet({title, main, sub, action, danger, busyText})` — `openModal` 기반. 제목 / 주 문장 / 부 문장(muted; E-D4·E-D17 조건 문구 자리) / [취소][동사 버튼(danger)]. 로딩은 버튼 안 `busyText`, 오류는 시트 안 `.err`(행 유지). 적용 4곳: 페어링 해제(폰)·기기 삭제(PC)·QR 다시 만들기·이 기기 초기화. 나머지 `confirm()` 9곳은 범위 밖(TODO).
+확인 시트 부 문장에는 기기 짧은 id(`#a1b2`, device id 앞 4자)를 함께 보인다(DR-9).
+
+### 문구 (DR-10, 크로스체크 반영)
+- #pair 상황 줄(1개, muted; ⛔ 만 crit): 처음 "아직 페어링한 PC 가 없습니다. PC 의 ClewPath 에서 📱 → ＋ 기기 추가 로 QR 을 만드세요." / 폰에서 제거(0.10.0·구 Host) "이 폰에서 <PC> 를 제거했습니다 — PC 에서도 기기를 삭제하세요. 새 PC 는 아래 QR 로." / 폰에서 해제(0.11.0, 서버 확인) "<PC> 페어링을 해제했습니다. 새 PC 는 아래 QR 로." / PC 에서 해제됨 "⛔ PC 에서 이 기기의 페어링이 해제됐습니다 — 새 QR 을 스캔하세요." / 초기화 뒤 "이 기기를 초기화했습니다. 다시 쓰려면 QR 을 스캔하세요."
+- 좁은 화면에서 상황 줄은 줄바꿈 허용(생략 금지).
+- '해제' 라는 말은 서버 확인이 있을 때만; 0.10.0/구 Host 는 '제거' + 'PC 에서도 삭제' (E-D4·E-D17 과 일치).
+
+### E-2 '앱에서 열기' (DR-8)
+노출: 브리지 없음 AND iOS/Android UA AND 페어링 fragment 가 있는 첫 진입만(저장된 PC 재진입 시 미표시; 앱 안에서는 절대 미표시). 동작: `clewpath://pair?relay=<host>#<frag>` 이동 → 2초 타이머, `visibilitychange/pagehide` 면 타이머 취소 → 화면이 그대로면 '앱이 열리지 않았나요?' + [웹으로 계속](스토어 링크는 앱 심사 뒤).
+
+### 기기 이름 (DR-9)
+폰 보고 이름은 그대로(자동 접미사 없음). 구분은 짧은 id `#a1b2` 를 meta 와 확인 시트에 병기 + PC ✎ 이름 변경.
+
+### Safari ITP 안내 (DR-12, E-D21 자리 확정)
+iOS **Safari 본체**(브리지 없음 && `!navigator.standalone` && 인앱 브라우저 아님)에서 페어링 성공 직후 세션 목록 상단 `.firstrun` 박스 1회: "홈 화면에 추가해 앱처럼 열어보세요 · 방법 보기 · 닫기"(닫으면 `sm_hint_ios=1`). 설정 ⚙ 에 같은 문장 상시 1줄. 알림 권한·저장 유지 조건은 '방법 보기' 안에서만 설명(과장 금지).
+
+### PC QR 모달 '연결됨' 전환 (DR-11)
+QR 모달이 열린 동안 3초마다 `/api/owner/devices`(등록부만, CP 무접촉) 폴링 → **이 QR 로 만든 device id 의 last_seen 이 QR 발급 시각 이후**면 QR 을 "✅ <이름> 연결됨" + [닫기] 로 교체. 이름이 비면 "✅ 기기 연결됨 · 이름 확인 중…" 후 갱신. 모달 닫힘 = 폴링 중단 + 늦은 응답 폐기.
+
+### 접근성·반응형 (DR-13)
+페어링 화면 3개 + confirmSheet 에 적용: (a) 행 버튼 `.btn.sm` min 44×44 (b) `:focus-visible` 2px accent 링 (c) 모달 `role="dialog" aria-modal aria-labelledby`, 초기 포커스=첫 버튼, 포커스 순환, 배경 `inert`, ESC 닫기, 닫힌 뒤 포커스 복귀 (d) 토스트 `aria-live="polite"` (e) 색만으로 상태 전달 금지 (f) 375px: 행 버튼이 안 들어가면 두 번째 줄로 wrap(가로 스크롤 금지; 3버튼 행 확인) (g) `prefers-reduced-motion` 이면 시트 애니메이션 없음. 나머지 화면 적용은 TODO.
+
+### NOT in scope (디자인)
+- 앱 전체 `system-ui` 폰트 교체 — 전역 규칙, 별도 사이클.
+- `confirm()` 나머지 9곳 confirmSheet 이전 — TODO.
+- 접근성 규칙의 페어링 외 화면 적용 — TODO.
+- DESIGN.md 생성(`/design-consultation`) — TODO, 다음 사이클.
+- E-1 상태 표시(켜짐/접속 중) 칩 — CEO 결정대로 다음 사이클.
+- 앱 스토어 링크 — 심사 뒤.
+
+### What already exists (디자인)
+`:root` 토큰(index.html:16-27)·`.btn/.ghost/.danger/.sm`·`.devrow/.devname/.devmeta`·`.schip`(세션 칩과 같은 어휘)·`openModal(title, body, [buttons])`·`.firstrun`·`toast`·`.err`·`.cwd`. 새 것은 `confirmSheet` 와 `.schip` 상태 변형 6개뿐.
+
+### Implementation Tasks (디자인, eng T5/T6/T11 에 흡수)
+- [ ] **DT1 (P1, human ~1d / CC ~30min)** — pwa — DR-1 위계·DR-2 해제 진입점·DR-3 헤더 select·DR-4 상태 표·DR-10 문구를 T5 에 반영, 하네스 테스트 (Files: pwa/index.html, tests/pwa/pairing.test.mjs)
+- [ ] **DT2 (P1, ~3h / ~12min)** — pwa — `confirmSheet()` + 페어링 4곳 적용 + 짧은 id 병기(DR-7, DR-9)
+- [ ] **DT3 (P1, ~2h / ~10min)** — pwa css — `.schip` 상태 변형 6개(DR-6 토큰 표), 행당 1칩 헬퍼 `statusChip(row)`, 비활성 버튼 `.45`
+- [ ] **DT4 (P2, ~3h / ~15min)** — pwa — DR-13 접근성(44px·focus-visible·dialog·inert·ESC·aria-live·375px wrap·reduced-motion) 페어링 화면 3개
+- [ ] **DT5 (P2, ~2h / ~8min)** — pwa — DR-11 QR 모달 '연결됨' 전환(발급 시각 기준, 폴링 중단·늦은 응답 폐기) → eng T6 와 함께
+- [ ] **DT6 (P2, ~1h / ~5min)** — pwa — DR-8 E-2 버튼 노출 조건·타이머 취소·[웹으로 계속]
+- [ ] **DT7 (P3, ~1h / ~5min)** — pwa — DR-12 Safari ITP 안내(.firstrun + 설정 1줄)
+
+### 결정 기록 (design)
+DR-0 A 7패스 전부 / 목업 #pair C+B(⛔행)·기기 목록 C / 외부 시각 B(생략) → 대신 크로스체크(Gemini·Codex) / DR-1 A 위계 / DR-2 A 행 해제·설정 초기화·선택 모달 삭제 / DR-3 A select ≤1 숨김 / DR-4 A 상태 표 / DR-5 A 스토리보드+연결됨 전환 / DR-6 A 5기호 1칩 / DR-7 A confirmSheet / 크로스체크 D10~D17 전부 채택(반대 0, 보완 7). 미결 0.
+
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |
@@ -197,10 +313,10 @@ E-D1 A 2단계 / E-D2 A 브리지 relay 파싱 / E-D3 B 0.10.0 `_mutate`+RLock /
 | CEO Review | `/plan-ceo-review` | Scope & strategy | 1 | CLEAR (2026-09-29) | 7 proposals, 4 accepted, 3 deferred |
 | Codex Review | `/codex review` | Independent 2nd opinion | 2 (plan) | issues_found → 전부 결정에 반영 | CEO 단계 T1~T4 수용 / ENG 단계 7건(#1~#7) 모두 A 로 수용(E-D15~E-D19) |
 | Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR (2026-09-30, FULL_REVIEW) | 13 issues (arch 5·quality 4·test 2·perf 2), 0 critical gaps, 회귀 테스트 5건 필수, e2e 게이트 |
-| Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | — |
+| Design Review | `/plan-design-review` | UI/UX gaps | 1 | CLEAR (2026-09-30) | score: 4/10 → 9/10, 15 decisions(패스 7 + 크로스체크 8), 목업 6 생성 / 2 승인 |
 | DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
 
-- **CROSS-MODEL:** Codex 가 리뷰가 놓친 실패 경로 5건(결과 불명·B-7 순서·구 Host 호환·큐 목적지/내구성·공유토큰 폴백)을 찾았고 모두 계획에 흡수. 리뷰와 Codex 가 충돌한 지점 없음(보강만).
-- **VERDICT:** CEO + ENG CLEARED — ready to implement. Design review 권장(페어링 화면 B-2·해제 문구·📵/⛔/배지 UI 가 이번 범위의 절반).
+- **CROSS-MODEL:** ENG 단계 Codex 5건 흡수. DESIGN 단계는 크로스체크(Gemini 3.5 flash·Codex gpt-6-astra)로 8건 검증 — 반대 0, 보완 7(행 흐림 금지·포커스 트랩·'제거/해제' 구분·타이머 취소·짧은 id·ITP 문구·연결됨 판정 기준) 모두 반영. Copilot 은 3회 연속 무응답(제외).
+- **VERDICT:** CEO + ENG + DESIGN CLEARED — ready to implement (0.10.0 T1~T7 + DT1~DT7).
 
 NO UNRESOLVED DECISIONS
