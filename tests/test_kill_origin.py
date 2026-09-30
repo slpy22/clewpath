@@ -119,3 +119,30 @@ def test_proc_info_falls_back_to_cim_without_psutil(monkeypatch):
     assert info and info["parent_name"] == "WindowsTerminal.exe"
     assert peers.classify_origin(info, "cli", host_pid=1)["origin"] == "terminal"
     assert peers._proc_info(99) is None
+
+
+def test_same_process_by_procstart_and_startedat():
+    ct = 1790751403.653433
+    ps = int((ct + peers._FILETIME_EPOCH) * 1e7)
+    info = {"create_time": ct}
+    assert peers.same_process({"proc_start": str(ps)}, info) is True
+    assert peers.same_process({"proc_start": str(ps + 10 * 10**7)}, info) is False, "10초 다름 = 다른 프로세스"
+    assert peers.same_process({"started_at": (ct + 2) * 1000}, info) is True, "startedAt 은 기동 몇 초 뒤"
+    assert peers.same_process({"started_at": (ct - 100) * 1000}, info) is False, "레지스트리보다 나중에 뜬 프로세스"
+    assert peers.same_process({}, info) is None
+    assert peers.same_process({"proc_start": str(ps)}, {"create_time": "/Date(%d)/" % int(ct * 1000)}) is True, "CIM 형식"
+    assert peers.same_process({"proc_start": str(ps)}, None) is None
+
+
+def test_kill_refuses_reused_pid(fake_claude_home, monkeypatch):
+    import json, subprocess
+    d = fake_claude_home / "sessions"; d.mkdir()
+    ct = 1790751403.0
+    (d / "10.json").write_text(json.dumps({"pid": 10, "sessionId": "s1", "procStart": str(int((ct - 500 + peers._FILETIME_EPOCH) * 1e7))}), encoding="utf-8")
+    monkeypatch.setattr(peers, "_proc_info", lambda pid: {**_info(parent="pwsh.exe"), "create_time": ct})
+    from session_manager import webterm
+    monkeypatch.setattr(webterm, "has_terminal", lambda sid: False)
+    ran = []
+    monkeypatch.setattr(subprocess, "run", lambda args, **k: ran.append(args))
+    r = lifecycle.kill_session("s1")
+    assert r["killed"] == [] and r["errors"] == [{"pid": 10, "reason": "pid_reused"}] and ran == []

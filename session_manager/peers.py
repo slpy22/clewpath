@@ -53,6 +53,7 @@ def _read_all() -> list[dict]:
                 "name": str(d.get("name") or ""), "status": str(d.get("status") or ""),
                 "kind": str(d.get("kind") or ""), "socket": str(d.get("messagingSocketPath") or ""),
                 "cwd": str(d.get("cwd") or ""), "started_at": d.get("startedAt"),
+                "proc_start": d.get("procStart"),       # 프로세스 생성 시각(FILETIME, 100ns) — pid 재사용 판별용
                 "entrypoint": str(d.get("entrypoint") or ""),
                 # 어디서 띄운 프로세스인가(2026-09-30 사장님): clewpath|terminal|child|headless|sdk|script|other|unknown
                 "origin": origin_of(d.get("pid"), str(d.get("entrypoint") or "")),
@@ -237,3 +238,44 @@ def resolve(ref: str | None) -> str | None:
     if not hits:
         return _seen_name.get(name)          # 죽은 워커의 이름(실패 감지용)
     return None                              # 동명 2개 이상은 모호 — 해석 안 함
+
+
+# ---- pid 재사용 판별(강제 종료 안전장치, 2026-09-30 Codex 문서 리뷰) ----
+_FILETIME_EPOCH = 11644473600
+
+
+def _create_epoch(info: dict | None) -> float | None:
+    """_proc_info 의 create_time → epoch 초. psutil 은 float, CIM 은 '/Date(ms)/' 또는 WMI 문자열."""
+    if not info:
+        return None
+    ct = info.get("create_time")
+    if isinstance(ct, (int, float)):
+        return float(ct)
+    import re as _re
+    m = _re.search(r"/Date\((\d+)", str(ct or ""))
+    return int(m.group(1)) / 1000.0 if m else None
+
+
+def same_process(peer: dict, info: dict | None, tol: float = 2.0) -> bool | None:
+    """레지스트리 항목(peer)과 지금 그 pid 의 프로세스(info)가 같은 프로세스인가.
+
+    True=같음 / False=다름(pid 재사용) / None=판별 불가(시각 정보 없음).
+    procStart(정확, FILETIME) 우선, 없으면 startedAt(ms, 프로세스 기동 몇 초 뒤 기록)로 '그 전에 떴는가' 만 본다.
+    """
+    ct = _create_epoch(info)
+    if ct is None:
+        return None
+    ps = peer.get("proc_start")
+    try:
+        if ps not in (None, ""):
+            return abs(int(ps) / 1e7 - _FILETIME_EPOCH - ct) <= tol
+    except (TypeError, ValueError):
+        pass
+    sa = peer.get("started_at")
+    try:
+        if sa:
+            sa = float(sa) / 1000.0
+            return (sa - 3600) <= ct <= (sa + tol)
+    except (TypeError, ValueError):
+        pass
+    return None

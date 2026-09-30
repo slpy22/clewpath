@@ -433,6 +433,10 @@ def kill_session(session_id: str) -> dict:
         if not info or "claude" not in blob:
             res["errors"].append({"pid": pid, "reason": "gone_or_not_claude"})
             continue
+        # 낡은 레지스트리의 pid 를 다른 claude 가 재사용했으면 그 프로세스는 이 세션이 아니다 — 죽이지 않는다
+        if peers.same_process(p, info) is False:
+            res["errors"].append({"pid": pid, "reason": "pid_reused"})
+            continue
         try:
             if sys.platform == "win32":
                 subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, timeout=10)

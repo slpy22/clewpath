@@ -40,7 +40,7 @@
 - [x] 외부 접속 설정 화면: 로컬 전용 항목 숨김(🔒 폐지). 0.10.1 게시·적용(13:44). 주의: apply 재기동이 incidents 5 로 기록됨(표준 경로 확인 필요 — 다음 릴리스 때 관찰)
 
 ## 대기: 강제 종료 pid 재사용 방어 (Codex 문서 리뷰 2026-09-30)
-- [ ] `lifecycle.kill_session` 이 레지스트리 `startedAt`/`procStart` 와 프로세스 생성 시각(psutil `create_time`)을 대조해 **다르면 죽이지 않는다**(낡은 레지스트리의 pid 를 다른 claude 가 재사용한 경우). `/T` 자식 범위도 재검토(그 claude 가 띄운 MCP·도구 프로세스까지 끝남 — 의도라면 확인 시트 문구에 명시). 시작점 `session_manager/lifecycle.py` kill_session, 가드 `tests/test_kill_origin.py`. S
+- [x] (2026-09-30 완료: `peers.same_process` — procStart↔create_time 2초 이내, 없으면 startedAt 기준. 다르면 `pid_reused` 로 거부) `lifecycle.kill_session` 이 레지스트리 `startedAt`/`procStart` 와 프로세스 생성 시각(psutil `create_time`)을 대조해 **다르면 죽이지 않는다**(낡은 레지스트리의 pid 를 다른 claude 가 재사용한 경우). `/T` 자식 범위도 재검토(그 claude 가 띄운 MCP·도구 프로세스까지 끝남 — 의도라면 확인 시트 문구에 명시). 시작점 `session_manager/lifecycle.py` kill_session, 가드 `tests/test_kill_origin.py`. S
 
 ## 참고(완료·사고): 출처 마크 미표시 — 설치본 psutil 누락 (Host 0.10.6, 2026-09-30)
 - [x] 원인: pyproject 에 psutil 추가 후 **uv.lock 미갱신** → 업데이트 러너 `uv sync --frozen` 이 새 의존성을 설치하지 않음(0.10.1~0.10.5 모두 🔗). 조치: uv.lock 갱신·psutil 없을 때 PowerShell CIM 폴백·`release.ps1` 에 `uv lock --check` 게이트. 교훈: **의존성을 추가하면 `uv lock` 을 같이 커밋**(게이트가 막아 줌)
