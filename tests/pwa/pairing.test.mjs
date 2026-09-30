@@ -233,3 +233,24 @@ test("watchPairing: id 없으면 아무것도 안 한다", async () => {
   const ctx = await load();
   assert.equal(ev(ctx, "watchPairing(el('div'), '', 0)"), null);
 });
+
+// ---- 설정 화면: 로컬 전용 항목은 외부(릴레이) 접속에서 아예 그리지 않는다(2026-09-30 사장님) ----
+const LOCAL_LOC = { pathname: "/app", href: "http://127.0.0.1:5100/app", origin: "http://127.0.0.1:5100", protocol: "http:", host: "127.0.0.1:5100" };
+function settingsText(ctx) {
+  ev(ctx, "openModal = (t, b) => { globalThis.__sb = b; }; pushSupported = () => true; curPcLabel = () => 'PC';");
+  ev(ctx, "showSettings()");
+  return ev(ctx, "globalThis.__sb").text;
+}
+test("showSettings(릴레이): 2FA·외부 접속 기기·휴지통·워커 스킬·진단·업데이트 와 빈 '보안' 섹션이 안 보인다", async () => {
+  const ctx = await load();
+  const t = settingsText(ctx);
+  for (const s of ["2차 인증", "외부 접속 기기", "휴지통", "워커 스킬", "진단", "업데이트", "보안", "🔒"]) assert.ok(!t.includes(s), "외부에서 숨김: " + s);
+  for (const s of ["내 PC", "이 기기 초기화", "알림 설정", "세션 가져오기", "API 사용량", "정보 · 진단", "데이터"]) assert.ok(t.includes(s), "외부에서 표시: " + s);
+});
+test("showSettings(로컬): 로컬 전용 항목이 전부 보인다", async () => {
+  const ctx = await load({ location: LOCAL_LOC });
+  assert.equal(ev(ctx, "MODE"), "local");
+  const t = settingsText(ctx);
+  for (const s of ["2차 인증", "외부 접속 기기", "휴지통", "워커 스킬", "설치 상태", "재설치", "보안"]) assert.ok(t.includes(s), "로컬 표시: " + s);
+  assert.ok(!t.includes("이 기기 초기화") && !t.includes("내 PC"), "로컬엔 폰 전용 항목 없음");
+});

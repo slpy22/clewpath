@@ -3684,21 +3684,22 @@ $('#btn-settings').onclick=()=>showSettings();
 // 원격에서 숨기지 않고 🔒+안내로 보여준다 — 기능의 존재와 보안 설계를 설명.
 function showSettings(){
   const body=el('div');
-  const sec=(t)=>body.appendChild(el('div','setsec',t));
+  // 로컬 전용 항목(opt.local)은 외부(릴레이) 접속에선 아예 그리지 않는다 — 🔒 잠금 표시로 두면 누를 수 없는 줄만
+  // 남는다(2026-09-30 사장님). 섹션 제목은 실제로 항목이 하나라도 들어갈 때만 붙인다(빈 섹션 방지).
+  let pendingSec=null;
+  const sec=(t)=>{ pendingSec=el('div','setsec',t); };
+  const flushSec=()=>{ if(pendingSec){ body.appendChild(pendingSec); pendingSec=null; } };
+  const add=(node)=>{ flushSec(); body.appendChild(node); };
   const row=(icon,title,desc,fn,opt)=>{
     opt=opt||{};
+    if(opt.local && MODE!=='local') return;
     const b=el('button','setrow');
     b.appendChild(el('span','si',icon));
     const st=el('span','st'); st.appendChild(el('span',null,title));
     if(desc){ const s=document.createElement('small'); s.textContent=desc; st.appendChild(s); }
     b.appendChild(st);
-    const lockRemote=opt.local && MODE!=='local';
-    if(lockRemote) b.appendChild(el('span','lock','🔒'));
-    b.onclick=()=>{
-      if(lockRemote){ toast('이 기능은 PC 의 로컬 화면(127.0.0.1:5100)에서만 사용할 수 있습니다'); return; }
-      closeModal(); fn();
-    };
-    body.appendChild(b);
+    b.onclick=()=>{ closeModal(); fn(); };
+    add(b);
   };
 
   sec('연결 · PC');
@@ -3709,17 +3710,17 @@ function showSettings(){
     if(VERSTATE.cur) parts.push('v'+VERSTATE.cur+(VERSTATE.latest?' → v'+VERSTATE.latest:''));
     parts.push(MODE==='local'?'로컬 접속':('릴레이 접속'+(conn&&conn.e2eeKey?' · 🔒 E2EE':'')));
     const s=document.createElement('small'); s.textContent=parts.join(' · '); st.appendChild(s);
-    info.appendChild(st); body.appendChild(info); }
+    info.appendChild(st); add(info); }
   if(MODE==='relay'){
     row('🖧','내 PC','저장된 PC · 전환 · 이름 변경 · 페어링 해제',showPcs);
     if(iosHintNeeded(navigator.userAgent, !!navigator.standalone, !!(window.ClewBridge&&ClewBridge.isApp())))
-      body.appendChild(el('div','cwd','홈 화면에 추가해 앱처럼 열어보세요 — Safari 탭은 오래 안 쓰면 페어링이 지워질 수 있습니다.'));
+      add(el('div','cwd','홈 화면에 추가해 앱처럼 열어보세요 — Safari 탭은 오래 안 쓰면 페어링이 지워질 수 있습니다.'));
     row('🧹','이 기기 초기화','저장된 페어링·접속 자격·암호화 키를 모두 지웁니다',resetDevice);
   }
 
   sec('알림');
   if(pushSupported()) row('🔔','알림 설정','권한 요청·작업 완료 푸시 · 받는 기기 관리',togglePush);
-  else body.appendChild(el('div','cwd','이 브라우저는 웹 푸시를 지원하지 않습니다'));
+  else add(el('div','cwd','이 브라우저는 웹 푸시를 지원하지 않습니다'));
 
   sec('보안');
   row('🔒','2차 인증(2FA)','원격 접속 보호 · 설정 변경',showSecurity,{local:true});
@@ -3731,10 +3732,11 @@ function showSettings(){
   row('📦','워커 스킬 설치','하위 세션 분배 스킬(clewpath-workers)을 ~/.claude/skills 에 설치',installWorkersSkill,{local:true});
 
   sec('정보 · 진단');
+  // 업데이트 적용은 로컬 전용(update/apply 덴리스트) — 외부에선 위 '연결 · PC' 줄의 v현재 → v최신 표시로 갈음
   row('⬆','업데이트',
       VERSTATE.latest?('새 버전 v'+VERSTATE.latest+' 설치 가능'):'현재 버전 확인 · 재설치',
       ()=>{ if(VERSTATE.latest) showUpdateApply(VERSTATE.cur,VERSTATE.latest);
-            else checkUpdateNow(VERSTATE.cur); });
+            else checkUpdateNow(VERSTATE.cur); },{local:true});
   row('📈','API 사용량','토큰 · 환산 비용 통계',showUsage);
   row('🩺','진단','설치 상태 · 세션 수 · 설정 파일 위치',showDiagnostics,{local:true});
 
