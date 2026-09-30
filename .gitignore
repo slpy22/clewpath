@@ -32,3 +32,6 @@ icons/
 
 # 워커 등록부(프로젝트 상태, 세션 UUID 포함)
 .clewpath/
+
+# gstack design 로컬 산출(사용자 데이터, 리포 밖 정본 ~/.gstack)
+.gstack/
