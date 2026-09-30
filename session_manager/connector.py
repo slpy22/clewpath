@@ -260,6 +260,46 @@ class Connector:
         msg.update(kw)
         await self.send(msg)
 
+    # ---- 기기 인증(auth 프레임) ----
+    async def _auth(self, rid, cid, params: dict) -> None:
+        """params: token(필수) · pv(클라이언트 규약 버전) · name(폰이 보고하는 자기 이름, B-1).
+
+        name 은 등록부의 임시 이름(name_auto)만 채운다 — 사용자가 PC 에서 붙인 이름은 보존.
+        정규화는 devices.clean_name 한 곳(제어문자·40자). 구 폰은 name 을 안 보내고, 구 Host 는
+        name 을 무시한다(양쪽 다 무해).
+        """
+        from session_manager import devices
+
+        dev = devices.verify(params.get("token"))
+        if not dev:
+            await self._res(rid, False, error="auth_invalid")
+            return
+        if cid is not None:
+            # 인증 시점의 토큰 세대를 함께 보관(재발급 감지용)
+            dev = {**dev, "tver": devices.token_version(dev["id"])}
+            self.authed[cid] = dev
+        devices.touch(dev["id"])
+        filled = devices.set_name_if_empty(dev["id"], params.get("name"))
+        if filled:
+            dev["name"] = filled
+            if cid is not None:
+                self.authed[cid]["name"] = filled
+        # ver/hostname: 원격 화면이 "지금 붙은 PC 가 어떤 버전·어느 컴퓨터인지"
+        # 보여줄 유일한 통로. (auth 응답만 커넥터가 직접 채워 보낸다)
+        from session_manager import appconfig
+        # pv: 클라이언트(앱/웹)가 Host 와 규약 일치를 확인하는 유일한 통로.
+        # 클라이언트가 보낸 pv 가 더 높으면(=Host 가 구버전) 로그로 남긴다.
+        try:
+            client_pv = int(params.get("pv") or 0)
+        except (TypeError, ValueError):
+            client_pv = 0
+        if client_pv > PROTOCOL_VERSION:
+            _log(f"[pv] client pv={client_pv} > host pv={PROTOCOL_VERSION} - Host 업데이트 권장")
+        await self._res(rid, True, data={"id": dev["id"], "name": dev["name"],
+                                         "ver": CLIENT_VERSION,
+                                         "pv": PROTOCOL_VERSION,
+                                         "hostname": devices.clean_name(appconfig.machine_name(), "PC")})
+
     # ---- 메서드 디스패치 ----
     async def _handle_req(self, frame: dict) -> None:
         rid = frame.get("id")
@@ -273,30 +313,7 @@ class Connector:
 
             # 기기 인증: 토큰 → 이 cid 를 인증 처리
             if method == "auth":
-                dev = devices.verify(params.get("token"))
-                if dev:
-                    if cid is not None:
-                        # 인증 시점의 토큰 세대를 함께 보관(재발급 감지용)
-                        dev = {**dev, "tver": devices.token_version(dev["id"])}
-                        self.authed[cid] = dev
-                    devices.touch(dev["id"])
-                    # ver/hostname: 원격 화면이 "지금 붙은 PC 가 어떤 버전·어느 컴퓨터인지"
-                    # 보여줄 유일한 통로. (auth 응답만 커넥터가 직접 채워 보낸다)
-                    from session_manager import appconfig
-                    # pv: 클라이언트(앱/웹)가 Host 와 규약 일치를 확인하는 유일한 통로.
-                    # 클라이언트가 보낸 pv 가 더 높으면(=Host 가 구버전) 로그로 남긴다.
-                    try:
-                        client_pv = int(params.get("pv") or 0)
-                    except (TypeError, ValueError):
-                        client_pv = 0
-                    if client_pv > PROTOCOL_VERSION:
-                        _log(f"[pv] client pv={client_pv} > host pv={PROTOCOL_VERSION} - Host 업데이트 권장")
-                    await self._res(rid, True, data={"id": dev["id"], "name": dev["name"],
-                                                     "ver": CLIENT_VERSION,
-                                                     "pv": PROTOCOL_VERSION,
-                                                     "hostname": appconfig.machine_name()})
-                else:
-                    await self._res(rid, False, error="auth_invalid")
+                await self._auth(rid, cid, params)
                 return
 
             # 인증 강제(enforced) 시: 미인증/폐기 기기의 모든 메서드(ping 제외) 거부.

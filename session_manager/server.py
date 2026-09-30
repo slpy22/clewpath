@@ -708,11 +708,20 @@ def create_app() -> FastAPI:
         if not _is_local(request):
             return JSONResponse({"error": "이 PC(로컬)에서만 기기를 추가할 수 있습니다."},
                                 status_code=403)
-        r = devices.add_device(name)
-        # 이 기기 전용 client 자격증명을 CP 에서 발급(실패해도 공유 토큰으로 폴백)
+        # 이 기기 전용 client 자격증명을 CP 에서 발급. CP 가 설정된 환경에서 발급 실패는 오류(503)다 —
+        # 공유토큰 폴백은 CP 미설정(수동 room) 구성에서만(eng E-D19: 폴백으로 만든 기기는
+        # self-revoke·동기화가 불가능한 구형 페어링이 되므로 생산하지 않는다). 행은 발급 뒤에 만든다.
         from session_manager import cp_client
-        cc = cp_client.issue_client_credential(device_id=r["id"], name=name or "")
-        if cc:
+        name = devices.clean_name(name)
+        r = devices.add_device(name)
+        cc = None
+        if cp_client.cp_url():
+            cc = cp_client.issue_client_credential(device_id=r["id"], name=name)
+            if not cc:
+                devices.remove(r["id"])          # 행을 남기지 않는다(구형 페어링 생산 금지)
+                return JSONResponse({"error": "cp_unavailable",
+                                     "message": "CP 연결 실패 — 잠시 후 다시 시도하세요."},
+                                    status_code=503)
             devices.set_client_public_id(r["id"], cc["client_public_id"])
         r["client_scoped"] = bool(cc)
         link = _pair_link(r["token"], cc)
@@ -737,19 +746,31 @@ def create_app() -> FastAPI:
         if not _is_local(request):
             return JSONResponse({"error": "이 PC(로컬)에서만 변경할 수 있습니다."},
                                 status_code=403)
+        row = next((d for d in devices.list_devices() if d["id"] == device_id), None)
+        if not row or row["revoked"]:
+            return JSONResponse({"error": "not_found_or_revoked"}, status_code=404)
+        name = row["name"]
+        from session_manager import cp_client
+        old_cpub = devices.get_client_public_id(device_id)
+        # 순서(eng E-D7/B-8): 새 cpub 발급 → 성공했을 때만 옛 cpub 폐기·토큰 회전.
+        # 발급이 실패하면 아무것도 바꾸지 않는다(옛 자격·옛 QR 그대로, 503) — CP 가 잠깐 죽은
+        # 순간에 기기가 자격을 잃지 않게. 옛 cpub 폐기 실패/타임아웃은 '불명' 이라 로그만 남기고
+        # 0.11.0 의 cp_pending 재시도(E-D15)가 정리한다.
+        cc = None
+        if cp_client.cp_url():
+            cc = cp_client.issue_client_credential(device_id=device_id, name=name)
+            if not cc:
+                return JSONResponse({"error": "cp_unavailable",
+                                     "message": "CP 연결 실패 — 잠시 후 다시 시도하세요. 기존 QR 은 그대로 유효합니다."},
+                                    status_code=503)
         tok = devices.rotate_token(device_id)
         if not tok:
             return JSONResponse({"error": "not_found_or_revoked"}, status_code=404)
         connector.request_drop_device(device_id)   # 옛 자격의 열린 연결·스트림 즉시 종료
-        name = next((d["name"] for d in devices.list_devices()
-                     if d["id"] == device_id), "")
-        from session_manager import cp_client
-        old_cpub = devices.get_client_public_id(device_id)
-        if old_cpub:
-            cp_client.revoke_client_credential(old_cpub)   # 이전 자격 무효화
-        cc = cp_client.issue_client_credential(device_id=device_id, name=name)
         if cc:
             devices.set_client_public_id(device_id, cc["client_public_id"])
+        if old_cpub and not cp_client.revoke_client_credential(old_cpub):
+            print(f"[devices] reissue {device_id[:8]}: old cpub revoke unconfirmed ({old_cpub[:12]}) - 0.11.0 sync will retry")
         r = {"id": device_id, "name": name, "token": tok,
              "client_scoped": bool(cc), "room": _active_room()}
         r["pair_url"] = _pair_link(tok, cc)

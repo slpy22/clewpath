@@ -48,7 +48,7 @@
 `/plan-design-review` 완료(2026-09-30, 4/10→9/10, 크로스체크 Gemini·Codex 8건 채택) → 설계 문서 §디자인 리뷰(위계·상태 표·스토리보드·5기호 1칩·confirmSheet·문구·E-2·ITP 안내·QR 연결됨 전환·a11y) + DT1~DT7(T5/T6/T11 에 흡수). 승인 목업 `~/.gstack/projects/006_session_manager/designs/*-20260930/`.
 
 ### Phase 1-a — Host 0.10.0 (UI·용어·Host 내부 준비, 007 무변) — eng T1~T7 + design DT1~DT7
-- [ ] T1 devices `_mutate`+RLock·`clean_name` / T2 `Connector._auth()`+폰 이름 보고 / T3 재발급 재정렬(issue→revoke)·CP 설정 시 폴백 금지·구형 배지
+- [x] T1 devices `_mutate`+RLock·`clean_name`·`set_name_if_empty`·`client_scoped` / T2 `Connector._auth()`+폰 이름 보고 / T3 재발급 재정렬(issue→revoke)·CP 설정 시 폴백 금지(503)·구형 배지 필드 — 2026-09-30, 테스트 +20(383)
 - [ ] T4 `connect()` auth 결과 / T5 `#pair` 1벌·용어·'PC 에서도 삭제' 문구·공용 함수·`sm_pcs_relay` 전부 삭제·pv 저장 / T6 브리지 `?relay=`+E-2 버튼+`persistSync`(다음 TestFlight) / T7 007 `test_cp_client_credentials.py`(revoke 4건, 배포 없음)
 - [ ] 회귀 테스트 5건(잠금·notice 순서·재정렬·브리지·로컬 select) → release.ps1 0.10.0
 

@@ -6,6 +6,12 @@
   등록 기기가 0개면 아무도 통과 못 하므로 사실상 '외부 전면 차단'(별도 킬 스위치 없음).
 - 파일: ~/.claude/session_manager/devices.json  (로컬 006만 기록, 커넥터는 같은 프로세스에서 읽음)
 
+동시성(0.10.0, eng E-D3):
+- 쓰기는 전부 `_mutate(fn)` 을 통한다 — 모듈 RLock 아래서 읽기→수정→쓰기를 원자화한다.
+  커넥터(asyncio 스레드)의 touch 와 로컬 화면(FastAPI 스레드풀)의 삭제/이름 변경, 0.11.0 의
+  CP 동기화 스레드(revoked 기록)가 겹쳐도 앞의 변경을 뒤의 쓰기가 지우지 않는다.
+- 네트워크 호출은 잠금 밖에서 한다(E-D14). 잠금 안에서는 파일 I/O 만.
+
 보안 경계:
 - 이 레지스트리는 '누가(기기)'를 다루는 애플리케이션 계층 인증이다.
 - 릴레이 접속용 공유 client 토큰은 '릴레이에 닿을 수 있는가'만 담당(전송 계층).
@@ -16,10 +22,17 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import secrets
+import threading
 import time
+from typing import Callable
 
 from session_manager import config
+
+_LOCK = threading.RLock()
+NAME_MAX = 40
+_CTRL = re.compile(r"[\x00-\x1f\x7f]")
 
 
 def _file():
@@ -51,12 +64,45 @@ def _save(d: dict) -> None:
     os.replace(tmp, f)
 
 
+def _mutate(fn: Callable[[dict], object]):
+    """잠금 아래서 읽기→fn(d)→쓰기. fn 이 반환하는 값을 그대로 돌려준다.
+
+    fn 이 `None` 을 반환하면 '변경 없음' 으로 보고 저장하지 않는다(불필요한 쓰기 방지).
+    저장이 필요하면 무엇이든 None 이 아닌 값을(예: True, 새 토큰) 반환할 것.
+    """
+    with _LOCK:
+        d = _data()
+        r = fn(d)
+        if r is not None:
+            _save(d)
+        return r
+
+
+def _read(fn: Callable[[dict], object]):
+    with _LOCK:
+        return fn(_data())
+
+
 def _hash(tok: str) -> str:
     return hashlib.sha256(tok.encode("utf-8")).hexdigest()
 
 
 def _now() -> int:
     return int(time.time())
+
+
+def clean_name(raw: str | None, fallback: str = "") -> str:
+    """이름 정규화 한 곳(eng E-D9): 제어문자 제거·연속 공백 1칸·양끝 공백 제거·NAME_MAX 자.
+
+    add/rename(사용자 입력)·폰이 auth 때 보고하는 이름·appconfig.machine_name() 이 모두 이걸 탄다 —
+    PC 목록과 폰 목록에 같은 기기가 항상 같은 이름으로 보인다. 빈 결과는 fallback.
+    """
+    s = re.sub(r"[\t\r\n\f\v 　]", " ", str(raw or ""))   # 탭·줄바꿈·전각 공백 → 한 칸(제어문자 제거보다 먼저)
+    s = _CTRL.sub("", s)                                            # 나머지 제어문자(\x1f 등)는 흔적 없이 제거
+    s = re.sub(r" {2,}", " ", s).strip()
+    if len(s) > NAME_MAX:
+        s = s[:NAME_MAX].rstrip()
+    return s or fallback
 
 
 # ---- 기기 인증 ----
@@ -74,85 +120,113 @@ def enforced() -> bool:
 
 # ---- 기기 CRUD ----
 def list_devices() -> list[dict]:
-    """토큰 해시를 제외한 안전 뷰."""
-    out = []
-    for x in _data()["devices"]:
-        out.append({
-            "id": x["id"],
-            "name": x.get("name") or x["id"][:8],
-            "created": x.get("created"),
-            "last_seen": x.get("last_seen"),
-            "revoked": bool(x.get("revoked")),
-        })
-    return out
+    """토큰 해시를 제외한 안전 뷰. client_scoped=False 는 공유토큰(구형) 페어링 — 화면에 🔗 배지."""
+    def _f(d):
+        out = []
+        for x in d["devices"]:
+            out.append({
+                "id": x["id"],
+                "name": x.get("name") or x["id"][:8],
+                "created": x.get("created"),
+                "last_seen": x.get("last_seen"),
+                "revoked": bool(x.get("revoked")),
+                "client_scoped": bool(x.get("client_public_id")),
+            })
+        return out
+    return _read(_f)
 
 
 def add_device(name: str | None = None) -> dict:
-    """새 기기 등록. 반환에 token(1회성 원문) 포함 — 저장은 해시만."""
-    d = _data()
+    """새 기기 등록. 반환에 token(1회성 원문) 포함 — 저장은 해시만.
+
+    이름이 비어 있으면 id 앞 8자를 임시 이름으로 두고, 폰이 auth 때 보고한 이름으로 채워진다
+    (set_name_if_empty). 임시 이름 여부는 name_auto 로 기억한다.
+    """
     did = secrets.token_hex(8)
     tok = "dev-" + secrets.token_urlsafe(24)
-    nm = (name or "").strip() or did[:8]
-    d["devices"].append({
-        "id": did, "name": nm, "token_hash": _hash(tok),
-        "created": _now(), "last_seen": None, "revoked": False,
-    })
-    _save(d)
-    return {"id": did, "name": nm, "token": tok}
+    nm = clean_name(name)
+
+    def _f(d):
+        d["devices"].append({
+            "id": did, "name": nm or did[:8], "name_auto": not nm, "token_hash": _hash(tok),
+            "created": _now(), "last_seen": None, "revoked": False,
+        })
+        return True
+    _mutate(_f)
+    return {"id": did, "name": nm or did[:8], "token": tok}
 
 
 def verify(token: str | None) -> dict | None:
     """토큰 → 활성 기기(dict) 또는 None. revoked 는 실패."""
     if not token:
         return None
-    d = _data()
     h = _hash(token)
-    for x in d["devices"]:
-        if x.get("token_hash") == h and not x.get("revoked"):
-            return {"id": x["id"], "name": x.get("name")}
-    return None
+
+    def _f(d):
+        for x in d["devices"]:
+            if x.get("token_hash") == h and not x.get("revoked"):
+                return {"id": x["id"], "name": x.get("name")}
+        return None
+    return _read(_f)
 
 
 def is_active(did: str) -> bool:
     """기기 id 가 아직 유효한가(세션 중 폐기/삭제 반영용)."""
-    d = _data()
-    for x in d["devices"]:
-        if x["id"] == did:
-            return not x.get("revoked")
-    return False
+    def _f(d):
+        for x in d["devices"]:
+            if x["id"] == did:
+                return not x.get("revoked")
+        return False
+    return _read(_f)
 
 
 def touch(did: str) -> None:
-    d = _data()
-    for x in d["devices"]:
-        if x["id"] == did:
-            x["last_seen"] = _now()
-            _save(d)
-            return
+    def _f(d):
+        for x in d["devices"]:
+            if x["id"] == did:
+                x["last_seen"] = _now()
+                return True
+        return None
+    _mutate(_f)
+
+
+def set_name_if_empty(did: str, name: str | None) -> str | None:
+    """폰이 auth 때 보고한 이름으로 **임시 이름만** 채운다(B-1). 사용자가 붙인 이름은 건드리지 않는다.
+
+    반환: 채워진 이름, 변경 없으면 None.
+    """
+    nm = clean_name(name)
+    if not nm:
+        return None
+
+    def _f(d):
+        for x in d["devices"]:
+            if x["id"] == did and x.get("name_auto", not x.get("name")):
+                x["name"] = nm
+                x["name_auto"] = False
+                return nm
+        return None
+    return _mutate(_f)
 
 
 def revoke(did: str) -> bool:
     """접속만 차단하고 기록은 남김(비활성화). 목록에 '폐기됨'으로 표시."""
-    d = _data()
-    changed = False
-    for x in d["devices"]:
-        if x["id"] == did and not x.get("revoked"):
-            x["revoked"] = True
-            changed = True
-    if changed:
-        _save(d)
-    return changed
+    def _f(d):
+        for x in d["devices"]:
+            if x["id"] == did and not x.get("revoked"):
+                x["revoked"] = True
+                return True
+        return None
+    return bool(_mutate(_f))
 
 
 def remove(did: str) -> bool:
     """레지스트리에서 기기를 완전히 삭제(토큰 해시 제거 → 재페어링 필요)."""
-    d = _data()
-    before = len(d["devices"])
-    d["devices"] = [x for x in d["devices"] if x.get("id") != did]
-    if len(d["devices"]) != before:
-        _save(d)
-        return True
-    return False
+    def _f(d):
+        before = len(d["devices"])
+        d["devices"] = [x for x in d["devices"] if x.get("id") != did]
+        return True if len(d["devices"]) != before else None
+    return bool(_mutate(_f))
 
 
 def rotate_token(did: str) -> str | None:
@@ -160,15 +234,16 @@ def rotate_token(did: str) -> str | None:
 
     원문은 저장하지 않으므로 기존 QR 을 '다시 볼' 수는 없다 → 다시 만들어 준다.
     """
-    d = _data()
-    for x in d["devices"]:
-        if x["id"] == did and not x.get("revoked"):
-            tok = "dev-" + secrets.token_urlsafe(24)
-            x["token_hash"] = _hash(tok)
-            x["rotated_at"] = _now()
-            _save(d)
-            return tok
-    return None
+    tok = "dev-" + secrets.token_urlsafe(24)
+
+    def _f(d):
+        for x in d["devices"]:
+            if x["id"] == did and not x.get("revoked"):
+                x["token_hash"] = _hash(tok)
+                x["rotated_at"] = _now()
+                return tok
+        return None
+    return _mutate(_f)
 
 
 def token_version(did: str) -> int:
@@ -177,45 +252,53 @@ def token_version(did: str) -> int:
     커넥터가 인증 시점의 값을 들고 있다가 매 요청 대조한다 → 재발급하면
     '이미 인증된 기존 연결'도 즉시 무효가 된다(삭제와 동일한 실효성).
     """
-    for x in _data()["devices"]:
-        if x["id"] == did:
-            return int(x.get("rotated_at") or 0)
-    return -1
+    def _f(d):
+        for x in d["devices"]:
+            if x["id"] == did:
+                return int(x.get("rotated_at") or 0)
+        return -1
+    return _read(_f)
 
 
-def set_client_public_id(did: str, client_public_id: str) -> bool:
-    """기기에 CP 발급 client 자격증명 id 를 연결(삭제 시 회수하기 위해)."""
-    d = _data()
-    for x in d["devices"]:
-        if x["id"] == did:
-            x["client_public_id"] = client_public_id
-            _save(d)
-            return True
-    return False
+def set_client_public_id(did: str, client_public_id: str | None) -> bool:
+    """기기에 CP 발급 client 자격증명 id 를 연결(삭제 시 회수하기 위해). None 이면 연결 해제."""
+    def _f(d):
+        for x in d["devices"]:
+            if x["id"] == did:
+                if client_public_id:
+                    x["client_public_id"] = client_public_id
+                else:
+                    x.pop("client_public_id", None)
+                return True
+        return None
+    return bool(_mutate(_f))
 
 
 def get_client_public_id(did: str) -> str | None:
-    for x in _data()["devices"]:
-        if x["id"] == did:
-            return x.get("client_public_id")
-    return None
+    def _f(d):
+        for x in d["devices"]:
+            if x["id"] == did:
+                return x.get("client_public_id")
+        return None
+    return _read(_f)
 
 
 def rename(did: str, name: str) -> bool:
-    d = _data()
-    changed = False
-    for x in d["devices"]:
-        if x["id"] == did:
-            x["name"] = (name or "").strip() or x["id"][:8]
-            changed = True
-    if changed:
-        _save(d)
-    return changed
+    nm = clean_name(name)
+
+    def _f(d):
+        for x in d["devices"]:
+            if x["id"] == did:
+                x["name"] = nm or x["id"][:8]
+                x["name_auto"] = not nm
+                return True
+        return None
+    return bool(_mutate(_f))
 
 
 def status() -> dict:
     """UI 상태 요약."""
-    d = _data()
-    active = sum(1 for x in d["devices"] if not x.get("revoked"))
-    return {"enforced": True,
-            "active": active, "total": len(d["devices"])}
+    def _f(d):
+        active = sum(1 for x in d["devices"] if not x.get("revoked"))
+        return {"enforced": True, "active": active, "total": len(d["devices"])}
+    return _read(_f)
