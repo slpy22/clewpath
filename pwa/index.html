@@ -827,7 +827,7 @@ class Conn{
           if(!done){ if(this.devToken){ this._doAuth().then(a=>{ if(!done){done=true;res({...m, auth:a});} }); }
                      else { done=true; res({...m, auth:null}); } }
           return; }
-        if(m.type==='peer'){ if(m.event==='agent_online')this.peer=true;
+        if(m.type==='peer'){ if(m.event==='agent_online'){ this.peer=true; setTimeout(()=>{ try{ refreshVer(); }catch(e){} }, 3000); }   // PC 재기동(업데이트) 뒤 버전 확인
           if(m.event==='agent_offline')this.peer=false; this.onstatus(true,this.peer); return; }
         // 나머지: 봉투면 복호(수신 직렬화로 순서 보존) 후 디스패치
         this._rxq=this._rxq.then(async()=>{
@@ -1130,7 +1130,10 @@ setInterval(async()=>{
 
 // 모바일에서 앱을 내렸다 올리면 WS 는 이미 죽어 있다(onclose 가 eof 통지). 화면이 다시
 // 보이는 순간 전경 탭을 재접속 — 얼어붙은 화면을 '살아있는 척' 두지 않는다.
-document.addEventListener('visibilitychange',()=>{ if(!document.hidden) reattachForegroundTab(); });
+document.addEventListener('visibilitychange',()=>{ if(!document.hidden){ reattachForegroundTab(); verOnResume(); } });
+// 탭이 다시 보일 때 PC 버전을 확인(1분에 한 번) — 오래 열어 둔 탭이 업데이트를 놓치지 않게
+let _verResumeAt=0;
+function verOnResume(){ const n=Date.now(); if(n-_verResumeAt<60000) return; _verResumeAt=n; try{ refreshVer(); }catch(e){} }
 
 // ---- 알림 클릭 -> 세션 열기 (푸시에서 sid 전달) ----
 let PENDING_OPEN_SID = (location.hash.match(/#open=([^&]+)/)||[])[1] || '';
@@ -4155,8 +4158,27 @@ function onPcSelect(){
 }
 // 버전 상태는 설정 화면(⑤ 정보)이 소비한다. 헤더의 ⚙ 에는 새 버전일 때만 점 표시.
 let VERSTATE={cur:null, latest:null};
+// 이 화면(탭)을 연 뒤 PC 의 ClewPath 버전이 바뀌었나 — 폰에 오래 열어 둔 탭은 Host 를 업데이트해도 옛 화면 코드로
+// 동작한다(2026-09-30 실사용: 옛 탭에서 누른 '페어링 해제' 가 서버 폐기 없이 끝남). PC 별로 처음 본 버전과 비교.
+const PAGE_HOST_VER={};
+function hostVerKey(){ try{ return (typeof T!=='undefined'&&T===relayT)?(LS.getItem('sm_room')||'relay'):'local'; }catch(e){ return 'local'; } }
+function noteHostVer(cur){
+  const k=hostVerKey();
+  if(!PAGE_HOST_VER[k]){ PAGE_HOST_VER[k]=cur; return false; }
+  if(PAGE_HOST_VER[k]===cur) return false;
+  showStaleBanner(cur); return true;
+}
+function showStaleBanner(cur){
+  if(document.getElementById('stale-banner')) return;
+  const b=el('div','stale-banner'); b.id='stale-banner';
+  b.style.cssText='position:fixed;left:8px;right:8px;bottom:calc(8px + env(safe-area-inset-bottom));z-index:9999;padding:10px 12px;border-radius:10px;background:var(--accent,#2563eb);color:#fff;display:flex;gap:8px;align-items:center;box-shadow:0 4px 16px rgba(0,0,0,.3)';
+  b.appendChild(el('div','', 'PC 의 ClewPath 가 v'+cur+' 로 업데이트됐습니다 — 이 화면은 이전 버전이라 새로고침해야 새 기능이 제대로 동작합니다.'));
+  const go=el('button','btn sm','새로고침'); go.onclick=()=>location.reload(); b.appendChild(go);
+  document.body.appendChild(b);
+}
 function showVer(cur, latest){
   if(!cur) return;
+  noteHostVer(cur);
   VERSTATE={cur, latest: latest||null};
   const g=$('#btn-settings');
   if(g) g.classList.toggle('upd', !!latest);

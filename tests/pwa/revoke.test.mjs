@@ -150,3 +150,14 @@ test("showDevices: 칩 우선순위 📵(폰) > ⏳ > 🔗 > 💤(90일), 진단
   const d = ev(ctx, "globalThis.__diag");
   assert.ok(d.includes("📵 1") && d.includes("CP 동기화"), d);
 });
+
+test("noteHostVer/showStaleBanner: 이 탭에서 처음 본 PC 버전과 달라지면 새로고침 배너 1개(PC 별)", async () => {
+  const ctx = await load();
+  ev(ctx, "globalThis.__b = 0; showStaleBanner = (v) => { globalThis.__b++; globalThis.__bv = v; };");
+  assert.equal(ev(ctx, "noteHostVer('0.10.8')"), false, "처음 본 버전은 기준");
+  assert.equal(ev(ctx, "noteHostVer('0.10.8')"), false);
+  assert.equal(ev(ctx, "noteHostVer('0.11.0')"), true);
+  assert.equal(ev(ctx, "globalThis.__bv"), "0.11.0");
+  ev(ctx, "showVer('0.11.1', null)");
+  assert.equal(ev(ctx, "globalThis.__b"), 2, "showVer 경유로도 감지");
+});
