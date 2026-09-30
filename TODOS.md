@@ -75,7 +75,9 @@
 - [x] T12 `jsonl_log.py`(잠금+8MB 회전 1세대) → policy.audit 이전 + `pairing-audit.jsonl`(first_auth·delete·reissue·revoke·self_revoke[bye_device/cp_sync]) + E-3 ① 첫 접속 웹푸시(재접속 제외) — 테스트 +5
 - [x] T14 `tests/e2e/test_pairing_flow.py`(`@e2e`, `SM_E2E_CP_URL` 있을 때만, `SM_E2E_ADMIN_TOKEN` 으로 정리) + pyproject `addopts -m 'not e2e'` + release.ps1 e2e 단계. **실 CP 에 T8 엔드포인트가 배포된 뒤에야 통과** — 0.11.0 릴리스 전 /deploy-request 후 `SM_E2E_CP_URL=https://clewpath.pyongso.com/cp` 로 1회 실행
 - [x] T11 PWA 폰: `PV=2`, 폐기 큐 `{cp,public_id,secret,room,ts}`·persistSync 순서·항목 cp 로만 플러시·복원 병합, `unpairPc` 온라인=bye_device→revoke-self / 오프라인=큐, B-7 성공 후 옛 cpub 큐, pv≥2 게이팅(구 Host 는 D4 문구·'CP 폐기됨(PC 미반영)'), notice(device_removed/reissued)·CP 401·auth_invalid → ⛔[다시 페어링][지우기]·🔄 배지, resetDevice 큐 보존, PC 📱 목록 📵/⏳ 칩(revoked_by/cp_pending)·🩺 cp_synced / T13 💤 90일 / T15 앱 `#cb-pair` 오버레이 폐기 → TestFlight — 2026-09-30 구현(tests/pwa/revoke.test.mjs 9건, PWA 76). 앱 반영은 mac-build-tasks 업데이트 8(TestFlight 대기)
-- [ ] 0.11.0 릴리스 순서: ① /deploy-request(007 CP `/client/status`·`/client/revoke-self` + nginx limit_req `/cp/client/(token|revoke-self|status)`) ② e2e 1회 ③ release.ps1 0.11.0 ④ 앱 TestFlight
+- [x] 0.11.0 릴리스(2026-09-30): ① 서비스 모니터가 CP 재시작 + nginx `sm_cp_client` 30r/m burst 20(실측 21번째 429) ② 실 CP e2e 2/2 ③ Host 0.11.0 게시·적용(34f2efc, v0.11.0)
+- [ ] 앱 TestFlight — mac-build-tasks 업데이트 7+8 동반(맥 측)
+- [ ] 사장님 실사용 확인: 폰에서 PC 해제 → PC 📱 목록 📵 / PC 에서 기기 삭제·QR 재발급 → 폰 ⛔·🔄
 
 ### Phase 2 (고도화) — 대기
 - [ ] **E-1 양쪽 목록 상태 표시**(폰: PC 켜짐/꺼짐·마지막, PC: 기기 접속 중) — 왜: 열어보기 전에 상태를 앎. 이번엔 연기(Codex: '켜짐' 은 데이터가 보증 못 함). 설계 필수 항목: 릴레이→CP 즉시 상태 보고(seq, 알림 grace 와 분리), CP TTL·역전 방지, 폰 갱신 주기, 마지막 성공값+'확인 N분 전'·1시간 넘으면 숨김, Host `authed` 재접속 초기화(T2 선행). M→S
