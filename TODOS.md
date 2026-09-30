@@ -52,7 +52,7 @@
 - [x] T4 `connect()` auth 결과·페어링 실패 시 이전 자격 복원·폰 이름 보고·pcsSetName(2026-09-30) / T5+DT1~4 `#pair` 상황 줄 1개·행 어휘(pairRow/statusChip 5기호)·confirmSheet(4곳)·해제 진입점(행 [페어링 해제]·설정 [이 기기 초기화], 로그아웃 선택 모달 삭제)·헤더 select ≤1 숨김·`sm_pcs_relay`/`#btn-pcs` 제거·이름 없이 QR·🩺 줄·a11y(44px·focus-visible·dialog·ESC·aria-live) — PWA 테스트 53
 - [x] T6 브리지 `?relay=` 파싱·`persistSync`·`deviceName` + E-2 '앱에서 열기'(fragment 소거 전 보관·pagehide 타이머 취소·웹으로 계속) / DT5 QR 모달 ✅ 연결됨 전환(발급 시각 기준·늦은 응답 폐기·닫히면 중단) / DT7 iOS Safari 본체 안내(.firstrun 1회 + 설정 1줄) — PWA 테스트 58, pytest 383 (2026-09-30). 앱 반영은 다음 TestFlight(맥 지시서 갱신 필요)
 - [x] T7 007 `test_cp_client_credentials.py` 5건(revoke 소유권 경계·재폐기·미인증·폐기 뒤 401·발급 room 결합) — 007 커밋 7d2cda1, 배포 없음
-- [ ] 회귀 테스트 5건(잠금·notice 순서·재정렬·브리지·로컬 select) → release.ps1 0.10.0
+- [x] 회귀 테스트 5건(잠금·재정렬·브리지 relay·로컬 select·pcs 이름; notice 순서는 0.11.0 T10) → **release.ps1 0.10.0 게시·적용 완료(2026-09-30 10:41, Host 0.9.10→0.10.0, 태그 v0.10.0)**. 사장님 수동 확인: 폰 페어링 화면·해제 시트·PC 📱 목록 ✅ 연결됨·Safari '앱에서 열기'(앱은 다음 TestFlight)
 
 ### Phase 1-b — Host 0.11.0 + 007 (self-revoke·devsync·CP) — eng T8~T15
 - [ ] T8 007 `/client/status`(일괄·소유권)·`/client/revoke-self` + nginx limit_req (**/deploy-request 의뢰, 먼저**)
