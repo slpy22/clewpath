@@ -77,13 +77,15 @@
 - [x] T11 PWA 폰: `PV=2`, 폐기 큐 `{cp,public_id,secret,room,ts}`·persistSync 순서·항목 cp 로만 플러시·복원 병합, `unpairPc` 온라인=bye_device→revoke-self / 오프라인=큐, B-7 성공 후 옛 cpub 큐, pv≥2 게이팅(구 Host 는 D4 문구·'CP 폐기됨(PC 미반영)'), notice(device_removed/reissued)·CP 401·auth_invalid → ⛔[다시 페어링][지우기]·🔄 배지, resetDevice 큐 보존, PC 📱 목록 📵/⏳ 칩(revoked_by/cp_pending)·🩺 cp_synced / T13 💤 90일 / T15 앱 `#cb-pair` 오버레이 폐기 → TestFlight — 2026-09-30 구현(tests/pwa/revoke.test.mjs 9건, PWA 76). 앱 반영은 mac-build-tasks 업데이트 8(TestFlight 대기)
 - [x] 0.11.0 릴리스(2026-09-30): ① 서비스 모니터가 CP 재시작 + nginx `sm_cp_client` 30r/m burst 20(실측 21번째 429) ② 실 CP e2e 2/2 ③ Host 0.11.0 게시·적용(34f2efc, v0.11.0)
 - [ ] 앱 TestFlight — mac-build-tasks 업데이트 7+8 동반(맥 측)
-- [ ] 사장님 실사용 확인: 폰에서 PC 해제 → PC 📱 목록 📵 / PC 에서 기기 삭제·QR 재발급 → 폰 ⛔·🔄
+- [x] 사장님 실사용 확인: 폰에서 PC 해제 → PC 📱 목록 📵 → PC 에서 삭제(0.11.1 수정 후 확인, 2026-09-30)
+- [ ] 사장님 실사용 확인: PC 에서 기기 삭제·QR 재발급 → 폰 ⛔·🔄 + [다시 페어링][지우기] / 오래 연 탭의 새로고침 배너
 
 ### Phase 2 (고도화) — 대기
 - [ ] **E-1 양쪽 목록 상태 표시**(폰: PC 켜짐/꺼짐·마지막, PC: 기기 접속 중) — 왜: 열어보기 전에 상태를 앎. 이번엔 연기(Codex: '켜짐' 은 데이터가 보증 못 함). 설계 필수 항목: 릴레이→CP 즉시 상태 보고(seq, 알림 grace 와 분리), CP TTL·역전 방지, 폰 갱신 주기, 마지막 성공값+'확인 N분 전'·1시간 넘으면 숨김, Host `authed` 재접속 초기화(T2 선행). M→S
 - [ ] **E-6 데모 둘러보기**(PC 0대 빈 상태) — 스토어 제출 사이클(M4)에서, 화면 확정 뒤. 완전 목 데이터(`demoT`), Host/CP 호출 0(불가침). M→S
 - [ ] **X-1 6자리 코드 페어링**(PC 가 코드 표시, 폰은 입력, CP 60초 코드↔room 중개) — 카메라·링크·앱 무관. CP 임시 보관 = 무저장 예외 확장이라 C 와 함께. M→S
 - [ ] **C) CP 를 페어링 정본으로**(목록·이름·상태를 CP 에, 양쪽이 같은 API 렌더, 팀 공유 PC) — 외부 사용자 생긴 뒤. 로컬 전용 보안 설계 재검토 필요. L→M
+- [ ] **폰 해제 결과 문구를 실제 서버 폐기 결과로**(2026-09-30 document-release) — 왜: 0.10.x 때 페어링한 PC 는 폰에 pv=1 로 저장돼, PC 를 0.11 로 올린 뒤 연결 없이 해제하면 '이 폰에서만 제거 — PC 에서도 삭제하세요' 가 뜬다(실제로는 CP 폐기·PC 📵 반영됨). 무엇: `unpairPc` 의 sub/토스트·sm_pair_reason 을 `serverUnpairable`(저장된 pv) 대신 플러시 결과(done 에 room 포함)로 결정, 확인 시트 문구는 '서버 폐기 시도' 로 중립화. 시작점: `pwa/index.html` unpairPc·serverUnpairable. S
 - [ ] **`policy.usage_summary` 회전 파일 이어 읽기**(eng E-D20) — 왜: T12 로 `api_audit.jsonl` 이 8MB 에서 `.1` 로 회전하면 회전 직후 '최근 n건' 목록이 짧아진다(오늘 한도는 별도 usage 파일이라 무영향). 무엇: `.1` 이 있으면 이어 읽어 recent_n 을 채운다(10줄). 시작점: `session_manager/policy.py:167`. 의존: T12. S
 - [ ] **DESIGN.md 생성(`/design-consultation`)**(design DR-11) — 왜: 디자인 시스템 정본이 없어 리뷰마다 `index.html:16-27` 토큰을 사실상 기준으로 삼는다. 무엇: :root 토큰·타이포·컴포넌트(.btn/.devrow/.schip/openModal/confirmSheet) 어휘를 DESIGN.md 로. 다음 사이클. S
 - [ ] **접근성 규칙 전 화면 적용 + confirm() 나머지 9곳 confirmSheet 이전**(design DR-13/DR-7) — 왜: 이번엔 페어링 화면 3개만 44px·focus-visible·dialog·inert·aria-live 를 적용. 무엇: 세션 목록·터미널 탭·관제·설정에 같은 규칙, `grep confirm(` 9곳을 confirmSheet 로. 의존: DT2/DT4. M
