@@ -34,6 +34,11 @@
 - [x] 포크 점검(0.9.10, 사장님 질문 "포크가 데몬으로 뜨면?"): 실측 — 헤드리스 `-p` 도 실행 중엔 `~/.claude/sessions` 에 등록(kind interactive) → 0.9.9 삭제 보호가 **포크 자동 정리**(webapi 종료 시 delete, terminal.html 🗑)를 막을 수 있었음. 수정: 프로세스 `wait`/`kill` 뒤 `delete_session(..., wait_live_s=3)`(레지스트리 소멸을 최대 3초 대기), 그래도 살아 있으면(데몬 승격) **보류하고 안내**(전엔 살아 있는 채 파일을 옮겨 분기). API `wait_live_s`(상한 5초), terminal.html 은 409 를 안내로 표시. 재개 시 bg_hold 검사는 포크 id 에도 적용됨(기존)
 - [ ] 후속: 하위(subs) 세션의 continued-in 추적, 그쪽 PC 의 `claude --version`·agents 근거 확보 후 ② 데몬 주장 재검토
 
+## 참고(완료): 세션 출처 마크 + 강제 종료 (Host 0.10.1, 2026-09-30)
+- [x] 목록 칩 아이콘 = 출처(⌨ 터미널 / 🧬 클로드가 띄움 / 🤖 헤드리스 / 🧩 SDK / 🐍 스크립트 / 🖥 클루패스), `peers.origin_of`(psutil, pid 부모·명령줄, 캐시) → `peer.origin`
+- [x] 상세 '⛔ 세션 강제 종료' → `POST /api/sessions/{id}/kill`(PTY stop + 레지스트리 pid `taskkill /T /F`, claude 프로세스만·Host 자신 제외, 원격 2FA `_PRIV_API_SUFFIXES`)
+- [x] 외부 접속 설정 화면: 로컬 전용 항목 숨김(🔒 폐지). 0.10.1 게시·적용(13:44). 주의: apply 재기동이 incidents 5 로 기록됨(표준 경로 확인 필요 — 다음 릴리스 때 관찰)
+
 ## 진행중 기능: 페어링 UX 통일 — 대칭 페어링 모델 (Host 0.9.8 핫픽스 + 0.10.0 + 007 + 앱, 2026-09-29 기획)
 
 `/plan-ceo-review`(SELECTIVE EXPANSION, Codex 외부 시각) 산출: `docs/designs/pc-pairing-ux.md`(정본), 입력 인벤토리
