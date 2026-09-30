@@ -782,6 +782,7 @@ def create_app() -> FastAPI:
                 devices.add_cp_pending(device_id, "revoke:" + cc["client_public_id"]); devices.set_pending_cpub(device_id, None)
             return JSONResponse({"error": "not_found_or_revoked"}, status_code=404)
         connector.request_drop_device(device_id, notice="device_reissued")   # notice → 옛 자격의 연결·스트림 종료
+        devices.audit("reissue", device_id, old_cpub=old_cpub, new_cpub=(cc or {}).get("client_public_id"))
         if cc:
             devices.set_client_public_id(device_id, cc["client_public_id"])
             devices.set_pending_cpub(device_id, None)                       # 확정
@@ -807,7 +808,9 @@ def create_app() -> FastAPI:
             return JSONResponse({"error": "이 PC(로컬)에서만 변경할 수 있습니다."},
                                 status_code=403)
         r = {"revoked": devices.revoke(device_id), **devices.status()}
-        connector.request_drop_device(device_id)
+        connector.request_drop_device(device_id, notice="device_removed")
+        if r["revoked"]:
+            devices.audit("revoke", device_id)
         return r
 
     @app.post("/api/owner/devices/{device_id}/delete")
@@ -826,6 +829,7 @@ def create_app() -> FastAPI:
             if not cp_client.revoke_client_credential(cpub):
                 pending = True
         connector.request_drop_device(device_id, notice="device_removed")
+        devices.audit("delete", device_id, cpub=cpub, pending=pending)
         if pending:
             devices.mark_revoked(device_id, by="pc")
             devices.set_delete_pending(device_id, True)

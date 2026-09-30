@@ -70,6 +70,15 @@ if (-not $SkipTests) {
     $t = & $Python -m pytest -q 2>&1 | Select-Object -Last 1
     Log "  $t"
     if ($LASTEXITCODE -ne 0 -or $t -notmatch 'passed' -or $t -match 'failed') { Fail "테스트 실패 — 릴리스 중단" }
+    # 페어링 e2e 게이트(설계 6-1): 실 CP 를 상대로 tests/e2e 를 돈다. SM_E2E_CP_URL 이 없으면 건너뛰고 알린다.
+    if ($env:SM_E2E_CP_URL) {
+        Log "e2e 실행(pytest -m e2e, CP=$($env:SM_E2E_CP_URL))…"
+        $e = & $Python -m pytest -q -m e2e -o addopts="" tests/e2e 2>&1 | Select-Object -Last 1
+        Log "  $e"
+        if ($LASTEXITCODE -ne 0 -or $e -match 'failed' -or $e -match 'error') { Fail "e2e 실패 — 릴리스 중단" }
+    } else {
+        Log "e2e 건너뜀(SM_E2E_CP_URL 없음) — 0.11.0 이후 릴리스는 설정 권장"
+    }
 }
 
 # ── 1) 패키징 ───────────────────────────────────────────────

@@ -310,6 +310,31 @@ def status() -> dict:
     return _read(_f)
 
 
+# ---- 페어링 감사 로그(B-10, E-D10): 첫 auth·삭제·재발급·self-revoke 수신·revoke 만. 재접속 auth 는 기록하지 않는다 ----
+def _audit_file():
+    return config.data_dir() / "pairing-audit.jsonl"
+
+
+def audit(event: str, did: str | None = None, **fields) -> None:
+    from session_manager import jsonl_log
+    jsonl_log.append(_audit_file(), {"event": event, "device": did, **fields})
+
+
+def audit_tail(n: int = 50) -> list[dict]:
+    from session_manager import jsonl_log
+    return jsonl_log.tail(_audit_file(), n)
+
+
+def first_seen(did: str) -> bool:
+    """이 기기가 아직 한 번도 접속한 적 없는가(첫 auth 판정 — E-3 ① 웹푸시·감사 1회)."""
+    def _f(d):
+        for x in d["devices"]:
+            if x["id"] == did:
+                return not x.get("last_seen")
+        return False
+    return _read(_f)
+
+
 # ---- 0.11.0 CP 동기화(devsync)·self-revoke 지원 (eng E-D6/E-D7/E-D15) ----
 def mark_revoked(did: str, by: str = "pc") -> bool:
     """폐기 표시 + 누가 했는지(by='phone' 이면 📵 폰에서 해제함). 이미 폐기면 False."""

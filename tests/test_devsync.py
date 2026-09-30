@@ -119,7 +119,7 @@ def test_network_runs_outside_lock(fake_claude_home, cp):
     time.sleep(0.15)
     t0 = time.time(); devices.touch(a["id"]); dt = time.time() - t0
     t.join(3)
-    assert dt < 0.3, f"touch 가 CP 조회 동안 잠금에 막혔다({dt:.2f}s)"
+    assert dt < 0.5, f"touch 가 CP 조회 동안 잠금에 막혔다({dt:.2f}s)"   # 조회는 0.8s 잔다
 
 
 def test_thread_first_delay_and_kick(fake_claude_home, cp, monkeypatch):
@@ -127,8 +127,13 @@ def test_thread_first_delay_and_kick(fake_claude_home, cp, monkeypatch):
     monkeypatch.setattr(devsync, "sync_once", lambda notify=None: calls.append(time.time()))
     monkeypatch.setattr(devsync, "MIN_GAP_S", 0.0)
     devsync._last_run = 0.0
-    th = devsync.start(first_delay=0.3, interval=10.0)
-    time.sleep(0.1); assert calls == [], "기동 직후엔 돌지 않는다(헬스체크 창)"
-    time.sleep(0.4); assert len(calls) == 1
-    devsync.kick(); time.sleep(1.3); assert len(calls) == 2, "kick 이면 주기를 기다리지 않는다"
+    def until(n, limit):
+        t0 = time.time()
+        while len(calls) < n and time.time() - t0 < limit:
+            time.sleep(0.05)
+        return len(calls)
+    th = devsync.start(first_delay=0.6, interval=30.0)
+    time.sleep(0.15); assert calls == [], "기동 직후엔 돌지 않는다(헬스체크 창)"
+    assert until(1, 3.0) == 1
+    devsync.kick(); assert until(2, 4.0) == 2, "kick 이면 주기를 기다리지 않는다"
     devsync.stop(); th.join(3); assert not th.is_alive()

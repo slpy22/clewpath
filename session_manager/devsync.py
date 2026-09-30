@@ -55,6 +55,8 @@ def sync_once(notify=None) -> dict | None:
     ap = devices.apply_cp_status(statuses)
     result["phone_revoked"] = ap["phone_revoked"]
     result["removed"] = ap["removed"]
+    for did in ap["phone_revoked"]:
+        devices.audit("self_revoke", did, via="cp_sync")
 
     # 3) 불명이던 폐기 재시도 / 4) 미확정 새 cpub 정리 — 네트워크는 잠금 밖
     for r in rows:

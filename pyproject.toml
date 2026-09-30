@@ -54,3 +54,6 @@ include = ["session_manager*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# e2e(실 CP 대상, tests/e2e/)는 기본 실행에서 제외 — release.ps1 이 SM_E2E_CP_URL 이 있을 때 `-m e2e` 로 따로 돈다
+addopts = "-m 'not e2e'"
+markers = ["e2e: 실제 CP 를 상대로 하는 페어링 흐름 게이트(SM_E2E_CP_URL 필요, 릴리스 때만)"]

@@ -156,12 +156,9 @@ def match_denied(text: str, patterns: list[str]) -> str | None:
 
 
 def audit(entry: dict) -> None:
-    f = _audit_file()
-    f.parent.mkdir(parents=True, exist_ok=True)
-    rec = {"ts": _now_iso(), **entry}
-    with _LOCK:
-        with f.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    # 공용 jsonl_log(잠금 + 8MB 회전 1세대, E-D10). ts 는 기존과 같이 ISO 문자열.
+    from session_manager import jsonl_log
+    jsonl_log.append(_audit_file(), {"ts": _now_iso(), **entry}, ts_key=None)
 
 
 def usage_summary(recent_n: int = 30) -> dict:

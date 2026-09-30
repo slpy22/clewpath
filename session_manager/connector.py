@@ -285,12 +285,22 @@ class Connector:
             # 인증 시점의 토큰 세대를 함께 보관(재발급 감지용)
             dev = {**dev, "tver": devices.token_version(dev["id"])}
             self.authed[cid] = dev
+        first = devices.first_seen(dev["id"])
         devices.touch(dev["id"])
         filled = devices.set_name_if_empty(dev["id"], params.get("name"))
         if filled:
             dev["name"] = filled
             if cid is not None:
                 self.authed[cid]["name"] = filled
+        if first:
+            # 첫 접속만: 감사 1줄 + PC 웹푸시(E-3 ①). 재접속마다 기록하면 하루 수백 줄이 된다(E-D10).
+            devices.audit("first_auth", dev["id"], name=dev.get("name"), reported=params.get("name") or None)
+            try:
+                from session_manager import push
+                push.send("device", dev["id"], f"📱 {dev.get('name') or dev['id'][:8]} 이 PC 에 연결됨",
+                          "새 기기가 페어링을 마치고 처음 접속했습니다. 모르는 기기면 📱 목록에서 페어링을 해제하세요.")
+            except Exception as e:  # noqa: BLE001
+                _log(f"[devices] first-auth push 실패: {type(e).__name__}")
         # ver/hostname: 원격 화면이 "지금 붙은 PC 가 어떤 버전·어느 컴퓨터인지"
         # 보여줄 유일한 통로. (auth 응답만 커넥터가 직접 채워 보낸다)
         from session_manager import appconfig
@@ -344,6 +354,8 @@ class Connector:
                 did = dev.get("id")
                 if did:
                     changed = devices.mark_revoked(did, by="phone")
+                    if changed:
+                        devices.audit("self_revoke", did, via="bye_device")
                     await self._res(rid, True, data={"revoked": bool(changed)})
                     await self.drop_device(did)
                 else:
