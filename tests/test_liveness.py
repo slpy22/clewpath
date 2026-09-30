@@ -60,7 +60,7 @@ def test_stale_marker_for_other_pid_does_not_mask(fake_claude_home):
 def test_mark_shutdown_writes_own_pid(fake_claude_home):
     liveness.mark_shutdown("normal")
     d = json.loads(liveness.shutdown_file().read_text(encoding="utf-8"))
-    assert d["pid"] == os.getpid() and d["reason"] == "normal"
+    assert d["pids"][str(os.getpid())]["reason"] == "normal"      # 0.10.2: pid 별 표식
 
 
 def test_notify_incident_payload(fake_claude_home, monkeypatch):
@@ -94,9 +94,10 @@ def test_marks_are_per_pid_and_survive_overwrite_by_other_process(fake_claude_ho
     """회귀(2026-09-30 0.10.1 apply): 옛 Host 의 update 표식을 그 사이 뜬 다른 프로세스의 normal 표식이 덮어써
     새 Host 가 옛 Host 를 비정상 종료로 오판·복구 알림. pid 별로 쌓으면 둘 다 남는다."""
     OLD, OTHER = DEAD_PID, DEAD_PID - 1
-    monkeypatch.setattr(os, "getpid", lambda: OLD); liveness.mark_shutdown("update")
-    monkeypatch.setattr(os, "getpid", lambda: OTHER); liveness.mark_shutdown("normal")
-    monkeypatch.undo()
+    # undo() 는 fake_claude_home 의 env 까지 되돌려 실제 ~/.claude 를 읽게 되므로 context() 로 좁힌다
+    with monkeypatch.context() as m:
+        m.setattr(os, "getpid", lambda: OLD); liveness.mark_shutdown("update")
+        m.setattr(os, "getpid", lambda: OTHER); liveness.mark_shutdown("normal")
     marks = json.loads(liveness.shutdown_file().read_text(encoding="utf-8"))["pids"]
     assert set(marks) == {str(OLD), str(OTHER)} and marks[str(OLD)]["reason"] == "update"
     _runtime(OLD)
@@ -109,10 +110,10 @@ def test_marks_are_per_pid_and_survive_overwrite_by_other_process(fake_claude_ho
 
 
 def test_marks_keep_recent_only(fake_claude_home, monkeypatch):
-    for i in range(12):
-        monkeypatch.setattr(os, "getpid", lambda i=i: 1000 + i)
-        monkeypatch.setattr(liveness.time, "time", lambda i=i: 1_700_000_000 + i)
-        liveness.mark_shutdown("normal")
-    monkeypatch.undo()
+    with monkeypatch.context() as m:
+        for i in range(12):
+            m.setattr(os, "getpid", lambda i=i: 1000 + i)
+            m.setattr(liveness.time, "time", lambda i=i: 1_700_000_000 + i)
+            liveness.mark_shutdown("normal")
     marks = json.loads(liveness.shutdown_file().read_text(encoding="utf-8"))["pids"]
     assert len(marks) == liveness._MARK_KEEP and "1011" in marks and "1000" not in marks
