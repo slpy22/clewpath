@@ -542,6 +542,7 @@
   </div>
   <div id="p-pcs"></div>
   <button class="btn" id="p-scan" hidden>📷 QR 스캔으로 연결</button>
+  <div id="p-e2"></div>
   <div id="p-linkbox">
     <label>페어링 링크</label>
     <input id="p-link" autocomplete="off" autocapitalize="off" spellcheck="false"
@@ -3267,8 +3268,37 @@ function fieldWithCopy(label, value){
   f.appendChild(row);
   return f;
 }
+// QR 모달이 열린 동안 등록부만 3초마다 폴링(CP 무접촉) → 이 QR 로 만든 기기가 발급 시각 이후 접속하면 ✅ 로 교체(design DR-11).
+function pairingSeen(rows, id, issuedAt){
+  return (rows||[]).some(d=>d && d.id===id && d.last_seen && d.last_seen>=issuedAt);
+}
+function watchPairing(body, id, issuedAt){
+  if(!id) return null;
+  let done=false;
+  const stop=()=>{ done=true; clearInterval(t); };
+  const t=setInterval(async()=>{
+    if(done) return;
+    if(!$('#overlay') || body.isConnected===false){ stop(); return; }      // 모달 닫힘 → 폴링 중단
+    let st=null; try{ st=await T.api('GET','/api/owner/devices'); }catch(e){ return; }
+    if(done) return;                                                     // 늦게 도착한 응답은 버린다
+    const rows=(st&&st.devices)||[];
+    if(!pairingSeen(rows, id, issuedAt)) return;
+    stop();
+    const d=rows.find(x=>x.id===id)||{};
+    const nm=(d.name&&!/^[0-9a-f]{8}$/.test(d.name))?d.name:'';
+    body.innerHTML='';
+    const ok=el('div',null,'✅'); ok.style.cssText='font-size:2.4rem;text-align:center;margin:8px 0';
+    body.appendChild(ok);
+    body.appendChild(el('div','sheet-main', nm?('"'+nm+'" 연결됨'):'기기 연결됨 · 이름 확인 중…')).style.textAlign='center';
+    body.appendChild(el('div','cwd','이 창을 닫고 📱 목록에서 확인하세요.'));
+    const x=el('button','btn','닫기'); x.style.marginTop='10px'; x.onclick=()=>{ closeModal(); showDevices(); };
+    body.appendChild(x);
+  }, 3000);
+  return stop;
+}
 function showPairResult(body, r, title){
   body.innerHTML='';
+  watchPairing(body, r&&r.id, Math.floor(Date.now()/1000)-2);
   body.appendChild(el('div','cwd','폰 카메라로 이 QR 을 스캔하면 앱이 열리며 자동 페어링됩니다. 창을 닫으면 다시 볼 수 없습니다(필요하면 🔄 QR 로 다시 만드세요):'));
   if(r.qr_svg){ const qb=el('div','qrbox'); const im=document.createElement('img');
     im.src=r.qr_svg; im.alt='pair QR'; qb.appendChild(im); body.appendChild(qb); }
@@ -3505,6 +3535,55 @@ function pairSituationText(){
 function applyPairSituation(){
   const p=$('#p-sit'); if(!p) return;
   const s=pairSituationText(); p.textContent=s.text; p.className='sit'+(s.crit?' crit':'');
+  renderE2Button();
+}
+// ---- E-2 '앱에서 열기'(design DR-8): 릴레이 웹(브리지 앱 아님) + 모바일 UA + 페어링 fragment 가 있는 첫 진입에만.
+let PAIR_FRAG='';
+function e2Available(ua){
+  if(!PAIR_FRAG) return false;
+  try{ if(window.ClewBridge&&ClewBridge.isApp()) return false; }catch(e){}
+  return /iPhone|iPad|Android/.test(ua||navigator.userAgent||'');
+}
+function e2Url(){
+  const base=location.pathname.replace(/\/(app|index\.html)\/?$/,'').replace(/\/$/,'');
+  return 'clewpath://pair?relay='+encodeURIComponent(location.host+base)+'#'+PAIR_FRAG;
+}
+function renderE2Button(){
+  const host=$('#p-e2'); if(!host) return; host.innerHTML='';
+  if(!e2Available()) return;
+  const b=el('button','btn ghost','앱에서 열기'); const note=el('div','cwd'); note.hidden=true;
+  b.onclick=()=>{
+    // 앱이 열리면 이 페이지는 숨겨진다(visibilitychange/pagehide) → 안내 타이머 취소. 2초 뒤에도 그대로면 웹으로 계속.
+    let gone=false; const onHide=()=>{ gone=true; };
+    try{ document.addEventListener('visibilitychange', onHide, {once:true}); window.addEventListener('pagehide', onHide, {once:true}); }catch(e){}
+    try{ location.href=e2Url(); }catch(e){}
+    setTimeout(()=>{ if(gone||document.hidden) return;
+      note.hidden=false; note.textContent='앱이 열리지 않았나요? 앱이 없으면 이 화면(웹)에서 그대로 계속 쓸 수 있습니다.'; }, 2000);
+  };
+  host.appendChild(b); host.appendChild(note);
+}
+// ---- iOS Safari 탭 안내(design DR-12, eng E-D21): 홈 화면 미설치 Safari 는 7일 미사용 시 저장소를 지운다.
+function iosHintNeeded(ua, standalone, isApp){
+  ua=ua||navigator.userAgent||'';
+  if(isApp) return false;
+  if(!/iPhone|iPad/.test(ua) || !/Safari/.test(ua)) return false;
+  if(/CriOS|FxiOS|EdgiOS|KAKAOTALK|Instagram|FBAN|FBAV|Line\//i.test(ua)) return false;   // 인앱·타 브라우저는 제외
+  return !standalone;
+}
+function maybeShowIosHint(){
+  try{
+    if(MODE!=='relay' || LS.getItem('sm_hint_ios')==='1') return;
+    const isApp=!!(window.ClewBridge&&ClewBridge.isApp());
+    if(!iosHintNeeded(navigator.userAgent, !!navigator.standalone, isApp)) return;
+    const host=$('#paneList'); if(!host || $('#ios-hint')) return;
+    const b=el('div','firstrun'); b.id='ios-hint';
+    b.innerHTML='<b>홈 화면에 추가해 앱처럼 열어보세요.</b> Safari 탭은 오래 안 쓰면 페어링이 지워질 수 있습니다.';
+    const row=el('div'); row.style.cssText='display:flex;gap:8px;margin-top:10px;flex-wrap:wrap';
+    const how=el('button','btn ghost sm','방법 보기'); how.onclick=()=>toast('Safari 하단 공유(⬆) 버튼 → "홈 화면에 추가" → 추가');
+    const x=el('button','btn ghost sm','닫기'); x.onclick=()=>{ LS.setItem('sm_hint_ios','1'); b.remove(); };
+    row.appendChild(how); row.appendChild(x); b.appendChild(row);
+    host.insertBefore(b, host.firstChild);
+  }catch(e){}
 }
 function unpairPc(room){
   const pc=pcsLoad().find(x=>x.room===room); const name=pc?pcName(pc):room;
@@ -3633,6 +3712,8 @@ function showSettings(){
     info.appendChild(st); body.appendChild(info); }
   if(MODE==='relay'){
     row('🖧','내 PC','저장된 PC · 전환 · 이름 변경 · 페어링 해제',showPcs);
+    if(iosHintNeeded(navigator.userAgent, !!navigator.standalone, !!(window.ClewBridge&&ClewBridge.isApp())))
+      body.appendChild(el('div','cwd','홈 화면에 추가해 앱처럼 열어보세요 — Safari 탭은 오래 안 쓰면 페어링이 지워질 수 있습니다.'));
     row('🧹','이 기기 초기화','저장된 페어링·접속 자격·암호화 키를 모두 지웁니다',resetDevice);
   }
 
@@ -3702,7 +3783,7 @@ function enterApp(){ $('#pair').classList.add('hidden'); $('#app').classList.rem
     if(b && conn.e2eeKey){ b.textContent='🔒 E2EE'; b.className='connbadge jwt';
       b.classList.remove('hidden');
       b.onclick=()=>toast('종단 암호화 활성 - 릴레이 서버도 대화 내용을 읽을 수 없습니다'); } }
-  loadList(); }
+  loadList(); maybeShowIosHint(); }
 $('#p-go').onclick=doPair;
 // 폰이 auth 때 보고하는 자기 이름(B-1): 앱은 브리지의 기기 모델, 웹은 UA 요약. Host 가 40자·제어문자 정리.
 function deviceSelfName(){
@@ -3930,6 +4011,7 @@ if(MODE==='local'){
   // 신형 링크는 전부 fragment 로 온다. 구형(query) 링크도 계속 수용.
   const p=new URLSearchParams(location.search);
   if(location.hash.length>1){
+    PAIR_FRAG=location.hash.slice(1);      // E-2 '앱에서 열기' 가 쓴다 — 아래 replaceState 로 해시가 지워지기 전에 보관
     try{ new URLSearchParams(location.hash.slice(1)).forEach((v,k)=>p.set(k,v)); }catch(e){}
   }
   // E2EE 룸 키: 이 브라우저에만 저장(fragment 라 서버엔 안 감)

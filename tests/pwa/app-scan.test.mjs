@@ -116,3 +116,15 @@ test("앱(브리지 있음): 페어링 화면 #p-scan 노출 + PC 관리의 📷
   await scanBtn.onclick();
   same(calls.at(-1), ["pair2", "https://relay.test/relay/app#room=r2"]);
 });
+
+test("native-bridge(앱): clewpath://pair?relay= 가 실려 오면 릴레이 주소를 저장하고 진행(E-2, eng E-D2); persistSync·deviceName 계약", async () => {
+  const { sb, B, reloads } = bootBridge();
+  assert.equal(B.pairFromUrl("clewpath://pair?relay=clewpath.test%2Frelay#room=r1&rk=k1"), "ok");
+  assert.equal(sb.localStorage.getItem("sm_relay_ws"), "wss://clewpath.test/relay/ws", "relay 파라미터 → wss://<host/base>/ws");
+  assert.equal(reloads.length, 1); assert.equal(sb.location.hash, "room=r1&rk=k1");   // 샌드박스 location 은 # 를 안 붙인다
+  assert.equal(B.pairFromUrl("clewpath://pair?relay=x.test#"), "no_frag");
+  const p = B.persistSync("sm_room"); assert.ok(p && typeof p.then === "function"); await p;
+  assert.equal(typeof B.deviceName(), "string");
+  const web = bootBridge({ app: false });
+  await web.B.persistSync("sm_room"); assert.equal(web.B.deviceName(), "");
+});

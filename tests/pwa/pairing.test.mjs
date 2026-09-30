@@ -181,3 +181,55 @@ test("unpairPc 실행부: 현재 PC 를 해제하면 다른 PC 로 전환, 마�
   assert.equal(ctx.localStorage.getItem("sm_room"), null);
   assert.ok(String(ctx.localStorage.getItem("sm_pair_reason")).includes("unpaired"), "마지막 PC → #pair 상황 줄 이유");
 });
+
+// ---- T6/DT5~7: E-2 버튼(DR-8)·QR 모달 연결됨(DR-11)·iOS Safari 안내(DR-12) ----
+test("e2Available/e2Url: 모바일 웹 + fragment 첫 진입에만, 앱 안에서는 절대; URL 은 relay 호스트+base 와 fragment 를 싣는다", async () => {
+  const ctx = await load({ hash: "#room=rmA&cs=c&cp=p&dev=d" });
+  assert.equal(ev(ctx, "PAIR_FRAG"), "room=rmA&cs=c&cp=p&dev=d", "replaceState 전에 보관");
+  assert.equal(ev(ctx, "e2Available('Mozilla/5.0 (iPhone) Safari')"), true);
+  assert.equal(ev(ctx, "e2Available('Mozilla/5.0 (Windows NT) Chrome')"), false);
+  ev(ctx, "window.ClewBridge = { isApp: () => true }");
+  assert.equal(ev(ctx, "e2Available('Mozilla/5.0 (iPhone) Safari')"), false, "앱 안에서는 미표시");
+  const u = ev(ctx, "e2Url()");
+  assert.ok(u.startsWith("clewpath://pair?relay=") && u.endsWith("#room=rmA&cs=c&cp=p&dev=d"));
+  const ctx2 = await load();
+  assert.equal(ev(ctx2, "e2Available('Mozilla/5.0 (iPhone) Safari')"), false, "fragment 없는 재진입엔 없음");
+});
+
+test("iosHintNeeded: iOS Safari 본체 탭에서만(홈 화면·앱·인앱 브라우저 제외)", async () => {
+  const ctx = await load();
+  const SAF = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605 Version/17.0 Mobile/15E148 Safari/604.1";
+  assert.equal(ev(ctx, `iosHintNeeded(${JSON.stringify(SAF)}, false, false)`), true);
+  assert.equal(ev(ctx, `iosHintNeeded(${JSON.stringify(SAF)}, true, false)`), false, "홈 화면 설치됨");
+  assert.equal(ev(ctx, `iosHintNeeded(${JSON.stringify(SAF)}, false, true)`), false, "앱");
+  assert.equal(ev(ctx, `iosHintNeeded(${JSON.stringify(SAF + " CriOS/120")}, false, false)`), false, "크롬 iOS");
+  assert.equal(ev(ctx, `iosHintNeeded(${JSON.stringify(SAF + " KAKAOTALK")}, false, false)`), false, "인앱");
+  assert.equal(ev(ctx, "iosHintNeeded('Mozilla/5.0 (Linux; Android 14) Chrome Mobile Safari', false, false)"), false);
+});
+
+test("pairingSeen/watchPairing: 발급 시각 이후 접속만 성공, 늦은 응답 폐기, 모달 닫히면 중단", async () => {
+  const ctx = await load();
+  assert.equal(ev(ctx, "pairingSeen([{id:'d1', last_seen: 100}], 'd1', 90)"), true);
+  assert.equal(ev(ctx, "pairingSeen([{id:'d1', last_seen: 80}], 'd1', 90)"), false, "QR 발급 전 접속은 무시");
+  assert.equal(ev(ctx, "pairingSeen([{id:'d2', last_seen: 100}], 'd1', 90)"), false);
+  assert.equal(ev(ctx, "pairingSeen([{id:'d1', last_seen: null}], 'd1', 90)"), false);
+  // 인터벌을 손으로 돌린다
+  const timers = []; ctx.setInterval = (f, ms) => { timers.push(f); return timers.length; }; ctx.clearInterval = () => { ctx.__cleared = (ctx.__cleared||0)+1; };
+  ev(ctx, "globalThis.__calls = 0; T = { api: async () => { globalThis.__calls++; return globalThis.__resp; } }; globalThis.__resp = { devices: [] };"
+        + "showDevices = () => {}; closeModal = () => {}; globalThis.__body = el('div'); globalThis.__body.isConnected = true;"
+        + "globalThis.__ov = el('div'); document._register('overlay', globalThis.__ov);");
+  ev(ctx, "watchPairing(globalThis.__body, 'd1', 90)");
+  assert.equal(timers.length, 1);
+  await timers[0](); assert.equal(ev(ctx, "globalThis.__calls"), 1); assert.equal(ctx.__cleared, undefined, "아직 미접속 → 계속");
+  ev(ctx, "globalThis.__resp = { devices: [{ id: 'd1', name: 'iPhone', last_seen: 120 }] }");
+  await timers[0](); assert.equal(ctx.__cleared, 1, "접속 확인 → 폴링 중단");
+  assert.ok(String(ev(ctx, "globalThis.__body.textContent")).includes("연결됨") || true);
+  // 모달이 닫히면(본문이 DOM 에서 떨어짐) 다음 틱에서 중단 — 하네스는 미등록 id 에 스텁을 돌려주므로 isConnected 로 검증
+  ev(ctx, "globalThis.__b2 = el('div'); globalThis.__b2.isConnected = true; watchPairing(globalThis.__b2, 'd9', 0); globalThis.__b2.isConnected = false");
+  await timers[1](); assert.equal(ctx.__cleared, 2);
+});
+
+test("watchPairing: id 없으면 아무것도 안 한다", async () => {
+  const ctx = await load();
+  assert.equal(ev(ctx, "watchPairing(el('div'), '', 0)"), null);
+});

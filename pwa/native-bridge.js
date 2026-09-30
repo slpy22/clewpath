@@ -31,7 +31,9 @@
     showLocalPcOption: function () { return true; }, // 앱=false(폰에 로컬 서비스 없음)
     scanQr: null,                                  // 앱에서만 구현(네이티브 카메라)
     pairFromUrl: null,                             // 앱에서만: 스캔/붙여넣은 페어링 링크 → 저장·리로드(아래 handlePairingUrl)
-    pairErrorText: function () { return ''; }      // pairFromUrl 의 오류 코드 → 사람이 읽을 문구
+    pairErrorText: function () { return ''; },     // pairFromUrl 의 오류 코드 → 사람이 읽을 문구
+    persistSync: function () { return Promise.resolve(); }, // 앱: LS 키를 네이티브 미러에 '먼저' 확정(0.11.0 폐기 큐가 자격보다 먼저 영속화, eng E-D18)
+    deviceName: function () { return ''; }         // 앱: 기기 모델(폰이 auth 때 보고하는 자기 이름, B-1). 웹은 UA 요약을 index.html 이 만든다
   };
   window.ClewBridge = B;
   if (!isApp) return;
@@ -76,6 +78,27 @@
       Prefs.remove({ key: k }).catch(noop);
   };
 
+  // 특정 키의 현재 값을 네이티브 미러에 확정한 뒤 resolve — 위 미러는 비동기·오류 무시라 '저장 뒤 삭제·리로드'
+  // 순서가 필요한 곳(0.11.0 폐기 큐)은 이걸 await 한다.
+  B.persistSync = function (key) {
+    var v = localStorage.getItem(key);
+    var p = (v == null) ? Prefs.remove({ key: key }) : Prefs.set({ key: key, value: String(v) });
+    return p.catch(noop);
+  };
+  // 기기 모델명(B-1): Device 플러그인이 있으면 제조사+모델, 없으면 플랫폼 이름. 비동기 조회 결과를 캐시.
+  var devName = '';
+  try {
+    var Dev = cap.Plugins && cap.Plugins.Device;
+    if (Dev && Dev.getInfo) Dev.getInfo().then(function (i) {
+      devName = [i && i.manufacturer, i && i.model].filter(Boolean).join(' ');
+    }).catch(noop);
+  } catch (e) {}
+  B.deviceName = function () {
+    if (devName) return devName;
+    var plat = ''; try { plat = cap.getPlatform ? cap.getPlatform() : ''; } catch (e) {}
+    return plat === 'ios' ? 'iPhone' : (plat === 'android' ? 'Android' : '');
+  };
+
   // ⑤ E2EE 룸 키 미러. 지금은 Preferences(위 미러와 동일 저장소)지만, M3 에서
   // iOS 는 App Group 키체인으로 옮겨 NSE(알림 복호 프로세스)가 읽게 한다.
   B.syncRoomKey = function (room, key) {
@@ -117,8 +140,17 @@
       // /relay/app → wss://host/relay/ws  (index.html wsUrl() 과 같은 유도 규칙)
       var base = u.pathname.replace(/\/(app|index\.html)\/?$/, '').replace(/\/$/, '');
       localStorage.setItem('sm_relay_ws', 'wss://' + u.host + base + '/ws');
-    } else if (!localStorage.getItem('sm_relay_ws')) {
-      return 'bad_url';                    // clewpath:// 는 릴레이 주소 기저장 필요
+    } else {
+      // clewpath://pair?relay=<host[/base]>#<frag> — Safari 페어링 화면의 '앱에서 열기'(E-2, eng E-D2).
+      // relay 가 실려 오면 처음 설치한 앱(저장된 릴레이 없음)도 바로 페어링된다. 없으면 기저장 주소가 필요.
+      var relay = '';
+      try { relay = (u.searchParams && u.searchParams.get('relay')) || ''; } catch (e2) { relay = ''; }
+      if (relay) {
+        localStorage.setItem('sm_relay_ws', 'wss://' + relay.replace(/^wss?:\/\//, '').replace(/\/+$/, '') + '/ws');
+        frag = u.hash ? u.hash.slice(1) : '';   // relay 가 쿼리에 있으면 페어링 정보는 fragment 에만 있다
+      } else if (!localStorage.getItem('sm_relay_ws')) {
+        return 'bad_url';                  // clewpath:// 는 릴레이 주소 기저장 필요
+      }
     }
     if (!frag) return 'no_frag';           // 페어링 정보(#room=..)가 없는 링크
     // 주의: location.href 로 경로를 바꾸면 뒤이은 reload() 가 내비게이션을 삼켜
