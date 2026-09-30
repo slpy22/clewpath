@@ -39,6 +39,9 @@
 - [x] 상세 '⛔ 세션 강제 종료' → `POST /api/sessions/{id}/kill`(PTY stop + 레지스트리 pid `taskkill /T /F`, claude 프로세스만·Host 자신 제외, 원격 2FA `_PRIV_API_SUFFIXES`)
 - [x] 외부 접속 설정 화면: 로컬 전용 항목 숨김(🔒 폐지). 0.10.1 게시·적용(13:44). 주의: apply 재기동이 incidents 5 로 기록됨(표준 경로 확인 필요 — 다음 릴리스 때 관찰)
 
+## 대기: 강제 종료 pid 재사용 방어 (Codex 문서 리뷰 2026-09-30)
+- [ ] `lifecycle.kill_session` 이 레지스트리 `startedAt`/`procStart` 와 프로세스 생성 시각(psutil `create_time`)을 대조해 **다르면 죽이지 않는다**(낡은 레지스트리의 pid 를 다른 claude 가 재사용한 경우). `/T` 자식 범위도 재검토(그 claude 가 띄운 MCP·도구 프로세스까지 끝남 — 의도라면 확인 시트 문구에 명시). 시작점 `session_manager/lifecycle.py` kill_session, 가드 `tests/test_kill_origin.py`. S
+
 ## 참고(완료·사고): 출처 마크 미표시 — 설치본 psutil 누락 (Host 0.10.6, 2026-09-30)
 - [x] 원인: pyproject 에 psutil 추가 후 **uv.lock 미갱신** → 업데이트 러너 `uv sync --frozen` 이 새 의존성을 설치하지 않음(0.10.1~0.10.5 모두 🔗). 조치: uv.lock 갱신·psutil 없을 때 PowerShell CIM 폴백·`release.ps1` 에 `uv lock --check` 게이트. 교훈: **의존성을 추가하면 `uv lock` 을 같이 커밋**(게이트가 막아 줌)
 
@@ -61,7 +64,7 @@
 
 ### Phase 1-a — Host 0.10.0 (UI·용어·Host 내부 준비, 007 무변) — eng T1~T7 + design DT1~DT7
 - [x] T1 devices `_mutate`+RLock·`clean_name`·`set_name_if_empty`·`client_scoped` / T2 `Connector._auth()`+폰 이름 보고 / T3 재발급 재정렬(issue→revoke)·CP 설정 시 폴백 금지(503)·구형 배지 필드 — 2026-09-30, 테스트 +20(383)
-- [x] T4 `connect()` auth 결과·페어링 실패 시 이전 자격 복원·폰 이름 보고·pcsSetName(2026-09-30) / T5+DT1~4 `#pair` 상황 줄 1개·행 어휘(pairRow/statusChip 5기호)·confirmSheet(4곳)·해제 진입점(행 [페어링 해제]·설정 [이 기기 초기화], 로그아웃 선택 모달 삭제)·헤더 select ≤1 숨김·`sm_pcs_relay`/`#btn-pcs` 제거·이름 없이 QR·🩺 줄·a11y(44px·focus-visible·dialog·ESC·aria-live) — PWA 테스트 53
+- [x] T4 `connect()` auth 결과·페어링 실패 시 이전 자격 복원·폰 이름 보고·pcsSetName(2026-09-30) / T5+DT1~4 `#pair` 상황 줄 1개·행 어휘(pairRow/statusChip 5기호)·confirmSheet(4곳)·해제 진입점(행 [페어링 해제]·설정 [이 기기 초기화], 로그아웃 선택 모달 삭제)·헤더 select ≤1 숨김·`sm_pcs_relay`/`#btn-pcs` 제거(**0.10.2~0.10.4 에서 사장님 요청으로 되돌림**: 헤더 🖧 버튼·로컬 다른 PC 목록 복구)·이름 없이 QR·🩺 줄·a11y(44px·focus-visible·dialog·ESC·aria-live) — PWA 테스트 53
 - [x] T6 브리지 `?relay=` 파싱·`persistSync`·`deviceName` + E-2 '앱에서 열기'(fragment 소거 전 보관·pagehide 타이머 취소·웹으로 계속) / DT5 QR 모달 ✅ 연결됨 전환(발급 시각 기준·늦은 응답 폐기·닫히면 중단) / DT7 iOS Safari 본체 안내(.firstrun 1회 + 설정 1줄) — PWA 테스트 58, pytest 383 (2026-09-30). 앱 반영은 다음 TestFlight(맥 지시서 갱신 필요)
 - [x] T7 007 `test_cp_client_credentials.py` 5건(revoke 소유권 경계·재폐기·미인증·폐기 뒤 401·발급 room 결합) — 007 커밋 7d2cda1, 배포 없음
 - [x] 회귀 테스트 5건(잠금·재정렬·브리지 relay·로컬 select·pcs 이름; notice 순서는 0.11.0 T10) → **release.ps1 0.10.0 게시·적용 완료(2026-09-30 10:41, Host 0.9.10→0.10.0, 태그 v0.10.0)**. 사장님 수동 확인: 폰 페어링 화면·해제 시트·PC 📱 목록 ✅ 연결됨·Safari '앱에서 열기'(앱은 다음 TestFlight)
@@ -82,7 +85,7 @@
 - [ ] **`policy.usage_summary` 회전 파일 이어 읽기**(eng E-D20) — 왜: T12 로 `api_audit.jsonl` 이 8MB 에서 `.1` 로 회전하면 회전 직후 '최근 n건' 목록이 짧아진다(오늘 한도는 별도 usage 파일이라 무영향). 무엇: `.1` 이 있으면 이어 읽어 recent_n 을 채운다(10줄). 시작점: `session_manager/policy.py:167`. 의존: T12. S
 - [ ] **DESIGN.md 생성(`/design-consultation`)**(design DR-11) — 왜: 디자인 시스템 정본이 없어 리뷰마다 `index.html:16-27` 토큰을 사실상 기준으로 삼는다. 무엇: :root 토큰·타이포·컴포넌트(.btn/.devrow/.schip/openModal/confirmSheet) 어휘를 DESIGN.md 로. 다음 사이클. S
 - [ ] **접근성 규칙 전 화면 적용 + confirm() 나머지 9곳 confirmSheet 이전**(design DR-13/DR-7) — 왜: 이번엔 페어링 화면 3개만 44px·focus-visible·dialog·inert·aria-live 를 적용. 무엇: 세션 목록·터미널 탭·관제·설정에 같은 규칙, `grep confirm(` 9곳을 confirmSheet 로. 의존: DT2/DT4. M
-- [ ] **iOS Safari(홈 화면 미설치) ITP 7일 저장소 삭제 안내**(eng E-D21 → design DR-12 로 자리·문구 확정: 페어링 직후 .firstrun 1회 + 설정 1줄, '앱처럼 열어보세요') — 왜: 웹 탭은 localStorage 뿐이라 7일 미사용이면 폐기 큐·`sm_pcs` 가 통째 사라져 유령 cpub(E-5 90일)·'페어링이 저절로 사라짐' 이 된다. 무엇: 페어링 완료 화면/설정에 `navigator.standalone` 아니면 '홈 화면에 추가하면 알림과 페어링이 보존됩니다' 한 줄(푸시 안내와 같은 자리) + docs 에 제약 기록. 문구·위치는 /plan-design-review 에서. 의존: 없음(T5 B-2 화면 작업 때 후보). S
+- [x] **iOS Safari(홈 화면 미설치) ITP 7일 저장소 삭제 안내** — **Completed:** 2026-09-30 (0.10.0 DT7 `maybeShowIosHint`·설정 1줄)(eng E-D21 → design DR-12 로 자리·문구 확정: 페어링 직후 .firstrun 1회 + 설정 1줄, '앱처럼 열어보세요') — 왜: 웹 탭은 localStorage 뿐이라 7일 미사용이면 폐기 큐·`sm_pcs` 가 통째 사라져 유령 cpub(E-5 90일)·'페어링이 저절로 사라짐' 이 된다. 무엇: 페어링 완료 화면/설정에 `navigator.standalone` 아니면 '홈 화면에 추가하면 알림과 페어링이 보존됩니다' 한 줄(푸시 안내와 같은 자리) + docs 에 제약 기록. 문구·위치는 /plan-design-review 에서. 의존: 없음(T5 B-2 화면 작업 때 후보). S
 
 ## 진행중 기능: 모바일 앱 — 앱 안 QR 스캔으로 PC 추가 (앱 1.6(6), 2026-09-29)
 
@@ -103,7 +106,7 @@
 ginx\default.conf`): clewpath 블록에 `location ^~ /.well-known/` → CP. 재생성 없이 reload
 - [x] iOS: `App.entitlements`(`applinks:clewpath.pyongso.com`) + pbxproj `CODE_SIGN_ENTITLEMENTS` · Android: `autoVerify` https intent-filter(`/relay/app`). 앱 쪽 링크 처리는 기존 `appUrlOpen → handlePairingUrl`
 - [x] **Apple Team ID** `7789R34LHR`(맥 보고, 2026-09-29) → `applinks.json` 기입(007 push) → CP restart → AASA **200** `appID 7789R34LHR.com.pyongso.clewpath` 확인. 맥 쪽은 `applinks:clewpath.pyongso.com` 을 Xcode 에 적용해 **1.9 로 TestFlight 배포**(맥이 자체 버전업 — 저장소 pbxproj 1.6(6) 은 더 이상 정본 아님)
-- [ ] 사장님 실기(TestFlight 1.9): ① 앱 ⚙ 설정 → PC 전환·관리 → 📷 로 PC 추가 ② 카메라 앱으로 같은 QR → ClewPath 앱이 열리는지. 함정: AASA 는 Apple CDN 캐시(최대 1일)·앱 설치 시점 검증 → 안 되면 앱 삭제·재설치. 1.9 가 Team ID 반영(02:31) **전에** 설치됐으면 재설치가 거의 확실히 필요
+- [ ] 사장님 실기(TestFlight 1.9): ① 앱 헤더 🖧 → 📷 로 PC 추가(0.10.3~, 이전엔 ⚙ 설정 → PC 전환·관리) ② 카메라 앱으로 같은 QR → ClewPath 앱이 열리는지. 함정: AASA 는 Apple CDN 캐시(최대 1일)·앱 설치 시점 검증 → 안 되면 앱 삭제·재설치. 1.9 가 Team ID 반영(02:31) **전에** 설치됐으면 재설치가 거의 확실히 필요
 - [ ] Android: Play 서명 키 SHA-256 을 `applinks.json` 에(배포 때)
 
 ### Phase 2 (고도화) — 대기
@@ -174,7 +177,7 @@ Host 가 `bye` 프레임으로 예고해 오탐을 막는다.
 - [x] 탭 배지 주기 재렌더(2026-09-28, 하네스 `tests/pwa/unverified.test.mjs`): 터미널 뷰 마운트 + 탭 2개 fast-path 상태에서 20초 틱 3회 → 목록은 3회 재렌더, 스트립은 300ms 코얼레싱으로 1회, 활성 칩 `scrollIntoView` 0(사용자 스크롤 보존), xterm 포커스 0·인스턴스/스트림 동일·전송 0. 하네스에 `setInterval` 기록(`__intervals`) 추가
 - [x] 즉시 전환(2026-09-28): 버퍼 초과 폴백을 실제 `/ws/terminal?screen=` 라우트로(`test_webterm_overflow_route.py` 2건: tail+'생략' 안내 / 정확한 델타·배너 없음 / 처음 보는 화면 tail+재연결 배너) · 로컬 모드(/app)는 하네스 `MODE=local` 부트로 탭별 iframe 보유·전환 시 `.on` 토글만(src 재대입 0)·dead 탭만 리로드·닫으면 about:blank 검증. ⚠ 남은 것: 로컬 /app 육안(iframe 그리드) — 낮음
 - [x] 2FA on OTP 경로(2026-09-28): PWA `ensurePriv`(취소 null·OTP→grace 캐시·재요청 없음·불일치 toast·`2fa_invalid` 시 grace 소거) + 터미널 스트림 2fa 오류 → grace 소거·안내 문구 + 커넥터 실 TOTP 비밀로 grant→grace→terminal start 통과/거부·비밀 재설정 시 grace 무효(`test_connector_stop_2fa.py`). ⚠ 실기 OTP 입력(폰 인증앱)은 이 Host 2FA 를 켤 때 — **(사장님)** 선택
-- [ ] 모바일 실기기 육안: 탭 밑줄·필터 바·💾·🔗 칩 **(사장님)**
+- [ ] 모바일 실기기 육안: 탭 밑줄·필터 바·💾·재개 버튼 상태 아이콘(🖥/⌨/🧬/🤖 — 0.10.7 에서 🔗 이름 칩 대체) **(사장님)**
 - [x] 워커 스킬 실사용 1회 — 2026-09-28 완료(위 워커 분배 섹션). 폰 알림은 iPhone 홈 화면 추가 뒤
 
 ## 참고(완료): CHANGELOG.md 도입 (retro 개선 #2, 2026-09-28)

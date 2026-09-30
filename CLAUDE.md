@@ -38,3 +38,8 @@ ClewPath 는 claude 를 **관찰·중계·실행**하는 도구이지, claude �
   --dangerously-skip-permissions) + 부모 사망' 이중 조건에서만. 픽커 재개·safe
   모드·bg 승격체(--bg-pty-host)·사용자 bg 에이전트는 계속 불가침.
   가드 테스트: test_pty_registry.py::test_legacy_orphan_signature_precision
+- 세션 강제 종료(2026-09-30 사장님 요청, Host 0.10.1) → 세션 상세 **⛔ 세션 강제 종료** 버튼 +
+  확인 시트로만. 대상은 피어 레지스트리(`~/.claude/sessions`, 읽기만) pid 중 **이름/명령줄에 claude 가
+  있는 프로세스만** `taskkill /T /F`(Host 자신 제외. **한계**: 생성 시각을 재검증하지 않아 낡은 레지스트리의 pid 를 다른 claude 가 재사용했으면 그 프로세스를 끝낼 수 있고, `/T` 는 그 claude 가 띄운 자식도 끝낸다 — TODOS 에 보강 항목) + ClewPath PTY 는 stop. 파일(jsonl·레지스트리)
+  무접촉, 원격은 2FA 특권. ClewPath 가 띄우지 않은 claude 도 끝낼 수 있어 원칙 2 의 승인 예외다.
+  가드 테스트: test_kill_origin.py

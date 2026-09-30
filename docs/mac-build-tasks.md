@@ -20,7 +20,7 @@ git pull
 cd app && npm install && npm run bundle && npx cap sync ios
 grep -n "persistSync\|deviceName\|relay" ios/App/App/public/native-bridge.js | head   # 3 함수가 보여야 최신 번들
 ```
-시뮬레이터 확인: 페어링 화면에 3줄 설명 대신 **상황 줄 1개**, ⚙ 설정에 '🖧 내 PC' 와 '🧹 이 기기 초기화'(danger) 가 보이면 최신.
+시뮬레이터 확인: 페어링 화면에 3줄 설명 대신 **상황 줄 1개**, 헤더에 **🖧 버튼**, ⚙ 설정에 '🧹 이 기기 초기화'(danger) 가 보이면 최신(설정의 '🖧 내 PC' 는 0.10.3 에서 헤더 🖧 로 옮김).
 (첫 실행 오버레이 `#cb-pair` 는 그대로 — 0.11.0 에서 폐기 예정.) 배포 뒤 pbxproj 버전 커밋·push 규칙은 업데이트 6 과 같다.
 
 ## ★★★★★★ 업데이트 6 (2026-09-29 — 1.9 배포 확인, 버전 규칙 변경, Team ID 반영 완료)
