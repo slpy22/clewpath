@@ -244,7 +244,8 @@ function settingsText(ctx) {
 test("showSettings(릴레이): 2FA·외부 접속 기기·휴지통·워커 스킬·진단·업데이트 와 빈 '보안' 섹션이 안 보인다", async () => {
   const ctx = await load();
   const t = settingsText(ctx);
-  for (const s of ["2차 인증", "외부 접속 기기", "휴지통", "워커 스킬", "진단", "업데이트", "보안", "🔒"]) assert.ok(!t.includes(s), "외부에서 숨김: " + s);
+  // '진단' 은 섹션 제목('정보 · 진단')에도 들어가므로 행의 설명('설치 상태')으로 판정
+  for (const s of ["2차 인증", "외부 접속 기기", "휴지통", "워커 스킬", "설치 상태", "새 버전", "재설치", "보안", "🔒"]) assert.ok(!t.includes(s), "외부에서 숨김: " + s);
   for (const s of ["내 PC", "이 기기 초기화", "알림 설정", "세션 가져오기", "API 사용량", "정보 · 진단", "데이터"]) assert.ok(t.includes(s), "외부에서 표시: " + s);
 });
 test("showSettings(로컬): 로컬 전용 항목이 전부 보인다", async () => {
