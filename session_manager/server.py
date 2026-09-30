@@ -828,7 +828,10 @@ def create_app() -> FastAPI:
         if cpub:
             from session_manager import cp_client
             if not cp_client.revoke_client_credential(cpub):
-                pending = True
+                # False 는 '이미 폐기됨'(폰 self-revoke 📵 행)일 수도 있다 — CP 상태로 확인되면 폐기 완료로 본다
+                st = cp_client.client_status([cpub]) or {}
+                if (st.get(cpub) or {}).get("status") != "revoked":
+                    pending = True
         connector.request_drop_device(device_id, notice="device_removed")
         devices.audit("delete", device_id, cpub=cpub, pending=pending)
         if pending:

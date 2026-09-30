@@ -3319,8 +3319,9 @@ async function showDevices(){
     // 칩은 행당 1개(우선순위 📵 > 🔗). 📵/⏳/💤 는 0.11.0 에서 서버 상태로 채워진다.
     // 행당 칩 1개, 우선순위 📵 > ⏳ > 🔗 > 💤 (DR-6)
     const stale=!d.revoked && d.last_seen && (Date.now()/1000 - d.last_seen) > 90*86400;
-    const chip = (d.revoked && d.revoked_by==='phone') ? {icon:'📵', text:'폰에서 해제함', tone:'crit'}
-               : (d.delete_pending||d.cp_pending) ? {icon:'⏳', text:'폐기 대기', tone:'warn'}
+    // 삭제를 누른 행(delete_pending)은 📵 보다 ⏳ 가 먼저 — 눌렀는데 그대로인 것처럼 보이지 않게
+    const chip = (d.delete_pending||d.cp_pending) ? {icon:'⏳', text:'삭제 대기', tone:'warn'}
+               : (d.revoked && d.revoked_by==='phone') ? {icon:'📵', text:'폰에서 해제함', tone:'crit'}
                : d.revoked ? {icon:'📵', text:'해제됨', tone:'muted'}
                : (!d.client_scoped ? {icon:'🔗', text:'공유 자격(구형)', tone:'warn', dimtext:true}
                : (stale ? {icon:'💤', text:'90일 미접속', tone:'muted'} : null));
@@ -3344,8 +3345,8 @@ function deleteDevice(d){
   return confirmSheet({title:'페어링 해제', main:'"'+d.name+'" 기기의 페어링을 해제할까요?',
     sub:'이 기기의 접속 자격이 무효가 되고 열린 연결도 즉시 끊깁니다. 다시 쓰려면 새 QR 로 페어링해야 합니다.',
     action:'페어링 해제', danger:true, busyText:'해제 중…',
-    run: async()=>{ await T.api('POST','/api/owner/devices/'+d.id+'/delete',{body:{}}); }})
-    .then(ok=>{ if(ok){ toast('페어링 해제됨'); showDevices(); } });
+    run: async()=>{ const r=await T.api('POST','/api/owner/devices/'+d.id+'/delete',{body:{}}); d._pending=!!(r&&r.pending); }})
+    .then(ok=>{ if(ok){ toast(d._pending?'서버 폐기 확인을 기다리는 중 — 확인되면 목록에서 사라집니다(최대 5분)':'페어링 해제됨'); showDevices(); } });
 }
 async function copyText(t){
   // 127.0.0.1/https 는 보안 컨텍스트라 clipboard API 사용 가능. 실패 시 구식 방법으로 폴백.

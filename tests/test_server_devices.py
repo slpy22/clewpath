@@ -102,6 +102,8 @@ def test_delete_keeps_row_pending_when_revoke_unconfirmed(client, monkeypatch):
     drops = []
     monkeypatch.setattr(C, "request_drop_device", lambda did, wait_s=2.5, notice=None: drops.append((did, notice)) or 0)
     _calls(monkeypatch, revoke=False)
+    from session_manager import cp_client
+    monkeypatch.setattr(cp_client, "client_status", lambda ids: None)     # 상태 조회도 불명
     r = client.post(f"/api/owner/devices/{d['id']}/delete", json={})
     assert r.status_code == 200 and r.json()["deleted"] is False and r.json()["pending"] is True
     row = devices.list_devices()[0]
@@ -112,6 +114,23 @@ def test_delete_keeps_row_pending_when_revoke_unconfirmed(client, monkeypatch):
     _calls(monkeypatch, revoke=True)
     r = client.post(f"/api/owner/devices/{d['id']}/delete", json={})
     assert r.json()["deleted"] is True and devices.list_devices() == []
+
+
+def test_delete_phone_revoked_row_deletes_now(client, monkeypatch):
+    # 폰이 이미 self-revoke 한 📵 행: CP revoke 는 False(이미 폐기)지만 상태 조회가 revoked 면 바로 삭제(2026-09-30 실사용 버그)
+    monkeypatch.setenv("SM_CP_URL", "https://cp.test")
+    d = devices.add_device("a"); devices.set_client_public_id(d["id"], "cpub_a")
+    devices.mark_revoked(d["id"], by="phone")
+    from session_manager import connector as C, cp_client
+    monkeypatch.setattr(C, "request_drop_device", lambda did, wait_s=2.5, notice=None: 0)
+    _calls(monkeypatch, revoke=False)
+    monkeypatch.setattr(cp_client, "client_status", lambda ids: {"cpub_a": {"status": "revoked"}})
+    r = client.post(f"/api/owner/devices/{d['id']}/delete", json={})
+    assert r.json()["deleted"] is True and r.json()["pending"] is False and devices.list_devices() == []
+    # 상태가 active(= 폐기가 정말 안 됨)면 여전히 pending
+    d2 = devices.add_device("b"); devices.set_client_public_id(d2["id"], "cpub_b")
+    monkeypatch.setattr(cp_client, "client_status", lambda ids: {"cpub_b": {"status": "active"}})
+    assert client.post(f"/api/owner/devices/{d2['id']}/delete", json={}).json()["pending"] is True
 
 
 def test_reissue_records_pending_cpub_then_confirms_and_pending_on_unconfirmed_revoke(client, monkeypatch):
