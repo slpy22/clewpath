@@ -574,6 +574,7 @@
     <span class="title" id="head">세션</span>
     <select class="pcname hidden" id="pcname" title="PC 선택 (localhost / 저장된 PC)"></select>
     <span class="grow"></span>
+    <button class="icon hidden" id="btn-pcs" title="내 PC 전환 · 추가 · 페어링 해제">🖧</button>
     <button class="icon" id="btn-monitor" title="오케스트레이션 관제">🎬</button>
     <button class="icon" id="btn-refresh" title="새로고침">⟳</button>
     <button class="icon" id="btn-settings" title="설정">⚙</button>
@@ -3725,6 +3726,7 @@ conn.onauth=(ok,err)=>{
 };
 $('#btn-refresh').onclick=()=>loadList();
 $('#btn-monitor').onclick=()=>showMonitorPicker();
+{ const b=$('#btn-pcs'); if(b) b.onclick=()=>showPcs(); }   // 헤더 🖧: 폰에서 PC 전환·추가·해제(1대일 때도 보임)
 $('#btn-settings').onclick=()=>showSettings();
 
 // ---- ⚙ 설정 화면: 흩어져 있던 도구를 한곳에(5개 섹션). 로컬 전용 항목은
@@ -3933,7 +3935,12 @@ function refreshPcSelect(){
     const seen=new Set();
     pcsLoad().forEach(pc=>{ opts.push({v:pc.room, t:'🖥 '+pcName(pc)}); seen.add(pc.room); });
     if(curRoom && !seen.has(curRoom)) opts.push({v:curRoom, t:'🖥 '+roomLabel(curRoom)});
+    opts.push({v:'__manage__', t:'🖧 PC 추가·관리…'});          // 1대뿐이어도 전환·추가 입구가 헤더에 남게(사장님 2026-09-30)
+  } else {
+    // 로컬: 다른 PC 로 가는 길은 릴레이 앱(저장된 PC 목록은 거기 있다). 팝업 동기화(구 E-4)는 폐지.
+    opts.push({v:'__relay__', t:'🖧 다른 PC (릴레이)…'});
   }
+  const btn=$('#btn-pcs'); if(btn){ if(MODE==='relay') btn.classList.remove('hidden'); else btn.classList.add('hidden'); }
   // 로컬 화면은 localhost 만(E-4): 릴레이 PC 목록 미러(sm_pcs_relay)·팝업 동기화는 0.10.0 에서 제거.
   sel.innerHTML='';
   opts.forEach(o=>{ const op=document.createElement('option'); op.value=o.v; op.textContent=o.t; sel.appendChild(op); });
@@ -3964,6 +3971,8 @@ function onPcSelect(){
   const sel=$('#pcname'); if(!sel) return;
   const v=sel.value;
   if(v==='__local__'){ if(MODE==='local') return; location.href=localAppUrl(); return; }  // localhost 로
+  if(v==='__relay__'){ sel.value='__local__'; location.href=RELAY_APP_URL; return; }      // 로컬 → 릴레이 앱(다른 PC)
+  if(v==='__manage__'){ sel.value=LS.getItem('sm_room')||''; showPcs(); return; }         // 전환·추가·해제 관리
   if(v===LS.getItem('sm_room')){ return; }                                                // 현재와 같음
   if(MODE==='relay'){ const pc=pcsLoad().find(x=>x.room===v)||{room:v,name:''}; switchToPc(pc); }
 }
