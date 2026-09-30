@@ -606,8 +606,11 @@ function pcName(pc){ return pc.name || ('PC ' + String(pc.room).replace(/^rm_/,'
 function pcsUpsert(c){
   if(!c||!c.room) return;
   const a=pcsLoad(); const i=a.findIndex(x=>x.room===c.room);
+  // name: 사용자가 붙인 이름 우선, 없으면 Host 가 auth 응답에 준 hostname(B-1 PC 이름 자동).
+  // pv: 마지막 auth 의 Host 규약 버전 — 구 Host 게이팅(E-D17)에 쓴다.
   const rec={room:c.room, cs:c.cs||'', cp:c.cp||'', dev:c.dev||'',
              name:(i>=0?a[i].name:'')||c.name||'',
+             pv:(c.pv|0)||(i>=0?(a[i].pv|0):0),
              added:(i>=0?a[i].added:Date.now()), last:Date.now()};
   if(i>=0) a[i]=rec; else a.push(rec);
   pcsSave(a);
@@ -626,6 +629,12 @@ function pcsActivate(room){
   return pc;
 }
 function pcsRemove(room){ pcsSave(pcsLoad().filter(x=>x.room!==room)); }
+// 사용자가 붙이는 이름은 여기로만(pcsUpsert 는 '기존 이름 우선' 이라 hostname 이 사용자 이름을 못 덮는다).
+// 빈 이름 = 사용자 이름 해제 → 다음 auth 의 hostname 으로 다시 채워진다.
+function pcsSetName(room, name){
+  const a=pcsLoad(); const i=a.findIndex(x=>x.room===room); if(i<0) return false;
+  a[i].name=String(name||'').trim(); pcsSave(a); return true;
+}
 
 // ---- client JWT: 기기 전용 secret 을 단기 JWT 로 교환(캐시+사전갱신) ----
 function cpBase(){
@@ -698,9 +707,10 @@ class Conn{
     this._txq=this._txq.then(async()=>{ const env=await this._seal(obj);
       this.ws.send(JSON.stringify(env)); }).catch(()=>{});
   }
-  _doAuth(){   // 기기 토큰이 있으면 릴레이 연결 직후 기기 인증
-    if(!this.devToken){ this.authed=false; return Promise.resolve(); }
-    return this.req('auth',{token:this.devToken,pv:PV}).then(r=>{
+  _doAuth(){   // 기기 토큰이 있으면 릴레이 연결 직후 기기 인증 → {ok,error,data} (토큰 없으면 null)
+    if(!this.devToken){ this.authed=false; return Promise.resolve(null); }
+    // name: 폰이 자기 이름을 보고한다(B-1) — Host 는 등록부의 임시 이름만 이걸로 채운다.
+    return this.req('auth',{token:this.devToken,pv:PV,name:deviceSelfName()}).then(r=>{
       this.authed=!!(r&&r.ok);
       // 접속한 PC(호스트)의 버전 — 우선 auth 응답값으로 표시, 이어서 최신 여부까지 확인.
       if(this.authed && r.data && r.data.ver){ showVer(r.data.ver, null); refreshVer(); }
@@ -710,8 +720,11 @@ class Conn{
         this._pvWarned=true;
         toast('PC 프로그램이 더 새 통신 규약을 사용합니다 — 이 앱/화면을 업데이트해 주세요');
       }
-      if(this.onauth)this.onauth(this.authed, r&&r.error);
-    });
+      // 페어링 중(_pairing)에는 전역 onauth(자격 상실 화면·로그아웃)를 부르지 않는다 — 결과는 doPair 가
+      // connect() 의 auth 필드로 받아 되돌리기(pairRollback)까지 스스로 처리한다.
+      if(this.onauth && !this._pairing)this.onauth(this.authed, r&&r.error);
+      return {ok:this.authed, error:(r&&r.error)||null, data:(r&&r.data)||null};
+    }).catch(e=>({ok:false, error:String((e&&e.message)||e||'auth_failed'), data:null}));
   }
   async connect(room,token){
     this._room=room; this._token=token;           // 재접속에 사용
@@ -747,8 +760,10 @@ class Conn{
         // 릴레이가 직접 보내는 제어 프레임(암호화 대상 아님)
         if(m.type==='hello'){ this.peer=!!m.peer_present; this.cid=m.cid||null;
           this.onstatus(true,this.peer);
-          if(!done){ if(this.devToken){ this._doAuth().finally(()=>{ if(!done){done=true;res(m);} }); }
-                     else { done=true; res(m); } }
+          // connect() 의 resolve 값에 auth 결과를 싣는다(eng E-D16): hello 는 릴레이 입장일 뿐이라
+          // 기기 인증 실패(만료 QR 등)를 '성공' 으로 오해하지 않게. reject 는 안 한다(onauth 경로 유지).
+          if(!done){ if(this.devToken){ this._doAuth().then(a=>{ if(!done){done=true;res({...m, auth:a});} }); }
+                     else { done=true; res({...m, auth:null}); } }
           return; }
         if(m.type==='peer'){ if(m.event==='agent_online')this.peer=true;
           if(m.event==='agent_offline')this.peer=false; this.onstatus(true,this.peer); return; }
@@ -3467,7 +3482,7 @@ function showPcs(){
     const rn=el('button','btn ghost sm','✎');
     rn.title='이름 변경';
     rn.onclick=()=>{ const n=prompt('이 PC 의 표시 이름', pcName(pc));
-      if(n!==null){ pc.name=n.trim(); pcsUpsert(pc); showPcs(); refreshPcsBtn(); } };
+      if(n!==null){ pcsSetName(pc.room, n); showPcs(); refreshPcsBtn(); } };
     row.appendChild(rn);
     const del=el('button','btn ghost sm','🗑');
     del.title='목록에서 제거';
@@ -3633,6 +3648,22 @@ function enterApp(){ $('#pair').classList.add('hidden'); $('#app').classList.rem
       b.onclick=()=>toast('종단 암호화 활성 - 릴레이 서버도 대화 내용을 읽을 수 없습니다'); } }
   loadList(); }
 $('#p-go').onclick=doPair;
+// 폰이 auth 때 보고하는 자기 이름(B-1): 앱은 브리지의 기기 모델, 웹은 UA 요약. Host 가 40자·제어문자 정리.
+function deviceSelfName(){
+  try{ const B=window.ClewBridge; if(B&&B.deviceName){ const n=B.deviceName(); if(n) return String(n); } }catch(e){}
+  const ua=(navigator.userAgent||'');
+  const dev=/iPad/.test(ua)?'iPad':/iPhone/.test(ua)?'iPhone':/Android/.test(ua)?'Android':/Macintosh/.test(ua)?'Mac':/Windows/.test(ua)?'Windows':'기기';
+  const br=/CriOS|Chrome/.test(ua)?'Chrome':/FxiOS|Firefox/.test(ua)?'Firefox':/Safari/.test(ua)?'Safari':'';
+  return br?dev+' '+br:dev;
+}
+// 페어링 실패 되돌리기: 방금 쓴 자격·룸 키를 지우고, 이전에 쓰던 PC 가 있으면 그 자격을 되살린다.
+function pairRollback(room, prevRoom, hadRk){
+  try{ conn._stopped=true; if(conn.ws) conn.ws.close(); }catch(e){}
+  ['sm_devtoken','sm_cs','sm_cp','sm_cjwt','sm_token'].forEach(k=>LS.removeItem(k));
+  if(!hadRk) LS.removeItem('sm_e2ee_'+room);
+  conn.devToken='';
+  if(prevRoom && prevRoom!==room && pcsLoad().some(x=>x.room===prevRoom)) pcsActivate(prevRoom);
+}
 function doPair(){
   // ① 페어링 링크를 붙여넣었으면 거기서 값을 뽑는다(권장 경로)
   const link=($('#p-link')?$('#p-link').value:'').trim();
@@ -3658,6 +3689,8 @@ function doPair(){
   if(!room||!(cs||token)){ $('#p-err').textContent='페어링 링크를 붙여넣거나, 직접 입력을 채워주세요'; return; }
   if(cs&&!cp){ $('#p-err').textContent='cli_ 자격을 쓰려면 CLIENT PUBLIC ID(cpub_…)도 필요합니다'; return; }
 
+  // 실패 시 되돌릴 이전 상태(E-D16: 잘못된/만료된 QR 은 아무것도 바꾸지 않는다)
+  const prevRoom=LS.getItem('sm_room')||'', hadRk=!!LS.getItem('sm_e2ee_'+room);
   // 자격 저장 → connect() 가 cs 를 단기 JWT 로 교환해 사용한다
   if(dev){ LS.setItem('sm_devtoken',dev); conn.devToken=dev; }
   // E2EE 룸 키 — 링크로 수동 페어링해도 부트 경로와 동일하게 저장(빠지면 평문 접속이 돼버림)
@@ -3667,12 +3700,24 @@ function doPair(){
   else { LS.removeItem('sm_cs'); LS.removeItem('sm_cp'); LS.removeItem('sm_cjwt'); }
 
   $('#p-err').textContent=''; $('#p-go').textContent='연결 중…';
-  conn.connect(room,token).then(()=>{
+  conn._pairing=true; conn._stopped=false;
+  conn.connect(room,token).then((r)=>{
+    conn._pairing=false;
+    const a=r&&r.auth;
+    if(dev && !(a&&a.ok)){
+      // 기기 인증 실패 = 이 QR 은 Host 에서 이미 무효(삭제·재발급·만료). 저장하지 않고 이전 상태로.
+      pairRollback(room, prevRoom, hadRk);
+      $('#p-err').textContent = (a&&a.error==='auth_invalid')
+        ? '이 QR 은 더 이상 유효하지 않습니다 — PC 의 📱 기기 목록에서 새 QR 을 만드세요'
+        : 'PC 인증 실패: '+((a&&a.error)||'unknown');
+      $('#p-go').textContent='연결';
+      return;
+    }
     LS.setItem('sm_room',room);
     if(token) LS.setItem('sm_token',token); else LS.removeItem('sm_token');
-    pcsUpsert({room, cs, cp, dev});
+    pcsUpsert({room, cs, cp, dev, name:(a&&a.data&&a.data.hostname)||'', pv:(a&&a.data&&a.data.pv)|0});
     T=relayT; enterApp(); refreshPcsBtn();
-  }).catch(e=>{ $('#p-err').textContent=e.message; $('#p-go').textContent='연결'; });
+  }).catch(e=>{ conn._pairing=false; $('#p-err').textContent=e.message; $('#p-go').textContent='연결'; });
 }
 
 // ---- 버전 표기 -------------------------------------------------------------
