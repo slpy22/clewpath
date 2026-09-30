@@ -362,3 +362,14 @@ test("왕복 동기화: doExport 최상위면 #pcs= 로 복귀, 로컬 부팅이
   ev(ctx2, "sessionStorage.removeItem('sm_pcs_rt')");
   assert.equal(ev(ctx2, "relayPcsRoundTrip()"), true); assert.ok(hrefs[0].includes("?pcexport=http%3A%2F%2F127.0.0.1%3A5100"));
 });
+
+
+test("rowResumeIcon: 🖥 클루패스 실행 중 / 출처 아이콘(⌨·🧬·🤖) / ▶ 재개", async () => {
+  const ctx = await load();
+  assert.equal(ev(ctx, "rowResumeIcon({live_terminal:true, peer:{origin:{origin:'terminal'}}})"), "🖥");
+  assert.equal(ev(ctx, "rowResumeIcon({peer:{origin:{origin:'terminal'}}})"), "⌨");
+  assert.equal(ev(ctx, "rowResumeIcon({peer:{origin:{origin:'child'}}})"), "🧬");
+  assert.equal(ev(ctx, "rowResumeIcon({peer:{origin:{origin:'headless'}}})"), "🤖");
+  assert.equal(ev(ctx, "rowResumeIcon({})"), "▶");
+  assert.ok(ev(ctx, "rowResumeTitle({peer:{status:'busy', origin:{origin:'terminal'}}})").startsWith("터미널에서 실행 중 · 작업 중"));
+});

@@ -1232,6 +1232,19 @@ function sessionBadge(s){
   if(rt.phase==='ready'    &&fresh(rt.ready_at,60*M))       return {c:'#3fb950',pulse:false,text:'완료'};
   return null;
 }
+// 목록 행의 재개 버튼 아이콘 = 세션 상태(2026-09-30): 🖥 클루패스 터미널 실행 중 / ⌨·🧬·🤖… 다른 곳에서 실행 중(출처) / ▶ 재개
+function rowResumeIcon(s){
+  if(s.live_terminal) return '🖥';
+  if(s.peer) return peerOriginLabel(s.peer).icon;
+  return '▶';
+}
+function rowResumeTitle(s){
+  if(s.live_terminal) return '실행 중(클루패스 터미널) - 터미널로 돌아가기';
+  if(s.peer){ const lab=peerOriginLabel(s.peer);
+    return lab.text+'에서 실행 중'+(s.peer.status==='busy'?' · 작업 중':'')+' — '+lab.title
+      +'. 여기서 다시 재개하면 대화가 두 갈래로 갈라집니다(상세의 ⛔ 강제 종료로 끝낼 수 있음)'; }
+  return '재개 (웹/터미널 선택)';
+}
 // 살아 있는 세션의 출처 마크(2026-09-30 사장님): 어디서 띄웠는지 한눈에. Host 의 peer.origin(psutil, pid 부모/명령줄) 기반.
 const PEER_ORIGIN_LABELS={
   clewpath:{icon:'🖥', text:'클루패스', title:'ClewPath 가 띄운 세션(화면은 지금 이 기기에 없음)'},
@@ -1676,14 +1689,8 @@ function renderRows(wrap,q){
         g.title='백그라운드 에이전트가 이 세션 사용 중 - 이어재개 잠김(포크는 가능)';
         r1.appendChild(g);
       }
-      if(s.peer&&!s.live_terminal){
-        // 피어 레지스트리(~/.claude/sessions): 우리 PTY 는 아니지만 어딘가에서 떠 있는 세션 — 출처별로 다른 마크(2026-09-30)
-        const lab=peerOriginLabel(s.peer);
-        // 아이콘이 출처(⌨ 터미널 / 🧬 클로드가 띄움 / 🤖 헤드리스 …), 텍스트는 SendMessage 주소(이름) — 없으면 출처 문구
-        const g=el('span','schip agentbg',lab.icon+' '+(s.peer.name||lab.text)+(s.peer.status==='busy'?' · 작업 중':''));
-        g.title=lab.text+' — '+lab.title+(s.peer.name?' · SendMessage 주소: '+s.peer.name:'')+'. 여기서 다시 재개하면 대화가 두 갈래로 갈라집니다 — 상세의 ⛔ 강제 종료로 끝낼 수 있습니다';
-        r1.appendChild(g);
-      }
+      // 피어(다른 곳에서 살아 있는 세션)는 칩 대신 오른쪽 재개 버튼 아이콘이 출처를 보여 준다(2026-09-30 사장님:
+      // 'worker-3-ax-52' 같은 SendMessage 이름 칩은 봐도 이해가 안 됨)
       if(s.picker_hidden&&!s.picker_expose){
         const g=el('span','schip gear','⚙ 에이전트');
         g.title='claude 재개 목록(피커)에 없는 세션 - 에이전트/포크 산물. 상세에서 설명 보기';
@@ -1720,8 +1727,8 @@ function renderRows(wrap,q){
         bA.style.color='#e8a03c'; bA.onclick=()=>showApprove(s);
         srow.appendChild(info); srow.appendChild(bA);
       } else { srow.appendChild(info); }
-      const bR=el('button','sbtn resume', s.live_terminal?'🖥':'▶');
-      bR.title=s.live_terminal?'실행 중 - 터미널로 돌아가기':'재개 (웹/터미널 선택)';
+      const bR=el('button','sbtn resume', rowResumeIcon(s));
+      bR.title=rowResumeTitle(s);
       bR.onclick=()=>showResumeChooser(continuedTarget(s));
       const bN=el('button','sbtn rename','✎'); bN.title='이름 변경'; bN.onclick=()=>renameNative(s);
       srow.appendChild(bR); srow.appendChild(bN);
