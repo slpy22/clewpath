@@ -397,3 +397,52 @@ def move_session(session_id: str, new_cwd: str, move_content: bool = False,
             "old_cwd": old_cwd, "new_cwd": new_cwd,
             "operations": moved_ops,
             "content": content_result if move_content else None}
+
+
+# ---- 강제 종료(2026-09-30 사장님): 이 세션을 살려 두고 있는 프로세스를 어디서 띄웠든 끝낸다 ----
+def kill_session(session_id: str) -> dict:
+    """ClewPath PTY 면 stop_terminal, 피어 레지스트리(~/.claude/sessions)의 pid 면 프로세스 트리를 종료한다.
+
+    안전장치: 레지스트리가 낡아 pid 가 다른 프로그램에 재사용됐을 수 있으므로 **프로세스 이름/명령줄에 claude 가
+    있는 것만** 죽인다. Host 자신은 절대 죽이지 않는다. 파일(jsonl·레지스트리)은 건드리지 않는다 — 프로세스가
+    죽으면 claude 가 스스로 정리한다(불가침 원칙 범위 밖: 프로세스 종료는 터미널 창을 닫는 것과 같은 행위).
+    반환: {"killed": [{how, pid?, origin?}], "errors": [{pid, reason}]}
+    """
+    import os
+    import subprocess
+    import sys
+    res: dict = {"killed": [], "errors": []}
+    try:
+        from session_manager import webterm
+        if webterm.has_terminal(session_id):
+            res["killed"].append({"how": "clewpath", "ok": bool(webterm.stop_terminal(session_id))})
+    except Exception as e:  # noqa: BLE001
+        res["errors"].append({"pid": None, "reason": f"pty:{type(e).__name__}"})
+    from session_manager import peers
+    for p in peers.snapshot(0):
+        if p.get("session_id") != session_id or not p.get("pid"):
+            continue
+        try:
+            pid = int(p["pid"])
+        except (TypeError, ValueError):
+            continue
+        if pid == os.getpid():
+            continue
+        info = peers._proc_info(pid)
+        blob = ((info or {}).get("name", "") + " " + " ".join((info or {}).get("cmdline") or [])).lower()
+        if not info or "claude" not in blob:
+            res["errors"].append({"pid": pid, "reason": "gone_or_not_claude"})
+            continue
+        try:
+            if sys.platform == "win32":
+                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, timeout=10)
+            else:
+                import psutil
+                pr = psutil.Process(pid)
+                for c in pr.children(recursive=True):
+                    c.kill()
+                pr.kill()
+            res["killed"].append({"how": "process", "pid": pid, "origin": (p.get("origin") or {}).get("origin")})
+        except Exception as e:  # noqa: BLE001
+            res["errors"].append({"pid": pid, "reason": type(e).__name__})
+    return res

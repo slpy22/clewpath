@@ -255,3 +255,35 @@ test("showSettings(로컬): 로컬 전용 항목이 전부 보인다", async () 
   for (const s of ["2차 인증", "외부 접속 기기", "휴지통", "워커 스킬", "설치 상태", "재설치", "보안"]) assert.ok(t.includes(s), "로컬 표시: " + s);
   assert.ok(!t.includes("이 기기 초기화") && !t.includes("내 PC"), "로컬엔 폰 전용 항목 없음");
 });
+
+// ---- 세션 출처 마크 · 강제 종료(2026-09-30) ----
+test("peerOriginLabel/sessionIsLive: 출처별 아이콘·문구, 부모 프로세스 툴팁, 살아 있는 판정", async () => {
+  const ctx = await load();
+  const lab = (o, par) => ev(ctx, `peerOriginLabel({origin:{origin:${JSON.stringify(o)}, parent:${JSON.stringify(par || null)}}})`);
+  assert.equal(lab("terminal").icon, "⌨"); assert.equal(lab("child").text, "클로드가 띄움"); assert.equal(lab("headless").icon, "🤖");
+  assert.equal(lab("clewpath").icon, "🖥"); assert.equal(lab("sdk").icon, "🧩"); assert.equal(lab("script").icon, "🐍");
+  assert.equal(lab("bogus").text, "실행 중"); assert.equal(ev(ctx, "peerOriginLabel(null).text"), "실행 중");
+  assert.ok(lab("terminal", "pwsh.exe").title.includes("pwsh.exe"));
+  assert.equal(ev(ctx, "sessionIsLive({live_terminal:true})"), true);
+  assert.equal(ev(ctx, "sessionIsLive({peer:{name:'x'}})"), true);
+  assert.equal(ev(ctx, "sessionIsLive({agent:{kind:'background'}})"), true);
+  assert.equal(ev(ctx, "sessionIsLive({})"), false);
+});
+
+test("killSession: 확인 시트 → (릴레이면 2FA) → POST kill → 토스트·목록 갱신; 실패는 시트 오류", async () => {
+  const ctx = await load();
+  ev(ctx, "globalThis.__t = []; toast = (m) => globalThis.__t.push(m); globalThis.__ll = 0; loadList = async () => { globalThis.__ll++; };"
+        + "globalThis.__api = []; T = { api: async (m, p, o) => { globalThis.__api.push([m, p, o]); return globalThis.__resp; } };"
+        + "globalThis.__resp = { ok: true, killed: [{ how: 'process', pid: 10 }], errors: [] };"
+        + "ensurePriv = async () => ({ grace: 'g', otp: '' }); loadDetail = () => {}; SESSIONS = [];"
+        + "confirmSheet = async (o) => { globalThis.__sheet = o; try { await o.run(); return true; } catch (e) { globalThis.__err = e.message; return false; } }");
+  await ev(ctx, "killSession({session_id: 'sid1', title: 'T', peer: {name: 'w1', origin: {origin: 'child'}}})");
+  const api = ev(ctx, "globalThis.__api");
+  assert.equal(api.length, 1); assert.equal(api[0][1], "/api/sessions/sid1/kill"); assert.equal(api[0][2].grace, "g", "릴레이는 2FA grace 동봉");
+  assert.ok(ev(ctx, "globalThis.__sheet").sub.includes("클로드가 띄움(w1)"));
+  assert.ok(ev(ctx, "globalThis.__t")[0].includes("1개")); assert.equal(ev(ctx, "globalThis.__ll"), 1);
+  ev(ctx, "globalThis.__resp = { ok: false, killed: [], errors: [{ pid: 11, reason: 'gone_or_not_claude' }] }; globalThis.__t = []");
+  await ev(ctx, "killSession({session_id: 'sid2', live_terminal: true})");
+  assert.ok(String(ev(ctx, "globalThis.__err")).includes("gone_or_not_claude"), "실패 사유가 시트에 남는다");
+  assert.equal(ev(ctx, "globalThis.__t").length, 0);
+});

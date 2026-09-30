@@ -221,6 +221,9 @@ def revoke_client_credential(client_public_id: str) -> bool:
         return False
 
 
+_status_404_logged: list = []
+
+
 def client_status(public_ids: list[str]) -> dict | None:
     """기기 자격들의 CP 상태 일괄 조회(0.11.0 devsync). 실패/타임아웃은 None(= 불명, 호출자는 아무것도 바꾸지 않는다).
 
@@ -239,6 +242,12 @@ def client_status(public_ids: list[str]) -> dict | None:
                             json={"public_id": creds["credential_public_id"],
                                   "secret": creds["secret"], "public_ids": ids},
                             timeout=10)
+        if r.status_code == 404:
+            # CP 가 아직 /client/status 를 모르는 구버전(0.11.0 CP 배포 전) — 5분마다 로그를 채우지 않게 1회만
+            if not _status_404_logged:
+                _status_404_logged.append(1)
+                log("[cp] client status 미지원 CP(404) - 서버 0.11.0 배포 전까지 동기화 건너뜀")
+            return None
         if r.status_code != 200:
             log(f"[cp] client status 조회 실패 http={r.status_code}")
             return None

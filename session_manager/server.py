@@ -1154,6 +1154,18 @@ def create_app() -> FastAPI:
 
     # ---- 열린 터미널 명시 종료: persist PTY 는 화면을 닫아도 살아 있어(재접속 설계)
     #      사용자가 끝낼 유일한 UI 경로. 원격 승인과 같은 신뢰 수준(기기 인증 뒤 API 터널).
+    @app.post("/api/sessions/{session_id}/kill")
+    def session_kill(session_id: str):
+        """이 세션을 살려 두고 있는 claude 프로세스를 어디서 띄웠든 강제 종료(2026-09-30).
+
+        ClewPath 화면·터미널에서 보이지 않는 경로(다른 터미널·`claude -p`·다른 클로드가 띄운 것)로 살아 있을 때의
+        마지막 수단. 원격은 terminal/stop 과 같은 2FA 게이트(커넥터 _PRIV_API_SUFFIXES).
+        """
+        r = lifecycle.kill_session(session_id)
+        if not r["killed"] and not r["errors"]:
+            return JSONResponse({"error": "not_live", **r}, status_code=404)
+        return {"ok": bool(r["killed"]), **r}
+
     @app.post("/api/sessions/{session_id}/terminal/stop")
     def terminal_stop(session_id: str):
         from session_manager import webterm

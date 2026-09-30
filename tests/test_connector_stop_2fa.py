@@ -24,6 +24,7 @@ STOP = "/api/sessions/59f9577b-0d25-47be-994b-29009cf0fba3/terminal/stop"
 def test_is_privileged_api_matches_only_stop():
     assert C._is_privileged_api(STOP) is True
     assert C._is_privileged_api(STOP + "/") is True
+    assert C._is_privileged_api("/api/sessions/x/kill") is True   # 강제 종료도 특권(2026-09-30)
     assert C._is_privileged_api(STOP + "?x=1") is True
     assert C._is_privileged_api("/api/sessions/abc/stats") is False
     assert C._is_privileged_api("/api/v1/sessions") is False
