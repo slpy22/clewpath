@@ -3,6 +3,26 @@
 > 이 문서는 Windows 측(주 개발)에서 맥 측 Claude 에게 전달하는 작업 지시서다.
 > 위에서부터 순서대로 실행하면 된다. 완료 후 결과를 사용자에게 보고할 것.
 
+## ★★★★★★★ 업데이트 7 (2026-09-30 — 페어링 UX 0.10.0: 브리지 변경 3건, 다음 TestFlight 에 동반)
+
+Host 0.10.0 의 페어링 화면 재설계에 맞춰 `native-bridge.js` 가 바뀌었다(웹은 Host 릴리스와 함께 즉시 반영, **앱은 이 번들을
+다시 올려야 동작**). 화면 쪽 변경(페어링 화면 1벌·확인 시트·해제 버튼 정리)은 번들 안 `index.html` 이라 `npm run bundle` 로 같이 들어간다.
+
+1. **`clewpath://pair?relay=<host/base>#<frag>`** — Safari 페어링 화면의 새 버튼 **'앱에서 열기'** 가 이 링크를 연다.
+   브리지가 `relay` 를 읽어 릴레이 주소를 저장하므로 **처음 설치한 앱(저장된 릴레이 없음)도 바로 페어링**된다.
+   1.9 이하는 이 링크를 `bad_url` 로 거부한다(웹 버튼 문구에 '앱이 없으면 웹으로 계속' 안내가 있다).
+2. **`persistSync(key)`** — 특정 LS 키를 네이티브 Preferences 에 확정한 뒤 resolve. 0.11.0 의 '폐기 큐' 가 자격 삭제 전에 await 한다.
+3. **`deviceName()`** — 폰이 auth 때 자기 이름을 Host 에 보고한다(PC 📱 목록의 임시 이름을 채움). `Device` 플러그인이 있으면
+   제조사+모델, 없으면 'iPhone'/'Android'. **`@capacitor/device` 를 추가하면 더 정확**(선택; 없어도 동작).
+
+```bash
+git pull
+cd app && npm install && npm run bundle && npx cap sync ios
+grep -n "persistSync\|deviceName\|relay" ios/App/App/public/native-bridge.js | head   # 3 함수가 보여야 최신 번들
+```
+시뮬레이터 확인: 페어링 화면에 3줄 설명 대신 **상황 줄 1개**, ⚙ 설정에 '🖧 내 PC' 와 '🧹 이 기기 초기화'(danger) 가 보이면 최신.
+(첫 실행 오버레이 `#cb-pair` 는 그대로 — 0.11.0 에서 폐기 예정.) 배포 뒤 pbxproj 버전 커밋·push 규칙은 업데이트 6 과 같다.
+
 ## ★★★★★★ 업데이트 6 (2026-09-29 — 1.9 배포 확인, 버전 규칙 변경, Team ID 반영 완료)
 
 - 맥이 자체 버전업으로 **1.9** 를 TestFlight 에 올렸다(사장님 확인). 앞으로 **앱 버전의 정본은 맥**이다 — 저장소의
