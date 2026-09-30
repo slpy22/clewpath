@@ -3781,11 +3781,11 @@ function showSettings(){
   row('📦','워커 스킬 설치','하위 세션 분배 스킬(clewpath-workers)을 ~/.claude/skills 에 설치',installWorkersSkill,{local:true});
 
   sec('정보 · 진단');
-  // 업데이트 적용은 로컬 전용(update/apply 덴리스트) — 외부에선 위 '연결 · PC' 줄의 v현재 → v최신 표시로 갈음
+  // 업데이트 적용: 로컬은 바로, 원격(폰)은 2차 인증 뒤(사장님 2026-09-30 — 원격에서도 Host 업데이트). 서명 검증은 Host 가 한다.
   row('⬆','업데이트',
       VERSTATE.latest?('새 버전 v'+VERSTATE.latest+' 설치 가능'):'현재 버전 확인 · 재설치',
       ()=>{ if(VERSTATE.latest) showUpdateApply(VERSTATE.cur,VERSTATE.latest);
-            else checkUpdateNow(VERSTATE.cur); },{local:true});
+            else checkUpdateNow(VERSTATE.cur); });
   row('📈','API 사용량','토큰 · 환산 비용 통계',showUsage);
   row('🩺','진단','설치 상태 · 세션 수 · 설정 파일 위치',showDiagnostics,{local:true});
 
@@ -3985,9 +3985,9 @@ function syncRelayPcs(){
     f.setAttribute('aria-hidden','true'); f.tabIndex=-1;
     f.style.cssText='position:absolute;width:0;height:0;border:0;opacity:0;pointer-events:none';
     document.body.appendChild(f); _pcsSyncFrame=f;
-    // iframe 이 빈 목록(저장소 분리)이거나 응답이 없으면 → 세션당 1회 왕복
-    setTimeout(()=>{ if(_pcsSyncFrame===f){ try{ f.remove(); }catch(e){} _pcsSyncFrame=null; }
-      if(!relayPcsLoad().length) relayPcsRoundTrip(); }, 6000);
+    // 응답이 없으면(릴레이 불통·오프라인) 정리만 한다 — 이때 왕복하면 로컬 화면이 오류 페이지에 남는다.
+    // 왕복은 iframe 이 '응답은 했는데 빈 목록'(=서버 살아 있음, 저장소 분리)일 때만(onRelayPcsMessage).
+    setTimeout(()=>{ if(_pcsSyncFrame===f){ try{ f.remove(); }catch(e){} _pcsSyncFrame=null; } }, 15000);
   }catch(e){}
 }
 function onRelayPcsMessage(ev){
@@ -3999,7 +3999,7 @@ function onRelayPcsMessage(ev){
       if(list.length) relayPcsSave(list);          // 빈 목록은 저장소 분리(partitioning)일 수 있어 기존 값을 지우지 않는다
       if(_pcsSyncFrame){ try{ _pcsSyncFrame.remove(); }catch(e){} _pcsSyncFrame=null; }
       refreshPcSelect();
-      if(!list.length && !relayPcsLoad().length) relayPcsRoundTrip();
+      if(!list.length && !relayPcsLoad().length && navigator.onLine!==false) relayPcsRoundTrip();
     }
   }catch(e){}
 }
@@ -4089,9 +4089,11 @@ function showUpdateApply(cur,latest){
   const status=el('div'); status.style.cssText='margin-top:10px;color:var(--ink2)'; body.appendChild(status);
   const go=el('button','btn full',`지금 v${latest} 로 업데이트`);
   go.onclick=async()=>{
+    let cred={};
+    if(MODE==='relay'){ cred=await ensurePriv(); if(cred===null) return; }   // 원격 적용 = 특권(terminal/stop 과 같은 2FA)
     go.disabled=true; go.textContent='적용 중…'; status.textContent='서버가 새 버전을 받아 검증하고 있습니다…';
     try{
-      const j=await T.api('POST','/api/owner/update/apply');   // 로컬=직접, 릴레이=원격 PC 에 적용
+      const j=await T.api('POST','/api/owner/update/apply',{grace:cred.grace,otp:cred.otp});   // 로컬=직접, 릴레이=원격 PC 에 적용
       if(j && j.applied){
         status.innerHTML='적용을 시작했습니다. 서비스가 잠시 재기동됩니다 — <b>30초 뒤 자동으로 새로고침</b>됩니다.';
         go.textContent='재기동 대기…';

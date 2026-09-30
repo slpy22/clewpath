@@ -92,8 +92,10 @@ def _priv_ok(params: dict) -> bool:
 # 구멍(2026-09-29 발견, Host 0.9.8 핫픽스). 아래 덴리스트는 2중 방어(서버까지 안 보냄).
 VIA_HEADER = "X-ClewPath-Via"
 _LOCAL_ONLY_API = re.compile(
-    r"^/api/(owner/(devices(/|$|\?)|2fa/(provision|toggle)|skills/[^/]+/install|trash/|update/apply)"
+    r"^/api/(owner/(devices(/|$|\?)|2fa/(provision|toggle)|skills/[^/]+/install|trash/)"
     r"|sessions/[^/]+/terminal/start)")
+# update/apply 는 0.10.5 부터 로컬 전용이 아니라 특권(2FA) — 원격에서 Host 업데이트(사장님 2026-09-30).
+# 실행되는 코드는 CP 가 서명한 패키지뿐(Host 가 서명·해시 검증)이라 원격 트리거의 위험은 '재기동' 에 국한된다.
 
 
 def _is_local_only_api(path: str, verb: str) -> bool:
@@ -118,7 +120,7 @@ def _otp_error() -> str:
 # 새는 비대칭 갭이 있었다 — 원격에서 OTP 없이 남의 claude 프로세스를 죽일 수 있었다.
 # start 와 대칭이 되도록 stop 도 특권 경로로 취급한다(릴레이 경유 한정; 소유자
 # 로컬 직접 호출은 이 프록시를 안 타므로 무영향 — start 2FA 와 같은 원리).
-_PRIV_API_SUFFIXES = ("/terminal/stop", "/kill")   # /kill: 세션 강제 종료(어디서 띄웠든) — stop 과 같은 2FA 게이트
+_PRIV_API_SUFFIXES = ("/terminal/stop", "/kill", "/update/apply")   # kill: 세션 강제 종료, update/apply: 원격 Host 업데이트 — 모두 2FA 게이트
 
 
 def _is_privileged_api(path: str) -> bool:

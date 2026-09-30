@@ -33,7 +33,7 @@ def _conn():
     ("/api/owner/skills/workers/install", "POST", True),
     ("/api/owner/skills/workers", "GET", False),
     ("/api/owner/trash/sessions/restore", "POST", True),
-    ("/api/owner/update/apply", "POST", True),
+    ("/api/owner/update/apply", "POST", False),         # 0.10.5: 원격 업데이트는 2FA 특권(덴리스트 아님)
     ("/api/owner/update/status", "GET", False),
     ("/api/sessions/59f9577b-0d25-47be-994b-29009cf0fba3/terminal/start", "POST", True),
     ("/api/sessions/59f9577b-0d25-47be-994b-29009cf0fba3/terminal/stop", "POST", False),   # 2FA 게이트가 담당

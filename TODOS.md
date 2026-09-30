@@ -39,6 +39,10 @@
 - [x] 상세 '⛔ 세션 강제 종료' → `POST /api/sessions/{id}/kill`(PTY stop + 레지스트리 pid `taskkill /T /F`, claude 프로세스만·Host 자신 제외, 원격 2FA `_PRIV_API_SUFFIXES`)
 - [x] 외부 접속 설정 화면: 로컬 전용 항목 숨김(🔒 폐지). 0.10.1 게시·적용(13:44). 주의: apply 재기동이 incidents 5 로 기록됨(표준 경로 확인 필요 — 다음 릴리스 때 관찰)
 
+## 참고(완료): 원격 Host 업데이트 + 로컬 다른 PC 목록 (Host 0.10.5, 2026-09-30)
+- [x] `update/apply` 를 로컬 전용 덴리스트에서 빼고 특권(2FA, `_PRIV_API_SUFFIXES`)으로 — 폰 설정 '업데이트' 가 원격에서도 보이고 ensurePriv 뒤 적용(사장님 요청). 실행 코드는 CP 서명 패키지뿐이라 위험은 재기동에 국한. 0.9.8 리뷰 결정(로컬 전용)을 사장님 결정으로 덮음
+- [x] 로컬 헤더 '다른 PC 목록': Chrome 서드파티 iframe 저장소 분리 → 세션당 1회 왕복(`?pcexport`→`#pcs=`), 왕복은 iframe 이 '응답은 했는데 빈 목록' 일 때만(불통이면 안 함 — 로컬 화면 이탈 방지), '🔄 PC 목록 새로고침'
+
 ## 진행중 기능: 페어링 UX 통일 — 대칭 페어링 모델 (Host 0.9.8 핫픽스 + 0.10.0 + 007 + 앱, 2026-09-29 기획)
 
 `/plan-ceo-review`(SELECTIVE EXPANSION, Codex 외부 시각) 산출: `docs/designs/pc-pairing-ux.md`(정본), 입력 인벤토리

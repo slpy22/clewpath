@@ -678,8 +678,9 @@ def create_app() -> FastAPI:
     @app.post("/api/owner/update/apply")
     def owner_update_apply(request: Request):
         from session_manager import updater
-        if not _is_local(request):
-            return JSONResponse({"error": "업데이트 적용은 이 PC(로컬)에서만 가능합니다."},
+        # 로컬 또는 릴레이(커넥터가 2FA 로 게이트한 특권 요청)만. 그 외 직접 접근은 거부.
+        if not (_is_local(request) or _via_relay(request)):
+            return JSONResponse({"error": "업데이트 적용은 이 PC(로컬) 또는 페어링된 기기(2차 인증)에서만 가능합니다."},
                                 status_code=403)
         if not updater.RELEASE_KEYS:
             return JSONResponse({"error": "이 빌드에는 릴리스 공개키가 없어 "

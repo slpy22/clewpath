@@ -136,3 +136,21 @@ def test_list_reports_cp_synced_and_kicks_devsync(client, monkeypatch):
     devices.set_cp_synced(1700000000)
     r = client.get("/api/owner/devices").json()
     assert r["cp_synced"] == 1700000000 and kicks == [1]
+
+
+# ---- 0.10.5: 원격(릴레이 경유, 커넥터 2FA 게이트) 업데이트 적용 허용 ----
+
+def test_update_apply_allowed_via_relay_header(fake_claude_home, monkeypatch):
+    from fastapi.testclient import TestClient
+    for k in ("SM_RELAY_URL", "SM_RELAY_ROOM", "SM_RELAY_AGENT_TOKEN", "SM_CP_URL"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("SM_HOST", "127.0.0.1")
+    from session_manager import server as S, updater, connector as C
+    monkeypatch.setattr(S, "_client_host", lambda r: "10.0.0.9")          # 로컬 아님
+    monkeypatch.setattr(updater, "RELEASE_KEYS", [], raising=False)
+    with TestClient(S.create_app()) as c:
+        assert c.post("/api/owner/update/apply").status_code == 403, "릴레이도 로컬도 아닌 직접 접근은 거부"
+        r = c.post("/api/owner/update/apply", headers={C.VIA_HEADER: "relay"})
+        assert r.status_code == 400 and "공개키" in r.json()["error"], "릴레이 경유는 로컬 게이트를 통과해 다음 검사(키)로 간다"
+    assert C._is_local_only_api("/api/owner/update/apply", "POST") is False
+    assert C._is_privileged_api("/api/owner/update/apply") is True
