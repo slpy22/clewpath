@@ -169,7 +169,7 @@ test("refreshPcSelect: 옵션이 1개 이하면 select 를 숨기고 제목만(D
   // '__manage__' 선택 → showPcs, 값은 현재 PC 로 복귀
   ev(ctx, "globalThis.__pcs = 0; showPcs = () => { globalThis.__pcs++; }"); sel.value = "__manage__"; ev(ctx, "onPcSelect()");
   assert.equal(ev(ctx, "globalThis.__pcs"), 1); assert.equal(sel.value, "rm1");
-  assert.equal(ev(ctx, "typeof relayPcsLoad"), "undefined", "sm_pcs_relay 미러 코드 제거(E-4)");
+  assert.equal(ev(ctx, "typeof relayPcsLoad"), "function", "로컬 헤더의 다른 PC 목록 거울(숨은 iframe 동기화, 2026-09-30 복구)");
   assert.equal(ev(ctx, "typeof refreshPcsBtn"), "undefined", "죽은 #btn-pcs 코드 제거(B-6)");
   assert.equal(ev(ctx, "typeof showLogoutChoice"), "undefined", "로그아웃 선택 모달 삭제(DR-2)");
   assert.equal(ev(ctx, "typeof confirmSheet"), "function"); assert.equal(ev(ctx, "typeof unpairPc"), "function"); assert.equal(ev(ctx, "typeof resetDevice"), "function");
@@ -255,7 +255,8 @@ test("showSettings(릴레이): 2FA·외부 접속 기기·휴지통·워커 스�
   const t = settingsText(ctx);
   // '진단' 은 섹션 제목('정보 · 진단')에도 들어가므로 행의 설명('설치 상태')으로 판정
   for (const s of ["2차 인증", "외부 접속 기기", "휴지통", "워커 스킬", "설치 상태", "새 버전", "재설치", "보안", "🔒"]) assert.ok(!t.includes(s), "외부에서 숨김: " + s);
-  for (const s of ["내 PC", "이 기기 초기화", "알림 설정", "세션 가져오기", "API 사용량", "정보 · 진단", "데이터"]) assert.ok(t.includes(s), "외부에서 표시: " + s);
+  for (const s of ["이 기기 초기화", "알림 설정", "세션 가져오기", "API 사용량", "정보 · 진단", "데이터"]) assert.ok(t.includes(s), "외부에서 표시: " + s);
+  assert.ok(!t.includes("내 PC"), "'내 PC' 는 헤더 🖧 로 옮겨 설정에서 제거(2026-09-30)");
 });
 test("showSettings(로컬): 로컬 전용 항목이 전부 보인다", async () => {
   const ctx = await load({ location: LOCAL_LOC });
@@ -306,7 +307,29 @@ test("refreshPcSelect(로컬): localhost + '🖧 다른 PC (릴레이)…' — �
   sel.appendChild = (o) => { opts.push(o.value); }; ctx.document._register("pcname", sel);
   ev(ctx, "refreshPcSelect()");
   same(opts, ["__local__", "__relay__"]); assert.ok(!cls.has("hidden"));
+  // 릴레이 앱(숨은 iframe)이 넘긴 목록이 오면 실제 PC 들이 나열되고, 고르면 ?switch=room 으로 이동
+  const handlers = ctx.__winListeners.message || [];
+  const relayOrigin = new URL(ev(ctx, "RELAY_APP_URL")).origin;
+  handlers.forEach((h) => h({ origin: "https://evil.test", data: { type: "clewpath_pcs", pcs: [{ room: "rmX", name: "X" }] } }));
+  assert.equal(ctx.localStorage.getItem("sm_pcs_relay"), null, "릴레이 origin 이 아니면 무시");
+  opts.length = 0;
+  handlers.forEach((h) => h({ origin: relayOrigin, data: { type: "clewpath_pcs", pcs: [{ room: "rmA", name: "집 PC" }, { room: "rmB", name: "" }, { room: "", name: "bad" }] } }));
+  same(opts, ["__local__", "relay:rmA", "relay:rmB", "__relay__"]);
+  same(JSON.parse(ctx.localStorage.getItem("sm_pcs_relay")), [{ room: "rmA", name: "집 PC" }, { room: "rmB", name: "" }], "room+name 만, 토큰 없음");
   const hrefs = []; Object.defineProperty(ctx.location, "href", { set: (v) => hrefs.push(v), get: () => "http://127.0.0.1:5100/app", configurable: true });
   sel.value = "__relay__"; ev(ctx, "onPcSelect()");
   assert.equal(hrefs[0], ev(ctx, "RELAY_APP_URL")); assert.equal(sel.value, "__local__");
+  sel.value = "relay:rmA"; ev(ctx, "onPcSelect()");
+  assert.equal(hrefs[1], ev(ctx, "RELAY_APP_URL") + "?switch=rmA");
+});
+
+test("doExport(릴레이, ?pcexport): 로컬 오리진에만 parent/opener 로 room+name 목록을 넘긴다", async () => {
+  const ctx = await load();
+  ev(ctx, "pcsUpsert({room:'rm1', cs:'c', cp:'p', dev:'d', name:'집'}); pcsUpsert({room:'rm2', cs:'c2', cp:'p2', dev:'d2'})");
+  const posted = [];
+  ctx.window.parent = { postMessage: (m, t) => posted.push([m, t]) };
+  ev(ctx, "doExport('https://evil.test')"); assert.equal(posted.length, 0, "로컬 오리진이 아니면 안 보낸다");
+  ev(ctx, "doExport('http://127.0.0.1:5100')");
+  assert.equal(posted.length, 1); assert.equal(posted[0][1], "http://127.0.0.1:5100");
+  same(posted[0][0], { type: "clewpath_pcs", pcs: [{ room: "rm1", name: "집" }, { room: "rm2", name: "" }] }, "토큰(cs/cp/dev)은 절대 안 나간다");
 });

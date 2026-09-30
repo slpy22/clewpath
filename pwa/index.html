@@ -3761,7 +3761,7 @@ function showSettings(){
     const s=document.createElement('small'); s.textContent=parts.join(' · '); st.appendChild(s);
     info.appendChild(st); add(info); }
   if(MODE==='relay'){
-    row('🖧','내 PC','저장된 PC · 전환 · 이름 변경 · 페어링 해제',showPcs);
+    // '내 PC' 는 헤더 🖧 버튼으로(설정 중복 제거, 2026-09-30)
     if(iosHintNeeded(navigator.userAgent, !!navigator.standalone, !!(window.ClewBridge&&ClewBridge.isApp())))
       add(el('div','cwd','홈 화면에 추가해 앱처럼 열어보세요 — Safari 탭은 오래 안 쓰면 페어링이 지워질 수 있습니다.'));
     row('🧹','이 기기 초기화','저장된 페어링·접속 자격·암호화 키를 모두 지웁니다',resetDevice);
@@ -3937,8 +3937,11 @@ function refreshPcSelect(){
     if(curRoom && !seen.has(curRoom)) opts.push({v:curRoom, t:'🖥 '+roomLabel(curRoom)});
     opts.push({v:'__manage__', t:'🖧 PC 추가·관리…'});          // 1대뿐이어도 전환·추가 입구가 헤더에 남게(사장님 2026-09-30)
   } else {
-    // 로컬: 다른 PC 로 가는 길은 릴레이 앱(저장된 PC 목록은 거기 있다). 팝업 동기화(구 E-4)는 폐지.
-    opts.push({v:'__relay__', t:'🖧 다른 PC (릴레이)…'});
+    // 로컬: 릴레이 앱에 저장된 다른 PC 목록(room+name, 토큰 없음)을 숨은 iframe 으로 받아 그대로 나열한다(사장님 2026-09-30).
+    // 고르면 릴레이 앱으로 이동해 그 PC 가 선택된다(?switch=room). 목록이 아직 없으면 릴레이 열기 항목만.
+    const rp=relayPcsLoad();
+    rp.forEach(pc=>{ opts.push({v:'relay:'+pc.room, t:'🖥 '+(pc.name||roomLabel(pc.room))}); });
+    opts.push({v:'__relay__', t: rp.length?'🖧 릴레이 앱 열기…':'🖧 다른 PC (릴레이)…'});
   }
   const btn=$('#btn-pcs'); if(btn){ if(MODE==='relay') btn.classList.remove('hidden'); else btn.classList.add('hidden'); }
   // 로컬 화면은 localhost 만(E-4): 릴레이 PC 목록 미러(sm_pcs_relay)·팝업 동기화는 0.10.0 에서 제거.
@@ -3948,6 +3951,45 @@ function refreshPcSelect(){
   setTitle(curPcLabel());
   // 선택지가 1개 이하면 select 는 소음(DR-3) — 숨기고 제목 텍스트만 남긴다(로컬·릴레이 공통)
   if(opts.length<=1) sel.classList.add('hidden'); else sel.classList.remove('hidden');
+}
+// ---- 로컬 화면의 '다른 PC 목록' 거울(sm_pcs_relay: room+name 만, 토큰 없음) ----
+// 릴레이 앱(clewpath.pyongso.com)의 저장 목록은 origin 이 달라 직접 못 읽는다 → 로컬 부팅 때 릴레이 앱을
+// 숨은 iframe 으로 열면(?pcexport=<로컬 origin>) 그 페이지가 자기 목록을 postMessage 로 넘긴다. 클릭 없음.
+function relayPcsLoad(){ try{ const a=JSON.parse(LS.getItem('sm_pcs_relay')||'[]'); return Array.isArray(a)?a:[]; }catch(e){ return []; } }
+function relayPcsSave(a){ LS.setItem('sm_pcs_relay', JSON.stringify(a)); }
+let _pcsSyncFrame=null;
+function syncRelayPcs(){
+  if(MODE!=='local' || !RELAY_APP_URL) return;
+  try{
+    if(_pcsSyncFrame){ _pcsSyncFrame.remove(); _pcsSyncFrame=null; }
+    const f=document.createElement('iframe');
+    f.src=RELAY_APP_URL+'?pcexport='+encodeURIComponent(location.origin);
+    f.setAttribute('aria-hidden','true'); f.tabIndex=-1;
+    f.style.cssText='position:absolute;width:0;height:0;border:0;opacity:0;pointer-events:none';
+    document.body.appendChild(f); _pcsSyncFrame=f;
+    setTimeout(()=>{ if(_pcsSyncFrame===f){ try{ f.remove(); }catch(e){} _pcsSyncFrame=null; } }, 15000);   // 응답 없으면 정리
+  }catch(e){}
+}
+function onRelayPcsMessage(ev){
+  try{
+    if(ev.origin !== new URL(RELAY_APP_URL).origin) return;
+    const d=ev.data;
+    if(d && d.type==='clewpath_pcs' && Array.isArray(d.pcs)){
+      relayPcsSave(d.pcs.map(x=>({room:String(x.room||''),name:String(x.name||'')})).filter(x=>x.room));
+      if(_pcsSyncFrame){ try{ _pcsSyncFrame.remove(); }catch(e){} _pcsSyncFrame=null; }
+      refreshPcSelect();
+    }
+  }catch(e){}
+}
+// 릴레이 앱이 ?pcexport 로 열렸을 때(로컬의 숨은 iframe): 자기 PC 목록(room+name)만 넘기고 부팅하지 않는다.
+function doExport(target){
+  const ok=/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(target||'');   // 로컬 오리진만
+  const to=(window.parent&&window.parent!==window)?window.parent:window.opener;
+  if(ok && to){
+    const list=pcsLoad().map(pc=>({room:pc.room, name:pc.name||''}));         // 토큰 제외
+    try{ to.postMessage({type:'clewpath_pcs', pcs:list}, target); }catch(e){}
+  }
+  document.body.innerHTML='';
 }
 // 로컬 iframe 터미널의 화면 인계 통지(v0.9.6): terminal.html 이 서버 통지를 감지하면 같은 origin 으로
 // {type:'clewpath-term', event:'taken', id, fork} 를 보낸다 → 그 탭을 '빼앗김'으로(릴레이 모드의 스트림 감지와 동일 결과).
@@ -3972,6 +4014,7 @@ function onPcSelect(){
   const v=sel.value;
   if(v==='__local__'){ if(MODE==='local') return; location.href=localAppUrl(); return; }  // localhost 로
   if(v==='__relay__'){ sel.value='__local__'; location.href=RELAY_APP_URL; return; }      // 로컬 → 릴레이 앱(다른 PC)
+  if(v.indexOf('relay:')===0){ location.href=RELAY_APP_URL+'?switch='+encodeURIComponent(v.slice(6)); return; } // 로컬 → 릴레이의 그 PC
   if(v==='__manage__'){ sel.value=LS.getItem('sm_room')||''; showPcs(); return; }         // 전환·추가·해제 관리
   if(v===LS.getItem('sm_room')){ return; }                                                // 현재와 같음
   if(MODE==='relay'){ const pc=pcsLoad().find(x=>x.room===v)||{room:v,name:''}; switchToPc(pc); }
@@ -4054,8 +4097,12 @@ async function refreshVer(){
 }
 
 // 모드별 부팅: local=페어링 없이 바로, relay=room/token 페어링
-if(MODE==='local'){
-  LS.removeItem('sm_pcs_relay');                             // 0.10.0: 릴레이 PC 목록 미러 폐지(E-4) — 구버전 잔재 정리
+const _pcexport=new URLSearchParams(location.search).get('pcexport');
+if(_pcexport){
+  // 로컬 앱의 숨은 iframe 이 목록 동기화를 위해 이 릴레이 페이지를 열었다 — 목록만 넘기고 끝(부팅 안 함)
+  doExport(_pcexport);
+}else if(MODE==='local'){
+  window.addEventListener('message', onRelayPcsMessage);   // 릴레이 PC 목록(숨은 iframe) 수신
   window.addEventListener('message', onLocalTermMessage);  // 탭 iframe(terminal.html) → 화면 인계 통지
   refreshConnBadge();                            // 접속 인증 모드 배지(JWT/fallback)
   setInterval(refreshConnBadge, 60000);
@@ -4064,6 +4111,7 @@ if(MODE==='local'){
   setStatus(true,true);
   enterApp();
   maybeShowFirstRunHint();
+  setTimeout(syncRelayPcs, 1500);              // 릴레이 주소(/api/owner/connection)가 채워진 뒤 목록 동기화
 }else{
   // 페어링 파라미터: fragment(#) 우선 - query 는 릴레이 접근로그에 남을 수 있어
   // 신형 링크는 전부 fragment 로 온다. 구형(query) 링크도 계속 수용.
