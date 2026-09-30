@@ -108,6 +108,10 @@
 
   // 기동 복원: localStorage 에 페어링 흔적이 없는데 네이티브 미러에 있으면 되살린다.
   function restoreIfEvicted() {
+    // 폐기 대기 큐는 페어링이 남아 있어도 따로 복원한다(E-D18) — 자격보다 먼저 영속화된 유일한 재시도 자료
+    if (!localStorage.getItem('sm_revoke_queue')) Prefs.get({ key: 'sm_revoke_queue' }).then(function (v) {
+      if (v && v.value) origSet.call(localStorage, 'sm_revoke_queue', v.value);
+    }).catch(noop);
     if (localStorage.getItem('sm_room') || localStorage.getItem('sm_pcs')) return; // 정상
     if (sessionStorage.getItem('cb_restored')) return;      // 이번 실행에서 이미 시도
     Prefs.keys().then(function (r) {
@@ -279,6 +283,7 @@
 
   restoreIfEvicted();
   if (document.readyState === 'loading')
-    document.addEventListener('DOMContentLoaded', function () { styles(); tabBar(); pairingOverlay(); });
-  else { styles(); tabBar(); pairingOverlay(); }
+    document.addEventListener('DOMContentLoaded', function () { styles(); tabBar(); });
+  else { styles(); tabBar(); }
+  // 첫 실행 오버레이(#cb-pair)는 0.11.0 에서 폐기 — index.html 의 #pair 1벌(📷 스캔·링크 붙여넣기)이 맡는다(B-2/T15)
 })();

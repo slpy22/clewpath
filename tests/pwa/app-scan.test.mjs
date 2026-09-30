@@ -52,11 +52,11 @@ test("native-bridge(앱): pairFromUrl — https 만, 릴레이 ws 유도·저장
   assert.ok(scanned[0].scanInstructions.includes("QR"));
 });
 
-test("native-bridge(앱): 첫 실행 오버레이는 릴레이 주소가 없을 때만", () => {
+test("native-bridge(앱): 첫 실행 오버레이(#cb-pair)는 0.11.0 에서 폐기 — 입구는 #pair 1벌(B-2/T15)", () => {
   const a = bootBridge();
-  assert.ok(a.sb.document.body.children.some((c) => c.id === "cb-pair"), "미페어링 → 오버레이");
+  assert.ok(!a.sb.document.body.children.some((c) => c.id === "cb-pair"), "미페어링이어도 오버레이 없음");
   const b = bootBridge({ relayWs: "wss://relay.test/relay/ws" });
-  assert.ok(!b.sb.document.body.children.some((c) => c.id === "cb-pair"), "페어링 뒤엔 없음(→ 입구는 페어링 화면·PC 관리)");
+  assert.ok(!b.sb.document.body.children.some((c) => c.id === "cb-pair"));
 });
 
 // ---- index.html 쪽 입구 ----

@@ -108,11 +108,11 @@ test("Conn: 기기 인증 — devToken 있으면 hello 직후 auth, 성공 시 v
   const ws = sockets.at(-1); ws.open(); ws.push({ type: "hello", peer_present: true });
   await tick();
   const af = ws.sent.at(-1);
-  assert.equal(af.method, "auth"); assert.equal(af.params.token, "dev-1"); assert.equal(af.params.pv, 1);
+  assert.equal(af.method, "auth"); assert.equal(af.params.token, "dev-1"); assert.equal(af.params.pv, 2);
   assert.equal(typeof af.params.name, "string", "0.10.0: 폰이 자기 이름을 보고한다(B-1)");
   let settled = false; p.then(() => { settled = true; });
   await tick(); assert.equal(settled, false, "auth 가 끝나야 connect 가 풀린다");
-  ws.push({ type: "res", id: af.id, ok: true, data: { id: "d1", name: "폰", ver: "0.9.5", pv: 2 } });
+  ws.push({ type: "res", id: af.id, ok: true, data: { id: "d1", name: "폰", ver: "0.9.5", pv: 3 } });
   await p; await tick();
   assert.equal(ev(ctx, "conn.authed"), true); assert.equal(ev(ctx, "globalThis.__ver"), "0.9.5");
   same(ev(ctx, "globalThis.__auth"), [[true, undefined]]);

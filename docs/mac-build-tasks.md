@@ -3,6 +3,22 @@
 > 이 문서는 Windows 측(주 개발)에서 맥 측 Claude 에게 전달하는 작업 지시서다.
 > 위에서부터 순서대로 실행하면 된다. 완료 후 결과를 사용자에게 보고할 것.
 
+## ★★★★★★★★ 업데이트 8 (2026-09-30 — 0.11.0: 첫 실행 오버레이 폐기·폐기 큐 복원, 업데이트 7 과 같은 TestFlight 에 묶어도 됨)
+
+1. **첫 실행 오버레이 `#cb-pair` 폐기** — 앱을 처음 열면 브리지 오버레이 대신 `index.html` 의 페어링 화면(📷 QR 스캔 버튼·링크 붙여넣기)이 바로 뜬다.
+   붙여넣은 https/clewpath 링크는 화면이 `ClewBridge.pairFromUrl` 로 넘겨 릴레이 주소까지 저장한다(오버레이가 하던 일).
+2. **폐기 큐 `sm_revoke_queue` 복원** — 페어링이 남아 있어도 이 키가 LS 에 없으면 Preferences 에서 따로 되살린다
+   (폰에서 PC 페어링을 해제했는데 서버 폐기가 아직 안 된 자격 — 다음 실행 때 재시도).
+
+```bash
+git pull
+cd app && npm install && npm run bundle && npx cap sync ios
+grep -c "cb-pair" ios/App/App/public/native-bridge.js   # 함수 정의만 남음(호출 없음). 아래 grep 이 0 이면 최신
+grep -n "styles(); tabBar(); pairingOverlay" ios/App/App/public/native-bridge.js | wc -l
+```
+시뮬레이터 확인: 앱 삭제 후 새로 설치 → 첫 화면이 **ClewPath 페어링 화면(상황 줄 + 📷 QR 스캔)** 이면 최신. 검은 오버레이가 뜨면 구번들.
+Host 0.11.0 이 아직 안 나갔어도 앱은 동작한다(구 Host 에서는 '페어링 해제' 가 이 폰에서만 제거로 안내됨).
+
 ## ★★★★★★★ 업데이트 7 (2026-09-30 — 페어링 UX 0.10.0: 브리지 변경 3건, 다음 TestFlight 에 동반)
 
 Host 0.10.0 의 페어링 화면 재설계에 맞춰 `native-bridge.js` 가 바뀌었다(웹은 Host 릴리스와 함께 즉시 반영, **앱은 이 번들을
@@ -21,7 +37,7 @@ cd app && npm install && npm run bundle && npx cap sync ios
 grep -n "persistSync\|deviceName\|relay" ios/App/App/public/native-bridge.js | head   # 3 함수가 보여야 최신 번들
 ```
 시뮬레이터 확인: 페어링 화면에 3줄 설명 대신 **상황 줄 1개**, 헤더에 **🖧 버튼**, ⚙ 설정에 '🧹 이 기기 초기화'(danger) 가 보이면 최신(설정의 '🖧 내 PC' 는 0.10.3 에서 헤더 🖧 로 옮김).
-(첫 실행 오버레이 `#cb-pair` 는 그대로 — 0.11.0 에서 폐기 예정.) 배포 뒤 pbxproj 버전 커밋·push 규칙은 업데이트 6 과 같다.
+(첫 실행 오버레이는 업데이트 8 에서 폐기.) 배포 뒤 pbxproj 버전 커밋·push 규칙은 업데이트 6 과 같다.
 
 ## ★★★★★★ 업데이트 6 (2026-09-29 — 1.9 배포 확인, 버전 규칙 변경, Team ID 반영 완료)
 

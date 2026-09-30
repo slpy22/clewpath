@@ -599,7 +599,7 @@ const MODE=(window.ClewBridge&&ClewBridge.modeOverride())
   :(location.pathname.indexOf('/relay/')>=0?'relay':'local'));
 // 프로토콜 버전(기획서 §12-8): 앱은 스토어 심사에 묶여 웹·Host 보다 늦게 갱신되므로,
 // auth 에서 서로 pv 를 교환해 불일치를 사용자에게 알린다.
-const PV=1;
+const PV=2;   // 2(0.11.0): notice·bye_device·서버 self-revoke — Host pv≥2 에서만 '해제 완료' 로 표시(E-D17)
 const APIBASE=(SM_BASE_RAW.indexOf('{{')<0)?SM_BASE_RAW:'';
 function qs(o){ if(!o)return''; const e=Object.entries(o).filter(([k,v])=>v!=null&&v!=='');
   return e.length?'?'+e.map(([k,v])=>encodeURIComponent(k)+'='+encodeURIComponent(v)).join('&'):''; }
@@ -629,6 +629,9 @@ function pcsUpsert(c){
              name:(i>=0?a[i].name:'')||c.name||'',
              pv:(c.pv|0)||(i>=0?(a[i].pv|0):0),
              added:(i>=0?a[i].added:Date.now()), last:Date.now()};
+  // state: removed(⛔ PC 에서 해제)·changed(⛔ 페어링 바뀜)·reissued(🔄 QR 바뀜). 같은 자격이면 유지, 새 QR 이면 해제
+  const st=('state' in c)?c.state:((i>=0&&a[i].cp===rec.cp&&a[i].dev===rec.dev)?a[i].state:undefined);
+  if(st) rec.state=st;
   if(i>=0) a[i]=rec; else a.push(rec);
   pcsSave(a);
 }
@@ -646,6 +649,46 @@ function pcsActivate(room){
   return pc;
 }
 function pcsRemove(room){ pcsSave(pcsLoad().filter(x=>x.room!==room)); }
+function pcMarkState(room, st){
+  const a=pcsLoad(); const i=a.findIndex(x=>x.room===room); if(i<0) return false;
+  if(st) a[i].state=st; else delete a[i].state; pcsSave(a); return true;
+}
+const PC_STATE_CHIP={
+  removed:{icon:'⛔', text:'PC 에서 해제됨', tone:'crit'},
+  changed:{icon:'⛔', text:'페어링 바뀜', tone:'crit'},
+  reissued:{icon:'🔄', text:'QR 바뀜', tone:'accent'}
+};
+// ---- 폐기 큐(0.11.0 B-4, eng E-D18): 폰이 스스로 자격을 폐기(self-revoke). 항목은 발급한 CP 주소(cp)를 품는다 ----
+// 저장이 확정된 뒤에야 자격을 지운다(persistSync) — 앱 저장소 퇴거·종료에도 재시도 자료가 남게. 90일 지나면 포기(E-5 안전망).
+const REVOKE_Q='sm_revoke_queue';
+function revokeQLoad(){ try{ const a=JSON.parse(LS.getItem(REVOKE_Q)||'[]'); return Array.isArray(a)?a:[]; }catch(e){ return []; } }
+async function revokeQSave(a){
+  if(a.length) LS.setItem(REVOKE_Q, JSON.stringify(a)); else LS.removeItem(REVOKE_Q);
+  try{ if(window.ClewBridge&&ClewBridge.persistSync) await ClewBridge.persistSync(REVOKE_Q); }catch(e){}
+}
+async function revokeEnqueue(pc){
+  if(!pc||!pc.cs||!pc.cp) return false;                  // 공유토큰(구형)은 폐기할 자격이 없다
+  let cp=''; try{ cp=cpBase(); }catch(e){}
+  if(!cp) return false;
+  const q=revokeQLoad().filter(x=>x.public_id!==pc.cp);
+  q.push({cp, public_id:pc.cp, secret:pc.cs, room:pc.room, ts:Date.now()});
+  await revokeQSave(q); return true;
+}
+// 200(폐기됨/이미 폐기)·401(자격 없음) = 완료로 큐에서 뺀다. 그 외(404 구 CP·5xx·네트워크)는 남긴다.
+async function revokeFlush(){
+  const q=revokeQLoad(); if(!q.length) return {done:[], left:0};
+  const keep=[], done=[];
+  for(const it of q){
+    let ok=false;
+    try{ const r=await fetch(String(it.cp).replace(/\/$/,'')+'/client/revoke-self',{method:'POST',
+           headers:{'Content-Type':'application/json'}, body:JSON.stringify({public_id:it.public_id, secret:it.secret})});
+         ok=(r.status===200||r.status===401); }catch(e){}
+    if(ok) done.push(it.room);
+    else if(Date.now()-(it.ts||0) < 90*86400000) keep.push(it);
+  }
+  await revokeQSave(keep);
+  return {done, left:keep.length};
+}
 // 사용자가 붙이는 이름은 여기로만(pcsUpsert 는 '기존 이름 우선' 이라 hostname 이 사용자 이름을 못 덮는다).
 // 빈 이름 = 사용자 이름 해제 → 다음 auth 의 hostname 으로 다시 채워진다.
 function pcsSetName(room, name){
@@ -683,7 +726,8 @@ async function clientJwt(force){
     const r=await fetch(cpBase()+'/client/token',{method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({public_id:cpid,secret:cs})});
-    if(!r.ok){ if(r.status===401){ toast('이 기기 인증이 해제되었습니다 — 재페어링 필요'); } return null; }
+    if(!r.ok){ if(r.status===401){ pcMarkState(LS.getItem('sm_room'),'changed');
+        toast('PC 에서 페어링이 바뀌었습니다(해제 또는 QR 재발급) — 새 QR 을 스캔하세요'); } return null; }
     const j=await r.json();
     LS.setItem('sm_cjwt',JSON.stringify({token:j.token,exp:j.expires_at}));
     return j.token;
@@ -771,6 +815,7 @@ class Conn{
           const w=this.waiters.get(m.id);
           if(w){this.waiters.delete(m.id); w(m);} return; }
         if(m.type==='stream'){ const h=this.streams.get(m.id); if(h)h(m); return; }
+        if(m.type==='notice'){ if(this.onnotice) this.onnotice(m); return; }   // 0.11.0: PC 가 이 기기를 해제/재발급
       };
       ws.onmessage=(ev)=>{
         let m; try{m=JSON.parse(ev.data);}catch(e){return;}
@@ -3265,13 +3310,20 @@ async function showDevices(){
   const body=el('div');
   const active=st.active|0, total=st.total|0;
   // 🩺 진단 한 줄(B-10). CP 동기화 시각은 0.11.0(meta.cp_synced)에서 붙는다.
-  body.appendChild(el('div','diag','🩺 활성 '+active+' · 총 '+total+(active?'':' · 🛑 외부 접속 전면 차단중(등록 기기 없음)')));
+  const synced=st.cp_synced?(' · CP 동기화 '+relTs(st.cp_synced)):'';
+  body.appendChild(el('div','diag','🩺 활성 '+active+' · 총 '+total+((st.phone_revoked|0)?(' · 📵 '+st.phone_revoked):'')+synced
+    +(active?'':' · 🛑 외부 접속 전면 차단중(등록 기기 없음)')));
   body.appendChild(el('div','cwd','등록된 기기만 외부에서 접속할 수 있습니다. 페어링을 해제하면 다음 요청부터 차단되고 열린 연결도 끊깁니다 — 이 보호는 끌 수 없습니다.'));
   const list=el('div'); list.style.marginTop='8px';
   (st.devices||[]).forEach(d=>{
     // 칩은 행당 1개(우선순위 📵 > 🔗). 📵/⏳/💤 는 0.11.0 에서 서버 상태로 채워진다.
-    const chip = d.revoked ? {icon:'📵', text:'해제됨', tone:'crit'}
-               : (!d.client_scoped ? {icon:'🔗', text:'공유 자격(구형)', tone:'warn', dimtext:true} : null);
+    // 행당 칩 1개, 우선순위 📵 > ⏳ > 🔗 > 💤 (DR-6)
+    const stale=!d.revoked && d.last_seen && (Date.now()/1000 - d.last_seen) > 90*86400;
+    const chip = (d.revoked && d.revoked_by==='phone') ? {icon:'📵', text:'폰에서 해제함', tone:'crit'}
+               : (d.delete_pending||d.cp_pending) ? {icon:'⏳', text:'폐기 대기', tone:'warn'}
+               : d.revoked ? {icon:'📵', text:'해제됨', tone:'muted'}
+               : (!d.client_scoped ? {icon:'🔗', text:'공유 자격(구형)', tone:'warn', dimtext:true}
+               : (stale ? {icon:'💤', text:'90일 미접속', tone:'muted'} : null));
     const btns=[];
     if(!d.revoked){
       const re=el('button','btn ghost sm','QR 다시 만들기'); re.onclick=()=>reissueDevice(d); btns.push(re);
@@ -3280,7 +3332,8 @@ async function showDevices(){
       const del=el('button','btn ghost sm','삭제'); del._keep=true; del.onclick=()=>deleteDevice(d); btns.push(del);
     }
     list.appendChild(pairRow({name:d.name, id:d.id, chip, off:!!d.revoked, buttons:btns,
-      meta:[d.last_seen?('최근 '+relTs(d.last_seen)):'미접속', (!d.client_scoped&&!d.revoked)?'QR 다시 만들기 권장':null]}));
+      meta:[d.last_seen?('최근 '+relTs(d.last_seen)):'미접속', (!d.client_scoped&&!d.revoked)?'QR 다시 만들기 권장':null,
+            stale?'오래 안 쓴 기기면 페어링 해제 권장':null, (d.delete_pending||d.cp_pending)?'서버 폐기 확인되면 사라짐':null]}));
   });
   if(!(st.devices||[]).length) list.appendChild(el('div','cwd','아직 페어링된 기기가 없습니다 — 폰으로 QR 을 찍으면 여기 나타납니다.'));
   body.appendChild(list);
@@ -3518,14 +3571,15 @@ function showAuthLost(err){
   try{ conn._stopped=true; conn.logout&&conn.logout(); }catch(e){}   // 무의미한 재접속 중단
   const body=el('div');
   const line=(t)=>body.appendChild(el('div','cwd',t));
-  line(err==='auth_invalid'
-    ? '이 기기의 접속 자격이 해제되었습니다.'
-    : '이 기기가 더 이상 등록되어 있지 않습니다.');
-  line('PC 의 로컬 웹에서 이 기기를 삭제했거나, 🔄 QR 로 자격을 다시 발급한 경우입니다. 이전 QR·링크는 무효가 됩니다.');
-  line('다시 쓰려면: PC 로컬 웹 → 📱 → 해당 기기의 🔄 QR (또는 ＋새 기기 추가) → 새 QR 스캔.');
-  const b=el('button','btn','🔗 새 QR/링크로 다시 연결');
+  // 사유 단정 금지(B-5): notice 로 알게 된 것만 확정 문구, 401·auth_invalid 는 '바뀜'
+  line(err==='removed' ? '⛔ PC 에서 이 기기의 페어링이 해제됐습니다.'
+     : err==='reissued' ? '🔄 PC 에서 이 기기의 QR 을 다시 만들었습니다.'
+     : '⛔ PC 에서 이 기기의 페어링이 바뀌었습니다(해제 또는 QR 재발급).');
+  line('다시 쓰려면 PC 의 ClewPath → ⚙ 설정 → 📱 외부 접속 기기에서 새 QR 을 만들어 스캔하세요. 이전 QR·링크는 무효입니다.');
+  const b=el('button','btn','다시 페어링');
   b.style.marginTop='10px';
-  b.onclick=()=>{ clearPairing(false);   // 현재 PC 자격만 정리(다른 PC 목록은 보존)
+  b.onclick=()=>{ clearPairing(false);   // 현재 PC 자격만 정리(다른 PC 목록·상태는 보존 — ⛔/🔄 칩으로 남는다)
+    setPairReason(err==='reissued'?'reissued':'removed_by_pc');
     closeModal(); location.reload(); };
   body.appendChild(b);
   const keep=pcsLoad().length>1;
@@ -3543,6 +3597,16 @@ function renderPairPcs(){
   host.appendChild(el('label',null,'저장된 PC'));
   const wrap=el('div'); wrap.style.cssText='display:flex;flex-direction:column;gap:8px;margin:8px 0 18px';
   list.forEach(pc=>{
+    if(pc.state&&PC_STATE_CHIP[pc.state]){
+      // 해제·재발급된 PC 는 자동 재접속 대상이 아니다 — 새 QR 로만 다시 붙는다(상태기계 removed_by_pc/reissued)
+      const again=el('button','btn ghost sm','다시 페어링'); again._keep=true;
+      again.onclick=()=>{ if(appScanAvailable()) appScanPair(); else { const li=$('#p-link'); if(li&&li.focus) li.focus(); toast('PC 에서 새 QR 을 만들어 스캔하거나 링크를 붙여넣으세요'); } };
+      const rm=el('button','btn ghost sm','지우기'); rm._keep=true;
+      rm.onclick=()=>{ pcsRemove(pc.room); renderPairPcs(); applyPairSituation(); };
+      wrap.appendChild(pairRow({name:'🖥 '+pcName(pc), chip:PC_STATE_CHIP[pc.state], buttons:[again, rm],
+        meta:[pc.last?('최근 '+relTs(Math.floor(pc.last/1000))):null]}));
+      return;
+    }
     const b=el('button','btn ghost','🖥 '+pcName(pc));
     b.style.cssText='justify-content:space-between;text-align:left';
     b.onclick=async()=>{
@@ -3583,6 +3647,7 @@ function pairSituationText(){
   if(r&&r.k==='unpaired') return {text:'이 폰에서 '+n+' 를 제거했습니다 — PC 에서도 기기를 삭제하세요. 새 PC 는 아래 QR 로.', crit:false};
   if(r&&r.k==='unpaired_server') return {text:n+' 페어링을 해제했습니다. 새 PC 는 아래 QR 로.', crit:false};
   if(r&&r.k==='removed_by_pc') return {text:'⛔ PC 에서 이 기기의 페어링이 해제됐습니다 — 새 QR 을 스캔하세요.', crit:true};
+  if(r&&r.k==='reissued') return {text:'🔄 PC 에서 QR 을 다시 만들었습니다 — 새 QR 을 스캔하세요.', crit:false};
   if(r&&r.k==='reset') return {text:'이 기기를 초기화했습니다. 다시 쓰려면 QR 을 스캔하세요.', crit:false};
   if(pcsLoad().length) return {text:'접속할 PC 를 고르거나, 새 PC 의 QR 을 스캔하세요.', crit:false};
   return {text:'아직 페어링한 PC 가 없습니다. PC 의 ClewPath 에서 📱 → ＋ 기기 추가 로 QR 을 만드세요.', crit:false};
@@ -3640,28 +3705,48 @@ function maybeShowIosHint(){
     host.insertBefore(b, host.firstChild);
   }catch(e){}
 }
+// 서버까지 해제되는 PC 인가: 기기 자격(cs/cp)이 있고 Host 가 0.11.0 규약(pv≥2)을 안다(E-D17). 아니면 '이 폰에서만'.
+function serverUnpairable(pc){ return !!(pc&&pc.cs&&pc.cp&&(pc.pv|0)>=2); }
 function unpairPc(room){
   const pc=pcsLoad().find(x=>x.room===room); const name=pc?pcName(pc):room;
-  return confirmSheet({title:'이 PC 페어링 해제', main:'"'+name+'" 의 페어링을 해제할까요?', sub:UNPAIR_SUB_LOCAL,
+  const full=serverUnpairable(pc);
+  return confirmSheet({title:'이 PC 페어링 해제', main:'"'+name+'" 의 페어링을 해제할까요?',
+    sub: full ? '이 폰의 접속 자격을 서버에서 폐기하고 PC 의 기기 목록에도 📵 로 표시됩니다(오프라인이면 다음 접속 때 처리).'
+              : UNPAIR_SUB_LOCAL,
     action:'페어링 해제', danger:true, busyText:'해제 중…',
     run: async()=>{
       const cur=LS.getItem('sm_room')===room;
-      pcsRemove(room);
+      await revokeEnqueue(pc);                               // ① 재시도 자료를 먼저 영속화(E-D18)
+      if(cur && full){                                       // ② 연결돼 있으면 PC 에 바로 알림(📵 즉시 반영)
+        try{ await Promise.race([conn.req('bye_device',{}), new Promise(r=>setTimeout(r,2000))]); }catch(e){}
+      }
+      pcsRemove(room);                                       // ③ 로컬 제거
+      let fl={done:[]}; try{ fl=await Promise.race([revokeFlush(), new Promise(r=>setTimeout(()=>r({done:[]}),5000))]); }catch(e){}
+      const serverDone=full && (fl.done||[]).includes(room);
+      pc && (pc._unpairResult=serverDone);
       if(!cur) return;
       // 현재 PC 였으면: 다른 PC 가 있으면 최근 것으로 전환, 없으면 #pair(상황 줄)로.
       clearPairing(false);
       const next=pcsLoad().sort((a,b)=>(b.last||0)-(a.last||0))[0];
       if(next){ pcsActivate(next.room); }
-      else { setPairReason('unpaired', name); }
+      else { setPairReason(serverDone?'unpaired_server':'unpaired', name); }
       setTimeout(()=>location.reload(), 300);
-    }}).then(ok=>{ if(ok) toast('"'+name+'" 페어링 해제됨'); return ok; });
+    }}).then(ok=>{
+      if(ok) toast(pc&&pc._unpairResult ? '"'+name+'" 페어링 해제됨(서버 폐기 완료)'
+                 : full ? '"'+name+'" 이 폰에서 제거함 — 서버 폐기는 다음 접속 때 다시 시도'
+                        : '"'+name+'" 이 폰에서 제거함 — PC 에서도 기기를 삭제하세요');
+      return ok; });
 }
 function resetDevice(){
   const n=pcsLoad().length;
   return confirmSheet({title:'이 기기 초기화', main:'이 기기에 저장된 모든 페어링(PC '+n+'대)·접속 자격·암호화 키를 지울까요?',
     sub:'PC 에 있는 클로드 세션은 그대로입니다. 지운 뒤 다시 쓰려면 QR 을 새로 스캔해야 합니다. PC 쪽 📱 기기 목록의 항목은 남으니 거기서도 삭제하세요.',
     action:'초기화', danger:true, busyText:'초기화 중…',
-    run: async()=>{ clearPairing(true); setPairReason('reset'); setTimeout(()=>location.reload(), 300); }});
+    run: async()=>{
+      for(const pc of pcsLoad()) await revokeEnqueue(pc);   // 폐기 대기로 남기고(sm_revoke_queue 는 초기화 대상 아님)
+      clearPairing(true); setPairReason('reset');
+      try{ await Promise.race([revokeFlush(), new Promise(r=>setTimeout(r,5000))]); }catch(e){}
+      setTimeout(()=>location.reload(), 300); }});
 }
 
 // ---- PC 전환 (여러 PC 를 페어링해 두고 골라 접속) ----
@@ -3678,7 +3763,7 @@ function showPcs(){
     btns.push(rn);
     const un=el('button','btn ghost sm','페어링 해제'); un.onclick=()=>unpairPc(pc.room); btns.push(un);
     wrap.appendChild(pairRow({name:(isCur?'✅ ':'🖥 ')+pcName(pc), buttons:btns,
-      chip: legacy?{icon:'🔗', text:'공유 자격(구형)', tone:'warn', dimtext:true}:null,
+      chip: (pc.state&&PC_STATE_CHIP[pc.state]) || (legacy?{icon:'🔗', text:'공유 자격(구형)', tone:'warn', dimtext:true}:null),
       meta:[pc.room.slice(0,14)+'…', pc.last?('최근 '+relTs(Math.floor(pc.last/1000))):null]}));
   });
   if(!list.length) wrap.appendChild(el('div','cwd','아직 페어링한 PC 가 없습니다.'));
@@ -3729,7 +3814,12 @@ async function maybeShowFirstRunHint(){
 conn.onstatus=(on,peer)=>setStatus(on,peer);
 conn.onauth=(ok,err)=>{
   if(ok){ window._authLost=false; return; }
-  if(err==='auth_required'||err==='auth_invalid') showAuthLost(err);
+  if(err==='auth_required'||err==='auth_invalid'){ pcMarkState(LS.getItem('sm_room'),'changed'); showAuthLost(err); }
+};
+conn.onnotice=(m)=>{
+  const room=LS.getItem('sm_room');
+  if(m.kind==='device_removed'){ pcMarkState(room,'removed'); showAuthLost('removed'); }
+  else if(m.kind==='device_reissued'){ pcMarkState(room,'reissued'); showAuthLost('reissued'); }
 };
 $('#btn-refresh').onclick=()=>loadList();
 $('#btn-monitor').onclick=()=>showMonitorPicker();
@@ -3862,6 +3952,12 @@ function pairRollback(room, prevRoom, hadRk){
 function doPair(){
   // ① 페어링 링크를 붙여넣었으면 거기서 값을 뽑는다(권장 경로)
   const link=($('#p-link')?$('#p-link').value:'').trim();
+  // 앱(오버레이 폐기, T15): 붙여넣은 https 링크는 브리지가 릴레이 주소까지 저장하고 부트 파서로 넘긴다
+  if(link && window.ClewBridge && ClewBridge.pairFromUrl && /^(https?:|clewpath:)/i.test(link)){
+    const r=ClewBridge.pairFromUrl(link);
+    if(r!=='ok') $('#p-err').textContent=ClewBridge.pairErrorText(r)||'링크를 인식하지 못했습니다';
+    return;
+  }
   let room='', token='', cs='', cp='', dev='';
   let rk='';
   if(link){
@@ -3886,6 +3982,7 @@ function doPair(){
 
   // 실패 시 되돌릴 이전 상태(E-D16: 잘못된/만료된 QR 은 아무것도 바꾸지 않는다)
   const prevRoom=LS.getItem('sm_room')||'', hadRk=!!LS.getItem('sm_e2ee_'+room);
+  const prevPc=pcsLoad().find(x=>x.room===room)||null;     // B-7: 같은 PC 의 새 QR 이면 성공 뒤 옛 cpub 폐기
   // 자격 저장 → connect() 가 cs 를 단기 JWT 로 교환해 사용한다
   if(dev){ LS.setItem('sm_devtoken',dev); conn.devToken=dev; }
   // E2EE 룸 키 — 링크로 수동 페어링해도 부트 경로와 동일하게 저장(빠지면 평문 접속이 돼버림)
@@ -3911,6 +4008,7 @@ function doPair(){
     LS.setItem('sm_room',room);
     if(token) LS.setItem('sm_token',token); else LS.removeItem('sm_token');
     pcsUpsert({room, cs, cp, dev, name:(a&&a.data&&a.data.hostname)||'', pv:(a&&a.data&&a.data.pv)|0});
+    if(prevPc && prevPc.cp && prevPc.cp!==cp){ revokeEnqueue(prevPc).then(()=>revokeFlush()).catch(()=>{}); }
     T=relayT; enterApp();
   }).catch(e=>{ conn._pairing=false; $('#p-err').textContent=e.message; $('#p-go').textContent='연결'; });
 }
@@ -4184,6 +4282,10 @@ if(_pcexport){
     if(window.ClewBridge) ClewBridge.syncRoomKey(p.get('room'), p.get('rk'));
   }
   const dev=p.get('dev');
+  // B-7(E-D16): 이 해시가 이미 저장된 PC 의 '새 QR' 이면 옛 자격을 기억해 둔다 — 새 자격이 인증된 뒤에만 옛 cpub 폐기,
+  // 인증 실패면 옛 페어링을 되살린다(잘못된·만료된 QR 이 멀쩡한 페어링을 깨지 않게)
+  const _prevPc=p.get('room')?pcsLoad().find(x=>x.room===p.get('room')):null;
+  const _hashPair=!!(dev&&p.get('room'));
   if(dev){ LS.setItem('sm_devtoken',dev); conn.devToken=dev; }
   // 기기 전용 client 자격증명(공유 토큰 대체). 있으면 저장하고 JWT 로 교환해 쓴다.
   const cs=p.get('cs'), cpid=p.get('cp');
@@ -4203,10 +4305,27 @@ if(_pcexport){
   // 저장된 자격이 있으면 자동 접속(기기 자격 cs 또는 구 공유 토큰)
   const hasCs=!!(LS.getItem('sm_cs')&&LS.getItem('sm_cp'));
   renderPairPcs(); applyPairSituation(); // 저장된 PC 가 있으면 페어링 화면에서 바로 고를 수 있게 + 상황 줄 1개(DR-1)
-  if(room&&(hasCs||token)){
+  if(revokeQLoad().length) setTimeout(()=>{ revokeFlush().catch(()=>{}); }, 3000);   // 폐기 대기 재시도(오프라인 해제분)
+  const _curPc=pcsLoad().find(x=>x.room===room);
+  if(room&&(hasCs||token)&&!(_curPc&&_curPc.state&&!_hashPair)){   // ⛔/🔄 PC 는 자동 재접속하지 않는다
     $('#p-err').textContent=''; $('#p-go').textContent='연결 중…';
-    conn.connect(room,token).then(()=>{ LS.setItem('sm_room',room); T=relayT; enterApp(); })
-      .catch(e=>{ $('#p-err').textContent=e.message; $('#p-go').textContent='연결'; });
+    if(_hashPair) conn._pairing=true;
+    conn.connect(room,token).then(async(r)=>{
+      conn._pairing=false;
+      const a=r&&r.auth;
+      if(_hashPair && !(a&&a.ok)){
+        if(_prevPc){ pcsUpsert({..._prevPc}); pcsActivate(_prevPc.room); }   // 옛 페어링 복원
+        else { pcsRemove(room); clearPairing(false); }
+        $('#p-err').textContent=(a&&a.error==='auth_invalid')?'이 QR 은 더 이상 유효하지 않습니다 — PC 의 📱 기기 목록에서 새 QR 을 만드세요':'PC 인증 실패: '+((a&&a.error)||'unknown');
+        $('#p-go').textContent='연결'; renderPairPcs(); return;
+      }
+      if(a&&a.ok&&a.data){ pcsUpsert({room, cs:LS.getItem('sm_cs')||'', cp:LS.getItem('sm_cp')||'', dev:LS.getItem('sm_devtoken')||'',
+                                      name:a.data.hostname||'', pv:a.data.pv|0}); }
+      if(_hashPair && _prevPc && _prevPc.cp && _prevPc.cp!==LS.getItem('sm_cp')){
+        await revokeEnqueue(_prevPc); revokeFlush().catch(()=>{});                  // B-7: 옛 cpub 은 새 자격 성공 뒤 폐기
+      }
+      LS.setItem('sm_room',room); T=relayT; enterApp(); })
+      .catch(e=>{ conn._pairing=false; $('#p-err').textContent=e.message; $('#p-go').textContent='연결'; });
   }
 }
 </script>
