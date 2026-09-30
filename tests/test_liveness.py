@@ -88,3 +88,31 @@ def test_launcher_template_and_ensure_script_contract():
 def test_ensure_launcher_skips_dev_tree(fake_claude_home):
     assert liveness.ensure_launcher(5100) is None               # 리포 실행 = start-connector.ps1 없음
     assert not list(config.data_dir().glob("launcher-ensured-*"))
+
+
+def test_marks_are_per_pid_and_survive_overwrite_by_other_process(fake_claude_home, monkeypatch):
+    """회귀(2026-09-30 0.10.1 apply): 옛 Host 의 update 표식을 그 사이 뜬 다른 프로세스의 normal 표식이 덮어써
+    새 Host 가 옛 Host 를 비정상 종료로 오판·복구 알림. pid 별로 쌓으면 둘 다 남는다."""
+    OLD, OTHER = DEAD_PID, DEAD_PID - 1
+    monkeypatch.setattr(os, "getpid", lambda: OLD); liveness.mark_shutdown("update")
+    monkeypatch.setattr(os, "getpid", lambda: OTHER); liveness.mark_shutdown("normal")
+    monkeypatch.undo()
+    marks = json.loads(liveness.shutdown_file().read_text(encoding="utf-8"))["pids"]
+    assert set(marks) == {str(OLD), str(OTHER)} and marks[str(OLD)]["reason"] == "update"
+    _runtime(OLD)
+    assert liveness.check_previous_exit() is None, "옛 Host 의 표식이 살아 있다 → 사고 아님"
+    left = json.loads(liveness.shutdown_file().read_text(encoding="utf-8"))["pids"]
+    assert set(left) == {str(OTHER)}, "소비한 표식만 지우고 다른 pid 것은 남긴다"
+    _runtime(OTHER)
+    assert liveness.check_previous_exit() is None
+    assert not liveness.shutdown_file().exists(), "마지막 표식까지 소비되면 파일 제거"
+
+
+def test_marks_keep_recent_only(fake_claude_home, monkeypatch):
+    for i in range(12):
+        monkeypatch.setattr(os, "getpid", lambda i=i: 1000 + i)
+        monkeypatch.setattr(liveness.time, "time", lambda i=i: 1_700_000_000 + i)
+        liveness.mark_shutdown("normal")
+    monkeypatch.undo()
+    marks = json.loads(liveness.shutdown_file().read_text(encoding="utf-8"))["pids"]
+    assert len(marks) == liveness._MARK_KEEP and "1011" in marks and "1000" not in marks

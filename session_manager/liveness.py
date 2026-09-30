@@ -32,13 +32,36 @@ def incidents_file() -> Path:
     return config.data_dir() / "incidents.jsonl"
 
 
+_MARK_KEEP = 8
+
+
+def _read_marks(sd: dict | None) -> dict:
+    """shutdown.json → {pid(str): {reason, at}}. 구형(단일 {"pid":…}) 도 읽는다."""
+    if not sd:
+        return {}
+    if isinstance(sd.get("pids"), dict):
+        return {str(k): (v if isinstance(v, dict) else {}) for k, v in sd["pids"].items()}
+    if sd.get("pid"):
+        return {str(sd["pid"]): {"reason": sd.get("reason"), "at": sd.get("at")}}
+    return {}
+
+
 def mark_shutdown(reason: str) -> None:
-    """정상 종료 표식. 다음 기동이 '의심' 판정에서 제외한다."""
+    """정상 종료 표식. 다음 기동이 '의심' 판정에서 제외한다.
+
+    pid 별로 쌓는다(0.10.2): 업데이트 적용 중 옛 Host 가 남긴 표식을 그 사이 뜬 다른(짧은) 프로세스의
+    정상 종료 표식이 **덮어써** 새 Host 가 옛 Host 를 '비정상 종료' 로 오판하고 복구 알림을 보내던 사고
+    (2026-09-30 0.10.1 apply, pid 143148 표식이 pid 77156 로 교체됨). 최근 _MARK_KEEP 개만 보관.
+    """
     try:
         p = shutdown_file()
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps({"pid": os.getpid(), "reason": reason, "at": int(time.time())}),
-                     encoding="utf-8")
+        marks = _read_marks(_read_json(p))
+        marks[str(os.getpid())] = {"reason": reason, "at": int(time.time())}
+        if len(marks) > _MARK_KEEP:
+            for k in sorted(marks, key=lambda k: int((marks[k] or {}).get("at") or 0))[: len(marks) - _MARK_KEEP]:
+                marks.pop(k, None)
+        p.write_text(json.dumps({"pids": marks}), encoding="utf-8")
     except Exception:  # noqa: BLE001
         pass
 
@@ -96,10 +119,14 @@ def check_previous_exit() -> dict | None:
     if not rt or not rt.get("pid") or int(rt["pid"]) == os.getpid():
         return None
     prev_pid = int(rt["pid"])
-    sd = _read_json(shutdown_file())
-    if sd and int(sd.get("pid") or 0) == prev_pid:
+    marks = _read_marks(_read_json(shutdown_file()))
+    if str(prev_pid) in marks:
+        marks.pop(str(prev_pid), None)                          # 표식 소비(다른 pid 의 표식은 남긴다)
         try:
-            shutdown_file().unlink()                            # 표식 소비
+            if marks:
+                shutdown_file().write_text(json.dumps({"pids": marks}), encoding="utf-8")
+            else:
+                shutdown_file().unlink()
         except OSError:
             pass
         return None
