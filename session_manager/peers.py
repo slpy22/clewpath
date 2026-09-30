@@ -10,6 +10,7 @@ ClewPath 는 이걸로 ① 우리 PTY 가 아닌 세션도 "떠 있음"으로 �
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 import time
@@ -91,17 +92,67 @@ _ORIGIN_CACHE: dict[int, dict] = {}
 
 
 def _proc_info(pid: int) -> dict | None:
-    """pid → {name, cmdline, parent_name, parent_pid, create_time} 또는 None(없음/권한 없음/psutil 없음)."""
+    """pid → {name, cmdline, parent_name, parent_pid, create_time} 또는 None(없음/권한 없음).
+
+    psutil 우선. 없으면(설치본에 의존성이 빠진 경우 — 0.10.5 까지 uv.lock 미갱신으로 실제 발생) Windows 는
+    PowerShell CIM(Win32_Process) 으로 같은 정보를 만든다(느리지만 pid 별 캐시라 1회).
+    """
     try:
         import psutil
+    except ImportError:
+        return _proc_info_cim(pid) if os.name == "nt" else None
+    try:
         p = psutil.Process(int(pid))
         with p.oneshot():
             par = p.parent()
             return {"name": p.name() or "", "cmdline": list(p.cmdline() or []),
                     "parent_name": (par.name() if par else "") or "", "parent_pid": (par.pid if par else None),
                     "create_time": p.create_time()}
-    except Exception:  # noqa: BLE001  NoSuchProcess/AccessDenied/ImportError
+    except Exception:  # noqa: BLE001  NoSuchProcess/AccessDenied
         return None
+
+
+def _cim_query(pid: int) -> dict | None:
+    import json as _json
+    import subprocess
+    cmd = (f"Get-CimInstance Win32_Process -Filter 'ProcessId={int(pid)}' | "
+           "Select-Object ProcessId,ParentProcessId,Name,CommandLine,CreationDate | ConvertTo-Json -Compress")
+    try:
+        r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", cmd],
+                           capture_output=True, text=True, timeout=8,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        out = (r.stdout or "").strip()
+        if not out:
+            return None
+        d = _json.loads(out)
+        return d if isinstance(d, dict) else (d[0] if d else None)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def parse_cim(row: dict | None, parent_row: dict | None) -> dict | None:
+    """CIM 행 → _proc_info 와 같은 모양(순수 함수, 테스트용). 명령줄은 공백 분리(따옴표 안 공백은 유지)."""
+    if not row:
+        return None
+    import shlex
+    cl = str(row.get("CommandLine") or "")
+    try:
+        argv = shlex.split(cl, posix=False)
+    except ValueError:
+        argv = cl.split()
+    argv = [a.strip('"') for a in argv]
+    return {"name": str(row.get("Name") or ""), "cmdline": argv,
+            "parent_name": str((parent_row or {}).get("Name") or ""),
+            "parent_pid": row.get("ParentProcessId"),
+            "create_time": str(row.get("CreationDate") or "")}
+
+
+def _proc_info_cim(pid: int) -> dict | None:
+    row = _cim_query(pid)
+    if not row:
+        return None
+    par = _cim_query(int(row.get("ParentProcessId") or 0)) if row.get("ParentProcessId") else None
+    return parse_cim(row, par)
 
 
 def classify_origin(info: dict | None, entrypoint: str = "", host_pid: int | None = None) -> dict:

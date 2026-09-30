@@ -89,3 +89,33 @@ def test_kill_endpoint_404_when_not_live_and_privileged_remote(fake_claude_home,
         r = c.post("/api/sessions/s1/kill")
         assert r.status_code == 200 and r.json()["ok"] is True
     assert C._is_privileged_api("/api/sessions/s1/kill") is True, "원격은 stop 과 같은 2FA 게이트"
+
+
+def test_parse_cim_matches_proc_info_shape():
+    row = {"ProcessId": 10, "ParentProcessId": 7, "Name": "claude.exe",
+           "CommandLine": r'"C:\Users\me\.local\bin\claude.exe" --resume --dangerously-skip-permissions', "CreationDate": "20260930"}
+    info = peers.parse_cim(row, {"ProcessId": 7, "Name": "pwsh.exe"})
+    assert info["name"] == "claude.exe" and info["parent_name"] == "pwsh.exe" and info["parent_pid"] == 7
+    assert info["cmdline"][0].endswith("claude.exe") and "--resume" in info["cmdline"]
+    assert peers.classify_origin(info, "cli", host_pid=1)["origin"] == "terminal"
+    assert peers.parse_cim(None, None) is None
+    hp = peers.parse_cim({"Name": "claude.exe", "CommandLine": "claude.exe -p hi"}, None)
+    assert peers.classify_origin(hp, "cli", host_pid=1)["origin"] == "headless"
+
+
+def test_proc_info_falls_back_to_cim_without_psutil(monkeypatch):
+    import builtins, sys
+    real_import = builtins.__import__
+    def fake_import(name, *a, **k):
+        if name == "psutil":
+            raise ImportError("no psutil")
+        return real_import(name, *a, **k)
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    monkeypatch.setattr(peers.os, "name", "nt", raising=False)
+    rows = {10: {"ProcessId": 10, "ParentProcessId": 7, "Name": "claude.exe", "CommandLine": "claude.exe --resume x"},
+            7: {"ProcessId": 7, "Name": "WindowsTerminal.exe"}}
+    monkeypatch.setattr(peers, "_cim_query", lambda pid: rows.get(int(pid)))
+    info = peers._proc_info(10)
+    assert info and info["parent_name"] == "WindowsTerminal.exe"
+    assert peers.classify_origin(info, "cli", host_pid=1)["origin"] == "terminal"
+    assert peers._proc_info(99) is None

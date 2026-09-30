@@ -65,6 +65,14 @@ if ($pyver -ne $Version) { Fail "pyproject.toml 버전($pyver) 과 -Version($Ver
 $dirty = (git status --porcelain 2>$null | Where-Object { $_ -notmatch '^\?\? (003_crosscheck|\.context)' })
 if ($dirty -and -not $AllowDirty) { Fail "작업 트리가 깨끗하지 않습니다(커밋 먼저, 또는 -AllowDirty):`n$($dirty -join "`n")" }
 if (-not (Test-Path (Join-Path $Root "ops\release-keys\private.pem"))) { Fail "서명 키가 없습니다: ops/release-keys/private.pem" }
+# 의존성 잠금 검사(0.10.6): pyproject 에 새 의존성을 넣고 uv.lock 을 안 갱신하면 설치본은 `uv sync --frozen` 이라
+# 그 의존성이 영원히 설치되지 않는다(0.10.5 psutil 실사고). lock 이 어긋나면 릴리스를 막는다.
+$uvExe = Join-Path $env:LOCALAPPDATA "ClewPath\bin\uv.exe"
+if (-not (Test-Path $uvExe)) { $uvExe = (Get-Command uv -ErrorAction SilentlyContinue).Source }
+if ($uvExe) {
+    & $uvExe lock --check 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) { Fail "uv.lock 이 pyproject.toml 과 어긋납니다 - uv lock 으로 갱신하고 커밋하세요(설치본 의존성 누락 방지)" }
+} else { Log "uv 를 못 찾아 lock 검사를 건너뜁니다" }
 if (-not $SkipTests) {
     Log "테스트 실행(pytest -q)…"
     $t = & $Python -m pytest -q 2>&1 | Select-Object -Last 1
