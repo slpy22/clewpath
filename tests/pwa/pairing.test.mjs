@@ -306,7 +306,7 @@ test("refreshPcSelect(로컬): localhost + '🖧 다른 PC (릴레이)…' — �
   sel.classList = { add: (c) => cls.add(c), remove: (c) => cls.delete(c), contains: (c) => cls.has(c) };
   sel.appendChild = (o) => { opts.push(o.value); }; ctx.document._register("pcname", sel);
   ev(ctx, "refreshPcSelect()");
-  same(opts, ["__local__", "__relay__"]); assert.ok(!cls.has("hidden"));
+  same(opts, ["__local__", "__relay__", "__sync__"]); assert.ok(!cls.has("hidden"));
   // 릴레이 앱(숨은 iframe)이 넘긴 목록이 오면 실제 PC 들이 나열되고, 고르면 ?switch=room 으로 이동
   const handlers = ctx.__winListeners.message || [];
   const relayOrigin = new URL(ev(ctx, "RELAY_APP_URL")).origin;
@@ -314,7 +314,7 @@ test("refreshPcSelect(로컬): localhost + '🖧 다른 PC (릴레이)…' — �
   assert.equal(ctx.localStorage.getItem("sm_pcs_relay"), null, "릴레이 origin 이 아니면 무시");
   opts.length = 0;
   handlers.forEach((h) => h({ origin: relayOrigin, data: { type: "clewpath_pcs", pcs: [{ room: "rmA", name: "집 PC" }, { room: "rmB", name: "" }, { room: "", name: "bad" }] } }));
-  same(opts, ["__local__", "relay:rmA", "relay:rmB", "__relay__"]);
+  same(opts, ["__local__", "relay:rmA", "relay:rmB", "__relay__", "__sync__"]);
   same(JSON.parse(ctx.localStorage.getItem("sm_pcs_relay")), [{ room: "rmA", name: "집 PC" }, { room: "rmB", name: "" }], "room+name 만, 토큰 없음");
   const hrefs = []; Object.defineProperty(ctx.location, "href", { set: (v) => hrefs.push(v), get: () => "http://127.0.0.1:5100/app", configurable: true });
   sel.value = "__relay__"; ev(ctx, "onPcSelect()");
@@ -332,4 +332,32 @@ test("doExport(릴레이, ?pcexport): 로컬 오리진에만 parent/opener 로 r
   ev(ctx, "doExport('http://127.0.0.1:5100')");
   assert.equal(posted.length, 1); assert.equal(posted[0][1], "http://127.0.0.1:5100");
   same(posted[0][0], { type: "clewpath_pcs", pcs: [{ room: "rm1", name: "집" }, { room: "rm2", name: "" }] }, "토큰(cs/cp/dev)은 절대 안 나간다");
+});
+
+test("왕복 동기화: doExport 최상위면 #pcs= 로 복귀, 로컬 부팅이 #pcs= 를 소비해 목록 저장(Chrome iframe 저장소 분리 대응)", async () => {
+  // 릴레이 쪽(최상위, parent/opener 없음)
+  const ctx = await load();
+  ev(ctx, "pcsUpsert({room:'rm1', cs:'c', cp:'p', dev:'d', name:'집'})");
+  const repl = []; ctx.location.replace = (u) => repl.push(u); ctx.window.parent = ctx.window; ctx.window.opener = null;
+  ev(ctx, "doExport('http://127.0.0.1:5100')");
+  assert.equal(repl.length, 1);
+  assert.ok(repl[0].startsWith("http://127.0.0.1:5100/#pcs="));
+  same(JSON.parse(decodeURIComponent(repl[0].split("#pcs=")[1])), [{ room: "rm1", name: "집" }]);
+  ev(ctx, "doExport('https://evil.test')"); assert.equal(repl.length, 1, "로컬 오리진이 아니면 안 보낸다");
+  // 로컬 쪽(복귀): 해시 소비
+  const LOCAL = { pathname: "/", href: "http://127.0.0.1:5100/", origin: "http://127.0.0.1:5100", protocol: "http:", host: "127.0.0.1:5100" };
+  const ctx2 = await load({ location: LOCAL, hash: "#pcs=" + encodeURIComponent(JSON.stringify([{ room: "rmA", name: "집 PC" }, { room: "", name: "x" }])) });
+  same(JSON.parse(ctx2.localStorage.getItem("sm_pcs_relay")), [{ room: "rmA", name: "집 PC" }]);
+  assert.equal(ev(ctx2, "relayPcsRoundTrip.name"), "relayPcsRoundTrip");
+  // 빈 목록 메시지는 기존 값을 지우지 않는다(저장소 분리 오탐)
+  const handlers = ctx2.__winListeners.message || [];
+  const relayOrigin = new URL(ev(ctx2, "RELAY_APP_URL")).origin;
+  ev(ctx2, "sessionStorage.setItem('sm_pcs_rt','1')");
+  handlers.forEach((h) => h({ origin: relayOrigin, data: { type: "clewpath_pcs", pcs: [] } }));
+  same(JSON.parse(ctx2.localStorage.getItem("sm_pcs_relay")), [{ room: "rmA", name: "집 PC" }]);
+  // 왕복은 세션당 1회
+  const hrefs = []; Object.defineProperty(ctx2.location, "href", { set: (v) => hrefs.push(v), get: () => "http://127.0.0.1:5100/", configurable: true });
+  assert.equal(ev(ctx2, "relayPcsRoundTrip()"), false, "이미 왕복한 세션");
+  ev(ctx2, "sessionStorage.removeItem('sm_pcs_rt')");
+  assert.equal(ev(ctx2, "relayPcsRoundTrip()"), true); assert.ok(hrefs[0].includes("?pcexport=http%3A%2F%2F127.0.0.1%3A5100"));
 });

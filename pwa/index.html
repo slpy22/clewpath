@@ -3942,6 +3942,7 @@ function refreshPcSelect(){
     const rp=relayPcsLoad();
     rp.forEach(pc=>{ opts.push({v:'relay:'+pc.room, t:'🖥 '+(pc.name||roomLabel(pc.room))}); });
     opts.push({v:'__relay__', t: rp.length?'🖧 릴레이 앱 열기…':'🖧 다른 PC (릴레이)…'});
+    opts.push({v:'__sync__', t:'🔄 PC 목록 새로고침'});
   }
   const btn=$('#btn-pcs'); if(btn){ if(MODE==='relay') btn.classList.remove('hidden'); else btn.classList.add('hidden'); }
   // 로컬 화면은 localhost 만(E-4): 릴레이 PC 목록 미러(sm_pcs_relay)·팝업 동기화는 0.10.0 에서 제거.
@@ -3958,6 +3959,23 @@ function refreshPcSelect(){
 function relayPcsLoad(){ try{ const a=JSON.parse(LS.getItem('sm_pcs_relay')||'[]'); return Array.isArray(a)?a:[]; }catch(e){ return []; } }
 function relayPcsSave(a){ LS.setItem('sm_pcs_relay', JSON.stringify(a)); }
 let _pcsSyncFrame=null;
+// 왕복 동기화: 로컬 → 릴레이 앱(?pcexport=<로컬 origin>, 최상위 문맥이라 저장소 분리 없음) → 목록을 #pcs= 조각에 실어 로컬로 복귀.
+// Chrome 은 서드파티 iframe 의 localStorage 를 분리(partitioning)해 iframe 방식은 빈 목록만 돌려준다(실측 2026-09-30).
+// 조각(#)은 서버로 가지 않고, 내용은 room+name 뿐(토큰 없음). 세션당 1회만 자동, 나머지는 '🔄 PC 목록 새로고침'.
+function relayPcsRoundTrip(){
+  if(MODE!=='local' || !RELAY_APP_URL) return false;
+  try{ if(sessionStorage.getItem('sm_pcs_rt')==='1') return false; sessionStorage.setItem('sm_pcs_rt','1'); }catch(e){}
+  try{ location.href=RELAY_APP_URL+'?pcexport='+encodeURIComponent(location.origin); }catch(e){ return false; }
+  return true;
+}
+// 복귀 시 #pcs=<json> 소비(부팅 최초에 호출) — 저장 뒤 주소창에서 지운다
+function consumeRelayPcsHash(){
+  const m=(location.hash||'').match(/[#&]pcs=([^&]+)/); if(!m) return false;
+  try{ const a=JSON.parse(decodeURIComponent(m[1]));
+    if(Array.isArray(a)) relayPcsSave(a.map(x=>({room:String(x.room||''),name:String(x.name||'')})).filter(x=>x.room)); }catch(e){}
+  try{ history.replaceState(null,'',location.pathname); }catch(e){}
+  return true;
+}
 function syncRelayPcs(){
   if(MODE!=='local' || !RELAY_APP_URL) return;
   try{
@@ -3967,7 +3985,9 @@ function syncRelayPcs(){
     f.setAttribute('aria-hidden','true'); f.tabIndex=-1;
     f.style.cssText='position:absolute;width:0;height:0;border:0;opacity:0;pointer-events:none';
     document.body.appendChild(f); _pcsSyncFrame=f;
-    setTimeout(()=>{ if(_pcsSyncFrame===f){ try{ f.remove(); }catch(e){} _pcsSyncFrame=null; } }, 15000);   // 응답 없으면 정리
+    // iframe 이 빈 목록(저장소 분리)이거나 응답이 없으면 → 세션당 1회 왕복
+    setTimeout(()=>{ if(_pcsSyncFrame===f){ try{ f.remove(); }catch(e){} _pcsSyncFrame=null; }
+      if(!relayPcsLoad().length) relayPcsRoundTrip(); }, 6000);
   }catch(e){}
 }
 function onRelayPcsMessage(ev){
@@ -3975,9 +3995,11 @@ function onRelayPcsMessage(ev){
     if(ev.origin !== new URL(RELAY_APP_URL).origin) return;
     const d=ev.data;
     if(d && d.type==='clewpath_pcs' && Array.isArray(d.pcs)){
-      relayPcsSave(d.pcs.map(x=>({room:String(x.room||''),name:String(x.name||'')})).filter(x=>x.room));
+      const list=d.pcs.map(x=>({room:String(x.room||''),name:String(x.name||'')})).filter(x=>x.room);
+      if(list.length) relayPcsSave(list);          // 빈 목록은 저장소 분리(partitioning)일 수 있어 기존 값을 지우지 않는다
       if(_pcsSyncFrame){ try{ _pcsSyncFrame.remove(); }catch(e){} _pcsSyncFrame=null; }
       refreshPcSelect();
+      if(!list.length && !relayPcsLoad().length) relayPcsRoundTrip();
     }
   }catch(e){}
 }
@@ -3985,11 +4007,16 @@ function onRelayPcsMessage(ev){
 function doExport(target){
   const ok=/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(target||'');   // 로컬 오리진만
   const to=(window.parent&&window.parent!==window)?window.parent:window.opener;
+  const list=pcsLoad().map(pc=>({room:pc.room, name:pc.name||''}));           // 토큰 제외
   if(ok && to){
-    const list=pcsLoad().map(pc=>({room:pc.room, name:pc.name||''}));         // 토큰 제외
     try{ to.postMessage({type:'clewpath_pcs', pcs:list}, target); }catch(e){}
+    document.body.innerHTML='';
+  } else if(ok){
+    // 최상위 문맥(왕복): 로컬 앱으로 돌아가며 목록을 fragment 에 싣는다(서버 무전송)
+    try{ location.replace(target.replace(/\/$/,'')+'/#pcs='+encodeURIComponent(JSON.stringify(list))); }catch(e){}
+  } else {
+    document.body.innerHTML='';
   }
-  document.body.innerHTML='';
 }
 // 로컬 iframe 터미널의 화면 인계 통지(v0.9.6): terminal.html 이 서버 통지를 감지하면 같은 origin 으로
 // {type:'clewpath-term', event:'taken', id, fork} 를 보낸다 → 그 탭을 '빼앗김'으로(릴레이 모드의 스트림 감지와 동일 결과).
@@ -4015,6 +4042,7 @@ function onPcSelect(){
   if(v==='__local__'){ if(MODE==='local') return; location.href=localAppUrl(); return; }  // localhost 로
   if(v==='__relay__'){ sel.value='__local__'; location.href=RELAY_APP_URL; return; }      // 로컬 → 릴레이 앱(다른 PC)
   if(v.indexOf('relay:')===0){ location.href=RELAY_APP_URL+'?switch='+encodeURIComponent(v.slice(6)); return; } // 로컬 → 릴레이의 그 PC
+  if(v==='__sync__'){ sel.value='__local__'; try{ sessionStorage.removeItem('sm_pcs_rt'); }catch(e){} relayPcsRoundTrip(); return; }
   if(v==='__manage__'){ sel.value=LS.getItem('sm_room')||''; showPcs(); return; }         // 전환·추가·해제 관리
   if(v===LS.getItem('sm_room')){ return; }                                                // 현재와 같음
   if(MODE==='relay'){ const pc=pcsLoad().find(x=>x.room===v)||{room:v,name:''}; switchToPc(pc); }
@@ -4102,6 +4130,7 @@ if(_pcexport){
   // 로컬 앱의 숨은 iframe 이 목록 동기화를 위해 이 릴레이 페이지를 열었다 — 목록만 넘기고 끝(부팅 안 함)
   doExport(_pcexport);
 }else if(MODE==='local'){
+  const _rt=consumeRelayPcsHash();                          // 왕복 복귀(#pcs=) 면 목록 저장 후 iframe 시도는 생략
   window.addEventListener('message', onRelayPcsMessage);   // 릴레이 PC 목록(숨은 iframe) 수신
   window.addEventListener('message', onLocalTermMessage);  // 탭 iframe(terminal.html) → 화면 인계 통지
   refreshConnBadge();                            // 접속 인증 모드 배지(JWT/fallback)
@@ -4111,7 +4140,7 @@ if(_pcexport){
   setStatus(true,true);
   enterApp();
   maybeShowFirstRunHint();
-  setTimeout(syncRelayPcs, 1500);              // 릴레이 주소(/api/owner/connection)가 채워진 뒤 목록 동기화
+  if(!_rt) setTimeout(syncRelayPcs, 1500);     // 릴레이 주소(/api/owner/connection)가 채워진 뒤 목록 동기화
 }else{
   // 페어링 파라미터: fragment(#) 우선 - query 는 릴레이 접근로그에 남을 수 있어
   // 신형 링크는 전부 fragment 로 온다. 구형(query) 링크도 계속 수용.
