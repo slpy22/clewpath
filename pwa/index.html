@@ -43,6 +43,7 @@
     gap:16px;padding:28px;max-width:440px;margin:0 auto}
   #pair h1{font-size:1.5rem;margin:0 0 4px;letter-spacing:-.02em}
   #pair p{color:var(--muted);margin:0 0 12px;font-size:.9rem}
+  #pair p.sit.crit{color:var(--crit)}
   #pair label{font-size:.8rem;color:var(--ink2);font-family:var(--mono);
     text-transform:uppercase;letter-spacing:.08em}
   #pair input{width:100%;margin-top:6px;padding:13px 14px;border-radius:11px;
@@ -103,6 +104,13 @@
   .schip{flex:none;font-size:.66rem;padding:1px 7px;border-radius:999px;
     background:var(--accent-wash);color:var(--accent);font-family:var(--mono);
     border:1px solid color-mix(in srgb,var(--accent) 30%,transparent)}
+  /* 페어링 상태 칩(design DR-6): 배경 없이 1px 외곽선, 항상 아이콘+텍스트, 행당 1개. 기존 토큰만 쓴다 */
+  .schip.st{background:transparent;font-family:var(--sans);font-size:.72rem;padding:2px 8px}
+  .schip.st-crit{color:var(--crit);border-color:color-mix(in srgb,var(--crit) 55%,transparent)}
+  .schip.st-warn{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 55%,transparent)}
+  .schip.st-warn.dimtext{color:var(--muted)}
+  .schip.st-accent{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 55%,transparent)}
+  .schip.st-muted{color:var(--muted);border-color:var(--line2)}
   .smeta2{font-size:.75rem;color:var(--muted);margin-top:4px;display:flex;gap:9px;flex-wrap:wrap}
   /* 픽커 미표시(에이전트/포크 산물) 세션: 일반 세션과 구분되게 흐리게 */
   .srow.dim .sname{color:var(--muted)}
@@ -222,9 +230,18 @@
   .todorow.now{color:var(--accent);font-weight:600}
   .devrow{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)}
   .devrow>div:first-child{flex:1;min-width:0}
-  .devrow .devname{font-weight:600;font-size:.95rem}
+  .devrow .devname{font-weight:600;font-size:.95rem;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .devrow .devname .did{font-family:var(--mono);font-size:.7rem;color:var(--muted);font-weight:400}
   .devrow .devmeta{font-size:.78rem;color:var(--muted);margin-top:2px}
-  .btn.sm{padding:7px 12px;font-size:.82rem;flex:none}
+  .devrow .devbtns{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;flex:none}
+  /* 비활성 상태(해제됨·폐기 대기)는 버튼만 흐린다 — 이름·칩·meta 는 정상 대비 유지(DR-6) */
+  .btn[disabled]{opacity:.45;cursor:default}
+  @media (max-width:420px){ .devrow{flex-wrap:wrap} .devrow .devbtns{width:100%;justify-content:flex-start} }
+  .diag{font-family:var(--mono);font-size:.74rem;color:var(--muted);margin:-4px 0 10px}
+  .sheet-main{font-size:1rem;margin:2px 0 8px}
+  .sheet-sub{font-size:.85rem;color:var(--muted);line-height:1.5}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .btn.sm{padding:7px 12px;font-size:.82rem;flex:none;min-height:44px;min-width:44px}   /* 터치 최소 44px(DR-13) */
   .btn.danger{background:transparent;border:1px solid color-mix(in srgb,var(--crit) 45%,transparent);color:var(--crit)}
   .backbar{display:flex;align-items:center;gap:6px;padding:8px 10px;
     position:sticky;top:0;z-index:4;background:var(--surface);border-bottom:1px solid var(--line)}
@@ -521,9 +538,7 @@
 <div id="pair">
   <div>
     <h1>ClewPath</h1>
-    <p>내 PC에 연결합니다.<br>
-      PC의 로컬 웹(<span class="mono">127.0.0.1:5100</span>) → <b>📱</b> → <b>＋ 새 기기 추가</b> 에서
-      <b>QR을 스캔</b>하거나, 거기 표시된 <b>페어링 링크를 붙여넣으세요.</b></p>
+    <p id="p-sit" class="sit">아직 페어링한 PC 가 없습니다. PC 의 ClewPath 에서 📱 → ＋ 기기 추가 로 QR 을 만드세요.</p>
   </div>
   <div id="p-pcs"></div>
   <button class="btn" id="p-scan" hidden>📷 QR 스캔으로 연결</button>
@@ -565,7 +580,7 @@
   <main id="main"><div id="paneList"></div><div id="resizer" title="드래그로 폭 조절 · 더블클릭 초기화"></div><div id="paneDetail"></div></main>
 </div>
 
-<div class="toast" id="toast"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script src="native-bridge.js"></script>
 <script>
@@ -894,7 +909,7 @@ const relayT={
     const r=await conn.req('import',Object.assign({filename:file.name,b64},opts));
     return r.data || {error:r.error||'가져오기 실패'}; },
   grant(otp){ return conn.req('grant',{otp}).then(r=>{ if(!r.ok)throw new Error(r.error||'인증 실패'); return r.data; }); },
-  logout(){ showLogoutChoice(); },
+  logout(){ resetDevice(); },
 };
 const localT={
   mode:'local', needsPairing:false,
@@ -2654,13 +2669,24 @@ function importSession(){
 }
 
 // ---- 모달 시스템 ----
-function closeModal(){ const o=$('#overlay'); if(o)o.remove(); }
+let _modalOpener=null;
+function closeModal(){
+  const o=$('#overlay'); if(o)o.remove();
+  try{ document.removeEventListener('keydown', _modalKey); }catch(e){}
+  // 닫힌 뒤 포커스는 모달을 연 버튼으로(DR-13)
+  try{ if(_modalOpener && _modalOpener.focus){ _modalOpener.focus(); } }catch(e){}
+  _modalOpener=null;
+}
+function _modalKey(e){ if(e.key==='Escape'){ closeModal(); } }
 function openModal(title, bodyEl, footChildren){
   closeModal();
+  try{ _modalOpener=(document.activeElement&&document.activeElement.tagName==='BUTTON')?document.activeElement:null; }catch(e){}
   const ov=el('div','overlay'); ov.id='overlay';
   const m=el('div','modal');
-  const h=el('div','modal-head'); h.appendChild(el('h3',null,title));
-  const x=el('button','x','✕'); x.onclick=closeModal; h.appendChild(x);
+  try{ m.setAttribute('role','dialog'); m.setAttribute('aria-modal','true'); m.setAttribute('aria-labelledby','modal-title'); }catch(e){}
+  const h=el('div','modal-head'); const ht=el('h3',null,title); ht.id='modal-title'; h.appendChild(ht);
+  const x=el('button','x','✕'); x.title='닫기'; x.onclick=closeModal; h.appendChild(x);
+  try{ document.addEventListener('keydown', _modalKey); }catch(e){}
   m.appendChild(h);
   const b=el('div','modal-body'); if(bodyEl)b.appendChild(bodyEl); m.appendChild(b);
   if(footChildren&&footChildren.length){ const f=el('div','modal-foot');
@@ -2668,6 +2694,45 @@ function openModal(title, bodyEl, footChildren){
   ov.appendChild(m);
   ov.onclick=(e)=>{ if(e.target===ov)closeModal(); };
   document.body.appendChild(ov);
+  // 초기 포커스: 푸터 첫 버튼 → 없으면 닫기(DR-13)
+  try{ const first=(footChildren&&footChildren[0])||x; setTimeout(()=>{ try{ first.focus(); }catch(e){} },0); }catch(e){}
+}
+// 확인 시트(design DR-7): 브라우저 confirm() 대신. 제목 / 주 문장 / 부 문장(정직한 조건 문구 자리) / [취소][동사 버튼].
+// run 이 throw 하면 시트 안에 오류를 보이고 행은 그대로(재시도 가능). 반환: 실행 성공 여부.
+function confirmSheet(o){
+  return new Promise((resolve)=>{
+    const body=el('div');
+    body.appendChild(el('div','sheet-main',o.main||''));
+    if(o.sub) body.appendChild(el('div','sheet-sub',o.sub));
+    const err=el('div','err'); body.appendChild(err);
+    const cancel=el('button','btn ghost','취소'); cancel.onclick=()=>{ closeModal(); resolve(false); };
+    const go=el('button','btn'+(o.danger?' danger':''),o.action||'확인');
+    go.onclick=async()=>{
+      if(go.disabled) return;
+      go.disabled=true; const orig=go.textContent; go.textContent=o.busyText||(orig+' 중…'); err.textContent='';
+      try{ if(o.run) await o.run(); closeModal(); resolve(true); }
+      catch(e){ err.textContent=(e&&e.message)||String(e); go.disabled=false; go.textContent=orig; }
+    };
+    openModal(o.title||'확인', body, [cancel, go]);
+  });
+}
+// 페어링 행 1벌(design DR-1/B-9): 이름(+짧은 id) · 상태 칩(≤1) / meta / 버튼들. PC 기기 목록·폰 PC 목록이 같이 쓴다.
+function statusChip(c){
+  if(!c) return null;
+  const sp=el('span','schip st st-'+(c.tone||'muted')+(c.dimtext?' dimtext':''), (c.icon?c.icon+' ':'')+c.text);
+  return sp;
+}
+function pairRow(r){
+  const row=el('div','devrow'+(r.off?' off':'')); const info=el('div');
+  const nm=el('div','devname'); nm.appendChild(el('span',null,r.name||''));
+  if(r.id) nm.appendChild(el('span','did','#'+String(r.id).slice(0,4)));   // 같은 이름 구분용 짧은 id(DR-9)
+  const chip=statusChip(r.chip); if(chip) nm.appendChild(chip);
+  info.appendChild(nm);
+  if(r.meta&&r.meta.length) info.appendChild(el('div','devmeta',r.meta.filter(Boolean).join(' · ')));
+  row.appendChild(info);
+  const bt=el('div','devbtns'); (r.buttons||[]).forEach(b=>{ if(r.off&&!b._keep) b.disabled=true; bt.appendChild(b); });
+  row.appendChild(bt);
+  return row;
 }
 // ---- 오케스트레이션 관제(멀티 세션 실시간 관전) ----
 function monSessName(s){ return s.title||s.label_name||s.slug||s.session_id.slice(0,8); }
@@ -3141,37 +3206,37 @@ function relTs(sec){ if(!sec)return '미접속';
   if(d<86400)return Math.floor(d/3600)+'시간 전'; return Math.floor(d/86400)+'일 전'; }
 async function showDevices(){
   let st; try{ st=await T.api('GET','/api/owner/devices'); }catch(e){ toast('기기 목록 실패: '+e.message); return; }
-  const body=el('div'); const line=(t)=>body.appendChild(el('div','cwd',t));
-  const blockAll = !st.active;   // 등록 기기 0 = 외부 전면 차단
-  line('외부(릴레이) 기기 인증: '+(blockAll?'🛑 전면 차단중(등록 기기 없음)':'항상 켜짐 ✅'));
-  line('등록된 기기만 외부에서 접속할 수 있습니다. 삭제하면 다음 요청부터 즉시 차단되며, 이미 열려 있던 연결도 끊깁니다.');
-  line('이 보호는 끌 수 없습니다 — 끄면 기기 삭제가 실효를 잃기 때문입니다. (이 PC 로컬 접속은 항상 가능)');
+  const body=el('div');
+  const active=st.active|0, total=st.total|0;
+  // 🩺 진단 한 줄(B-10). CP 동기화 시각은 0.11.0(meta.cp_synced)에서 붙는다.
+  body.appendChild(el('div','diag','🩺 활성 '+active+' · 총 '+total+(active?'':' · 🛑 외부 접속 전면 차단중(등록 기기 없음)')));
+  body.appendChild(el('div','cwd','등록된 기기만 외부에서 접속할 수 있습니다. 페어링을 해제하면 다음 요청부터 차단되고 열린 연결도 끊깁니다 — 이 보호는 끌 수 없습니다.'));
   const list=el('div'); list.style.marginTop='8px';
   (st.devices||[]).forEach(d=>{
-    const row=el('div','devrow'); const info=el('div');
-    info.appendChild(el('div','devname',(d.revoked?'🚫 ':'📱 ')+d.name));
-    const meta=[]; meta.push(d.last_seen?('최근 '+relTs(d.last_seen)):'미접속');
-    if(d.revoked)meta.push('폐기됨');
-    info.appendChild(el('div','devmeta',meta.join(' · ')));
-    row.appendChild(info);
+    // 칩은 행당 1개(우선순위 📵 > 🔗). 📵/⏳/💤 는 0.11.0 에서 서버 상태로 채워진다.
+    const chip = d.revoked ? {icon:'📵', text:'해제됨', tone:'crit'}
+               : (!d.client_scoped ? {icon:'🔗', text:'공유 자격(구형)', tone:'warn', dimtext:true} : null);
+    const btns=[];
     if(!d.revoked){
-      const qr=el('button','btn ghost sm','🔄 QR');
-      qr.title='QR/링크 다시 만들기 (이전 QR 은 무효)';
-      qr.onclick=()=>reissueDevice(d);
-      row.appendChild(qr);
+      const re=el('button','btn ghost sm','QR 다시 만들기'); re.onclick=()=>reissueDevice(d); btns.push(re);
+      const un=el('button','btn ghost sm','페어링 해제'); un.onclick=()=>deleteDevice(d); btns.push(un);
+    }else{
+      const del=el('button','btn ghost sm','삭제'); del._keep=true; del.onclick=()=>deleteDevice(d); btns.push(del);
     }
-    const del=el('button','btn ghost sm','🗑 삭제');
-    del.onclick=async()=>{
-      if(!confirm('"'+d.name+'" 기기를 삭제할까요?\n이 기기의 접속 토큰이 무효화되어, 다시 쓰려면 새로 페어링해야 합니다.'))return;
-      try{ await T.api('POST','/api/owner/devices/'+d.id+'/delete',{body:{}}); toast('삭제됨'); showDevices(); }
-      catch(e){ toast('실패: '+e.message); } };
-    row.appendChild(del);
-    list.appendChild(row);
+    list.appendChild(pairRow({name:d.name, id:d.id, chip, off:!!d.revoked, buttons:btns,
+      meta:[d.last_seen?('최근 '+relTs(d.last_seen)):'미접속', (!d.client_scoped&&!d.revoked)?'QR 다시 만들기 권장':null]}));
   });
-  if(!(st.devices||[]).length) list.appendChild(el('div','cwd','아직 등록된 기기가 없습니다.'));
+  if(!(st.devices||[]).length) list.appendChild(el('div','cwd','아직 페어링된 기기가 없습니다 — 폰으로 QR 을 찍으면 여기 나타납니다.'));
   body.appendChild(list);
-  const add=el('button','btn','＋ 새 기기 추가'); add.onclick=addDevice;
-  openModal('📱 외부 접속 기기', body, [add]);
+  const add=el('button','btn','＋ 기기 추가'); add.onclick=addDevice;
+  openModal('📱 페어링된 기기', body, [add]);
+}
+function deleteDevice(d){
+  return confirmSheet({title:'페어링 해제', main:'"'+d.name+'" 기기의 페어링을 해제할까요?',
+    sub:'이 기기의 접속 자격이 무효가 되고 열린 연결도 즉시 끊깁니다. 다시 쓰려면 새 QR 로 페어링해야 합니다.',
+    action:'페어링 해제', danger:true, busyText:'해제 중…',
+    run: async()=>{ await T.api('POST','/api/owner/devices/'+d.id+'/delete',{body:{}}); }})
+    .then(ok=>{ if(ok){ toast('페어링 해제됨'); showDevices(); } });
 }
 async function copyText(t){
   // 127.0.0.1/https 는 보안 컨텍스트라 clipboard API 사용 가능. 실패 시 구식 방법으로 폴백.
@@ -3216,35 +3281,28 @@ function showPairResult(body, r, title){
 }
 
 async function reissueDevice(d){
-  if(!confirm('"'+d.name+'" 의 QR/링크를 다시 만들까요? 이전 QR 은 즉시 무효가 되며, 그 기기는 새 QR 로 다시 페어링해야 합니다.'))return;
-  try{
-    const r=await T.api('POST','/api/owner/devices/'+d.id+'/reissue',{body:{}});
-    const body=el('div');
-    openModal('🔄 '+d.name+' — 새 QR', body);
-    showPairResult(body, r);
-  }catch(e){ toast('재발급 실패: '+e.message); }
+  const ok=await confirmSheet({title:'QR 다시 만들기', main:'"'+d.name+'" 의 QR 을 다시 만들까요?',
+    sub:'이전 QR 은 즉시 무효가 되고, 그 기기는 새 QR 로 다시 페어링해야 합니다. 서버 연결이 안 되면 아무것도 바뀌지 않습니다.',
+    action:'QR 다시 만들기', busyText:'만드는 중…',
+    run: async()=>{ const r=await T.api('POST','/api/owner/devices/'+d.id+'/reissue',{body:{}}); d._reissued=r; }});
+  if(!ok) return;
+  const body=el('div'); openModal('🔄 '+d.name+' — 새 QR', body); showPairResult(body, d._reissued);
 }
-
 async function addDevice(){
-  const body=el('div');
-  const nm=inputEl(''); nm.placeholder='예: 내 아이폰, 회사 노트북';
-  body.appendChild(field('기기 이름', nm));
-  const go=el('button','btn','＋ 등록 + QR 생성');
-  go.onclick=async()=>{
-    try{ const r=await T.api('POST','/api/owner/devices',{body:{name:nm.value.trim()}});
-      body.innerHTML='';
-      body.appendChild(el('div','cwd','폰 카메라로 이 QR을 스캔하면 앱이 열리며 자동 페어링됩니다. 창을 닫으면 토큰을 다시 볼 수 없습니다:'));
-      if(r.qr_svg){ const qb=el('div','qrbox'); const im=document.createElement('img');
-        im.src=r.qr_svg; im.alt='pair QR'; qb.appendChild(im); body.appendChild(qb); }
-      if(r.pair_url){ body.appendChild(fieldWithCopy('페어링 링크(수동 입력용)', r.pair_url)); }
-      else { body.appendChild(el('div','cwd','⚠ 공개 앱 주소(SM_APP_URL) 미설정 → 링크 생성 불가. 앱에 아래 값을 수동 입력하세요:'));
-        body.appendChild(field('room', inputEl(r.room||'')));
-        body.appendChild(field('기기 토큰(dev)', inputEl(r.token))); }
-    }catch(e){ toast('실패: '+e.message); }
-  };
-  openModal('＋ 새 기기 추가', body, [go]);
+  // 이름 입력 없이 바로 QR(B-1): 이름은 폰이 접속하면 스스로 채워진다. CP 연결 실패(503)면 행이 안 생기고 다시 시도.
+  const body=el('div'); body.appendChild(el('div','cwd','QR 을 만드는 중…'));
+  openModal('＋ 기기 추가', body);
+  try{
+    const r=await T.api('POST','/api/owner/devices',{body:{name:''}});
+    showPairResult(body, r);
+    body.appendChild(el('div','cwd','이름은 폰이 접속하면 채워집니다(나중에 ✎ 로 바꿀 수 있습니다).'));
+  }catch(e){
+    body.innerHTML='';
+    const msg=/cp_unavailable|503/.test(String(e&&e.message))?'CP 연결 실패 — 잠시 후 다시 시도하세요.':('실패: '+(e&&e.message));
+    body.appendChild(el('div','err',msg));
+    const retry=el('button','btn ghost','다시 시도'); retry.onclick=addDevice; body.appendChild(retry);
+  }
 }
-
 // ---- 프로파일(API 정책) 편집 ----
 async function editProfile(s){
   let data; try{ data=await T.api('GET',`/api/sessions/${s.session_id}/profile`); }
@@ -3407,13 +3465,12 @@ function renderPairPcs(){
       $('#p-err').textContent=''; b.textContent='연결 중… '+pcName(pc);
       conn._stopped=false; conn._retry=0;
       try{ await conn.connect(pc.room, LS.getItem('sm_token')||'');
-           LS.setItem('sm_room',pc.room); T=relayT; enterApp(); refreshPcsBtn(); }
+           LS.setItem('sm_room',pc.room); T=relayT; enterApp(); }
       catch(e){ $('#p-err').textContent=e.message; b.textContent='🖥 '+pcName(pc); }
     };
     wrap.appendChild(b);
   });
   host.appendChild(wrap);
-  host.appendChild(el('div','cwd','새 PC 를 추가하려면 아래에 페어링 링크를 붙여넣거나 QR 을 스캔하세요.'));
 }
 
 // ---- 연결 해제 / 완전 로그아웃 ----
@@ -3429,67 +3486,66 @@ function clearPairing(all){
   try{ conn.devToken=''; }catch(e){}
   setTitle(''); const sel=$('#pcname'); if(sel) sel.classList.add('hidden');   // 헤더 PC 표시 숨김
 }
-function showLogoutChoice(){
+// 폰 쪽 해제 2종(B-3/DR-2): 행 단위 = unpairPc(이 PC 페어링 해제), 기기 단위 = resetDevice(이 기기 초기화).
+// 0.10.0: 폰에서 해제는 로컬 제거뿐 → 부 문장이 정직하게 알린다(E-D4). 0.11.0 이 self-revoke 를 붙이면
+// pv ≥ 신형 Host 항목에서만 이 줄이 빠진다(E-D17). 상황 줄 이유는 sm_pair_reason 에 남겨 #pair 가 1회 소비한다.
+const UNPAIR_SUB_LOCAL='이 폰에서만 제거됩니다 — PC 의 📱 기기 목록에서도 삭제하세요.';
+function setPairReason(k, name){ try{ LS.setItem('sm_pair_reason', JSON.stringify({k, name:name||''})); }catch(e){} }
+function pairSituationText(){
+  let r=null; try{ r=JSON.parse(LS.getItem('sm_pair_reason')||'null'); }catch(e){ r=null; }
+  LS.removeItem('sm_pair_reason');
+  const n=(r&&r.name)?('"'+r.name+'"'):'이 PC';
+  if(r&&r.k==='unpaired') return {text:'이 폰에서 '+n+' 를 제거했습니다 — PC 에서도 기기를 삭제하세요. 새 PC 는 아래 QR 로.', crit:false};
+  if(r&&r.k==='unpaired_server') return {text:n+' 페어링을 해제했습니다. 새 PC 는 아래 QR 로.', crit:false};
+  if(r&&r.k==='removed_by_pc') return {text:'⛔ PC 에서 이 기기의 페어링이 해제됐습니다 — 새 QR 을 스캔하세요.', crit:true};
+  if(r&&r.k==='reset') return {text:'이 기기를 초기화했습니다. 다시 쓰려면 QR 을 스캔하세요.', crit:false};
+  if(pcsLoad().length) return {text:'접속할 PC 를 고르거나, 새 PC 의 QR 을 스캔하세요.', crit:false};
+  return {text:'아직 페어링한 PC 가 없습니다. PC 의 ClewPath 에서 📱 → ＋ 기기 추가 로 QR 을 만드세요.', crit:false};
+}
+function applyPairSituation(){
+  const p=$('#p-sit'); if(!p) return;
+  const s=pairSituationText(); p.textContent=s.text; p.className='sit'+(s.crit?' crit':'');
+}
+function unpairPc(room){
+  const pc=pcsLoad().find(x=>x.room===room); const name=pc?pcName(pc):room;
+  return confirmSheet({title:'이 PC 페어링 해제', main:'"'+name+'" 의 페어링을 해제할까요?', sub:UNPAIR_SUB_LOCAL,
+    action:'페어링 해제', danger:true, busyText:'해제 중…',
+    run: async()=>{
+      const cur=LS.getItem('sm_room')===room;
+      pcsRemove(room);
+      if(!cur) return;
+      // 현재 PC 였으면: 다른 PC 가 있으면 최근 것으로 전환, 없으면 #pair(상황 줄)로.
+      clearPairing(false);
+      const next=pcsLoad().sort((a,b)=>(b.last||0)-(a.last||0))[0];
+      if(next){ pcsActivate(next.room); }
+      else { setPairReason('unpaired', name); }
+      setTimeout(()=>location.reload(), 300);
+    }}).then(ok=>{ if(ok) toast('"'+name+'" 페어링 해제됨'); return ok; });
+}
+function resetDevice(){
   const n=pcsLoad().length;
-  const body=el('div');
-  const line=(t)=>body.appendChild(el('div','cwd',t));
-  line('PC 에 저장된 클로드 세션은 삭제되지 않습니다. 이 브라우저에 저장된 접속 정보만 지웁니다.');
-  const b1=el('button','btn','🔌 연결 해제');
-  b1.onclick=()=>{ clearPairing(false); closeModal();
-    toast('연결을 해제했습니다'); setTimeout(()=>location.reload(),400); };
-  const b1n=el('div','cwd','현재 PC 접속만 끊습니다. 페어링해 둔 PC 목록('+n+'대)은 남아 있어 다시 고르면 바로 연결됩니다.');
-  b1n.style.margin='6px 0 12px';
-  const b2=el('button','btn danger','🧹 이 기기에서 완전 로그아웃');
-  b2.onclick=()=>{
-    if(!confirm('이 브라우저에 저장된 모든 접속 자격과 PC 목록('+n+'대)을 지웁니다. 다시 쓰려면 QR 을 새로 스캔해야 합니다. 계속할까요?'))return;
-    clearPairing(true); closeModal();
-    toast('모두 지웠습니다'); setTimeout(()=>location.reload(),400); };
-  const b2n=el('div','cwd','폰을 양도·분실하거나 남의 기기에서 썼다면 이걸 쓰세요. 저장된 자격이 전부 사라집니다.');
-  b2n.style.margin='6px 0 0';
-  body.appendChild(b1); body.appendChild(b1n);
-  body.appendChild(b2); body.appendChild(b2n);
-  openModal('⏻ 연결 해제', body);
+  return confirmSheet({title:'이 기기 초기화', main:'이 기기에 저장된 모든 페어링(PC '+n+'대)·접속 자격·암호화 키를 지울까요?',
+    sub:'PC 에 있는 클로드 세션은 그대로입니다. 지운 뒤 다시 쓰려면 QR 을 새로 스캔해야 합니다. PC 쪽 📱 기기 목록의 항목은 남으니 거기서도 삭제하세요.',
+    action:'초기화', danger:true, busyText:'초기화 중…',
+    run: async()=>{ clearPairing(true); setPairReason('reset'); setTimeout(()=>location.reload(), 300); }});
 }
 
 // ---- PC 전환 (여러 PC 를 페어링해 두고 골라 접속) ----
-function refreshPcsBtn(){
-  const b=$('#btn-pcs'); if(!b) return;
-  const list=pcsLoad();
-  if(MODE!=='relay'||list.length===0){ b.classList.add('hidden'); return; }
-  b.classList.remove('hidden');
-  const cur=list.find(x=>x.room===LS.getItem('sm_room'));
-  b.title='PC 전환'+(cur?(' — 현재: '+pcName(cur)):'')+` (${list.length}대)`;
-}
 function showPcs(){
   const list=pcsLoad(), curRoom=LS.getItem('sm_room');
   const body=el('div');
-  body.appendChild(el('div','cwd','페어링해 둔 PC 목록입니다. 선택하면 그 PC 로 전환합니다.'));
-  const wrap=el('div'); wrap.style.marginTop='8px';
+  const wrap=el('div');
   list.sort((a,b)=>(b.last||0)-(a.last||0)).forEach(pc=>{
-    const row=el('div','devrow'); const info=el('div');
-    const isCur=pc.room===curRoom;
-    info.appendChild(el('div','devname',(isCur?'✅ ':'🖥 ')+pcName(pc)));
-    const meta=[pc.room.slice(0,14)+'…'];
-    if(pc.last) meta.push('최근 '+relTs(Math.floor(pc.last/1000)));
-    if(!(pc.cs&&pc.cp)) meta.push('구 방식(공유토큰)');
-    info.appendChild(el('div','devmeta',meta.join(' · ')));
-    row.appendChild(info);
-    if(!isCur){
-      const go=el('button','btn ghost sm','전환');
-      go.onclick=()=>{ closeModal(); switchToPc(pc); };
-      row.appendChild(go);
-    }
-    const rn=el('button','btn ghost sm','✎');
-    rn.title='이름 변경';
-    rn.onclick=()=>{ const n=prompt('이 PC 의 표시 이름', pcName(pc));
-      if(n!==null){ pcsSetName(pc.room, n); showPcs(); refreshPcsBtn(); } };
-    row.appendChild(rn);
-    const del=el('button','btn ghost sm','🗑');
-    del.title='목록에서 제거';
-    del.onclick=()=>{ if(!confirm('"'+pcName(pc)+'" 을 목록에서 제거할까요? (PC 자체는 그대로이며, 다시 페어링하면 됩니다)'))return;
-      pcsRemove(pc.room); showPcs(); refreshPcsBtn(); };
-    row.appendChild(del);
-    wrap.appendChild(row);
+    const isCur=pc.room===curRoom, legacy=!(pc.cs&&pc.cp);
+    const btns=[];
+    if(!isCur){ const go=el('button','btn ghost sm','전환'); go.onclick=()=>{ closeModal(); switchToPc(pc); }; btns.push(go); }
+    const rn=el('button','btn ghost sm','✎'); rn.title='이름 변경';
+    rn.onclick=()=>{ const n=prompt('이 PC 의 표시 이름', pcName(pc)); if(n!==null){ pcsSetName(pc.room, n); showPcs(); } };
+    btns.push(rn);
+    const un=el('button','btn ghost sm','페어링 해제'); un.onclick=()=>unpairPc(pc.room); btns.push(un);
+    wrap.appendChild(pairRow({name:(isCur?'✅ ':'🖥 ')+pcName(pc), buttons:btns,
+      chip: legacy?{icon:'🔗', text:'공유 자격(구형)', tone:'warn', dimtext:true}:null,
+      meta:[pc.room.slice(0,14)+'…', pc.last?('최근 '+relTs(Math.floor(pc.last/1000))):null]}));
   });
   if(!list.length) wrap.appendChild(el('div','cwd','아직 페어링한 PC 가 없습니다.'));
   body.appendChild(wrap);
@@ -3499,9 +3555,9 @@ function showPcs(){
     const sc=el('button','btn','📷 QR 스캔으로 PC 추가'); sc.style.marginTop='10px';
     sc.onclick=()=>{ closeModal(); appScanPair(); };
     body.appendChild(sc);
-    body.appendChild(el('div','cwd','추가할 PC 의 로컬 웹(127.0.0.1:5100) → 📱 → ＋새 기기 추가 의 QR 을 비추세요.'));
+    body.appendChild(el('div','cwd','추가할 PC 의 로컬 웹(127.0.0.1:5100) → 📱 → ＋ 기기 추가 의 QR 을 비추세요.'));
   } else {
-    body.appendChild(el('div','cwd','다른 PC 를 추가하려면 그 PC 의 로컬 웹에서 📱 → ＋새 기기 추가 로 QR 을 만들어 스캔하세요.'));
+    body.appendChild(el('div','cwd','다른 PC 를 추가하려면 그 PC 의 로컬 웹에서 📱 → ＋ 기기 추가 로 QR 을 만들어 스캔하세요.'));
   }
   openModal('🖧 내 PC', body);
 }
@@ -3576,8 +3632,8 @@ function showSettings(){
     const s=document.createElement('small'); s.textContent=parts.join(' · '); st.appendChild(s);
     info.appendChild(st); body.appendChild(info); }
   if(MODE==='relay'){
-    row('🔄','PC 전환 · 관리','저장된 PC 목록 · 이름 변경 · 제거',showPcs);
-    row('🚪','연결 해제','이 기기에 저장된 접속 자격을 지웁니다',()=>T.logout());
+    row('🖧','내 PC','저장된 PC · 전환 · 이름 변경 · 페어링 해제',showPcs);
+    row('🧹','이 기기 초기화','저장된 페어링·접속 자격·암호화 키를 모두 지웁니다',resetDevice);
   }
 
   sec('알림');
@@ -3716,7 +3772,7 @@ function doPair(){
     LS.setItem('sm_room',room);
     if(token) LS.setItem('sm_token',token); else LS.removeItem('sm_token');
     pcsUpsert({room, cs, cp, dev, name:(a&&a.data&&a.data.hostname)||'', pv:(a&&a.data&&a.data.pv)|0});
-    T=relayT; enterApp(); refreshPcsBtn();
+    T=relayT; enterApp();
   }).catch(e=>{ conn._pairing=false; $('#p-err').textContent=e.message; $('#p-go').textContent='연결'; });
 }
 
@@ -3735,10 +3791,6 @@ function curPcLabel(){
   const pc=pcsLoad().find(x=>x.room===room);
   return pc ? pcName(pc) : roomLabel(room);
 }
-// 로컬 origin 에 저장하는 '릴레이 PC 목록 거울'(room+name 만, 토큰 없음). 릴레이 저장소는
-// origin 이 달라 직접 못 읽어, 팝업(첫 파티 릴레이 페이지)이 postMessage 로 넘겨준 걸 여기 담는다.
-function relayPcsLoad(){ try{ const a=JSON.parse(LS.getItem('sm_pcs_relay')||'[]'); return Array.isArray(a)?a:[]; }catch(e){ return []; } }
-function relayPcsSave(a){ LS.setItem('sm_pcs_relay', JSON.stringify(a)); }
 function refreshPcSelect(){
   const sel=$('#pcname'); if(!sel) return;
   const curRoom=LS.getItem('sm_room');
@@ -3751,24 +3803,15 @@ function refreshPcSelect(){
     const seen=new Set();
     pcsLoad().forEach(pc=>{ opts.push({v:pc.room, t:'🖥 '+pcName(pc)}); seen.add(pc.room); });
     if(curRoom && !seen.has(curRoom)) opts.push({v:curRoom, t:'🖥 '+roomLabel(curRoom)});
-  } else {
-    // 로컬: 릴레이에서 동기화해 둔 외부 PC 목록. 고르면 릴레이로 이동해 그 PC 가 선택된다.
-    relayPcsLoad().forEach(pc=>{ opts.push({v:'relay:'+pc.room, t:'🖥 '+(pc.name||roomLabel(pc.room))}); });
-    opts.push({v:'__sync__', t:'🔄 릴레이에서 PC 목록 동기화'});
   }
+  // 로컬 화면은 localhost 만(E-4): 릴레이 PC 목록 미러(sm_pcs_relay)·팝업 동기화는 0.10.0 에서 제거.
   sel.innerHTML='';
   opts.forEach(o=>{ const op=document.createElement('option'); op.value=o.v; op.textContent=o.t; sel.appendChild(op); });
   sel.value = (MODE==='local') ? '__local__' : (curRoom||(opts[0]&&opts[0].v)||'');
   setTitle(curPcLabel());
-  sel.classList.remove('hidden');
+  // 선택지가 1개 이하면 select 는 소음(DR-3) — 숨기고 제목 텍스트만 남긴다(로컬·릴레이 공통)
+  if(opts.length<=1) sel.classList.add('hidden'); else sel.classList.remove('hidden');
 }
-// 릴레이 목록 동기화 — 릴레이 앱을 팝업으로 열면 그 페이지가 자기 목록을 postMessage 로 넘긴다.
-function syncRelayPcs(){
-  const w=window.open(RELAY_APP_URL+'?pcexport='+encodeURIComponent(location.origin),
-                      'clewpath_pcsync','width=440,height=340');
-  if(!w) toast('팝업이 차단됐습니다 — 팝업 허용 후 다시 시도하세요.');
-}
-// 팝업(릴레이)에서 넘어온 PC 목록 수신 — 릴레이 origin 만 신뢰, room+name 만 저장.
 // 로컬 iframe 터미널의 화면 인계 통지(v0.9.6): terminal.html 이 서버 통지를 감지하면 같은 origin 으로
 // {type:'clewpath-term', event:'taken', id, fork} 를 보낸다 → 그 탭을 '빼앗김'으로(릴레이 모드의 스트림 감지와 동일 결과).
 // 되찾기는 탭 클릭 → 확인창 → iframe 리로드(attach 의 wasTaken). 자동으로 되찾지 않는다(핑퐁 차단).
@@ -3778,42 +3821,19 @@ function onLocalTermMessage(ev){
   const rec=findTab(d.fork||d.id); if(!rec||rec.taken) return;
   rec.taken=true; renderTabBarSoon();
 }
-function onRelayPcsMessage(ev){
-  try{
-    if(ev.origin !== new URL(RELAY_APP_URL).origin) return;
-    const d=ev.data;
-    if(d && d.type==='clewpath_pcs' && Array.isArray(d.pcs)){
-      relayPcsSave(d.pcs.map(x=>({room:String(x.room||''),name:String(x.name||'')})).filter(x=>x.room));
-      refreshPcSelect();
-      toast('릴레이 PC 목록 동기화됨 ('+d.pcs.length+'대)');
-    }
-  }catch(e){}
-}
-// 릴레이 앱이 ?pcexport 로 열렸을 때: 자기 PC 목록(room+name)을 opener(로컬)로 넘기고 끝.
-function doExport(target){
-  const ok=/^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(target||'');   // 로컬 오리진만
-  if(ok && window.opener){
-    const list=pcsLoad().map(pc=>({room:pc.room, name:pc.name||''}));         // 토큰 제외
-    try{ window.opener.postMessage({type:'clewpath_pcs', pcs:list}, target); }catch(e){}
-  }
-  document.body.innerHTML='<div style="padding:24px;font:15px system-ui;color:#e6edf3;'+
-    'background:#0d1117;height:100vh">PC 목록을 로컬 앱으로 전송했습니다. 이 창은 닫으셔도 됩니다.</div>';
-}
 async function switchToPc(pc){
   pcsActivate(pc.room);
   toast(pcName(pc)+' 로 전환 중…');
   try{ conn.logout(); }catch(e){}
   conn._stopped=false; conn._retry=0;
   try{ await conn.connect(pc.room, LS.getItem('sm_token')||'');
-       T=relayT; enterApp(); refreshPcsBtn(); refreshPcSelect(); toast(pcName(pc)+' 연결됨'); }
+       T=relayT; enterApp(); refreshPcSelect(); toast(pcName(pc)+' 연결됨'); }
   catch(e){ toast('전환 실패: '+e.message); refreshPcSelect(); }
 }
 function onPcSelect(){
   const sel=$('#pcname'); if(!sel) return;
   const v=sel.value;
   if(v==='__local__'){ if(MODE==='local') return; location.href=localAppUrl(); return; }  // localhost 로
-  if(v==='__sync__'){ syncRelayPcs(); refreshPcSelect(); return; }                        // 목록 동기화
-  if(v.indexOf('relay:')===0){ location.href=RELAY_APP_URL+'?switch='+encodeURIComponent(v.slice(6)); return; } // 릴레이로 그 PC
   if(v===LS.getItem('sm_room')){ return; }                                                // 현재와 같음
   if(MODE==='relay'){ const pc=pcsLoad().find(x=>x.room===v)||{room:v,name:''}; switchToPc(pc); }
 }
@@ -3895,12 +3915,8 @@ async function refreshVer(){
 }
 
 // 모드별 부팅: local=페어링 없이 바로, relay=room/token 페어링
-const _pcexport=new URLSearchParams(location.search).get('pcexport');
-if(_pcexport){
-  // 로컬 앱이 목록 동기화를 위해 이 릴레이 페이지를 팝업으로 열었다 — 목록만 넘기고 끝(부팅 안 함).
-  doExport(_pcexport);
-}else if(MODE==='local'){
-  window.addEventListener('message', onRelayPcsMessage);   // 팝업 동기화 수신
+if(MODE==='local'){
+  LS.removeItem('sm_pcs_relay');                             // 0.10.0: 릴레이 PC 목록 미러 폐지(E-4) — 구버전 잔재 정리
   window.addEventListener('message', onLocalTermMessage);  // 탭 iframe(terminal.html) → 화면 인계 통지
   refreshConnBadge();                            // 접속 인증 모드 배지(JWT/fallback)
   setInterval(refreshConnBadge, 60000);
@@ -3940,10 +3956,10 @@ if(_pcexport){
   if(appScanAvailable()){ const sb=$('#p-scan'); if(sb){ sb.hidden=false; sb.onclick=appScanPair; } }
   // 저장된 자격이 있으면 자동 접속(기기 자격 cs 또는 구 공유 토큰)
   const hasCs=!!(LS.getItem('sm_cs')&&LS.getItem('sm_cp'));
-  renderPairPcs();                       // 저장된 PC 가 있으면 페어링 화면에서 바로 고를 수 있게
+  renderPairPcs(); applyPairSituation(); // 저장된 PC 가 있으면 페어링 화면에서 바로 고를 수 있게 + 상황 줄 1개(DR-1)
   if(room&&(hasCs||token)){
     $('#p-err').textContent=''; $('#p-go').textContent='연결 중…';
-    conn.connect(room,token).then(()=>{ LS.setItem('sm_room',room); T=relayT; enterApp(); refreshPcsBtn(); })
+    conn.connect(room,token).then(()=>{ LS.setItem('sm_room',room); T=relayT; enterApp(); })
       .catch(e=>{ $('#p-err').textContent=e.message; $('#p-go').textContent='연결'; });
   }
 }

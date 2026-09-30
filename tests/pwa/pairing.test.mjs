@@ -116,3 +116,68 @@ test("doPair: 공유토큰(dev 없음) 경로는 auth 없이 그대로 진입한
   assert.equal(ev(ctx, "pcsLoad()[0].room"), "rmS");
   ev(ctx, "conn._stopped = true"); ws.close();
 });
+
+// ---- T5/DT1~3 (design DR-1/2/3/4/6/7): 상황 줄·행 어휘·칩·헤더 select·해제 진입점 ----
+test("pairSituationText: sm_pair_reason 을 1회 소비해 4 진입 문구를 만들고, 없으면 저장된 PC 유무로 기본 문구", async () => {
+  const ctx = await load();
+  let s = ev(ctx, "pairSituationText()");
+  assert.ok(s.text.startsWith("아직 페어링한 PC 가 없습니다") && s.crit === false);
+  ev(ctx, "setPairReason('unpaired', 'MY-PC')");
+  s = ev(ctx, "pairSituationText()");
+  assert.ok(s.text.includes('"MY-PC"') && s.text.includes("PC 에서도 기기를 삭제"), "0.10.0 은 '제거' + PC 에서도 삭제(E-D4)");
+  assert.equal(ctx.localStorage.getItem("sm_pair_reason"), null, "1회 소비");
+  ev(ctx, "setPairReason('removed_by_pc')");
+  s = ev(ctx, "pairSituationText()"); assert.ok(s.text.startsWith("⛔") && s.crit === true);
+  ev(ctx, "setPairReason('reset')");
+  s = ev(ctx, "pairSituationText()"); assert.ok(s.text.includes("초기화했습니다"));
+  ev(ctx, "setPairReason('unpaired_server', 'X')");
+  s = ev(ctx, "pairSituationText()"); assert.ok(s.text.includes("페어링을 해제했습니다"));
+  ev(ctx, "pcsUpsert({room:'rm1', cs:'c', cp:'p', dev:'d'})");
+  s = ev(ctx, "pairSituationText()"); assert.ok(s.text.includes("접속할 PC 를 고르거나"));
+});
+
+test("pairRow/statusChip: 이름+짧은 id+칩(≤1, 아이콘+텍스트), off 면 버튼만 disabled(_keep 제외)", async () => {
+  const ctx = await load();
+  // 버튼은 평범한 객체로(스텁 엘리먼트는 임의 속성 읽기가 함수를 돌려준다) — disabled 대입만 검증
+  const row = ev(ctx, "const b1 = {}; const b2 = {_keep: true};"
+    + "globalThis.__b = [b1, b2]; pairRow({name:'iPhone', id:'abcd1234', chip:{icon:'🔗', text:'공유 자격(구형)', tone:'warn', dimtext:true}, meta:['최근 1분 전', null], off:true, buttons:[b1, b2]})");
+  assert.ok(String(row.className).includes("off"));
+  const [b1, b2] = ev(ctx, "globalThis.__b");
+  assert.equal(b1.disabled, true); assert.equal(b2.disabled, undefined);
+  const chip = ev(ctx, "statusChip({icon:'📵', text:'해제됨', tone:'crit'})");
+  assert.equal(chip.textContent, "📵 해제됨"); assert.ok(String(chip.className).includes("st-crit"));
+  assert.equal(ev(ctx, "statusChip(null)"), null);
+});
+
+test("refreshPcSelect: 옵션이 1개 이하면 select 를 숨기고 제목만(DR-3), 2개 이상이면 보인다", async () => {
+  const ctx = await load();
+  ev(ctx, "setTitle = () => {}; curPcLabel = () => 'x';");
+  const sel = stubEl("select"); const cls = new Set();
+  sel.classList = { add: (c) => cls.add(c), remove: (c) => cls.delete(c), contains: (c) => cls.has(c), toggle: () => {} };
+  sel.appendChild = () => {}; ctx.document._register("pcname", sel);
+  ev(ctx, "matchMedia = () => ({ matches: true })");
+  ev(ctx, "pcsUpsert({room:'rm1', cs:'c', cp:'p', dev:'d'}); localStorage.setItem('sm_room','rm1'); refreshPcSelect()");
+  assert.ok(cls.has("hidden"), "PC 1대 → select 숨김");
+  ev(ctx, "pcsUpsert({room:'rm2', cs:'c', cp:'p', dev:'d'}); refreshPcSelect()");
+  assert.ok(!cls.has("hidden"), "PC 2대 → select 표시");
+  assert.equal(ev(ctx, "typeof relayPcsLoad"), "undefined", "sm_pcs_relay 미러 코드 제거(E-4)");
+  assert.equal(ev(ctx, "typeof refreshPcsBtn"), "undefined", "죽은 #btn-pcs 코드 제거(B-6)");
+  assert.equal(ev(ctx, "typeof showLogoutChoice"), "undefined", "로그아웃 선택 모달 삭제(DR-2)");
+  assert.equal(ev(ctx, "typeof confirmSheet"), "function"); assert.equal(ev(ctx, "typeof unpairPc"), "function"); assert.equal(ev(ctx, "typeof resetDevice"), "function");
+});
+
+test("unpairPc 실행부: 현재 PC 를 해제하면 다른 PC 로 전환, 마지막이면 상황 줄 이유를 남긴다", async () => {
+  const ctx = await load();
+  const reloads = []; ev(ctx, "location.reload = () => { globalThis.__reload = (globalThis.__reload||0)+1; }; setTitle = () => {}; toast = () => {};");
+  // confirmSheet 를 즉시 실행하는 스텁으로 바꿔 run 만 검증
+  ev(ctx, "confirmSheet = async (o) => { await o.run(); return true; }");
+  ev(ctx, "pcsUpsert({room:'rmA', cs:'ca', cp:'pa', dev:'da'}); pcsUpsert({room:'rmB', cs:'cb', cp:'pb', dev:'db'}); pcsActivate('rmA')");
+  await ev(ctx, "unpairPc('rmA')");
+  same(ev(ctx, "pcsLoad().map(x => x.room)"), ["rmB"]);
+  assert.equal(ctx.localStorage.getItem("sm_room"), "rmB", "다른 PC 로 전환");
+  assert.equal(ctx.localStorage.getItem("sm_devtoken"), "db");
+  await ev(ctx, "unpairPc('rmB')");
+  same(ev(ctx, "pcsLoad()"), []);
+  assert.equal(ctx.localStorage.getItem("sm_room"), null);
+  assert.ok(String(ctx.localStorage.getItem("sm_pair_reason")).includes("unpaired"), "마지막 PC → #pair 상황 줄 이유");
+});

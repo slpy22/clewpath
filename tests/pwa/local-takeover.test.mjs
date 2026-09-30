@@ -68,7 +68,7 @@ test("앱(로컬): iframe 의 taken 통지 → 탭 taken(점선) → 탭 클릭 
   assert.equal(ev(ctx, "MODE"), "local");
   pinPaneDetail(ctx);
   const handlers = ctx.__winListeners.message || [];
-  assert.ok(handlers.length >= 2, "로컬 부팅이 message 리스너(팝업 동기화 + 터미널 통지)를 등록");
+  assert.ok(handlers.length >= 1, "로컬 부팅이 message 리스너(터미널 통지)를 등록 — 팝업 동기화 리스너는 0.10.0(E-4)에서 제거");
   const fire = (origin, data) => handlers.forEach((h) => h({ origin, data }));
   ev(ctx, "TABS.list = []; TABS.active = null");
   await ctx.loadTerminal({ session_id: A, title: "A" }, false);

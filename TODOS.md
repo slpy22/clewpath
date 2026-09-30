@@ -49,7 +49,8 @@
 
 ### Phase 1-a — Host 0.10.0 (UI·용어·Host 내부 준비, 007 무변) — eng T1~T7 + design DT1~DT7
 - [x] T1 devices `_mutate`+RLock·`clean_name`·`set_name_if_empty`·`client_scoped` / T2 `Connector._auth()`+폰 이름 보고 / T3 재발급 재정렬(issue→revoke)·CP 설정 시 폴백 금지(503)·구형 배지 필드 — 2026-09-30, 테스트 +20(383)
-- [ ] T4 `connect()` auth 결과 / T5 `#pair` 1벌·용어·'PC 에서도 삭제' 문구·공용 함수·`sm_pcs_relay` 전부 삭제·pv 저장 / T6 브리지 `?relay=`+E-2 버튼+`persistSync`(다음 TestFlight) / T7 007 `test_cp_client_credentials.py`(revoke 4건, 배포 없음)
+- [x] T4 `connect()` auth 결과·페어링 실패 시 이전 자격 복원·폰 이름 보고·pcsSetName(2026-09-30) / T5+DT1~4 `#pair` 상황 줄 1개·행 어휘(pairRow/statusChip 5기호)·confirmSheet(4곳)·해제 진입점(행 [페어링 해제]·설정 [이 기기 초기화], 로그아웃 선택 모달 삭제)·헤더 select ≤1 숨김·`sm_pcs_relay`/`#btn-pcs` 제거·이름 없이 QR·🩺 줄·a11y(44px·focus-visible·dialog·ESC·aria-live) — PWA 테스트 53
+- [ ] T6 브리지 `?relay=`+E-2 버튼+`persistSync`(다음 TestFlight) / DT5 QR 모달 ✅ 연결됨 전환 / DT6 E-2 타이머 / DT7 ITP 안내 / T7 007 `test_cp_client_credentials.py`(revoke 4건, 배포 없음)
 - [ ] 회귀 테스트 5건(잠금·notice 순서·재정렬·브리지·로컬 select) → release.ps1 0.10.0
 
 ### Phase 1-b — Host 0.11.0 + 007 (self-revoke·devsync·CP) — eng T8~T15
