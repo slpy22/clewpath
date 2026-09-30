@@ -91,3 +91,48 @@ def test_reissue_revoke_unconfirmed_is_logged_not_fatal(client, monkeypatch, cap
 def test_reissue_revoked_device_404(client, monkeypatch):
     d = devices.add_device("a"); devices.revoke(d["id"])
     assert client.post(f"/api/owner/devices/{d['id']}/reissue", json={}).status_code == 404
+
+
+# ---- 0.11.0 (E-D7/E-D15): 폐기 결과 불명 → 행 유지(delete_pending/cp_pending), 재발급 pending_cpub, notice ----
+
+def test_delete_keeps_row_pending_when_revoke_unconfirmed(client, monkeypatch):
+    monkeypatch.setenv("SM_CP_URL", "https://cp.test")
+    d = devices.add_device("a"); devices.set_client_public_id(d["id"], "cpub_a")
+    from session_manager import connector as C
+    drops = []
+    monkeypatch.setattr(C, "request_drop_device", lambda did, wait_s=2.5, notice=None: drops.append((did, notice)) or 0)
+    _calls(monkeypatch, revoke=False)
+    r = client.post(f"/api/owner/devices/{d['id']}/delete", json={})
+    assert r.status_code == 200 and r.json()["deleted"] is False and r.json()["pending"] is True
+    row = devices.list_devices()[0]
+    assert row["revoked"] and row["revoked_by"] == "pc" and row["delete_pending"] and row["cp_pending"]
+    assert drops == [(d["id"], "device_removed")], "notice → 해체는 어느 경우든"
+    assert devices.verify(d["token"]) is None, "토큰은 즉시 무효"
+    # 폐기가 확인되면 행 제거(delete 재호출 = 정상 삭제)
+    _calls(monkeypatch, revoke=True)
+    r = client.post(f"/api/owner/devices/{d['id']}/delete", json={})
+    assert r.json()["deleted"] is True and devices.list_devices() == []
+
+
+def test_reissue_records_pending_cpub_then_confirms_and_pending_on_unconfirmed_revoke(client, monkeypatch):
+    monkeypatch.setenv("SM_CP_URL", "https://cp.test")
+    d = devices.add_device("a"); devices.set_client_public_id(d["id"], "cpub_old")
+    from session_manager import connector as C
+    drops = []
+    monkeypatch.setattr(C, "request_drop_device", lambda did, wait_s=2.5, notice=None: drops.append((did, notice)) or 0)
+    _calls(monkeypatch, issue={"client_public_id": "cpub_new", "client_secret": "s"}, revoke=False)
+    r = client.post(f"/api/owner/devices/{d['id']}/reissue", json={})
+    assert r.status_code == 200
+    snap = devices.sync_snapshot()[0]
+    assert snap["cpub"] == "cpub_new" and snap["pending_cpub"] is None, "확정 뒤 pending_cpub 정리"
+    assert snap["cp_pending"] == ["revoke:cpub_old"], "옛 cpub 폐기 불명 → devsync 재시도 대상"
+    assert drops == [(d["id"], "device_reissued")]
+
+
+def test_list_reports_cp_synced_and_kicks_devsync(client, monkeypatch):
+    from session_manager import devsync
+    kicks = []
+    monkeypatch.setattr(devsync, "kick", lambda: kicks.append(1))
+    devices.set_cp_synced(1700000000)
+    r = client.get("/api/owner/devices").json()
+    assert r["cp_synced"] == 1700000000 and kicks == [1]

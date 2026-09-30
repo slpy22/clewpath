@@ -221,6 +221,34 @@ def revoke_client_credential(client_public_id: str) -> bool:
         return False
 
 
+def client_status(public_ids: list[str]) -> dict | None:
+    """기기 자격들의 CP 상태 일괄 조회(0.11.0 devsync). 실패/타임아웃은 None(= 불명, 호출자는 아무것도 바꾸지 않는다).
+
+    응답 {cpub: {status, revoked_at, last_used_at, device_id}} — 내 커넥터 것만 온다(남의 것·없는 것은 빠짐).
+    """
+    base = cp_url()
+    creds = load_creds()
+    ids = [x for x in (public_ids or []) if x][:200]
+    if not base or not creds:
+        return None
+    if not ids:
+        return {}
+    try:
+        with httpx.Client() as client:
+            r = client.post(f"{base}/client/status",
+                            json={"public_id": creds["credential_public_id"],
+                                  "secret": creds["secret"], "public_ids": ids},
+                            timeout=10)
+        if r.status_code != 200:
+            log(f"[cp] client status 조회 실패 http={r.status_code}")
+            return None
+        st = r.json().get("statuses")
+        return st if isinstance(st, dict) else None
+    except Exception as e:  # noqa: BLE001
+        log(f"[cp] client status 조회 오류: {type(e).__name__}")
+        return None
+
+
 def fetch_jwt(display_name: str = "") -> dict | None:
     """agent JWT 를 조달한다. 실패하면 None(=fail-open, 호출자는 공유토큰으로 계속).
 

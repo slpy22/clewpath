@@ -36,8 +36,8 @@ DEFAULT_LOCAL_BASE = os.environ.get(
     "SM_LOCAL_BASE", "http://127.0.0.1:5100").rstrip("/")
 
 # 릴레이 프레임 프로토콜 버전. 서버(릴레이)가 최소 지원 버전을 강제할 때 쓴다.
-# 프레임 형식이 호환 불가하게 바뀌면 올린다.
-PROTOCOL_VERSION = 1
+# 프레임 형식이 호환 불가하게 바뀌면 올린다. (정본은 아래 두 번째 정의 — 같은 값으로 유지)
+PROTOCOL_VERSION = 2
 
 
 def _client_version() -> str:
@@ -54,7 +54,9 @@ CLIENT_VERSION = _client_version()
 # 프로토콜 버전(기획서 §12-8): 앱은 스토어 심사 때문에 웹·Host 보다 늦게 갱신된다.
 # auth 에서 서로 pv 를 교환해, 규약이 어긋나면 클라이언트가 업데이트 안내를 띄운다.
 # 규약을 깨는 변경(프레임 형식·봉투 등)을 할 때만 올린다.
-PROTOCOL_VERSION = 1
+# 2 (0.11.0): 커넥터→폰 `notice`(device_removed/device_reissued), 폰→커넥터 `bye_device`, CP 상태 동기화.
+#   폰은 pv≥2 인 Host 에서만 self-revoke 를 '해제 완료' 로 표시한다(설계 E-D17). 구 폰은 notice 를 무시(무해).
+PROTOCOL_VERSION = 2
 
 
 def _log(msg: str) -> None:
@@ -175,16 +177,21 @@ def relay_config_from_env() -> dict | None:
 CURRENT = None
 
 
-def request_drop_device(device_id: str, wait_s: float = 1.5) -> int:
-    """서버 스레드(기기 삭제/재발급 API)에서 그 기기의 릴레이 연결을 즉시 끊는다. 커넥터 없으면 0."""
+def request_drop_device(device_id: str, wait_s: float = 2.5, notice: str | None = None) -> int:
+    """서버 스레드(기기 삭제/재발급 API)에서 그 기기의 릴레이 연결을 즉시 끊는다. 커넥터 없으면 0.
+
+    notice: 끊기 **전에** 그 기기의 cid 들에 보낼 통지 종류(device_removed/device_reissued, 설계 B-5·E-D5).
+    예외는 삼키되 로그로 남긴다(E-D15: 해체 실패가 조용히 0 으로 숨지 않게).
+    """
     c = CURRENT
     loop = getattr(c, "loop", None) if c is not None else None
     if c is None or loop is None:
         return 0
     try:
-        fut = asyncio.run_coroutine_threadsafe(c.drop_device(device_id), loop)
+        fut = asyncio.run_coroutine_threadsafe(c.drop_device(device_id, notice=notice), loop)
         return int(fut.result(timeout=wait_s))
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
+        _log(f"[devices] drop_device({device_id[:8]}) 실패: {type(e).__name__}: {e}")
         return 0
 
 
@@ -329,6 +336,18 @@ class Connector:
             if method == "ping":
                 await self.send({"v": 1, "type": "pong", "id": rid,
                                  **({"cid": cid} if cid is not None else {})})
+
+            elif method == "bye_device":
+                # 폰이 자기 자격을 CP 에서 self-revoke 한 뒤 알린다(B-4) → 등록부 revoked(by=phone) 📵 + 연결 해체.
+                # 인증된 자기 기기에만 적용(위 enforced 검사 통과 = authed). CP 동기화(devsync)가 없어도 즉시 반영.
+                dev = self.authed.get(cid) or {}
+                did = dev.get("id")
+                if did:
+                    changed = devices.mark_revoked(did, by="phone")
+                    await self._res(rid, True, data={"revoked": bool(changed)})
+                    await self.drop_device(did)
+                else:
+                    await self._res(rid, False, error="auth_required")
 
             elif method == "list_sessions":
                 q = {k: params[k] for k in ("q", "label", "limit")
@@ -622,24 +641,35 @@ class Connector:
                 return
         await q.put(frame.get("data"))
 
-    async def drop_device(self, device_id: str) -> int:
+    async def drop_device(self, device_id: str, notice: str | None = None) -> int:
         """기기 삭제/재발급/폐기 직후: 그 기기의 모든 연결(cid)을 인증 해제하고 스트림을 끊는다.
 
         CP 의 자격 폐기는 '다음 JWT 발급' 부터 막을 뿐, 이미 열린 릴레이 연결·터미널 스트림은
         별개다(0.9.8). 돌려주는 값은 끊은 연결 수.
+
+        notice(0.11.0, B-5/E-D5/E-D15): 해체 **앞에** 같은 WS 로 `notice` 프레임을 보낸다(순서 보장) — 폰이
+        '해제됨/재발급됨' 을 구별해 ⛔/🔄 를 보인다. 전송은 최선(1초 제한, 실패는 로그), 해체는 finally 로 무조건.
         """
-        n = 0
-        for cid, dev in list(self.authed.items()):
-            if dev.get("id") != device_id:
-                continue
-            for rid, task in list(self.streams.items()):
-                if self.req_cid.get(rid) == cid:
-                    task.cancel()
-            self.authed.pop(cid, None)
-            self.enc_cids.discard(cid)
-            n += 1
-        if n:
-            _log(f"[devices] 기기 {device_id} 연결 {n}개 해제(스트림 종료)")
+        cids = [cid for cid, dev in list(self.authed.items()) if dev.get("id") == device_id]
+        try:
+            if notice:
+                for cid in cids:
+                    try:
+                        await asyncio.wait_for(self.send({"v": 1, "type": "notice", "cid": cid,
+                                                          "kind": notice, "device": device_id}), 1.0)
+                    except Exception as e:  # noqa: BLE001
+                        _log(f"[devices] notice {notice} → {cid} 전송 실패: {type(e).__name__}")
+        finally:
+            n = 0
+            for cid in cids:
+                for rid, task in list(self.streams.items()):
+                    if self.req_cid.get(rid) == cid:
+                        task.cancel()
+                self.authed.pop(cid, None)
+                self.enc_cids.discard(cid)
+                n += 1
+            if n:
+                _log(f"[devices] 기기 {device_id} 연결 {n}개 해제(스트림 종료{', ' + notice if notice else ''})")
         return n
 
     # ---- 프레임 라우팅 ----

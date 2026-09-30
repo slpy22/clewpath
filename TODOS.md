@@ -55,8 +55,8 @@
 - [x] 회귀 테스트 5건(잠금·재정렬·브리지 relay·로컬 select·pcs 이름; notice 순서는 0.11.0 T10) → **release.ps1 0.10.0 게시·적용 완료(2026-09-30 10:41, Host 0.9.10→0.10.0, 태그 v0.10.0)**. 사장님 수동 확인: 폰 페어링 화면·해제 시트·PC 📱 목록 ✅ 연결됨·Safari '앱에서 열기'(앱은 다음 TestFlight)
 
 ### Phase 1-b — Host 0.11.0 + 007 (self-revoke·devsync·CP) — eng T8~T15
-- [ ] T8 007 `/client/status`(일괄·소유권)·`/client/revoke-self` + nginx limit_req (**/deploy-request 의뢰, 먼저**)
-- [ ] T9 devsync 스레드(기동+60s·5분·Event·점검중 건너뜀·잠금 밖·cp_pending·pending_cpub·meta.cp_synced)·📱 즉시 응답·`bye_device` / T10 `drop_device(notice=)` wait_for+finally·불명=pending·PROTOCOL_VERSION↑
+- [x] T8 007 `/client/status`(일괄·소유권 필터·200 상한)·`/client/revoke-self`(secret 검증·멱등) — 007 커밋 14b7841, **CP 배포는 /deploy-request 로 아직 안 함**(nginx limit_req 에 status 포함해 같이 의뢰)
+- [x] T9 `devsync.py`(기동+60s·5분·kick·최소 30s·잠금 밖 조회·(device_id,cpub) 재대조·cp_pending 재폐기·pending_cpub 정리·delete_pending 행 제거·meta.cp_synced·📵 웹푸시) + 📱 목록 즉시 응답+kick + `bye_device` / T10 `drop_device(notice=)` wait_for 1s+finally·request_drop_device 로그·삭제 불명→행 유지(pending)·재발급 pending_cpub·PROTOCOL_VERSION 2 — 2026-09-30, 테스트 +25
 - [ ] T11 폰 큐 `{cp,public_id,secret}`·persistSync 순서·B-7 성공 후 폐기·pv 게이팅·⛔/배지 / T12 `jsonl_log` 회전+pairing-audit+🩺+E-3 / T13 💤 90일 / T14 `tests/e2e` `-m e2e` 게이트 / T15 앱 오버레이 폐기·기기 모델 이름 → TestFlight
 
 ### Phase 2 (고도화) — 대기

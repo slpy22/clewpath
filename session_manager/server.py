@@ -317,6 +317,13 @@ async def _lifespan(app: FastAPI):
     except Exception as e:  # noqa: BLE001
         print(f"[monwatch] 시작 실패: {e}", flush=True)
 
+    # 기기 자격 CP 동기화(0.11.0): 기동 +60초 첫 실행·5분 주기·잠금 밖 네트워크. CP 미설정이면 무동작.
+    from session_manager import devsync as _devsync
+    try:
+        _devsync.start()
+    except Exception as e:  # noqa: BLE001
+        print(f"[devsync] 시작 실패: {e}", flush=True)
+
     # 자기 회복(0.9.2): 비정상 종료 의심이면 복구 푸시(마지막 로그 동봉), 설치본이면 런처 v2·5분 반복 보장
     from session_manager import liveness as _liveness, updater as _updater_mod
     try:
@@ -362,6 +369,7 @@ async def _lifespan(app: FastAPI):
         except Exception as e:  # noqa: BLE001
             print(f"[term] PTY 정리 실패: {e}", flush=True)
         _monwatch.stop()
+        _devsync.stop()
         for t in (task, upd_task):
             if t is not None:
                 t.cancel()
@@ -700,6 +708,9 @@ def create_app() -> FastAPI:
 
     @app.get("/api/owner/devices")
     def owner_devices_list():
+        # 등록부만 읽어 즉시 응답(E-D13). CP 상태는 devsync 스레드를 깨워 다음 재조회에 반영 — 목록이 CP 에 묶이지 않는다.
+        from session_manager import devsync
+        devsync.kick()
         return {"devices": devices.list_devices(), **devices.status()}
 
     @app.post("/api/owner/devices")
@@ -763,14 +774,21 @@ def create_app() -> FastAPI:
                 return JSONResponse({"error": "cp_unavailable",
                                      "message": "CP 연결 실패 — 잠시 후 다시 시도하세요. 기존 QR 은 그대로 유효합니다."},
                                     status_code=503)
+        if cc:
+            devices.set_pending_cpub(device_id, cc["client_public_id"])   # 확정 전 기록 — 여기서 죽어도 devsync 가 정리(E-D15)
         tok = devices.rotate_token(device_id)
         if not tok:
+            if cc:
+                devices.add_cp_pending(device_id, "revoke:" + cc["client_public_id"]); devices.set_pending_cpub(device_id, None)
             return JSONResponse({"error": "not_found_or_revoked"}, status_code=404)
-        connector.request_drop_device(device_id)   # 옛 자격의 열린 연결·스트림 즉시 종료
+        connector.request_drop_device(device_id, notice="device_reissued")   # notice → 옛 자격의 연결·스트림 종료
         if cc:
             devices.set_client_public_id(device_id, cc["client_public_id"])
+            devices.set_pending_cpub(device_id, None)                       # 확정
         if old_cpub and not cp_client.revoke_client_credential(old_cpub):
-            print(f"[devices] reissue {device_id[:8]}: old cpub revoke unconfirmed ({old_cpub[:12]}) - 0.11.0 sync will retry")
+            # 결과 불명(실패/타임아웃) → 행에 남기고 devsync 가 status 로 확인 후 재폐기(E-D15)
+            devices.add_cp_pending(device_id, "revoke:" + old_cpub)
+            print(f"[devices] reissue {device_id[:8]}: old cpub revoke unconfirmed ({old_cpub[:12]}) - devsync will retry")
         r = {"id": device_id, "name": name, "token": tok,
              "client_scoped": bool(cc), "room": _active_room()}
         r["pair_url"] = _pair_link(tok, cc)
@@ -798,14 +816,23 @@ def create_app() -> FastAPI:
         if not _is_local(request):
             return JSONResponse({"error": "이 PC(로컬)에서만 변경할 수 있습니다."},
                                 status_code=403)
-        # 기기 전용 client 자격증명도 함께 회수(안 하면 QR 이 계속 유효)
+        # 기기 전용 client 자격증명도 함께 회수(안 하면 QR 이 계속 유효). 회수 결과가 불명(실패/타임아웃)이면
+        # 행을 지우지 않고 revoked + delete_pending + cp_pending 으로 남긴다 — devsync 가 CP 에서 폐기를 확인한 뒤
+        # 행을 제거한다(E-D7/E-D15: 유령 cpub 방지). 열린 연결은 어느 경우든 지금 끊는다(notice 먼저).
         cpub = devices.get_client_public_id(device_id)
+        pending = False
         if cpub:
             from session_manager import cp_client
-            cp_client.revoke_client_credential(cpub)
-        r = {"deleted": devices.remove(device_id), **devices.status()}
-        connector.request_drop_device(device_id)   # 폐기는 다음 JWT 부터, 열린 연결은 여기서 끊는다
-        return r
+            if not cp_client.revoke_client_credential(cpub):
+                pending = True
+        connector.request_drop_device(device_id, notice="device_removed")
+        if pending:
+            devices.mark_revoked(device_id, by="pc")
+            devices.set_delete_pending(device_id, True)
+            devices.add_cp_pending(device_id, "revoke:" + cpub)
+            print(f"[devices] delete {device_id[:8]}: cpub revoke unconfirmed ({cpub[:12]}) - row kept as pending, devsync will retry")
+            return {"deleted": False, "pending": True, **devices.status()}
+        return {"deleted": devices.remove(device_id), "pending": False, **devices.status()}
 
     @app.post("/api/owner/devices/{device_id}/rename")
     def owner_devices_rename(device_id: str, request: Request,

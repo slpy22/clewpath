@@ -40,7 +40,7 @@ def _file():
 
 
 def _blank() -> dict:
-    return {"enforced": False, "devices": []}
+    return {"enforced": False, "devices": [], "meta": {}}
 
 
 def _data() -> dict:
@@ -53,6 +53,7 @@ def _data() -> dict:
         return _blank()
     d.setdefault("enforced", False)
     d.setdefault("devices", [])
+    d.setdefault("meta", {})
     return d
 
 
@@ -130,7 +131,10 @@ def list_devices() -> list[dict]:
                 "created": x.get("created"),
                 "last_seen": x.get("last_seen"),
                 "revoked": bool(x.get("revoked")),
+                "revoked_by": x.get("revoked_by"),                     # 'phone'(self-revoke 📵) | 'pc' | None
                 "client_scoped": bool(x.get("client_public_id")),
+                "cp_pending": bool(x.get("cp_pending")),               # 서버 폐기 확인 대기(⏳)
+                "delete_pending": bool(x.get("delete_pending")),       # 폐기 확인되면 행 제거
             })
         return out
     return _read(_f)
@@ -297,8 +301,124 @@ def rename(did: str, name: str) -> bool:
 
 
 def status() -> dict:
-    """UI 상태 요약."""
+    """UI 상태 요약(+ 🩺 진단: 마지막 CP 동기화 시각)."""
     def _f(d):
         active = sum(1 for x in d["devices"] if not x.get("revoked"))
-        return {"enforced": True, "active": active, "total": len(d["devices"])}
+        phone = sum(1 for x in d["devices"] if x.get("revoked") and x.get("revoked_by") == "phone")
+        return {"enforced": True, "active": active, "total": len(d["devices"]),
+                "phone_revoked": phone, "cp_synced": (d.get("meta") or {}).get("cp_synced")}
     return _read(_f)
+
+
+# ---- 0.11.0 CP 동기화(devsync)·self-revoke 지원 (eng E-D6/E-D7/E-D15) ----
+def mark_revoked(did: str, by: str = "pc") -> bool:
+    """폐기 표시 + 누가 했는지(by='phone' 이면 📵 폰에서 해제함). 이미 폐기면 False."""
+    def _f(d):
+        for x in d["devices"]:
+            if x["id"] == did and not x.get("revoked"):
+                x["revoked"] = True
+                x["revoked_by"] = by
+                x["revoked_at"] = _now()
+                return True
+        return None
+    return bool(_mutate(_f))
+
+
+def add_cp_pending(did: str, item: str) -> bool:
+    """CP 폐기 결과가 '불명'(실패/타임아웃)인 항목을 행에 남긴다 — devsync 가 status 로 확인 후 재폐기·정리."""
+    def _f(d):
+        for x in d["devices"]:
+            if x["id"] == did:
+                lst = list(x.get("cp_pending") or [])
+                if item in lst:
+                    return None
+                lst.append(item)
+                x["cp_pending"] = lst
+                return True
+        return None
+    return bool(_mutate(_f))
+
+
+def pop_cp_pending(did: str, item: str) -> bool:
+    def _f(d):
+        for x in d["devices"]:
+            if x["id"] == did and item in (x.get("cp_pending") or []):
+                x["cp_pending"] = [i for i in x["cp_pending"] if i != item]
+                if not x["cp_pending"]:
+                    x.pop("cp_pending", None)
+                return True
+        return None
+    return bool(_mutate(_f))
+
+
+def set_pending_cpub(did: str, cpub: str | None) -> bool:
+    """재발급 중 '발급됐지만 아직 확정 안 된' 새 cpub. 확정(set_client_public_id) 전에 Host 가 죽으면
+    다음 devsync 가 이 값을 폐기 대상으로 삼는다(미반영 신규 cpub 정리)."""
+    def _f(d):
+        for x in d["devices"]:
+            if x["id"] == did:
+                if cpub:
+                    x["pending_cpub"] = cpub
+                else:
+                    x.pop("pending_cpub", None)
+                return True
+        return None
+    return bool(_mutate(_f))
+
+
+def set_delete_pending(did: str, flag: bool = True) -> bool:
+    def _f(d):
+        for x in d["devices"]:
+            if x["id"] == did:
+                if flag:
+                    x["delete_pending"] = True
+                else:
+                    x.pop("delete_pending", None)
+                return True
+        return None
+    return bool(_mutate(_f))
+
+
+def set_cp_synced(ts: int | None = None) -> None:
+    def _f(d):
+        d.setdefault("meta", {})["cp_synced"] = int(ts or _now())
+        return True
+    _mutate(_f)
+
+
+def sync_snapshot() -> list[dict]:
+    """devsync 가 잠금 밖에서 CP 에 물을 자료(행의 사본): id·cpub·pending_cpub·cp_pending·revoked·delete_pending."""
+    def _f(d):
+        return [{"id": x["id"], "cpub": x.get("client_public_id"), "pending_cpub": x.get("pending_cpub"),
+                 "cp_pending": list(x.get("cp_pending") or []), "revoked": bool(x.get("revoked")),
+                 "delete_pending": bool(x.get("delete_pending")), "name": x.get("name")}
+                for x in d["devices"]]
+    return _read(_f)
+
+
+def apply_cp_status(statuses: dict) -> dict:
+    """CP 응답을 (device_id, cpub) 재대조로 반영(잠금 안, 파일 I/O 만). 응답에 없는 cpub 은 건드리지 않는다.
+
+    - 활성 행의 cpub 이 CP 에서 revoked → 행 revoked(by=phone) + 📵 (폰 self-revoke 수신)
+    - delete_pending 행의 cpub 이 revoked → 행 제거(폐기 확인)
+    반환: {"phone_revoked": [id...], "removed": [id...]}
+    """
+    out = {"phone_revoked": [], "removed": []}
+
+    def _f(d):
+        keep = []
+        changed = False
+        for x in d["devices"]:
+            st = statuses.get(x.get("client_public_id") or "")
+            if st and st.get("status") == "revoked":
+                if x.get("delete_pending"):
+                    out["removed"].append(x["id"]); changed = True
+                    continue
+                if not x.get("revoked"):
+                    x["revoked"] = True; x["revoked_by"] = "phone"; x["revoked_at"] = int(st.get("revoked_at") or _now())
+                    out["phone_revoked"].append(x["id"]); changed = True
+            keep.append(x)
+        d["devices"] = keep
+        return True if changed else None
+    _mutate(_f)
+    return out
