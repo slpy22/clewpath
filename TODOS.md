@@ -277,6 +277,17 @@ svcmon(사장님 모니터)이 13:07 `up → down` 을 기록했으나 복구 �
 - [ ] 관제 화면에 워커 큐 상태(대기/실행/실패) 패널
 - [ ] 기존 `-p` 관리 세션의 새 방식 이전 가이드(세션별 선택)
 
+### 워커 직접 통신(P2P) — 스킬 v2 (2026-10-01 기획, 정본 docs/designs/workers-p2p.md, 사장님 확정 대기)
+#### Phase 1 — 스킬만(Host 변경 없음)
+- [ ] SKILL.md v2: 직접 통신 허용 기준표·`[cw]` 메시지 규약(ASK/ANSWER/REVIEW/RESULT/BLOCKED)·1-hop·스레드 4회·BLOCKED 1회·owner 가 최종 1회 보고
+- [ ] 등록부 v2 스키마(version/revision/manager/workers.tags·write_scope/tasks{owner,collaborators,write_scope,done_when,status}) + v1 → v2 이전 절차
+- [ ] 「워커 모드」 절 + 새 워커 생성 프롬프트에 등록부 절대 경로·별칭, 기존 워커 온보딩 메시지
+- [ ] P2P 사전 점검(권한 모드 동일·워커 전원 관제 그룹 등록)
+- [ ] 실사용 1회: 워커 2개 + 관리 1개로 ASK/REVIEW 왕복 → 관제에 워커↔워커 호출선, 관리 세션 수신은 RESULT 1건만인지
+#### Phase 2 — 필요 확인 후
+- [ ] Host `GET /api/v1/team?registry=` (등록부+살아 있는 이름 한 번에) · 관제 labels 에 역할 미러·task/thread 묶음
+- [ ] monwatch 위반 감지 알림(턴 초과·무응답 ASK·전달 사슬·순환) · 업무 트리(parent)+보드 · 워커별 worktree · 업무별 비용 집계
+
 ## 참고(완료): 알림 → 탭 점프 (v0.8.6 PWA)
 
 멀티탭 Deferred 승격(2026-09-15). 지금은 알림 클릭이 세션 **상세 화면**으로 가고(탭이 이미 있으면 그 탭),
