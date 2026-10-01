@@ -324,6 +324,13 @@ async def _lifespan(app: FastAPI):
     except Exception as e:  # noqa: BLE001
         print(f"[devsync] 시작 실패: {e}", flush=True)
 
+    # 팀 명부 감시(1분): 구성원 세션 교체 반영·관제 그룹 맞추기·일감 기한 초과 알림. team.db 없으면 무동작.
+    from session_manager import team as _teamwatch
+    try:
+        _teamwatch.start()
+    except Exception as e:  # noqa: BLE001
+        print(f"[team] 시작 실패: {e}", flush=True)
+
     # 자기 회복(0.9.2): 비정상 종료 의심이면 복구 푸시(마지막 로그 동봉), 설치본이면 런처 v2·5분 반복 보장
     from session_manager import liveness as _liveness, updater as _updater_mod
     try:
@@ -370,6 +377,7 @@ async def _lifespan(app: FastAPI):
             print(f"[term] PTY 정리 실패: {e}", flush=True)
         _monwatch.stop()
         _devsync.stop()
+        _teamwatch.stop()
         for t in (task, upd_task):
             if t is not None:
                 t.cancel()
@@ -1015,6 +1023,104 @@ def create_app() -> FastAPI:
         from session_manager import mongroups
         return {"deleted": mongroups.delete(gid)}
 
+    # ---- 팀·에이전트 명부 + 일감 장부 (워커 P2P·개인 비서 인프라, docs/designs/workers-p2p.md) ----
+    # 전 동사 로컬 전용(eng E-2/E-5) — 폰은 릴레이로 '세션에 요청' 하고 세션이 PC 안에서 이 API 를 부른다.
+    # 커넥터 덴리스트(_LOCAL_ONLY_API)에도 있지만 그건 릴레이 경유만 막으므로 여기서 다시 검사한다.
+    from session_manager import team as _team
+
+    def _team_call(request: Request, fn, *a, **kw):
+        if not _is_local(request):
+            return JSONResponse({"error": "local_only"}, status_code=403)
+        try:
+            return fn(*a, **kw)
+        except _team.TeamError as e:
+            return JSONResponse({"error": e.code}, status_code=e.status)
+
+    def _team_sync_after(request: Request, team_id: str, res):
+        """구성원이 바뀐 뒤 관제 그룹 맞추기(실패해도 응답은 성공 + monitor_sync=pending)."""
+        if isinstance(res, JSONResponse):
+            return res
+        try:
+            res = {**res, **_team.sync_group(team_id)} if isinstance(res, dict) else res
+        except _team.TeamError:
+            pass
+        return res
+
+    @app.get("/api/v1/team")
+    def team_list(request: Request, archived: bool = False):
+        return _team_call(request, lambda: {"teams": _team.list_teams(archived)})
+
+    @app.post("/api/v1/team")
+    def team_create(request: Request, body: dict = Body(...)):
+        res = _team_call(request, _team.create_team, body.get("name", ""), root=body.get("root"),
+                         code=body.get("code"), manager_session=body.get("manager_session"),
+                         manager_alias=body.get("manager_alias") or "관리", parent=body.get("parent"))
+        return _team_sync_after(request, res.get("id") if isinstance(res, dict) else "", res)
+
+    @app.post("/api/v1/team/import")
+    def team_import(request: Request, body: dict = Body(...)):
+        res = _team_call(request, _team.import_v1, body.get("path", ""), body.get("name"))
+        if isinstance(res, dict):
+            res["team"] = _team_sync_after(request, res["team"]["id"], res["team"])
+        return res
+
+    @app.get("/api/v1/team/{team_id}")
+    def team_get(request: Request, team_id: str):
+        return _team_call(request, _team.get_team, team_id)
+
+    @app.post("/api/v1/team/{team_id}/sync")
+    def team_sync(request: Request, team_id: str):
+        return _team_call(request, _team.sync_group, team_id)
+
+    @app.post("/api/v1/team/{team_id}/members")
+    def team_member_add(request: Request, team_id: str, body: dict = Body(...)):
+        res = _team_call(request, _team.add_member, team_id, body.get("alias", ""), role=body.get("role", ""),
+                         tags=body.get("tags"), session_id=body.get("session_id"),
+                         write_scope=body.get("write_scope"), member_role=body.get("member_role", "worker"),
+                         agent_id=body.get("agent_id"))
+        return _team_sync_after(request, team_id, res)
+
+    @app.post("/api/v1/team/{team_id}/members/{agent}/session")
+    def team_member_session(request: Request, team_id: str, agent: str, body: dict = Body(...)):
+        res = _team_call(request, _team.bind_session, team_id, agent, body.get("session_id", ""),
+                         reason=body.get("reason", "replaced"))
+        return _team_sync_after(request, team_id, res)
+
+    @app.post("/api/v1/team/{team_id}/members/{agent}/leave")
+    def team_member_leave(request: Request, team_id: str, agent: str):
+        return _team_sync_after(request, team_id, _team_call(request, _team.leave, team_id, agent))
+
+    @app.post("/api/v1/team/{team_id}/members/{agent}/move")
+    def team_member_move(request: Request, team_id: str, agent: str, body: dict = Body(...)):
+        res = _team_call(request, _team.move, team_id, agent, body.get("to_team", ""),
+                         alias=body.get("alias"), member_role=body.get("member_role", "worker"))
+        if isinstance(res, dict):
+            _team_sync_after(request, team_id, {})
+            res = _team_sync_after(request, body.get("to_team", ""), res)
+        return res
+
+    @app.get("/api/v1/team/{team_id}/tasks")
+    def team_tasks(request: Request, team_id: str, status: str | None = None, limit: int = 100):
+        return _team_call(request, lambda: {"tasks": _team.list_tasks(team_id, status, limit)})
+
+    @app.post("/api/v1/team/{team_id}/tasks")
+    def team_task_create(request: Request, team_id: str, body: dict = Body(...)):
+        return _team_call(request, _team.create_task, team_id, body.get("goal", ""), body.get("owner", ""),
+                          collaborators=body.get("collaborators"), write_scope=body.get("write_scope"),
+                          done_when=body.get("done_when", ""), due=body.get("due"), parent=body.get("parent"),
+                          actor_session=body.get("actor_session"), idem_key=body.get("idem_key"))
+
+    @app.get("/api/v1/team/{team_id}/tasks/{task_id}")
+    def team_task_get(request: Request, team_id: str, task_id: str):
+        return _team_call(request, _team.task_detail, team_id, task_id)
+
+    @app.post("/api/v1/team/{team_id}/tasks/{task_id}/{action}")
+    def team_task_action(request: Request, team_id: str, task_id: str, action: str, body: dict = Body(default={})):
+        return _team_call(request, _team.transition, team_id, task_id, action,
+                          actor_session=body.get("actor_session"), idem_key=body.get("idem_key"),
+                          assignment_ver=body.get("assignment_ver"), note=body.get("note", ""),
+                          artifacts=body.get("artifacts"), owner=body.get("owner"))
+
     # ---- 오케스트레이션 관제 (여러 세션 실시간 관전, 읽기전용·무침습) ----
     # ?ids=<uuid1>,<uuid2>,...  &manager=<uuid>  (manager 미지정 시 첫 세션)
     @app.websocket("/ws/monitor")
@@ -1028,7 +1134,8 @@ def create_app() -> FastAPI:
             websocket.query_params.get("ids"),
             websocket.query_params.get("manager"))
         await websocket.accept()
-        await webmonitor.run_monitor(websocket, specs)
+        # gid: 저장 그룹으로 연 화면 — 그룹 구성원 변경(팀 동기화·워커 교체)을 따라간다(eng E-8)
+        await webmonitor.run_monitor(websocket, specs, websocket.query_params.get("gid") or None)
 
     # ---- 외부 API v1: 세션 재개(구조화 JSON, 멀티턴) ----
     # 인증: API 토큰(Authorization: Bearer <t> 또는 ?token=<t>). 웹 비밀번호와 별개.

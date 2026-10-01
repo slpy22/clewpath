@@ -93,7 +93,7 @@ def _priv_ok(params: dict) -> bool:
 VIA_HEADER = "X-ClewPath-Via"
 _LOCAL_ONLY_API = re.compile(
     r"^/api/(owner/(devices(/|$|\?)|2fa/(provision|toggle)|skills/[^/]+/install|trash/)"
-    r"|sessions/[^/]+/terminal/start)")
+    r"|sessions/[^/]+/terminal/start|v1/team(/|$|\?))")
 # update/apply 는 0.10.5 부터 로컬 전용이 아니라 특권(2FA) — 원격에서 Host 업데이트(사장님 2026-09-30).
 # 실행되는 코드는 CP 가 서명한 패키지뿐(Host 가 서명·해시 검증)이라 원격 트리거의 위험은 '재기동' 에 국한된다.
 
@@ -102,8 +102,8 @@ def _is_local_only_api(path: str, verb: str) -> bool:
     """릴레이 경유로는 절대 호출될 수 없는 경로. 기기 목록(GET)도 포함 — 이름·접속 시각 누출 방지."""
     if not _LOCAL_ONLY_API.match(path or ""):
         return False
-    if path.startswith("/api/owner/devices"):
-        return True                      # 모든 동사
+    if path.startswith("/api/owner/devices") or path.startswith("/api/v1/team"):
+        return True                      # 모든 동사(팀 명부: eng E-2 — 폰은 세션에 요청)
     return verb == "POST"
 
 
@@ -607,6 +607,8 @@ class Connector:
         manager = params.get("manager")
         if manager:
             q["manager"] = str(manager)
+        if params.get("gid"):
+            q["gid"] = str(params["gid"])
         local_ws = f"{_to_ws(self.local_base)}/ws/monitor?{urlencode(q)}"
         # 관전은 기본 단방향이나, 동적 그룹 변경(add/remove) 제어를 위해 up 채널을 둔다.
         self.stream_in[rid] = asyncio.Queue()

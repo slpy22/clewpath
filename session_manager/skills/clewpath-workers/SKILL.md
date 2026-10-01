@@ -1,108 +1,142 @@
 ---
 name: clewpath-workers
-description: 상위(관리) 세션이 하위 워커 세션들에 일감을 오래 지속적으로 나눠 주고 결과를 회수하는 운영 규칙. ClewPath Host(127.0.0.1:5100)로 워커 세션을 '살려 두고', 통신은 claude 표준 SendMessage 만 쓴다. "워커에게 시켜", "하위 세션에 분배", "일감 나눠서", "clewpath workers" 라고 하면 호출.
+description: 여러 Claude 세션이 한 팀으로 일하는 운영 규칙(v2). 관리 세션은 일감을 배정·승인하고, 워커들은 배정 범위 안에서 서로 직접 SendMessage 로 협업한다. 팀·에이전트·일감 이력은 ClewPath Host(127.0.0.1:5100)의 팀 명부에 쌓인다. "워커에게 시켜", "하위 세션에 분배", "일감 나눠서", "팀 만들어", "clewpath workers" 라고 하거나, 생성 프롬프트가 "너는 '<별칭>' 워커다" 이면 호출.
 ---
 
-# clewpath-workers — 하위 워커 세션 분배·관리
+# clewpath-workers v2 — 팀 협업(관리 + 워커 직접 통신)
 
-너는 **관리 세션**이다. 워커 세션들에 일감을 주고 결과를 받아 다음 일감을 정한다.
-전송 경로는 **`SendMessage` 하나**다. ClewPath 는 워커를 **살려 두는 일**(화면 없는 터미널 기동)만 한다.
+전송 경로는 **`SendMessage` 하나**다. ClewPath Host 는 ① 워커를 **살려 두고**(화면 없는 터미널 기동) ② **팀 명부·일감 장부**를 지킨다.
+명부는 이 PC 의 Host 에만 있고 **PC 안에서만** 부를 수 있다(원격·폰은 세션에게 말로 요청한다).
+
+**너는 어느 모드인가?**
+- 생성 프롬프트나 온보딩 메시지에 "너는 '<별칭>' 워커다 … 팀 `<팀>`" 이 있으면 → **워커 모드**(아래 「워커 모드」).
+- 사용자가 일을 나눠 시키라고 했으면 → **관리 모드**(아래 「관리 모드」).
 
 ## 절대 규칙 (어기면 사고)
 
-1. **살아 있는 세션에 `claude -p --resume` 을 하지 않는다.** 프로세스가 2개면 대화가 두 갈래로 갈라진다.
-   워커에게 말을 걸 때는 항상 아래 "배분 절차"를 따른다.
-2. **세션 하나는 한 방식만.** 이 스킬로 다루는 워커에는 `-p --resume` 을 쓰지 않고, 기존에 `-p --resume` 으로
-   부리던 하위 세션은 이 스킬의 워커로 등록하지 않는다.
-3. **권한 모드를 맞춘다.** 워커와 관리 세션의 권한 모드가 다르면 메시지가 사용자 승인 대기에 걸린다.
-   기본은 둘 다 자동 허용(`--dangerously-skip-permissions`; start API 의 `skip:true`).
-4. **폴링 금지.** `ListAgents` 를 반복 호출하거나 "끝났어?" 를 보내지 않는다. 완료는 워커의 답장 또는
-   `notify_when_idle` 통지로 안다.
-5. 워커 jsonl·`~/.claude` 아래 파일을 직접 쓰지 않는다. 상태는 프로젝트의 등록부 파일에만 적는다.
+1. **살아 있는 세션에 `claude -p --resume` 을 하지 않는다.** 프로세스가 2개면 대화가 두 갈래로 갈라진다. 말을 걸 때는 SendMessage 만.
+2. **세션 하나는 한 방식만.** 이 스킬의 팀원에게 `-p --resume` 을 쓰지 않는다.
+3. **권한 모드를 맞춘다.** 팀의 모든 세션(관리·워커)이 같은 권한 모드여야 한다 — 다르면 워커끼리 보낸 메시지까지 사용자 승인 대기에 걸린다. 기본은 자동 허용(start API 의 `skip:true`).
+4. **폴링 금지.** 명부 조회를 반복하거나 "끝났어?" 를 보내지 않는다. 완료는 답장·`notify_when_idle` 통지로 안다.
+5. **`~/.claude` 아래 파일을 직접 쓰지 않는다.** 상태는 팀 명부 API 로만 적는다.
+6. **명부 쓰기 역할**: 팀·구성원·일감 생성, 승인/반려/재배정은 **관리 세션만**. 워커는 **자기 일감의** 제출·막힘·메모만 쓴다(약속이며 기록된다).
 
-## 워커 등록부
+## 팀 명부 API (모두 `http://127.0.0.1:5100`, JSON)
 
-프로젝트 루트 `.clewpath/workers.json` (없으면 만든다):
+| 용도 | 호출 |
+|---|---|
+| 팀 목록 | `GET /api/v1/team` |
+| 팀 만들기 | `POST /api/v1/team` `{"name","root","code"?,"manager_session":"<관리 세션 uuid>"}` |
+| v1 등록부 가져오기 | `POST /api/v1/team/import` `{"path":"<프로젝트 루트>"}` (`.clewpath/workers.json`) |
+| 팀 보기(구성원·주소·열린 일감) | `GET /api/v1/team/<team>` |
+| 구성원 추가 | `POST /api/v1/team/<team>/members` `{"alias","role","tags":[],"session_id","write_scope":[]}` |
+| 세션 교체 기록 | `POST /api/v1/team/<team>/members/<agent>/session` `{"session_id","reason":"replaced"}` |
+| 구성원 빼기 / 다른 팀으로 | `POST /api/v1/team/<team>/members/<agent>/leave` · `…/members/<agent>/move` `{"to_team","alias"?}` |
+| 일감 목록 / 상세(이력) | `GET /api/v1/team/<team>/tasks` · `GET /api/v1/team/<team>/tasks/<task>` |
+| 일감 배정 | `POST /api/v1/team/<team>/tasks` `{"goal","owner","collaborators":[],"write_scope":{},"done_when","due"?,"idem_key"}` |
+| 일감 상태 바꾸기 | `POST /api/v1/team/<team>/tasks/<task>/<action>` — action = `submit`·`accept`·`reject`·`reopen`·`reassign`·`block`·`note` |
+| 관제 그룹 다시 맞추기 | `POST /api/v1/team/<team>/sync` |
 
-```json
-{
-  "workers": {
-    "포털개발": {"session_id": "<uuid>", "role": "포털 프론트 개발", "cwd": "F:/proj/portal",
-                "last_dispatch": "2026-09-23T10:00:00+09:00", "state": "idle"}
-  },
-  "monitor_group_id": "<ClewPath 관제 그룹 id 또는 null>"
-}
-```
+- `<team>` 은 팀 id(`tm_…`) 또는 코드(`PORTAL`), `<agent>` 는 에이전트 id(`ag_…`) 또는 팀 안 별칭, `<task>` 는 `PORTAL-T3` 형식.
+- **모든 쓰기에 `idem_key`** 를 붙인다(예: `<task>:submit:<assignment_ver>`). 같은 요청을 다시 보내도 한 번만 반영된다.
+- `actor_session` 에 **자기 세션 uuid** 를 적는다(장부의 '누가' — 자기 신고).
+- 제출(`submit`)은 `{"assignment_ver": <배정 버전>, "artifacts": ["상대 또는 절대 경로", …], "note"}` — Host 가 파일 해시·git 커밋을 증거로 남긴다. 재배정되면 버전이 올라가 옛 제출은 409(`stale_assignment`).
+- 오류: 404 없음 · 409 충돌(`alias_taken`·`session_owned_by_other_agent`·`bad_transition:…`·`stale_assignment`) · 503 명부 사용 불가 → 멈추고 사용자에게 보고.
 
-`state` 는 관리 세션이 기록하는 참고값(`idle|working|failed`)이고, 실제 생존 여부는 매번 아래 1단계로 확인한다.
+일감 상태: `assigned → submitted → accepted`, `submitted → rejected → (reopen/reassign) → assigned`, `assigned → blocked → (reassign) → assigned`.
 
-## 새 워커 만들기 (워커당 1회)
+## 관리 모드
 
-작업 폴더에서 헤드리스로 세션을 하나 만들어 UUID 를 얻고 등록부에 적는다:
+### 팀 준비 (프로젝트당 1회)
+
+1. 자기 세션 uuid: `~/.claude/sessions/*.json` 중 자기 pid 항목의 `sessionId`(모르면 사용자에게 묻는다).
+2. 프로젝트에 v1 등록부(`.clewpath/workers.json`)가 있으면 `POST /api/v1/team/import` 후 `members` 로 관리 세션을 `member_role:"manager"` 로 추가. 없으면 `POST /api/v1/team` 에 `manager_session` 을 넣어 만든다.
+3. 팀을 만들면 **관제 그룹이 자동으로 생기고 구성원이 맞춰진다**(응답의 `monitor_sync`). 이름·알림 설정은 사용자가 관제 화면에서 바꾼 값이 유지된다.
+
+### 워커 만들기 (워커당 1회)
 
 ```bash
-cd <워커 작업 폴더> && claude -p --output-format json "너는 '<역할>' 워커다. 관리 세션이 보내는 일감을 처리하고, 결과는 요약 5줄과 산출물 경로로 답한다. 지금은 'ready' 라고만 답하라."
-# 응답 JSON 의 session_id 를 등록부에 기록
+cd <워커 작업 폴더> && claude -p --output-format json "너는 '<별칭>' 워커다(역할: <역할>). 팀 <팀 코드>, 명부는 http://127.0.0.1:5100/api/v1/team/<team>(<team> = 팀 코드). 동료와의 통신은 clewpath-workers 스킬의 워커 모드를 따른다. 지금은 'ready' 라고만 답하라."
+# 응답 JSON 의 session_id 로 → POST /api/v1/team/<team>/members {"alias":"<별칭>","role":"<역할>","session_id":"…","write_scope":["<경로 패턴>"]}
 ```
 
-이 `-p` 는 **아직 살아 있지 않은 새 세션을 만드는 1회성**이라 규칙 1 과 충돌하지 않는다. 이후 그 세션에는 `-p` 를 다시 쓰지 않는다.
+이 `-p` 는 **아직 살아 있지 않은 새 세션을 만드는 1회성**이라 규칙 1 과 충돌하지 않는다. 이미 있는 워커(v1)에는 위 문장과 같은 **온보딩 메시지를 SendMessage 로 1회** 보낸다.
 
-## 배분 절차 (일감마다)
+### 일감 배정
+
+1. `POST …/tasks` 로 일감을 만든다 — **책임자(owner) 1명**, 협업자, 완료 조건, 파일 편집 범위(`write_scope`: `{"<별칭>":["경로 패턴"]}`). **같은 파일의 편집자는 한 명**만.
+2. 책임자에게 보낸다(아래 「보내는 법」). 본문 첫 줄 `결론:`, 둘째 줄 `[cw] task=<task> type=ASSIGN ver=<assignment_ver>`, 그다음 요구사항·완료 조건·협업자.
+3. 같은 워커에 여러 일감을 보내도 된다(순서대로 처리). 서로 의존하는 일감은 앞 것이 승인된 뒤 보낸다.
+
+### 결과 처리
+
+- 너에게 오는 것은 **4종뿐**이어야 한다: 책임자의 `RESULT`(1회) · 범위/우선순위 변경 요청 · 풀리지 않은 `BLOCKED` · 한도 도달. 워커끼리의 대화는 너에게 오지 않는다(관제 화면에는 보인다).
+- `RESULT` 를 받으면 `GET …/tasks/<task>` 로 제출 증거를 보고 `accept` 또는 `reject`(`note` 에 사유). 반려면 `reopen` 또는 `reassign` 후 다시 보낸다.
+- `due` 를 넣은 일감이 기한을 넘기면 Host 가 사용자 폰으로 알린다 — 그 알림을 기다리며 폴링하지 않는다.
+
+## 워커 모드
+
+1. 일감을 받으면 `GET /api/v1/team/<team>` 으로 팀원·별칭·자기 `write_scope`·일감의 `assignment_ver` 를 **한 번** 읽는다.
+2. 일한다. **자기 `write_scope` 밖 파일은 고치지 않는다** — 필요하면 그 담당에게 `REVIEW`(수정 제안)로 보낸다.
+3. 동료에게 직접 물어도 되는 것과 관리 세션에 올릴 것:
+
+| 동료에게 직접 | 반드시 관리 세션으로 |
+|---|---|
+| 같은 일감 안의 사실 확인·인터페이스 질의 | 목표·요구사항·우선순위 변경 |
+| 산출물 전달(파일 경로)·리뷰 요청·테스트 결과 공유 | 일감 재배정·새 워커·다른 일감에 영향 주는 인터페이스 변경 |
+| 이미 합의된 인터페이스의 세부 조율 | `write_scope` 밖 수정 필요·결론 불일치·풀리지 않는 막힘 |
+
+4. 끝나면 **책임자만** `POST …/tasks/<task>/submit`(`assignment_ver`·`artifacts`·`idem_key`) 후 관리 세션에 `RESULT` 1회. 협업자는 책임자에게만 답한다.
+5. 막히면 `POST …/tasks/<task>/block`(`note`) + 관리 세션에 `BLOCKED` **1회**.
+
+### 메시지 규약 (관리·워커 공통, 첫 두 줄)
 
 ```
-1. 살아 있나?   GET http://127.0.0.1:5100/api/v1/sessions  →  해당 session_id 의 peer 필드
-                (peer 가 있으면 살아 있음. name 이 SendMessage 의 주소다. status idle|busy)
-                또는 ListAgents 에 그 이름이 있으면 살아 있음
-2. 아니면 기동   POST http://127.0.0.1:5100/api/sessions/<session_id>/terminal/start  body {"skip": true}
-                → {"status":"started"|"already_live","pid":…}   (멱등 — 두 번 불러도 프로세스 1개)
-                실패: 409 cap(터미널 상한) / 409 bg_hold(백그라운드 에이전트 점유) / 404 no_cwd
-3. 뜰 때까지     3초 간격으로 1단계를 최대 10회 (레지스트리에 이름이 나타나면 됨)
-4. 보낸다        SendMessage(to=<peer.name>, message=<일감>, notify_when_idle=true)
-                ※ 이름은 **매번 1단계에서 새로 읽는다** — 제목이 없는 세션의 파생 이름(예: worker2-7f)은
-                  프로세스를 다시 띄울 때마다 바뀐다(실측). 등록부에는 UUID 만 믿는다.
-                첫 줄에 일감 제목, 본문에 요구사항·산출물 위치·완료 시 답장 형식을 쓴다.
-5. 기록          등록부의 last_dispatch, state=working
+결론: expires_at 단위가 초인지 밀리초인지 확인 부탁
+[cw] task=PORTAL-T17 thread=T17-a type=ASK turn=1/4 reply=yes from=백엔드
+- 배경: docs/auth-contract.md 에 단위 누락
+- 필요한 답: 단위 + 근거 파일 경로
 ```
 
-**같은 워커에 여러 일감**을 보내도 된다 — 워커의 턴 루프가 순서대로 처리한다(큐잉 실측). 단 서로 의존하는 일감은
-앞 것의 답장을 받은 뒤 보낸다.
+- `type` 은 `ASSIGN`(관리만)·`ASK`·`ANSWER`·`REVIEW`·`RESULT`·`BLOCKED`. 본문 5줄 이내, 긴 내용은 **파일 경로**.
+- 답장은 같은 `task`/`thread`, `turn` +1. `reply=no` 에는 수신 확인을 보내지 않는다.
+- `notify_when_idle:true` 는 답이 필요한 요청에만. **유휴 통지 ≠ 완료.**
 
-## 결과 회수
+### 폭주·루프 방지 (지켜야 하는 약속)
 
-- 워커의 답장은 `<cross-session-message from-name="<워커 이름>">` 로 관리 세션 대화에 자동 도착한다.
-  워커에게 답장 형식을 강제한다: **첫 줄 결론, 요약 5줄 이내, 산출물은 파일 경로**. 긴 결과를 메시지에 넣게 하지 않는다
-  (관리 세션 컨텍스트가 그만큼 찬다). 필요하면 경로의 파일을 읽는다.
-- `notify_when_idle:true` 로 보냈으면 워커가 유휴가 될 때 `[Cross-session idle notice]` 가 한 번 온다.
-- 답장이 없이 유휴 통지만 왔으면 워커에게 "결과를 형식대로 답하라" 고 한 번 더 보낸다.
+- **1-hop**: 받은 요청을 제3자에게 넘기지 않는다. 필요하면 `BLOCKED` 로 올린다.
+- **스레드당 최대 4회 전송**(질문→답→보충→최종). 넘으면 책임자가 관리 세션에 `BLOCKED`.
+- 같은 상대에게 같은 질문 재전송·무응답 재전송 금지. 답을 기다리는 동안 독립 작업을 계속한다.
+- 할 일이 없어졌거나 서로 기다리는 순환이면 `BLOCKED` 1회. 침묵은 동의·완료가 아니다.
+
+## 보내는 법 (관리·워커 공통)
+
+```
+1. 주소 읽기   GET http://127.0.0.1:5100/api/v1/team/<team>  →  members[].address (uds:…), live
+               ※ 이름이 아니라 address 로 보낸다 — 이름은 동명이면 모호하고 재기동마다 바뀐다.
+2. 안 살아 있으면(live=false, 관리 모드만)
+               POST http://127.0.0.1:5100/api/sessions/<session_id>/terminal/start  body {"skip": true}
+               → started | already_live (멱등). 실패: 409 cap / 409 bg_hold / 404 no_cwd → 사용자에게 알림.
+               3초 간격으로 1단계를 최대 10회. 워커 모드면 기동하지 말고 관리 세션에 BLOCKED.
+3. 보낸다      SendMessage(to=<address>, message=<규약대로>, notify_when_idle=<답 필요할 때만>)
+4. 실패하면    ("success":false / not reachable) 1단계부터 한 번만 다시. 또 실패면 BLOCKED.
+```
+
+받은 메시지에 답할 때는 그 메시지의 `from` 값(`uds:…`)을 `to` 로 쓴다.
 
 ## 실패 처리
 
-- `SendMessage` 결과가 `"success":false`(예: `No agent named … is reachable`) → 워커가 죽은 것. 2단계(기동)부터 다시.
-  ClewPath 관제 그룹에 등록돼 있으면 이 실패는 폰 알림("호출 실패")으로도 온다.
-- 기동이 409 `cap` 이면 다른 워커를 하나 종료(`POST …/terminal/stop`)하거나 사용자에게 알린다. `bg_hold` 면 사용자에게 알린다.
-- ClewPath Host 가 업데이트로 재기동되면 워커 PTY 가 모두 종료된다 — 다음 배분 때 1·2단계가 자연히 되살린다.
-- 같은 일감이 두 번 실패하면 멈추고 사용자에게 보고한다.
+- 명부 503: 멈추고 사용자에게 보고(명부 없이 추측으로 보내지 않는다).
+- 세션이 교체되면(대화가 커져 새 세션으로 이어짐) Host 가 continued-in 으로 알아채 명부·관제 그룹을 맞춘다. 직접 새 세션으로 바꿨으면 `…/members/<agent>/session` 으로 기록한다.
+- ClewPath Host 가 업데이트로 재기동되면 워커 PTY 가 모두 종료된다 — 다음 전송 때 「보내는 법」 2단계가 되살린다.
+- 같은 일감이 두 번 반려되면 멈추고 사용자에게 보고한다.
 
 ## 비용·수명
 
-- 워커 호출 간격이 **1시간을 넘기면** 그 워커의 캐시가 만료돼 다음 호출 때 대화 전체를 다시 읽는 비용이 든다.
-  묶어서 보낼 수 있는 일감은 묶고, 오래 쉴 워커는 그냥 두되 비용을 알고 있어라.
-- 워커 대화가 매우 커지면(수천 메시지) **교체**한다: 인수인계 요약을 프롬프트로 새 워커를 만들고 등록부의 UUID 를 바꾼다.
-  옛 워커는 `POST …/terminal/stop` 으로 내린다.
-
-## ClewPath 관제 연동 (권장)
-
-등록부의 워커들을 관제 그룹으로 저장하면 사용자가 폰에서 타임라인·응답 완료·호출 실패 알림을 받는다:
-
-```
-POST http://127.0.0.1:5100/api/owner/monitor/groups
-{"name":"<프로젝트명>","manager":"<관리 세션 uuid>","subs":["<워커 uuid>",…],"labels":{"<uuid>":"<이름>"}}
-→ 응답 id 를 등록부 monitor_group_id 에 기록. 워커 교체 시 같은 body 에 "id" 를 넣어 갱신
-```
-
-관리 세션 자신의 UUID 는 `~/.claude/sessions/*.json` 중 자기 pid 항목의 `sessionId`, 또는 사용자에게 묻는다.
+- 워커 호출 간격이 **1시간을 넘기면** 캐시가 만료돼 다음 호출 때 대화 전체를 다시 읽는 비용이 든다. 묶을 수 있는 일감은 묶는다.
+- 워커 대화가 매우 커지면 **교체**: 인수인계 요약으로 새 세션을 만들고 `…/members/<agent>/session`(reason `replaced`)으로 붙인다 — **에이전트의 이력은 이어진다.** 옛 세션은 `POST /api/sessions/<session_id>/terminal/stop` 으로 내린다.
 
 ## 사람 개입
 
-사용자가 워커에 직접 말하고 싶으면 ClewPath 에서 그 세션을 탭으로 열어 타이핑한다(살아 있는 PTY 에 화면이 붙는다).
-너는 그 사실을 몰라도 된다 — 답장 형식만 지키게 하면 된다.
+사용자는 ClewPath 관제 화면에서 팀 전체(관리↔워커, 워커↔워커 호출선)를 보고, 어느 세션이든 탭으로 열어 직접 말할 수 있다.
+너는 그 사실을 몰라도 된다 — 규약만 지키면 된다.

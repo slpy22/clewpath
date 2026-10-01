@@ -901,10 +901,10 @@ class Conn{
              close:()=>{ try{this._tx({v:1,type:'stream_close',id});}catch(e){} this.streams.delete(id); } };
   }
   // 오케스트레이션 관제 스트림(읽기전용). onEvent(dataStr, eof, error)
-  startMonitor(ids,manager,onEvent){
+  startMonitor(ids,manager,onEvent,gid){
     const id='mon'+(++this.seq);
     this.streams.set(id,(m)=>{ if(m.eof){onEvent(null,true,m.error);} else onEvent(m.data,false); });
-    this._tx({v:1,type:'req',id,method:'monitor',params:{ids,manager}});
+    this._tx({v:1,type:'req',id,method:'monitor',params:gid?{ids,manager,gid}:{ids,manager}});
     return {
       add:(sid,role)=>this._tx({v:1,type:'stream_in',id,
         data:{type:'add',session_id:sid,role:role||'sub'}}),
@@ -949,7 +949,7 @@ const relayT={
   api:(v,p,o)=>conn.api(v,p,o),
   resume:(id,cb,opts)=>conn.startResume(id,cb,opts&&opts.inplace,opts),
   terminal:(id,cb,opts)=>conn.startTerminal(id,cb,opts),
-  monitor:(ids,manager,cb)=>conn.startMonitor(ids,manager,cb),
+  monitor:(ids,manager,cb,gid)=>conn.startMonitor(ids,manager,cb,gid),
   async exportSession(id,wd){ const r=await conn.req('export',{session_id:id,include_workdir:!!wd});
     if(!r.ok)throw new Error(r.error||'내보내기 실패'); return r.data; },
   async importSession(file,opts){ const b64=await fileToB64(file);
@@ -981,10 +981,11 @@ const localT={
               {type:'user',message:{role:'user',content:[{type:'text',text}]}})),
              close:()=>{try{ws.close();}catch(e){}} };
   },
-  monitor(ids,manager,cb){
+  monitor(ids,manager,cb,gid){
     const proto=location.protocol==='https:'?'wss':'ws';
     let url=`${proto}://${location.host}${APIBASE}/ws/monitor?ids=${encodeURIComponent(ids)}`;
     if(manager)url+=`&manager=${encodeURIComponent(manager)}`;
+    if(gid)url+=`&gid=${encodeURIComponent(gid)}`;   // 저장 그룹 화면은 구성원 변경을 서버가 밀어 준다
     const ws=new WebSocket(url);
     ws.onmessage=(ev)=>cb(ev.data,false);
     ws.onclose=()=>cb(null,true);
@@ -3186,11 +3187,11 @@ function openMonitor(ids, manager, labels, opts){
         const nm=(SESSIONS.find(s=>s.session_id===m.session_id)||{});
         group[m.session_id]={label:(nm.title||nm.label_name||nm.slug||m.session_id.slice(0,8)),
                              color:null, role:'sub'};
-        if(savedGid){ groupDirty=true; renderSaveBtn(); }   // 저장 그룹과 구성이 달라짐
-        renderLegend(); toast('세션 추가됨');
+        if(savedGid && m.origin!=='sync'){ groupDirty=true; renderSaveBtn(); }   // 저장 그룹과 구성이 달라짐(서버 동기화는 제외)
+        renderLegend(); toast(m.origin==='sync'?'그룹 구성원 추가됨':'세션 추가됨');
       } else if(m.action==='remove' && m.session_id){
         delete group[m.session_id]; delete activity[m.session_id];
-        if(savedGid){ groupDirty=true; renderSaveBtn(); }
+        if(savedGid && m.origin!=='sync'){ groupDirty=true; renderSaveBtn(); }
         if(selectedSid===m.session_id){ selectedSid=null; renderVHead();
           vwrap.innerHTML=''; vwrap.appendChild(el('div','empty','세션이 제거되었습니다. 다른 세션을 선택하세요.')); }
         renderLegend(); toast('세션 제거됨');
@@ -3205,7 +3206,7 @@ function openMonitor(ids, manager, labels, opts){
     }
   }
 
-  try{ handle=T.monitor(ids.join(','), manager, onMsg); }
+  try{ handle=T.monitor(ids.join(','), manager, onMsg, savedGid); }
   catch(e){ setLive(false,'연결 실패'); toast('관제 연결 실패: '+e.message); }
   x.onclick=()=>{ try{ handle&&handle.close(); }catch(e){} ov.remove(); };
 }

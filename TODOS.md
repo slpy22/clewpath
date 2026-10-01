@@ -280,10 +280,11 @@ svcmon(사장님 모니터)이 13:07 `up → down` 을 기록했으나 복구 �
 ### 팀·에이전트 명부 + 워커 직접 통신(P2P) — 개인 비서 인프라 (2026-10-01 기획, 정본 docs/designs/workers-p2p.md)
 목적: 일반 프로젝트 협업 + 세션·에이전트를 사장님 작업 이력으로 축적 → 나중에 개인 비서 에이전트가 대신 관리. **결정(2026-10-01 사장님): Host 전역 명부부터**(프로젝트 파일 등록부 안 함). 에이전트(영속) ≠ 세션, 팀 안 평면·팀 위 1단(비서), 작성자는 Host API 하나.
 #### 단계 1 — 명부 + 스킬 v2 (M) · eng review CLEAR(2026-10-01, E-1~E-13: SQLite·전부 로컬 전용·uds 주소·상태기계·증거·기한) → 구현 T1~T7
-- [ ] Host `team` 모듈: 데이터 폴더 JSON(팀·에이전트·세션 교체 이력) + 일감 장부 jsonl(append) + API(팀/에이전트 CRUD·세션 교체·일감 배정/결과·`GET /api/v1/team/<팀>` 살아 있는 이름 포함)
-- [ ] 관제 그룹 자동 동기화(팀 구성원 → monitor group subs/labels)
-- [ ] 스킬 v2: P2P 허용 기준·`[cw]` 규약(ASK/ANSWER/REVIEW/RESULT/BLOCKED)·1-hop·스레드 4회·owner 최종 1회 보고·워커 모드·권한 모드 점검, 등록부 대신 Host API
-- [ ] 기존 `.clewpath/workers.json`(v1) 가져오기 경로
+- [x] Host `team` 모듈(2026-10-01): SQLite team.db(팀·에이전트·소속·세션 이력·일감·이벤트) + 상태기계·idem_key·assignment_ver·제출 증거·기한 알림 + `/api/v1/team` 로컬 전용(서버·커넥터 이중) — tests/test_team.py 17건
+- [x] 관제 그룹 자동 동기화(구성원·라벨만, 이름·알림 보존, pending 재시도, 워커 교체 추적) + 관제 상한 12·저장 그룹 화면이 구성원 변경을 따라감(gid)
+- [x] 스킬 v2(관리/워커 모드·P2P 기준·`[cw]` 규약·uds 주소·팀 API 표·제출 증거) + 문서↔라우트 대조 테스트
+- [x] v1 `.clewpath/workers.json` 가져오기(`POST /api/v1/team/import`)
+- [ ] Host 릴리스 + 설정 📦 워커 스킬 덮어쓰기 설치(사장님 버튼)
 - [ ] 실사용 1회: 워커 2 + 관리 1, ASK/REVIEW 왕복 → 관제 워커↔워커 호출선, 관리 세션 수신 RESULT 1건, 장부에 배정·결과
 #### 단계 2 — 장부 자동 채움·경력 화면 (M)
 - [ ] `[cw]` 헤더 인덱서(jsonl 읽기 전용, 토큰 0) · 에이전트 이력/일감 화면(PWA) · monwatch 위반 감지(턴 초과·무응답 ASK·전달 사슬·순환) · 일감별 비용

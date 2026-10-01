@@ -24,11 +24,32 @@ from session_manager import monitor
 _POLL_INTERVAL = 0.4
 # 유휴 하트비트 주기(초) — 이벤트가 없어도 이만큼마다 생존 신호를 보내 끊김 감지.
 _HEARTBEAT_EVERY = 5.0
-# 그룹 최대 세션 수(자원 상한).
-_MAX_SESSIONS = 8
+# 그룹 최대 세션 수(자원 상한). 팀(관리 1 + 워커 8~)을 담도록 12(eng E-8).
+_MAX_SESSIONS = 12
+# 저장 그룹을 연 화면은 이 주기로 그룹 구성원을 다시 읽어 맞춘다(팀 명부 동기화·워커 교체 반영).
+_GROUP_RESYNC_EVERY = 5.0
 
 
-async def run_monitor(ws, specs: list[dict]) -> None:
+def group_diff(saved_gid: str | None, synced: set[str], current: set[str]) -> tuple[list[str], list[str], set[str]]:
+    """저장 그룹의 지금 구성원과 비교해 (추가할 것, 뺄 것, 새 기준 집합). 뺄 것은 '전에 그룹 구성원이었다가
+    빠진 세션' 만 — 사용자가 이 화면에서 손으로 더한 세션은 건드리지 않는다."""
+    if not saved_gid:
+        return [], [], synced
+    try:
+        from session_manager import mongroups
+        g = mongroups.get(saved_gid)
+    except Exception:  # noqa: BLE001
+        return [], [], synced
+    if not g:
+        return [], [], synced
+    want = [g.get("manager")] + list(g.get("subs") or [])
+    want_set = {x for x in want if x}
+    add = [x for x in want if x and x not in current]
+    rm = [x for x in synced if x not in want_set and x in current]
+    return add, rm, want_set
+
+
+async def run_monitor(ws, specs: list[dict], saved_gid: str | None = None) -> None:
     """WS 하나를 그룹 관제에 붙인다. 호출 측에서 ws.accept()는 끝난 상태로 가정.
 
     specs: [{"session_id", "role"?}, ...]
@@ -68,6 +89,8 @@ async def run_monitor(ws, specs: list[dict]) -> None:
             closed.set()
 
     watcher = asyncio.create_task(_watch())
+    synced = {s["session_id"] for s in specs}
+    resync = 0.0
     try:
         idle = 0.0
         while not closed.is_set():
@@ -88,6 +111,22 @@ async def run_monitor(ws, specs: list[dict]) -> None:
                     await ws.send_json({"type": "group", "action": "remove",
                                         "session_id": c["session_id"]})
                 idle = 0.0
+            # 1-b) 저장 그룹 구성원 변경(팀 동기화·워커 교체) — origin=sync 라 화면이 '수정됨' 으로 보지 않는다
+            resync += _POLL_INTERVAL
+            if saved_gid and resync >= _GROUP_RESYNC_EVERY:
+                resync = 0.0
+                cur = {s.session_id for s in group.sessions}
+                add, rm, synced = group_diff(saved_gid, synced, cur)
+                for sid in rm:
+                    group.remove_session(sid)
+                    await ws.send_json({"type": "group", "action": "remove", "session_id": sid, "origin": "sync"})
+                for sid in add:
+                    if len(group.sessions) >= _MAX_SESSIONS:
+                        break
+                    evs = group.add_session({"session_id": sid, "role": "sub"})
+                    await ws.send_json({"type": "group", "action": "add", "session_id": sid, "origin": "sync"})
+                    if evs:
+                        await ws.send_json({"type": "events", "events": evs})
             # 2) 증분 이벤트
             evs = group.poll()
             if evs:
