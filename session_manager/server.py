@@ -1050,19 +1050,23 @@ def create_app() -> FastAPI:
     def team_list(request: Request, archived: bool = False):
         return _team_call(request, lambda: {"teams": _team.list_teams(archived)})
 
+    # 팀 만들기·보관·보존본 지우기는 승인 요청으로만(단계 3 A-3) — 직접 호출은 안내와 함께 거절
+    def _approval_required(kind: str):
+        return JSONResponse({"error": "approval_required", "kind": kind,
+                             "hint": "POST /api/v1/team/approvals {kind, args} 로 요청하고 사장님 승인 뒤 /execute"},
+                            status_code=403)
+
     @app.post("/api/v1/team")
     def team_create(request: Request, body: dict = Body(...)):
-        res = _team_call(request, _team.create_team, body.get("name", ""), root=body.get("root"),
-                         code=body.get("code"), manager_session=body.get("manager_session"),
-                         manager_alias=body.get("manager_alias") or "관리", parent=body.get("parent"))
-        return _team_sync_after(request, res.get("id") if isinstance(res, dict) else "", res)
+        if not _is_local(request):
+            return JSONResponse({"error": "local_only"}, status_code=403)
+        return _approval_required("team_create")
 
     @app.post("/api/v1/team/import")
     def team_import(request: Request, body: dict = Body(...)):
-        res = _team_call(request, _team.import_v1, body.get("path", ""), body.get("name"))
-        if isinstance(res, dict):
-            res["team"] = _team_sync_after(request, res["team"]["id"], res["team"])
-        return res
+        if not _is_local(request):
+            return JSONResponse({"error": "local_only"}, status_code=403)
+        return _approval_required("team_import")              # 팀이 생기는 길은 전부 승인 요청으로(A-3)
 
     # 단계 2 읽기(경력·장부, 비서의 바닥) — 전부 /api/v1/team 아래라 로컬 전용이 그대로 적용된다
     from session_manager import teamlog as _teamlog
@@ -1098,13 +1102,85 @@ def create_app() -> FastAPI:
 
     @app.post("/api/v1/team/{team_id}/purge")
     def team_purge(request: Request, team_id: str, body: dict = Body(default={})):
-        # '이 팀 보존본 지우기'(S2-5): 화면의 확인창을 거친 요청만 — confirm 이 팀 코드와 같아야 한다
-        def _do():
-            t = _team.get_team(team_id)
-            if str(body.get("confirm") or "").upper() != t["code"]:
-                raise _team.TeamError("confirm_required", 400)
-            return _teamlog.purge_team(team_id)
-        return _team_call(request, _do)
+        if not _is_local(request):
+            return JSONResponse({"error": "local_only"}, status_code=403)
+        return _approval_required("team_purge")                # 화면 확인창은 에이전트도 흉내 낼 수 있다(A-3)
+
+    # ---- 승인 요청·비서·사장님 프로필(단계 3) ----
+    from session_manager import approvals as _ap
+
+    def _human_proof(request: Request, otp: str | None) -> str | None:
+        """사람 증명(A-2): 폰 = 커넥터 메모리 비밀 + 활성 기기, PC = 2차 인증 코드. 아니면 None."""
+        import hmac
+        from session_manager import connector as _c, devices as _d, owner2fa as _o
+        h = request.headers
+        proof = h.get(_c.PROOF_HEADER) or ""
+        if proof and hmac.compare_digest(proof, _c.RELAY_PROOF):
+            did = h.get(_c.DEVICE_HEADER) or ""
+            if did and _d.is_active(did):
+                return "phone:" + did
+        if otp and _o.enabled() and _o.verify(otp):
+            return "otp"
+        return None
+
+    @app.post("/api/v1/team/approvals")
+    def approval_create(request: Request, body: dict = Body(...)):
+        return _team_call(request, _ap.create, body.get("kind", ""), body.get("args") or {},
+                          body.get("summary", ""), body.get("requested_by"))
+
+    @app.get("/api/v1/team/approvals")
+    def approval_list_local(request: Request, status: str = "pending", limit: int = 50):
+        return _team_call(request, lambda: {"approvals": _ap.list_(None if status == "all" else status, limit)})
+
+    @app.get("/api/v1/team/approvals/{aid}")
+    def approval_get_local(request: Request, aid: str):
+        return _team_call(request, _ap.get, aid)
+
+    @app.post("/api/v1/team/approvals/{aid}/execute")
+    def approval_execute(request: Request, aid: str):
+        return _team_call(request, _ap.execute, aid)
+
+    # 폰(릴레이)에서도 보이고 결정할 수 있어야 하는 것 — /api/owner 아래(로컬 전용 덴리스트 밖). 결정은 사람 증명 필수.
+    @app.get("/api/owner/approvals")
+    def approval_list_owner(request: Request):
+        try:
+            return {"approvals": _ap.list_("pending")}
+        except _team.TeamError as e:
+            return JSONResponse({"error": e.code}, status_code=e.status)
+
+    @app.get("/api/owner/approvals/{aid}")
+    def approval_get_owner(request: Request, aid: str):
+        try:
+            return _ap.get(aid)
+        except _team.TeamError as e:
+            return JSONResponse({"error": e.code}, status_code=e.status)
+
+    @app.post("/api/owner/approvals/{aid}/decide")
+    def approval_decide(request: Request, aid: str, body: dict = Body(...)):
+        try:
+            return _ap.decide(aid, bool(body.get("approve")), _human_proof(request, body.get("otp")))
+        except _team.TeamError as e:
+            return JSONResponse({"error": e.code}, status_code=e.status)
+
+    @app.get("/api/owner/assistant")
+    def assistant_info(request: Request):
+        try:
+            return {"assistant": _ap.assistant_info()}
+        except _team.TeamError as e:
+            return JSONResponse({"error": e.code}, status_code=e.status)
+
+    @app.get("/api/v1/team/profile")
+    def profile_list(request: Request, status: str | None = None):
+        return _team_call(request, lambda: {"profile": _ap.profile_list(status)})
+
+    @app.post("/api/v1/team/profile")
+    def profile_propose(request: Request, body: dict = Body(...)):
+        return _team_call(request, _ap.profile_propose, body.get("statement", ""), topic=body.get("topic", ""),
+                          evidence=body.get("evidence"), confidence=body.get("confidence", 0.5))
+
+    @app.get("/api/v1/team/search")
+    def team_search_all(request: Request, q: str = "", kind: str = "human_input", limit: int = 50):
+        return _team_call(request, _ap.search_all, q, kind, limit)
 
     @app.get("/api/v1/team/{team_id}")
     def team_get(request: Request, team_id: str):
@@ -1112,7 +1188,10 @@ def create_app() -> FastAPI:
 
     @app.post("/api/v1/team/{team_id}/archive")
     def team_archive(request: Request, team_id: str, body: dict = Body(default={})):
-        return _team_call(request, _team.archive, team_id, bool(body.get("on", True)))
+        if not _is_local(request):
+            return JSONResponse({"error": "local_only"}, status_code=403)
+        return _approval_required("team_archive")
+
 
     @app.post("/api/v1/team/{team_id}/sync")
     def team_sync(request: Request, team_id: str):
@@ -1366,18 +1445,23 @@ def create_app() -> FastAPI:
 
     # ---- 동봉 스킬 설치(워커 분배 스킬, v0.9.0) — 사용자 명시 동작(설정 버튼+확인창) 경유만 ----
     #      ~/.claude/skills 에 새 파일 생성: 불가침 원칙 예외(2026-09-23 승인). 로컬 전용.
-    @app.get("/api/owner/skills/workers")
-    def skills_workers_status():
+    @app.get("/api/owner/skills/{key}")
+    def skills_status(key: str):
         from session_manager import skillinstall
-        return skillinstall.status()
+        try:
+            return skillinstall.status(key)
+        except KeyError:
+            return JSONResponse({"error": "unknown_skill"}, status_code=404)
 
-    @app.post("/api/owner/skills/workers/install")
-    def skills_workers_install(request: Request, overwrite: bool = Body(False, embed=True)):
+    @app.post("/api/owner/skills/{key}/install")
+    def skills_install(request: Request, key: str, overwrite: bool = Body(False, embed=True)):
         from session_manager import skillinstall
         if not _is_local(request):
             return JSONResponse({"error": "이 PC(로컬)에서만 설치할 수 있습니다."}, status_code=403)
         try:
-            r = skillinstall.install(overwrite=overwrite)
+            r = skillinstall.install(overwrite=overwrite, key=key)
+        except KeyError:
+            return JSONResponse({"error": "unknown_skill"}, status_code=404)
         except FileNotFoundError:
             return JSONResponse({"error": "bundled_missing"}, status_code=500)
         if r.get("exists"):

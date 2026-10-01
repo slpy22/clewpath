@@ -575,6 +575,7 @@
     <select class="pcname hidden" id="pcname" title="PC 선택 (localhost / 저장된 PC)"></select>
     <span class="grow"></span>
     <button class="icon hidden" id="btn-pcs" title="내 PC 전환 · 추가 · 페어링 해제">🖧</button>
+    <button class="icon" id="btn-assist" title="개인 비서">🧑‍💼</button>
     <button class="icon" id="btn-monitor" title="오케스트레이션 관제">🎬</button>
     <button class="icon" id="btn-refresh" title="새로고침">⟳</button>
     <button class="icon" id="btn-settings" title="설정">⚙</button>
@@ -1108,6 +1109,7 @@ async function loadList(q){
     consumePendingOpen();          // 알림 클릭으로 진입한 경우 해당 세션 자동 열기
     restoreTabsOnce();             // 저장된 터미널 탭 워킹셋 복원(1회, 화면 탈취 없이 목록만)
     consumePendingMonitor();       // 관제 알림 클릭으로 진입한 경우 그 그룹 오버레이 열기
+    if(PENDING_APPROVAL){ const a=PENDING_APPROVAL; PENDING_APPROVAL=''; openApprovalById(a); }
     LIST_CTX={rerender};           // 자동 갱신(뱃지 실시간화)이 쓸 컨텍스트
   }catch(e){ listWrap.innerHTML=''; listWrap.appendChild(el('div','empty','목록 실패: '+e.message)); }
 }
@@ -1141,6 +1143,9 @@ let PENDING_OPEN_SID = (location.hash.match(/#open=([^&]+)/)||[])[1] || '';
 if(PENDING_OPEN_SID){ try{ history.replaceState(null,'',location.pathname); }catch(e){} }
 // 관제 알림 클릭 → #monitor=<gid>: 목록이 준비되면 그 그룹의 관제 오버레이를 연다(consumePendingMonitor)
 let PENDING_OPEN_GID = (location.hash.match(/#monitor=([^&]+)/)||[])[1] || '';
+// 승인 요청 알림 클릭 → #approval=<id>: 목록이 준비되면 승인 화면(개인 비서 단계 3)
+let PENDING_APPROVAL = (location.hash.match(/#approval=([^&]+)/)||[])[1] || '';
+if(PENDING_APPROVAL){ try{ history.replaceState(null,'',location.pathname); }catch(e){} }
 if(PENDING_OPEN_GID){ try{ history.replaceState(null,'',location.pathname); }catch(e){} }
 let CURRENT_TERM_SID=null;   // 지금 터미널 화면으로 보고 있는 세션(알림 클릭 시 화면 보존용)
 // 알림 클릭 → 세션으로 점프(v0.8.6). 탭이 있으면 그 탭, 우리 PTY 가 살아 있으면(live_terminal)
@@ -1175,6 +1180,7 @@ if('serviceWorker' in navigator){
   navigator.serviceWorker.addEventListener('message',(e)=>{
     if(e.data && e.data.type==='open-session') openSessionById(e.data.sid);
     if(e.data && e.data.type==='open-monitor') openMonitorGroupById(e.data.gid);
+    if(e.data && e.data.type==='open-approval') openApprovalById(e.data.id);   // 단계 3: 승인 요청 알림
   });
 }
 
@@ -3828,7 +3834,8 @@ conn.onnotice=(m)=>{
 };
 $('#btn-refresh').onclick=()=>loadList();
 $('#btn-monitor').onclick=()=>showMonitorPicker();
-{ const b=$('#btn-pcs'); if(b) b.onclick=()=>showPcs(); }   // 헤더 🖧: 폰에서 PC 전환·추가·해제(1대일 때도 보임)
+{ const b=$('#btn-pcs'); if(b) b.onclick=()=>showPcs(); }
+{ const b=$('#btn-assist'); if(b) b.onclick=()=>openAssistant(); }   // 🧑‍💼: PC·폰 어디서든 비서 세션(단계 3)   // 헤더 🖧: 폰에서 PC 전환·추가·해제(1대일 때도 보임)
 $('#btn-settings').onclick=()=>showSettings();
 
 // ---- ⚙ 설정 화면: 흩어져 있던 도구를 한곳에(5개 섹션). 로컬 전용 항목은
@@ -3873,6 +3880,9 @@ function showSettings(){
   if(pushSupported()) row('🔔','알림 설정','권한 요청·작업 완료 푸시 · 받는 기기 관리',togglePush);
   else add(el('div','cwd','이 브라우저는 웹 푸시를 지원하지 않습니다'));
 
+  sec('승인');
+  row('✅','승인 대기','비서·관리 세션의 실행 요청을 확인하고 승인/거절',showApprovals);
+
   sec('보안');
   row('🔒','2차 인증(2FA)','원격 접속 보호 · 설정 변경',showSecurity,{local:true});
   row('📱','외부 접속 기기','기기 추가(QR) · 폐기 · 킬',showDevices,{local:true});
@@ -3882,6 +3892,7 @@ function showSettings(){
   row('🗑','휴지통','삭제한 세션 복구 (30일 보관)',showTrash,{local:true});
   row('📦','워커 스킬 설치','하위 세션 분배 스킬(clewpath-workers)을 ~/.claude/skills 에 설치',installWorkersSkill,{local:true});
   row('👥','팀 · 경력','에이전트 이력 · 일감 타임라인 · 토큰 · 위반 · 사람 입력',showTeams,{local:true});
+  row('📦','비서 스킬 설치','개인 비서 스킬(clewpath-assistant)을 ~/.claude/skills 에 설치',()=>installBundledSkill('assistant'),{local:true});
 
   sec('정보 · 진단');
   // 업데이트 적용: 로컬은 바로, 원격(폰)은 2차 인증 뒤(사장님 2026-09-30 — 원격에서도 Host 업데이트). 서명 검증은 Host 가 한다.
@@ -3913,7 +3924,8 @@ async function showTeams(){
   let r; try{ r=await T.api('GET','/api/v1/team',{query:{archived:1}}); }catch(e){ toast('팀 목록 실패: '+e.message); return; }
   const body=el('div'); const teams=(r&&r.teams)||[];
   if(!teams.length) body.appendChild(el('div','cwd','아직 팀이 없습니다 — 관리 세션에서 clewpath-workers 스킬로 팀을 만들면 여기에 이력이 쌓입니다.'));
-  teams.forEach(t=>body.appendChild(teamRow(t.archived?'🗄':'👥', t.name+' ('+t.code+')',
+  body.appendChild(teamRow('🧑‍💼','사장님 프로필','비서가 배운 작업 습관·선호(제안 → 사장님 확정)', ()=>{ closeModal(); showProfile(); }));
+  teams.forEach(t=>body.appendChild(teamRow(t.kind==='portfolio'?'🧑‍💼':(t.archived?'🗄':'👥'), t.name+' ('+t.code+')',
     '구성원 '+t.members+' · 열린 일감 '+t.open_tasks+(t.archived?' · 보관됨':''), ()=>{ closeModal(); showTeam(t.code); })));
   openModal('👥 팀 · 경력', body, []);
 }
@@ -3945,16 +3957,15 @@ async function showTeam(code){
   }
   body.appendChild(el('div','setsec','기록'));
   body.appendChild(teamRow('🙋','사람 입력 검색','이 팀 세션에서 사장님이 친 내용', ()=>{ closeModal(); showTeamInputs(code); }));
-  const purge=teamRow('🧽','이 팀 보존본 지우기','보존 원본·사람 입력·메시지 전문 삭제(일감·토큰 수는 남음)', ()=>purgeTeamArchive(code, t.name));
+  const purge=teamRow('🧽','이 팀 보존본 지우기','보존 원본·사람 입력·메시지 전문 삭제(일감·토큰 수는 남음) — 승인 필요', ()=>purgeTeamArchive(code, t.name));
   body.appendChild(purge);
+  body.appendChild(teamRow('🗄','이 팀 보관','목록·알림에서 빼기(이력은 그대로) — 승인 필요',
+    ()=>requestApproval('team_archive', {team:code, on:true}, ()=>{ toast('보관했습니다'); closeModal(); showTeams(); })));
   openModal('👥 '+t.name+' ('+t.code+')', body, []);
 }
 function purgeTeamArchive(code, name){
-  return confirmSheet({title:'보존본 지우기', main:'"'+name+'" 팀의 보존 원본과 대화 전문을 지울까요?',
-    sub:'세션 원본 기록(claude)은 그대로입니다. 일감·배정·승인 기록과 토큰 수는 남습니다. 되돌릴 수 없습니다.',
-    action:'지우기', danger:true, busyText:'지우는 중…',
-    run: async()=>{ await T.api('POST','/api/v1/team/'+encodeURIComponent(code)+'/purge',{body:{confirm:code}}); }})
-    .then(ok=>{ if(ok){ toast('보존본을 지웠습니다'); closeModal(); showTeam(code); } return ok; });
+  // 화면 확인창은 에이전트도 흉내 낼 수 있어 승인 요청(사람 증명)으로만 지운다(단계 3 A-3)
+  return requestApproval('team_purge', {team:code}, ()=>{ toast('보존본을 지웠습니다'); closeModal(); showTeam(code); });
 }
 function teamEventText(e){
   const p=e.payload||{};
@@ -4025,23 +4036,151 @@ async function showTeamInputs(code, q, before){
   if(r&&r.next_before){ const more=el('button','btn ghost','더 보기'); more.onclick=()=>{ closeModal(); showTeamInputs(code, q, r.next_before); }; body.appendChild(more); }
   openModal('🙋 사람 입력', body, []);
 }
+// ---- ✅ 승인 요청(개인 비서 단계 3, A-1~A-3) ----
+// 영향이 큰 실행은 '사람만 가진 것' 으로만 승인된다: 폰(페어링 기기) 탭, 또는 PC 에서는 2차 인증 코드.
+const APPROVAL_KIND={team_create:'팀 만들기', team_archive:'팀 보관', team_purge:'보존본 지우기', assistant_set:'비서 지정',
+  delegate:'일감 위임', task_decide:'결과 승인/반려', profile_decide:'사장님 프로필 결정'};
+async function showApprovals(){
+  let r; try{ r=await T.api('GET','/api/owner/approvals'); }catch(e){ toast('승인 목록 실패: '+e.message); return; }
+  const body=el('div'); const list=(r&&r.approvals)||[];
+  if(!list.length) body.appendChild(el('div','cwd','대기 중인 승인 요청이 없습니다.'));
+  list.forEach(a=>body.appendChild(teamRow('✅', a.summary, (APPROVAL_KIND[a.kind]||a.kind)+' · '+tsText(a.created)
+    +' · 만료 '+tsText(a.expires), ()=>{ closeModal(); showApprovalSheet(a); })));
+  openModal('✅ 승인 대기', body, []);
+}
+async function openApprovalById(id){
+  let a; try{ a=await T.api('GET','/api/owner/approvals/'+encodeURIComponent(id)); }catch(e){ toast('승인 요청을 찾지 못했습니다'); return; }
+  showApprovalSheet(a);
+}
+function approvalErrText(m){
+  m=String(m||'');
+  if(m.includes('human_proof_required')) return MODE==='local'
+    ? '2차 인증 코드가 필요합니다(설정 → 2차 인증을 켜거나, 폰 알림에서 승인하세요).'
+    : '이 기기로는 승인할 수 없습니다(페어링을 확인하세요).';
+  if(m.includes('expired')) return '만료된 요청입니다(30분).';
+  if(m.includes('not_pending')) return '이미 처리된 요청입니다.';
+  return '실패: '+m;
+}
+// opts.execute: 승인 직후 이 화면(PC 로컬)에서 실행까지. opts.onDone(result): 실행 결과 콜백.
+function showApprovalSheet(a, opts){
+  opts=opts||{};
+  const body=el('div');
+  body.appendChild(el('div','setsec', APPROVAL_KIND[a.kind]||a.kind));
+  body.appendChild(el('div','cwd', a.summary));
+  const pre=el('pre','tl-full', JSON.stringify(a.args||{}, null, 2)); pre.style.whiteSpace='pre-wrap'; body.appendChild(pre);
+  body.appendChild(el('div','diag','요청 '+tsText(a.created)+(a.requested_by?' · 세션 '+String(a.requested_by).slice(0,8):'')
+    +' · 만료 '+tsText(a.expires)+' · 상태 '+a.status));
+  let otp=null;
+  if(MODE==='local' && a.status==='pending'){
+    body.appendChild(el('div','cwd','PC 에서는 2차 인증 코드로 승인합니다(또는 폰 알림에서 탭).'));
+    otp=el('input','inp'); otp.placeholder='2차 인증 6자리'; otp.inputMode='numeric'; body.appendChild(otp);
+  }
+  const err=el('div','cwd'); body.appendChild(err);
+  const decide=async(approve)=>{
+    err.textContent='';
+    try{
+      const d=await T.api('POST','/api/owner/approvals/'+encodeURIComponent(a.id)+'/decide',
+        {body:Object.assign({approve}, otp&&otp.value?{otp:otp.value.trim()}:{})});
+      if(d && d.error) throw new Error(d.error);
+      if(!approve){ toast('거절했습니다'); closeModal(); return 'rejected'; }
+      if(opts.execute && MODE==='local'){
+        const x=await T.api('POST','/api/v1/team/approvals/'+encodeURIComponent(a.id)+'/execute');
+        if(x && x.error) throw new Error(x.error);
+        closeModal(); toast('승인·실행했습니다'); if(opts.onDone) opts.onDone(x&&x.result); return 'executed';
+      }
+      closeModal(); toast('승인했습니다 — 요청한 세션이 실행합니다'); return 'approved';
+    }catch(e){ err.textContent=approvalErrText(e.message||e); return 'error'; }
+  };
+  globalThis.__approvalDecide=decide;      // 테스트 훅
+  if(a.status!=='pending'){ openModal('✅ 승인 요청', body, []); return; }
+  const yes=el('button','btn','승인'); yes.onclick=()=>decide(true);
+  const no=el('button','btn ghost','거절'); no.onclick=()=>decide(false);
+  openModal('✅ 승인 요청', body, [no, yes]);
+}
+// PC 로컬 화면에서 영향 큰 동작을 할 때: 승인 요청을 만들고 바로 그 승인 화면(2FA 또는 폰)을 띄운다.
+async function requestApproval(kind, args, onDone){
+  let a; try{ a=await T.api('POST','/api/v1/team/approvals',{body:{kind, args}}); }catch(e){ toast('요청 실패: '+e.message); return null; }
+  if(!a || a.error){ toast('요청 실패: '+((a&&a.error)||'')); return null; }
+  closeModal(); showApprovalSheet(a, {execute:true, onDone});
+  return a;
+}
+
+// ---- 🧑‍💼 개인 비서(단계 3, A-7) — 헤더 버튼: PC·폰 어디서든 비서 세션 터미널 ----
+async function openAssistant(){
+  let r; try{ r=await T.api('GET','/api/owner/assistant'); }catch(e){ toast('비서 조회 실패: '+e.message); return; }
+  const a=r&&r.assistant;
+  if(a && a.session_id){
+    const s=(typeof SESSIONS!=='undefined'&&SESSIONS.find(x=>x.session_id===a.session_id))
+      || {session_id:a.session_id, title:'🧑‍💼 비서', label_name:'🧑‍💼 비서'};
+    return loadTerminal(s);
+  }
+  const body=el('div');
+  if(MODE!=='local'){
+    body.appendChild(el('div','cwd','아직 비서가 없습니다. PC 의 ClewPath 에서 🧑‍💼 → 비서 만들기(또는 세션 지정)를 하세요.'));
+    openModal('🧑‍💼 개인 비서', body, []); return;
+  }
+  body.appendChild(el('div','cwd','비서는 모든 팀의 이력을 보고 분석·제안하는 전용 세션입니다. 실행(팀 만들기·위임·승인)은 언제나 사장님 승인 뒤에만 합니다.'));
+  body.appendChild(teamRow('✨','새 비서 만들기','데이터 폴더 assistant/ 에 새 세션 — 처음 열 때 폴더 신뢰 질문에 답하세요',
+    ()=>requestApproval('assistant_set', {create:true}, ()=>openAssistant())));
+  body.appendChild(teamRow('📌','기존 세션을 비서로','세션 목록에서 고르기', ()=>pickAssistantSession()));
+  openModal('🧑‍💼 개인 비서', body, []);
+}
+function pickAssistantSession(){
+  const body=el('div');
+  const list=(typeof SESSIONS!=='undefined'?SESSIONS:[]).slice(0,30);
+  if(!list.length) body.appendChild(el('div','cwd','세션 목록이 비어 있습니다.'));
+  list.forEach(s=>body.appendChild(teamRow('💬', s.title||s.slug||s.session_id.slice(0,8), (s.cwd||'')+' · '+s.session_id.slice(0,8),
+    ()=>requestApproval('assistant_set', {session_id:s.session_id}, ()=>openAssistant()))));
+  closeModal(); openModal('비서로 지정할 세션', body, []);
+}
+
+// ---- 🧑‍💼 사장님 프로필(A-8) — 비서가 제안, 사장님이 승인으로 확정·거절·수정·삭제 ----
+const PROFILE_STATUS={proposed:'제안', confirmed:'확정'};
+async function showProfile(){
+  let r; try{ r=await T.api('GET','/api/v1/team/profile'); }catch(e){ toast('프로필 조회 실패: '+e.message); return; }
+  const body=el('div'); const items=(r&&r.profile)||[];
+  body.appendChild(el('div','cwd','비서가 장부(사장님 입력·결정·반려 사유)에서 배운 것입니다. 제안은 확정해야 비서가 기준으로 씁니다. 거절·삭제한 문장은 다시 제안되지 않습니다.'));
+  if(!items.length) body.appendChild(el('div','cwd','아직 항목이 없습니다.'));
+  items.forEach(p=>{
+    body.appendChild(teamRow(p.status==='confirmed'?'📌':'💡', p.statement,
+      (PROFILE_STATUS[p.status]||p.status)+(p.topic?' · '+p.topic:'')+' · 확신 '+Math.round((p.confidence||0)*100)+'% · 근거 '
+      +((p.evidence||[]).length)+(p.source==='owner'?' · 사장님 수정':'')));
+    const acts=el('div'); acts.style.cssText='display:flex;gap:6px;flex-wrap:wrap;margin:0 0 8px 34px';
+    const mk=(label, decision, extra)=>{ const b=el('button','btn ghost sm',label);
+      b.onclick=()=>{ const args=Object.assign({id:p.id, decision}, extra?extra():{});
+        if('statement' in args && !args.statement) return;
+        requestApproval('profile_decide', args, ()=>{ closeModal(); showProfile(); }); };
+      acts.appendChild(b); };
+    if(p.status==='proposed') mk('확정','confirm');
+    mk('수정','edit', ()=>({statement: prompt('수정할 문장', p.statement)}));
+    if(p.status==='proposed') mk('거절','reject');
+    mk('삭제','delete');
+    body.appendChild(acts);
+  });
+  openModal('🧑‍💼 사장님 프로필', body, []);
+}
 // 동봉 스킬 설치(v0.9.0) — claude 가 읽는 ~/.claude/skills 에 새 파일을 만드는 행위라 반드시
 // 확인창을 거친다(불가침 원칙 예외, 2026-09-23). 이미 있으면 덮어쓰기를 다시 묻는다.
-async function installWorkersSkill(){
-  let st={}; try{ st=await T.api('GET','/api/owner/skills/workers'); }catch(e){ toast('상태 조회 실패: '+e.message); return; }
+const BUNDLED_SKILLS={
+  workers:{name:'clewpath-workers', title:'워커 스킬', desc:'여러 세션이 한 팀으로 일하는 운영 규칙(clewpath-workers 스킬)을 설치합니다. 관리 세션에서 /clewpath-workers 로 부릅니다.'},
+  assistant:{name:'clewpath-assistant', title:'비서 스킬', desc:'개인 비서 세션의 규칙(clewpath-assistant 스킬)을 설치합니다. 비서 세션에서 /clewpath-assistant 로 부릅니다.'}};
+function installWorkersSkill(){ return installBundledSkill('workers'); }
+async function installBundledSkill(key){
+  const k=BUNDLED_SKILLS[key]; if(!k) return;
+  let st={}; try{ st=await T.api('GET','/api/owner/skills/'+key); }catch(e){ toast('상태 조회 실패: '+e.message); return; }
   const body=el('div');
-  body.appendChild(el('p',null,'상위 세션이 하위 워커 세션들에 일감을 나눠 주는 운영 규칙(clewpath-workers 스킬)을 설치합니다. 관리 세션에서 /clewpath-workers 로 부릅니다.'));
+  body.appendChild(el('p',null,k.desc));
   const why=el('div','cwd'); why.style.whiteSpace='pre-line';
-  why.textContent='설치 위치: '+(st.path||'~/.claude/skills/clewpath-workers/SKILL.md')
+  why.textContent='설치 위치: '+(st.path||('~/.claude/skills/'+k.name+'/SKILL.md'))
     +'\n· claude 가 읽는 폴더에 파일 1개를 새로 만듭니다(다른 파일은 건드리지 않음)'
     +(st.installed?('\n· 이미 설치돼 있습니다'+(st.up_to_date?' (최신)':' (동봉본과 다름 — 덮어씁니다)')):'');
   body.appendChild(why);
   const ok=el('button','btn', st.installed?'📦 덮어쓰기 설치':'📦 설치');
   ok.onclick=async()=>{ ok.disabled=true;
-    try{ const r=await T.api('POST','/api/owner/skills/workers/install',{body:{overwrite:!!st.installed}});
-         closeModal(); toast('스킬 설치됨 — 새 claude 세션부터 /clewpath-workers 사용 가능'); }
+    try{ await T.api('POST','/api/owner/skills/'+key+'/install',{body:{overwrite:!!st.installed}});
+         closeModal(); toast('스킬 설치됨 — 새 claude 세션부터 /'+k.name+' 사용 가능'); }
     catch(e){ ok.disabled=false; toast('설치 실패: '+e.message); } };
-  openModal('📦 워커 스킬 설치', body, [ok]);
+  openModal('📦 '+k.title+' 설치', body, [ok]);
 }
 async function showDiagnostics(){
   const body=el('div'); const st=el('p',null,'불러오는 중…'); body.appendChild(st);

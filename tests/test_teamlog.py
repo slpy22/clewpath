@@ -317,7 +317,7 @@ def test_schema_migration_from_v1(fake_claude_home):
     c.commit(); c.close()
     assert team.list_teams()[0]["code"] == "OLD"
     c = sqlite3.connect(str(p))
-    assert c.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert c.execute("PRAGMA user_version").fetchone()[0] == team.SCHEMA_VERSION
     assert c.execute("SELECT team_id FROM agent_sessions").fetchone()[0] == "tm_1", "옛 바인딩에 당시 소속 채움"
 
 
@@ -357,9 +357,9 @@ def test_api_stage2(client, env):
     assert client.get("/api/v1/team/archive/nope").status_code == 404
     aid = client.get("/api/v1/team/WEB/members/프론트/history").json()["agent_id"]
     assert client.get(f"/api/v1/team/agent/{aid}").json()["alias"] == "프론트"
-    assert client.post("/api/v1/team/WEB/purge", json={}).status_code == 400, "확인 없이는 안 지움"
-    assert client.post("/api/v1/team/WEB/purge", json={"confirm": "web"}).json()["purged_events"] == 1
-    assert client.get("/api/v1/team/WEB/inputs").json()["items"] == []
+    r = client.post("/api/v1/team/WEB/purge", json={"confirm": "WEB"})
+    assert r.status_code == 403 and r.json()["error"] == "approval_required", "화면 확인만으로는 못 지움(단계 3)"
+    assert client.get("/api/v1/team/WEB/inputs").json()["items"], "지워지지 않았다"
 
 
 def test_new_worker_session_created_just_before_binding_is_taken_whole(env):

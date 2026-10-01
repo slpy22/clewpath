@@ -351,6 +351,7 @@ session_manager/
 ├── monitor.py · monwatch.py · mongroups.py   관제(멀티 세션) · 호출 실패 감지 · 그룹
 ├── team.py         팀·에이전트 명부 + 일감 장부(SQLite team.db, 로컬 전용 /api/v1/team) — 워커 직접 통신·개인 비서 인프라
 ├── teamlog.py      팀 세션 수집기: 원본 보존(gzip 청크, 비밀값 가림)·사람 입력/메시지/토큰 색인·규칙 위반 감지·경력 읽기
+├── approvals.py    승인 요청(폰 탭/2FA 사람 증명·1회 실행)·개인 비서 지정·사장님 프로필 — 비서는 분석 자유, 실행은 승인으로만
 ├── updater.py      서명 검증 자동 업데이트
 ├── liveness.py     비정상 종료 감지 · 자기 회복
 ├── jobguard.py     자식 프로세스 동반 종료(Job Object)
@@ -363,8 +364,8 @@ pwa/native-bridge.js  앱 전용 브리지
 ## 테스트
 
 ```bash
-python -m pytest tests/ -q                      # 파이썬 466개(fixture 기반, 실제 ~/.claude 안 건드림)
-node --test --test-reporter=tap tests/pwa/*.test.mjs   # PWA 84개(node:vm 하네스로 index.html 통째 부트)
+python -m pytest tests/ -q                      # 파이썬 483개(fixture 기반, 실제 ~/.claude 안 건드림)
+node --test --test-reporter=tap tests/pwa/*.test.mjs   # PWA 90개(node:vm 하네스로 index.html 통째 부트)
 python -m pytest -q -m e2e -o addopts="" tests/e2e      # 실 CP 페어링 e2e(SM_E2E_CP_URL 있을 때만)
 ```
 

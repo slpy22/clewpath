@@ -227,8 +227,8 @@ def client(T, monkeypatch):
 
 def test_api_flow(client):
     r = client.post("/api/v1/team", json={"name": "Web", "manager_session": "s-m"})
-    assert r.status_code == 200 and r.json()["monitor_sync"] == "ok"
-    tid = r.json()["id"]
+    assert r.status_code == 403 and r.json()["error"] == "approval_required", "팀 만들기는 승인 요청으로만(단계 3)"
+    tid = team.create_team("Web", manager_session="s-m")["id"]
     assert client.post(f"/api/v1/team/{tid}/members", json={"alias": "a", "session_id": "s-a"}).status_code == 200
     assert client.post(f"/api/v1/team/{tid}/members", json={"alias": "a"}).status_code == 409
     k = client.post(f"/api/v1/team/{tid}/tasks", json={"goal": "g", "owner": "a"}).json()
@@ -255,11 +255,12 @@ def test_api_is_local_only_on_server_side(client, monkeypatch):
     assert C._is_local_only_api("/api/v1/team", "GET") and C._is_local_only_api("/api/v1/team/x/tasks/y/submit", "POST")
 
 
-def test_skill_doc_api_paths_exist(client):
-    """eng E-4: SKILL.md 가 세션에게 부르라고 적은 /api/… 경로가 전부 실제 라우트여야 한다."""
+@pytest.mark.parametrize("skill", ["clewpath-workers", "clewpath-assistant"])
+def test_skill_doc_api_paths_exist(client, skill):
+    """eng E-4: SKILL.md 가 세션에게 부르라고 적은 /api/… 경로가 전부 실제 라우트여야 한다(워커·비서 스킬)."""
     import re
     from pathlib import Path
-    doc = (Path(__file__).resolve().parents[1] / "session_manager" / "skills" / "clewpath-workers" / "SKILL.md").read_text(encoding="utf-8")
+    doc = (Path(__file__).resolve().parents[1] / "session_manager" / "skills" / skill / "SKILL.md").read_text(encoding="utf-8")
     paths = set(re.findall(r"(/api/[A-Za-z0-9_./{}<>-]+)", doc))
     assert paths, "스킬 문서에 API 경로가 있어야 한다"
     routes = [getattr(r, "path", "") for r in client.app.routes]

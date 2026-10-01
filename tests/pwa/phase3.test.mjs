@@ -108,7 +108,7 @@ test("sw push: 페이로드 → 알림(title 기본값·tag·data{sid,kind,gid})
   const { calls, fire } = bootSw("/relay/sw.js");
   await fire("push", { data: { json: () => ({ title: "T", body: "b", tag: "x:ready", sid: A, kind: "ready" }) } });
   const n = calls.shown[0];
-  assert.equal(n.title, "T"); assert.equal(n.tag, "x:ready"); same(n.data, { sid: A, kind: "ready", gid: "" });
+  assert.equal(n.title, "T"); assert.equal(n.tag, "x:ready"); same(n.data, { sid: A, kind: "ready", gid: "", approval: "" });
   await fire("push", { data: { json: () => { throw new Error("bad"); } } });
   assert.equal(calls.shown[1].title, "ClewPath");
   await fire("push", { data: null });
@@ -122,8 +122,9 @@ test("sw notificationclick: 열린 창이 있으면 focus + postMessage(open-ses
   self.__wins = [win("https://other.example/relay/app", calls), win("https://test.local/relay/app", calls)];
   await fire("notificationclick", { notification: { close, data: { sid: A } } });
   await fire("notificationclick", { notification: { close, data: { sid: A, gid: "g1" } } });
-  same(calls.posted, [{ type: "open-session", sid: A }, { type: "open-monitor", gid: "g1" }]);
-  same(calls.focused, ["https://test.local/relay/app", "https://test.local/relay/app"]);
+  await fire("notificationclick", { notification: { close, data: { sid: A, approval: "ap_1" } } });   // 승인 요청(단계 3)
+  same(calls.posted, [{ type: "open-session", sid: A }, { type: "open-monitor", gid: "g1" }, { type: "open-approval", id: "ap_1" }]);
+  same(calls.focused, ["https://test.local/relay/app", "https://test.local/relay/app", "https://test.local/relay/app"]);
   assert.equal(calls.opened.length, 0);
   // focus 실패(죽은 창) → 다음 창, 전부 실패 → openWindow
   self.__wins = [win("https://test.local/relay/app", calls, { failFocus: true })];
@@ -133,7 +134,8 @@ test("sw notificationclick: 열린 창이 있으면 focus + postMessage(open-ses
   self.__wins = [];
   await fire("notificationclick", { notification: { close, data: { gid: "g 1" } } });
   await fire("notificationclick", { notification: { close } });
-  same(calls.opened.slice(1), ["/relay/app#monitor=g%201", "/relay/app"]);
+  await fire("notificationclick", { notification: { close, data: { approval: "ap 2" } } });
+  same(calls.opened.slice(1), ["/relay/app#monitor=g%201", "/relay/app", "/relay/app#approval=ap%202"]);
   // 로컬 배치(/sw.js) → 루트
   const loc = bootSw("/sw.js");
   await loc.fire("notificationclick", { notification: { close, data: { sid: B } } });

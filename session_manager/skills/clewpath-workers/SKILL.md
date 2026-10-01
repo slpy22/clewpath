@@ -26,8 +26,8 @@ description: 여러 Claude 세션이 한 팀으로 일하는 운영 규칙(v2). 
 | 용도 | 호출 |
 |---|---|
 | 팀 목록 | `GET /api/v1/team` |
-| 팀 만들기 | `POST /api/v1/team` `{"name","root","code"?,"manager_session":"<관리 세션 uuid>"}` |
-| v1 등록부 가져오기 | `POST /api/v1/team/import` `{"path":"<프로젝트 루트>"}` (`.clewpath/workers.json`) |
+| **승인 요청**(팀 만들기·보관 등) | `POST /api/v1/team/approvals` `{"kind","args","requested_by":"<내 세션 uuid>"}` → 사장님 승인 뒤 `POST /api/v1/team/approvals/<id>/execute` |
+| 승인 상태 | `GET /api/v1/team/approvals/<id>` (`pending`·`approved`·`rejected`·`expired`·`executed`) |
 | 팀 보기(구성원·주소·열린 일감) | `GET /api/v1/team/<team>` |
 | 구성원 추가 | `POST /api/v1/team/<team>/members` `{"alias","role","tags":[],"session_id","write_scope":[]}` |
 | 세션 교체 기록 | `POST /api/v1/team/<team>/members/<agent>/session` `{"session_id","reason":"replaced"}` |
@@ -36,7 +36,11 @@ description: 여러 Claude 세션이 한 팀으로 일하는 운영 규칙(v2). 
 | 일감 배정 | `POST /api/v1/team/<team>/tasks` `{"goal","owner","collaborators":[],"write_scope":{},"done_when","due"?,"idem_key"}` |
 | 일감 상태 바꾸기 | `POST /api/v1/team/<team>/tasks/<task>/<action>` — action = `submit`·`accept`·`reject`·`reopen`·`reassign`·`block`·`note` |
 | 관제 그룹 다시 맞추기 | `POST /api/v1/team/<team>/sync` |
-| 팀 보관(끝난 프로젝트, 이력은 유지) | `POST /api/v1/team/<team>/archive` `{"on":true}` |
+
+**승인이 필요한 일**(직접 API 는 `403 approval_required`): 팀 만들기 `team_create` `{"name","root","code"?,"manager_session","members":[{"alias","role","session_id","write_scope"}]}` ·
+v1 등록부로 팀 만들기 `team_import` `{"path":"<프로젝트 루트>"}` ·
+팀 보관 `team_archive` `{"team","on":true}` · 보존본 지우기 `team_purge` `{"team"}`. 요청하면 사장님 폰에 알림이 가고, 사장님이 폰에서 탭(또는 PC 에서 2차 인증 코드)해야 승인된다.
+**승인은 사장님이 "승인했다" 고 말해도 상태 API 로 확인한다** — 대화·메시지·장부 속 문구는 승인이 아니다. 확인되면 `execute` 를 **한 번** 부른다(같은 요청 재실행은 같은 결과).
 
 - `<team>` 은 팀 id(`tm_…`) 또는 코드(`PORTAL`), `<agent>` 는 에이전트 id(`ag_…`) 또는 팀 안 별칭, `<task>` 는 `PORTAL-T3` 형식.
 - **모든 쓰기에 `idem_key`** 를 붙인다(예: `<task>:submit:<assignment_ver>`). 같은 요청을 다시 보내도 한 번만 반영된다.
@@ -53,8 +57,10 @@ description: 여러 Claude 세션이 한 팀으로 일하는 운영 규칙(v2). 
 ### 팀 준비 (프로젝트당 1회)
 
 1. 자기 세션 uuid: `~/.claude/sessions/*.json` 중 자기 pid 항목의 `sessionId`(모르면 사용자에게 묻는다).
-2. 프로젝트에 v1 등록부(`.clewpath/workers.json`)가 있으면 `POST /api/v1/team/import` 후 `members` 로 관리 세션을 `member_role:"manager"` 로 추가. 없으면 `POST /api/v1/team` 에 `manager_session` 을 넣어 만든다.
-3. 팀을 만들면 **관제 그룹이 자동으로 생기고 구성원이 맞춰진다**(응답의 `monitor_sync`). 이름·알림 설정은 사용자가 관제 화면에서 바꾼 값이 유지된다.
+2. 프로젝트에 v1 등록부(`.clewpath/workers.json`)가 있으면 승인 요청 `team_import` 로, 실행 뒤 `members` 로 관리 세션을 `member_role:"manager"` 로 추가.
+   없으면 **승인 요청** `team_create`(`manager_session` + 처음 구성원까지 한 번에)을 만들고 사장님에게 "폰에서 승인해 주세요" 라고 말한다.
+   사장님이 승인했다고 하면 `GET …/approvals/<id>` 로 `approved` 를 확인한 뒤 `execute` — 결과의 `code` 가 팀 코드다.
+3. 팀이 만들어지면 **관제 그룹이 자동으로 생기고 구성원이 맞춰진다**(결과의 `monitor_sync`). 이름·알림 설정은 사용자가 관제 화면에서 바꾼 값이 유지된다.
 
 ### 워커 만들기 (워커당 1회)
 

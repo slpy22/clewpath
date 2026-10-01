@@ -33,7 +33,7 @@ from pathlib import Path
 
 from session_manager import config
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 _lock = threading.RLock()
 
 _SCHEMA = """
@@ -82,6 +82,21 @@ CREATE TABLE IF NOT EXISTS usage(
 CREATE INDEX IF NOT EXISTS ix_usage_team ON usage(team_id, agent_id);
 CREATE TABLE IF NOT EXISTS addresses(address TEXT PRIMARY KEY, session_id TEXT NOT NULL, first_seen INTEGER, last_seen INTEGER);
 CREATE TABLE IF NOT EXISTS pending_sends(tool_use_id TEXT PRIMARY KEY, session_id TEXT, event_id INTEGER, created INTEGER);
+"""
+
+
+# v3(단계 3, 개인 비서): 포트폴리오 팀 종류 · 비서 1명 · 승인 요청 · 사장님 프로필.
+_SCHEMA_V3 = """
+ALTER TABLE teams ADD COLUMN kind TEXT NOT NULL DEFAULT 'team';
+CREATE TABLE IF NOT EXISTS assistant(id INTEGER PRIMARY KEY CHECK(id=1), agent_id TEXT NOT NULL, team_id TEXT NOT NULL,
+  set_at INTEGER);
+CREATE TABLE IF NOT EXISTS approvals(id TEXT PRIMARY KEY, kind TEXT NOT NULL, args_json TEXT, summary TEXT,
+  requested_by TEXT, created INTEGER NOT NULL, expires INTEGER NOT NULL, status TEXT NOT NULL,
+  decided_at INTEGER, decided_via TEXT, executed_at INTEGER, result_json TEXT);
+CREATE INDEX IF NOT EXISTS ix_approvals_status ON approvals(status, created);
+CREATE TABLE IF NOT EXISTS profile(id TEXT PRIMARY KEY, topic TEXT, statement TEXT, evidence_json TEXT, confidence REAL,
+  status TEXT NOT NULL, source TEXT NOT NULL, stmt_hash TEXT NOT NULL, created INTEGER NOT NULL, updated INTEGER);
+CREATE INDEX IF NOT EXISTS ix_profile_hash ON profile(stmt_hash);
 """
 
 
@@ -137,6 +152,10 @@ def _connect() -> sqlite3.Connection:
                 if v < 2:
                     c.executescript(_SCHEMA_V2 + _fts_sql())
                     c.execute("PRAGMA user_version=2")
+                    v = 2
+                if v < 3:
+                    c.executescript(_SCHEMA_V3)
+                    c.execute("PRAGMA user_version=3")
         return c
     except sqlite3.DatabaseError as e:            # 손상·잠김 → 호출자는 503, Host 는 계속 산다
         raise TeamError("team_db_unavailable", 503) from e
@@ -210,7 +229,7 @@ def _code_from(name: str, c) -> str:
 
 def create_team(name: str, root: str | None = None, code: str | None = None,
                 manager_session: str | None = None, manager_alias: str = "관리",
-                parent: str | None = None) -> dict:
+                parent: str | None = None, kind: str = "team") -> dict:
     name = _clean(name, 80)
     if not name:
         raise TeamError("name_required")
@@ -222,8 +241,11 @@ def create_team(name: str, root: str | None = None, code: str | None = None,
         else:
             code = _code_from(name, c)
         tid = "tm_" + secrets.token_hex(4)
-        c.execute("INSERT INTO teams(id,code,name,root,parent,created) VALUES(?,?,?,?,?,?)",
-                  (tid, code, name, _clean(root, 400) or None, parent or None, _now()))
+        if parent is None and kind == "team":                # 비서가 있으면 새 팀은 비서 포트폴리오 아래(단계 3)
+            a = c.execute("SELECT agent_id FROM assistant WHERE id=1").fetchone()
+            parent = a["agent_id"] if a else None
+        c.execute("INSERT INTO teams(id,code,name,root,parent,created,kind) VALUES(?,?,?,?,?,?,?)",
+                  (tid, code, name, _clean(root, 400) or None, parent or None, _now(), kind))
         _event(c, tid, "team_created", payload={"name": name, "code": code, "root": root})
     if manager_session:
         try:
@@ -253,6 +275,7 @@ def list_teams(include_archived: bool = False) -> list[dict]:
             o = c.execute("SELECT COUNT(*) FROM tasks WHERE team_id=? AND status IN (?,?,?,?)",
                           (t["id"], *OPEN_STATUSES)).fetchone()[0]
             out.append({"id": t["id"], "code": t["code"], "name": t["name"], "root": t["root"],
+                        "kind": t["kind"], "parent": t["parent"],
                         "members": n, "open_tasks": o, "monitor_group_id": t["monitor_group_id"],
                         "monitor_sync": t["monitor_sync"], "archived": bool(t["archived"])})
         return out
@@ -477,7 +500,7 @@ def get_team(team_id: str) -> dict:
                        " WHERE m.team_id=? AND m.left_at IS NULL ORDER BY m.member_role, m.joined", (t["id"],)).fetchall()
         tasks = c.execute("SELECT * FROM tasks WHERE team_id=? AND status IN (?,?,?,?) ORDER BY created",
                           (t["id"], *OPEN_STATUSES)).fetchall()
-        return {"id": t["id"], "code": t["code"], "name": t["name"], "root": t["root"],
+        return {"id": t["id"], "code": t["code"], "name": t["name"], "root": t["root"], "kind": t["kind"],
                 "parent": t["parent"], "manager_agent": t["manager_agent"],
                 "monitor_group_id": t["monitor_group_id"], "monitor_sync": t["monitor_sync"],
                 "members": [_member_view(c, m, peers) for m in ms],
@@ -577,6 +600,8 @@ def transition(team_id: str, task_id: str, action: str, actor_session: str | Non
             raise TeamError(f"bad_transition:{r['status']}->{action}", 409)
         if action == "submit" and (assignment_ver is None or int(assignment_ver) != r["assignment_ver"]):
             raise TeamError("stale_assignment", 409)            # 재배정 전 옛 담당자의 제출 거절
+        if action in ("accept", "reject") and assignment_ver is not None and int(assignment_ver) != r["assignment_ver"]:
+            raise TeamError("stale_assignment", 409)            # 오래된 승인으로 재배정 뒤 다른 결과를 승인하지 않게
         ver = r["assignment_ver"] + (1 if bump else 0)
         new_owner = r["owner_agent"]
         if action == "reassign" and owner:
@@ -699,6 +724,8 @@ def sync_group(team_id: str) -> dict:
     """팀 구성원 → 관제 그룹. 구성원·라벨만 팀이 정본, 이름·알림 설정은 사용자 값 보존.
     실패하면 monitor_sync='pending' 으로 두고 다음 변경·감시 스레드가 다시 맞춘다. 그룹은 팀당 1개."""
     team = get_team(team_id)
+    if team.get("kind") == "portfolio":
+        return {"monitor_group_id": team["monitor_group_id"], "monitor_sync": "portfolio"}
     mgr, subs, labels = desired_group(team)
     if not mgr:
         state, gid = "no_manager", team["monitor_group_id"]

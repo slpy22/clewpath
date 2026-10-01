@@ -56,14 +56,17 @@ test("showTeam: 구성원(살아 있음·토큰)·일감·위반·기록 메뉴"
                    "프론트 → 백엔드", "알림됨", "사람 입력 검색", "이 팀 보존본 지우기"]) assert.ok(t.includes(s), s);
 });
 
-test("purgeTeamArchive: 확인 시트를 거쳐 confirm=팀 코드로 POST", async () => {
+test("purgeTeamArchive: 직접 지우지 않고 승인 요청(team_purge) → 승인 화면(PC 는 2FA 칸)", async () => {
   const ctx = await boot();
-  ev(ctx, "confirmSheet = async (o) => { globalThis.__sheet = o; await o.run(); return true; }; showTeam = () => {};");
+  ev(ctx, "globalThis.__sheets = []; showApprovalSheet = (a, o) => globalThis.__sheets.push([a, o]);");
+  ctx.__DATA["/api/v1/team/approvals"] = { id: "ap_1", kind: "team_purge", args: { team: "WEB" }, status: "pending", summary: "s" };
+  ev(ctx, "T.api = (orig => async (v, p, o) => { globalThis.__calls.push([v, p, o]); return p === '/api/v1/team/approvals' ? globalThis.__DATA[p] : orig(v, p, o); })(T.api)");
   await ev(ctx, "purgeTeamArchive('WEB', 'Web')");
-  assert.ok(ev(ctx, "globalThis.__sheet").danger);
   const post = ev(ctx, "globalThis.__calls.find(c => c[0] === 'POST')");
-  assert.equal(post[1], "/api/v1/team/WEB/purge");
-  assert.equal(post[2].body.confirm, "WEB");
+  assert.equal(post[1], "/api/v1/team/approvals");
+  assert.equal(JSON.stringify(post[2].body), JSON.stringify({ kind: "team_purge", args: { team: "WEB" } }));
+  assert.ok(!ev(ctx, "globalThis.__calls.some(c => String(c[1]).endsWith('/purge'))"), "직접 purge 호출 없음");
+  assert.equal(ev(ctx, "globalThis.__sheets[0][1].execute"), true);
 });
 
 test("showTaskTimeline: 종류 라벨·보낸 이→받는 이·메시지 첫 줄·산출물 수·토큰 추정", async () => {

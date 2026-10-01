@@ -332,6 +332,60 @@ USER FLOW: 실사용 1회(워커 2 + 관리 1, ASK/REVIEW 왕복, 관제 호출�
 ### 테스트
 수집: 완결 줄만·중복 재실행 무변화·usage message.id 중복 제거·human/msg/msg_failed/msg_in 분류·[cw] 해석 실패(헤더 없음)도 msg 로·파일 삭제·축소. 보존: gzip 다중 멤버 읽기 = 원본과 동일. 위반 4종 각 1회 알림. 비용 귀속(문맥 전환). API·로컬 전용·문서↔라우트. PWA 하네스: 팀 목록·일감 타임라인·에이전트 경력 렌더.
 
+## 단계 3 — 개인 비서 (2026-10-01 기획)
+
+### 사장님 결정
+- **S3-1 자율 = 분석은 자유, 실행은 승인 후.** 장부 조회·경력 분석·제안은 마음대로. 팀 만들기·일감 위임·워커 기동·승인/반려·프로필 확정은 사장님이 대화에서 '응' 한 뒤에만(비서 스킬 규칙). 사람 승인이 끼므로 팀 토큰 강제(E-11 업그레이드 조건)는 아직 불필요.
+- **S3-2 입구 = 전용 비서 세션 + 헤더 🧑‍💼 버튼.** PC 당 비서 1명(에이전트, 세션은 교체돼도 이어짐). PC·폰 어디서든 버튼 한 번에 그 세션 터미널.
+- **S3-3 사장님 프로필 = 장부의 항목.** 비서가 근거(이벤트 id)·확신도와 함께 더하고, 사장님이 화면에서 보고 고치고 지운다(최종 권한은 사장님).
+
+### Codex 보강(10건) → 설계 변경: **서버 강제 승인**(사장님 결정 S3-4, 2026-10-01)
+
+대화의 '응' 은 서버가 확인할 수 없고(로컬 프로세스는 어떤 API 든 부른다), 장부 속 문구가 비서를 속일 수 있다(지속형 프롬프트 주입). 그래서:
+
+| # | 결정 |
+|---|---|
+| A-1 | **승인 요청 `approvals`**: 종류·인자(정확히)·요약·요청 세션·만료 30분. 상태 pending → approved/rejected → executed(1회). 실행은 `POST …/approvals/<id>/execute` 가 저장된 인자로 서버에서 수행 — 승인 뒤 내용을 바꿀 수 없다 |
+| A-2 | **사람 증명**: ① 폰 = 커넥터(같은 프로세스)가 붙이는 메모리 비밀(`X-ClewPath-Relay-Proof`, 기동마다 새로)+인증 기기 id — 로컬 프로세스는 위조 불가 ② PC = 2차 인증 코드. 둘 다 없으면 승인 불가 |
+| A-3 | **승인 필요 종류**: team_create(초기 구성원 포함)·team_archive·team_purge·assistant_set·delegate(비서 위임 = 팀에 일감 생성)·task_decide(승인/반려, 기대 배정 버전 고정)·profile_decide(확정·거절·수정·삭제). 해당 직접 API 는 `approval_required` |
+| A-4 | **일상 흐름은 그대로**(6B): 관리 세션의 일감 배정·구성원 추가, 워커의 제출·막힘·메모. 남은 틈(세션이 일상 API 를 직접 부르는 것)은 TODO — 업그레이드 조건 그대로(팀 토큰) |
+| A-5 | 장부·검색·프로필 내용은 **비신뢰 데이터**(비서 스킬 규칙) — 승인은 승인 API 상태로만 판단 |
+| A-6 | 비서 기록도 쌓인다: 비서는 **포트폴리오 팀(kind=portfolio)** 의 구성원 → 단계 2 수집·보존·지우기가 그대로 적용. 위임 전달 실패는 위반(delivery_failed)으로 폰 알림 |
+| A-7 | 비서 1명: `assistant` 테이블(id=1 고정). 다시 지정하면 **같은 비서 에이전트에 새 세션을 붙인다**(페르소나·경력 유지). 원격 조회 `GET /api/owner/assistant` 는 쓰기 없는 순수 읽기(세션 id·살아 있음만, 인증된 기기만 — 릴레이) |
+| A-8 | 프로필: 제안(proposed, 비서가 근거·확신도와 함께) → 사장님 승인으로 확정/거절/수정/삭제. 거절·삭제한 문장은 다시 제안 불가(해시). 팀 보존본 지우기 시 그 팀 근거는 프로필에서 빠진다. 가림 적용 |
+| A-9 | 폰: 승인 화면·비서 열기만(프로필·경력은 PC 로컬, E-2 유지) |
+| A-10 | 순서: 승인·사람 증명·비서 수집 먼저, MCP 는 읽기 + 승인 요청/실행만(쓰기 도구 없음) |
+
+### 구조
+
+```
+ 사장님 ──🧑‍💼(PC·폰)──▶ 비서 세션 ──HTTP(127.0.0.1)──▶ /api/v1/team/*  (장부·경력·프로필·위임)
+                           │                             └ 포트폴리오: teams.parent = 비서 에이전트
+                           └─SendMessage(uds)──▶ 팀 관리 세션 ──▶ 워커들(단계 1·2 규칙)
+ 다른 LLM(Claude Desktop 등) ──MCP(선택 등록)──▶ 같은 API
+```
+
+### Host
+- `assistant` 지정: 비서 에이전트 1명(`agents` 에 role='assistant'), 현재 세션은 continued-in 사슬로(단계 1 재사용).
+  - `GET /api/owner/assistant` → `{session_id, live}` — **원격 읽기 허용**(폰 헤더 버튼용, 세션 id 만 노출). 나머지 비서 API 는 로컬 전용.
+  - `POST /api/v1/team/assistant` `{session_id}` 기존 세션을 비서로 · `{create:true}` 새 비서 세션 생성(데이터 폴더 `assistant/` 에서 `claude -p` 1회 — claude 가 만드는 새 세션, 처음 열 때 폴더 신뢰는 사장님이 답함).
+  - 비서가 생기면 새 팀의 `parent` 기본값 = 비서 에이전트.
+- 사장님 프로필 `profile(id, topic, statement, evidence_json, confidence, source, status, created, updated)` — `GET/POST /api/v1/team/profile`, `POST /api/v1/team/profile/<id>`(수정·보관). 비밀값은 저장 전 가림.
+- 전체 팀 검색 `GET /api/v1/team/search?q=&kind=` (사람 입력·메시지, 팀 가로질러).
+
+### 비서 스킬 `clewpath-assistant`(동봉, 📦 설치 버튼 — 새 불가침 예외, 사장님 승인 필요)
+역할(포트폴리오 관리)·승인 규칙(쓰기 전 계획을 보여 주고 '응' 받기)·조회 API 표·위임 절차(팀에 일감 생성 → 그 팀 관리 세션 address 로 `[cw] ASSIGN`)·프로필 학습(사람 입력·결정·반려 사유에서 패턴 → 근거와 함께 제안, 비밀값·개인정보 금지)·브리핑 형식·`-p --resume` 금지.
+
+### MCP(선택)
+`mcp_server.py` 에 읽기 도구(team_list·team_status·task_timeline·agent_career·search·usage·violations·profile)와 쓰기 도구(team_create·task_delegate·task_decide·profile_add — 설명에 '사람 승인 후에만'). 등록은 claude 설정 파일이라 **자동으로 하지 않고** 명령만 안내(`claude mcp add …`).
+
+### PWA
+- 헤더 🧑‍💼: 비서 있으면 그 세션 터미널 탭(살아 있지 않으면 기존 '재개' 흐름), 없으면 시트(로컬: 새 비서 만들기 / 세션 골라 지정, 원격: "PC 에서 비서를 정하세요").
+- 👥 팀 · 경력 → 🧑‍💼 사장님 프로필(목록·근거 링크·수정·보관).
+
+### 테스트
+비서 지정·생성(claude -p 스텁)·교체 추적·원격 읽기 허용 범위, 프로필 CRUD·가림·근거, 전체 검색, 새 팀 parent, 비서 스킬 문서↔라우트, 스킬 설치 일반화(workers·assistant), MCP 도구(httpx 스텁), PWA 헤더 버튼 3분기·프로필 화면.
+
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |
@@ -339,6 +393,7 @@ USER FLOW: 실사용 1회(워커 2 + 관리 1, ASK/REVIEW 왕복, 관제 호출�
 | CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
 | Codex Review | `/codex review` | Independent 2nd opinion | 1 (plan) | issues_found → 결정에 반영 | 10건: 7건 일괄 반영(E-5~E-10), 2건 단계 1 로 앞당김(E-12·E-13), 1건 사장님 6B(E-11, 업그레이드 TODO) |
 | Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR (2026-10-01, FULL_REVIEW) | 13 decisions(E-1~E-13), 0 critical gaps |
+| Codex(단계 2·3) | outside voice | 단계별 독립 검토 | 2 | issues_found → 전부 반영 | 단계 2 10건(C2-1~C2-10) · 단계 3 10건(A-1~A-10, 서버 강제 승인으로 설계 변경) |
 | Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | 단계 1 은 UI 없음(관제 상한·열린 화면 반영만) |
 | DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
 

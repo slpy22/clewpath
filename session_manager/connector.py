@@ -91,6 +91,12 @@ def _priv_ok(params: dict) -> bool:
 # 로컬 전용 API(기기 등록·삭제·재발급, 2FA 설정, 스킬 설치, 업데이트 적용…)를 부를 수 있던
 # 구멍(2026-09-29 발견, Host 0.9.8 핫픽스). 아래 덴리스트는 2중 방어(서버까지 안 보냄).
 VIA_HEADER = "X-ClewPath-Via"
+# 사람 증명(개인 비서 단계 3, A-2): 커넥터는 Host 와 같은 프로세스라 이 값은 메모리에만 있다(기동마다 새로).
+# 폰(인증된 기기)이 보낸 요청에만 붙여 서버가 '사람이 폰에서 눌렀다' 를 확인한다 — 로컬 프로세스는 위조할 수 없다.
+import secrets as _secrets
+RELAY_PROOF = _secrets.token_hex(24)
+PROOF_HEADER = "X-ClewPath-Relay-Proof"
+DEVICE_HEADER = "X-ClewPath-Device"
 _LOCAL_ONLY_API = re.compile(
     r"^/api/(owner/(devices(/|$|\?)|2fa/(provision|toggle)|skills/[^/]+/install|trash/)"
     r"|sessions/[^/]+/terminal/start|v1/team(/|$|\?))")
@@ -391,7 +397,7 @@ class Connector:
             elif method == "api":
                 # 제네릭 프록시: 로컬 006 의 /api/* 엔드포인트를 그대로 호출한다.
                 # PWA 가 목록/통계/뷰어/라벨/프로파일/검색/삭제 등을 이 한 메서드로 쓴다.
-                await self._handle_api(rid, params)
+                await self._handle_api(rid, params, cid)
 
             elif method == "resume":
                 await self._start_resume(rid, params)
@@ -426,7 +432,7 @@ class Connector:
             await self._res(rid, False, error=f"{type(e).__name__}: {e}")
 
     # ---- 제네릭 API 프록시 (로컬 006 /api/* 전부) ----
-    async def _handle_api(self, rid: str, params: dict) -> None:
+    async def _handle_api(self, rid: str, params: dict, cid=None) -> None:
         verb = (params.get("verb") or "GET").upper()
         path = params.get("path") or ""
         # 안전장치: /api/ 로 시작하는 경로만 허용(임의 경로 프록시 금지)
@@ -445,6 +451,9 @@ class Connector:
         query = params.get("query") or {}
         body = params.get("body")
         via = {VIA_HEADER: "relay"}          # 서버가 로컬 전용 경로를 스스로 거부하게(2중 방어)
+        dev = self.authed.get(cid) if cid is not None else None
+        if dev and dev.get("id"):            # 인증된 기기의 요청에만 사람 증명(A-2)
+            via.update({PROOF_HEADER: RELAY_PROOF, DEVICE_HEADER: str(dev["id"])})
         if verb == "GET":
             r = await self.http.get(url, params=query, headers=via)
         elif verb == "POST":

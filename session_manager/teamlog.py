@@ -552,6 +552,14 @@ def judge(team_id: str, now: int | None = None) -> list[str]:
                     and now - a["t"] >= DEADLOCK_S and now - b["t"] >= DEADLOCK_S:
                 found.append((f"v:dead:{a['id']}:{b['id']}", "deadlock",
                               {"a": a["from"], "b": a["to"], "asks": [a["id"], b["id"]]}))
+    if t["kind"] == "portfolio":                               # 비서의 위임 전달 실패는 바로 알린다(A-6)
+        c = team._read()
+        try:
+            for e in c.execute("SELECT id, payload_json FROM events WHERE team_id=? AND kind='msg_failed'", (t["id"],)):
+                p = team._uj(e["payload_json"], {})
+                found.append((f"v:dfail:{e['id']}", "delivery_failed", {"msg_event": p.get("msg_event")}))
+        finally:
+            c.close()
     new = []
     with team._Tx() as w:
         for key, kind, payload in found:
@@ -563,7 +571,8 @@ def judge(team_id: str, now: int | None = None) -> list[str]:
 
 
 _RULE_TEXT = {"turn_overrun": "스레드 턴 초과", "forward_chain": "제3자에게 넘김(1-hop 위반)",
-              "unanswered_ask": "답 없는 질문 30분", "deadlock": "서로 답을 기다리는 순환"}
+              "unanswered_ask": "답 없는 질문 30분", "deadlock": "서로 답을 기다리는 순환",
+              "delivery_failed": "비서 위임 전달 실패"}
 
 
 def notify_violations(team_id: str) -> int:
@@ -678,6 +687,11 @@ def purge_team(team_id: str) -> dict:
                 pass
             w.execute(f"DELETE FROM events WHERE id IN ({q})", part)
         team._event(w, t["id"], "archive_purged", payload={"sessions": removed, "events": len(ids)})
+    try:                                                       # 그 근거는 사장님 프로필에서도 뺀다(A-8)
+        from session_manager import approvals
+        approvals.profile_drop_evidence(ids)
+    except Exception:  # noqa: BLE001
+        pass
     return {"purged_sessions": removed, "purged_events": len(ids)}
 
 
