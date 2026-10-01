@@ -275,6 +275,63 @@ USER FLOW: 실사용 1회(워커 2 + 관리 1, ASK/REVIEW 왕복, 관제 호출�
 - [ ] **T6 (P1, CC ~30분)** — 스킬 v2(관리자/워커 모드·P2P 규칙·`[cw]`·팀 API 사용법·사전 점검·v1 이전) + 문서↔라우트 대조 테스트(E-4)
 - [ ] **T7 (P1)** — 테스트 전부(위 두 다이어그램) · 실사용 1회 v1/v2 비교(토큰·시간·반려)
 
+## 단계 2 — 장부 자동 채움·원본 보존·위반 감지·경력 화면 (2026-10-01 기획)
+
+### 사장님 결정
+- **S2-1 보존 범위 = 팀 세션 전부**(사람 입력·세션 간 메시지·어시스턴트 답변·도구 기록). 세션을 지워도(휴지통 30일) 경력은 남아야 한다 — 비서가 사장님의 입력까지 분석.
+- **S2-2 위반 알림 = 사장님 폰 푸시만**(관리 세션에 말 걸지 않음 — 관제 읽기 전용 원칙 유지, 토큰 0). 답 없는 ASK 기준 30분.
+- **S2-3 일감별 비용 = 일감 문맥 추정**(세션이 마지막으로 보내거나 받은 `[cw] task=` 에 이후 토큰 귀속, 없으면 미분류). 에이전트·세션 합계는 정확. 화면에 '추정' 표시.
+- **S2-4 경력 화면 = PC 로컬 웹만**(E-2 유지).
+
+### 구조
+
+```
+ team.db agent_sessions ──(세션별 오프셋)──▶ 수집기(teamlog, 감시 스레드 30초)
+   │                                         │ ① 새 바이트(완결된 줄만)
+   │                                         ├─▶ 원본 보존  <데이터 폴더>/team_archive/<session>.jsonl.gz  (gzip 멤버 append)
+   │                                         └─▶ 줄 해석
+   │                                              ├ user(사람이 친 텍스트)        → events kind=human_input (전문)
+   │                                              ├ assistant tool_use SendMessage → events kind=msg (전문 + [cw] 해석 + 받는 에이전트)
+   │                                              ├ tool_result success:false      → events kind=msg_failed
+   │                                              ├ cross-session 수신(팀 밖 발신)  → events kind=msg_in (전문)
+   │                                              └ assistant usage(message.id 중복 제거) → usage 테이블(+문맥 일감)
+   └─ 위반 판정(msg 이벤트 기준) → events kind=violation + 폰 푸시 1회
+        턴 초과(스레드 >4) · 전달 사슬(스레드 참여자 >2) · 답 없는 ASK(30분) · 순환(서로 답 없는 ASK)
+```
+
+- 원본 보존은 claude 파일 **읽기만**(복사본은 ClewPath 데이터 폴더) — 불가침 원칙 무관. 팀 보관(archive)해도 보존본은 남고, 지우기는 별도 명시 동작(단계 3).
+- 수집 대상 = 팀(보관 제외)의 **모든 바인딩 세션**(교체 전 세션 포함, 남은 꼬리까지). 파일이 사라지면(삭제) 그 지점에서 멈춘다(이미 보존된 건 유지).
+- 파일이 줄어들면(재작성) 오프셋을 처음으로 되돌리지 않고 `rewritten` 표시 후 그 자리부터 — 중복은 idem_key(`msg:<tool_use_id>`·`human:<record uuid>`) 와 usage PK(session, message.id) 가 막는다.
+
+### Codex 보강(10건 반영) + 사장님 결정 S2-5
+
+| # | 보강 |
+|---|---|
+| C2-1 | 파일 세대 감지: 첫 4KB·오프셋 직전 256B 서명이 바뀌거나 크기가 줄면 세대+1 로 처음부터 다시(누락 없음, 중복은 idem 키) |
+| C2-2 | 보존본은 **시작 오프셋 이름의 청크 파일**(`team_archive/<session>/g<세대>-<시작>.jsonl.gz`)을 임시→교체로 쓰고 그다음 DB 커밋 — 중간에 죽으면 같은 이름을 다시 써서 중복·꼬리 손상 없음 |
+| C2-3 | 세션 삭제 직전 최종 수집(lifecycle 삭제 훅) · continued-in 사슬의 **중간 세션도** 바인딩 |
+| C2-4 | 사람 입력 = user 텍스트 중 tool_result·세션 간 수신 래퍼·명령/메타/요약 제외. 전송 실패는 tool_use_id 로 결과를 이어 `is_error`/`success:false` |
+| C2-5 | usage: (세션, message.id) 기준 필드별 최댓값 갱신(스트리밍 중복·갱신) · 팀 내부 수신도 문맥 일감 갱신 |
+| C2-6 | 당시 소속·주소: `agent_sessions.team_id`, 주소 이력 테이블 `addresses(uds→session, 처음/마지막 본 시각)` · 경력 조회는 탈퇴자 포함 |
+| C2-7 | 위반 규칙: 전달 성공 메시지만 · 원본 시각(src_ts) · 턴 초과=스레드 성공 전송 >4 · 전달 사슬=스레드에서 ASK 를 받은 쪽이 보낸 쪽 아닌 제3자(관리 제외)에게 같은 스레드로 전송 · 무응답=reply=yes ASK 뒤 같은 스레드에 받은 쪽→보낸 쪽 전송이 30분 없음 · 순환=서로 무응답 ASK(둘 다 10분↑) |
+| C2-8 | 위반 푸시: 위반마다 고유 kind(억제 충돌 없음), 이벤트 기록 → 발송 성공 시 notified 기록, 실패면 다음 주기 재시도(최대 3회) |
+| C2-9 | 보안(S2-5 사장님): 보존·색인 모두 **비밀값 가리기**(sk-·ghp_·github_pat_·AKIA·xox·JWT·PEM 개인키·`password=` 류) + 경력 화면 '이 팀 보존본 지우기'(확인창) · API/화면 로컬 전용 · 화면은 textContent |
+| C2-10 | 예산: 세션당 주기 4MB 상한 · 청크 이름으로 오프셋 조회 O(1) · 사람 입력·메시지는 FTS5 검색 · 디스크 여유 1GB 미만이면 보존 중단+알림 1회 |
+
+### 읽기 API(로컬 전용, /api/v1/team 아래)
+- `GET /api/v1/team/<team>/members/<agent>/history` — 세션 이력·맡은/협업 일감(상태별 수)·승인/반려 수·토큰 합(+일감별 추정)
+- `GET /api/v1/team/agent/<agent_id>` — 팀을 가로지르는 경력(소속 이력·전체 일감·토큰)
+- `GET /api/v1/team/<team>/tasks/<task>/timeline` — 일감 이벤트 + 그 일감 [cw] 메시지(시간순)
+- `GET /api/v1/team/<team>/usage` — 에이전트별 정확 합계 + 일감별 추정
+- `GET /api/v1/team/<team>/inputs` — 사람 입력(검색어 q, 페이지)
+- `GET /api/v1/team/archive/<session_id>?offset=&limit=` — 보존 원본 줄(비서·검증용)
+
+### 경력 화면(PWA, 로컬 전용)
+⚙ 설정 → 👥 팀 → 팀 목록 → 팀(구성원·살아 있음·열린 일감·토큰) → 일감 타임라인(이벤트·메시지·위반) / 에이전트 경력(세션 이력·일감·승인률·토큰).
+
+### 테스트
+수집: 완결 줄만·중복 재실행 무변화·usage message.id 중복 제거·human/msg/msg_failed/msg_in 분류·[cw] 해석 실패(헤더 없음)도 msg 로·파일 삭제·축소. 보존: gzip 다중 멤버 읽기 = 원본과 동일. 위반 4종 각 1회 알림. 비용 귀속(문맥 전환). API·로컬 전용·문서↔라우트. PWA 하네스: 팀 목록·일감 타임라인·에이전트 경력 렌더.
+
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |

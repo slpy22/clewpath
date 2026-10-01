@@ -33,7 +33,7 @@ from pathlib import Path
 
 from session_manager import config
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 _lock = threading.RLock()
 
 _SCHEMA = """
@@ -65,6 +65,38 @@ CREATE INDEX IF NOT EXISTS ix_events_task ON events(task_id, id);
 CREATE INDEX IF NOT EXISTS ix_events_team ON events(team_id, id);
 """
 
+# v2(단계 2): 당시 소속(agent_sessions.team_id)·원본 시각(events.src_ts) + 수집기(teamlog) 테이블.
+_SCHEMA_V2 = """
+ALTER TABLE agent_sessions ADD COLUMN team_id TEXT;
+ALTER TABLE events ADD COLUMN src_ts INTEGER;
+UPDATE agent_sessions SET team_id=(SELECT m.team_id FROM memberships m WHERE m.agent_id=agent_sessions.agent_id
+  ORDER BY (m.left_at IS NULL) DESC, m.joined DESC LIMIT 1) WHERE team_id IS NULL;
+CREATE TABLE IF NOT EXISTS ingest(
+  session_id TEXT PRIMARY KEY, agent_id TEXT, team_id TEXT, gen INTEGER NOT NULL DEFAULT 1,
+  offset INTEGER NOT NULL DEFAULT 0, head_sig TEXT, tail_sig TEXT, ctx_task TEXT,
+  rewritten INTEGER NOT NULL DEFAULT 0, gone INTEGER, updated INTEGER);
+CREATE TABLE IF NOT EXISTS usage(
+  session_id TEXT NOT NULL, message_id TEXT NOT NULL, agent_id TEXT, team_id TEXT, task_id TEXT, model TEXT,
+  input INTEGER NOT NULL DEFAULT 0, output INTEGER NOT NULL DEFAULT 0, cache_read INTEGER NOT NULL DEFAULT 0,
+  cache_create INTEGER NOT NULL DEFAULT 0, src_ts INTEGER, PRIMARY KEY(session_id, message_id));
+CREATE INDEX IF NOT EXISTS ix_usage_team ON usage(team_id, agent_id);
+CREATE TABLE IF NOT EXISTS addresses(address TEXT PRIMARY KEY, session_id TEXT NOT NULL, first_seen INTEGER, last_seen INTEGER);
+CREATE TABLE IF NOT EXISTS pending_sends(tool_use_id TEXT PRIMARY KEY, session_id TEXT, event_id INTEGER, created INTEGER);
+"""
+
+
+def _fts_sql() -> str:
+    """사람 입력·메시지 전문 검색(한글 부분 일치 = trigram, 없는 SQLite 면 unicode61)."""
+    for tok in ("trigram", "unicode61"):
+        try:
+            sqlite3.connect(":memory:").execute(f"CREATE VIRTUAL TABLE t USING fts5(x, tokenize='{tok}')")
+            return (f"CREATE VIRTUAL TABLE IF NOT EXISTS texts USING fts5(body, kind UNINDEXED, team_id UNINDEXED,"
+                    f" event_id UNINDEXED, tokenize='{tok}');")
+        except sqlite3.OperationalError:
+            continue
+    return ""
+
+
 MEMBER_ROLES = ("manager", "worker")
 OPEN_STATUSES = ("assigned", "blocked", "submitted", "rejected")
 
@@ -94,9 +126,17 @@ def _connect() -> sqlite3.Connection:
         c.row_factory = sqlite3.Row
         c.execute("PRAGMA journal_mode=WAL")
         c.execute("PRAGMA foreign_keys=ON")
-        if c.execute("PRAGMA user_version").fetchone()[0] < SCHEMA_VERSION:
-            c.executescript(_SCHEMA)
-            c.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        v = c.execute("PRAGMA user_version").fetchone()[0]
+        if v < SCHEMA_VERSION:
+            with _lock:
+                v = c.execute("PRAGMA user_version").fetchone()[0]
+                if v < 1:
+                    c.executescript(_SCHEMA)
+                    c.execute("PRAGMA user_version=1")
+                    v = 1
+                if v < 2:
+                    c.executescript(_SCHEMA_V2 + _fts_sql())
+                    c.execute("PRAGMA user_version=2")
         return c
     except sqlite3.DatabaseError as e:            # 손상·잠김 → 호출자는 503, Host 는 계속 산다
         raise TeamError("team_db_unavailable", 503) from e
@@ -226,17 +266,22 @@ def archive(team_id: str, on: bool = True) -> dict:
 
 # ---------------------------------------------------------------- 에이전트·소속·세션
 
-def _bind(c, agent_id: str, session_id: str, reason: str) -> bool:
-    """세션을 에이전트에 붙인다. 같은 에이전트면 멱등(False), 다른 에이전트 소유면 409."""
+def _bind(c, agent_id: str, session_id: str, reason: str, team_id: str | None = None) -> bool:
+    """세션을 에이전트에 붙인다. 같은 에이전트면 멱등(False), 다른 에이전트 소유면 409.
+    team_id = 그 세션이 일한 당시 소속(경력 귀속, Codex C2-6). 없으면 지금 소속."""
     row = c.execute("SELECT agent_id FROM agent_sessions WHERE session_id=?", (session_id,)).fetchone()
     if row:
         if row["agent_id"] != agent_id:
             raise TeamError("session_owned_by_other_agent", 409)
         return False
     now = _now()
+    if not team_id:
+        r = c.execute("SELECT team_id FROM memberships WHERE agent_id=? AND left_at IS NULL ORDER BY joined DESC LIMIT 1",
+                      (agent_id,)).fetchone()
+        team_id = r["team_id"] if r else None
     c.execute("UPDATE agent_sessions SET ended=? WHERE agent_id=? AND ended IS NULL", (now, agent_id))
-    c.execute("INSERT INTO agent_sessions(agent_id,session_id,started,reason) VALUES(?,?,?,?)",
-              (agent_id, session_id, now, reason))
+    c.execute("INSERT INTO agent_sessions(agent_id,session_id,started,reason,team_id) VALUES(?,?,?,?,?)",
+              (agent_id, session_id, now, reason, team_id))
     return True
 
 
@@ -321,10 +366,31 @@ def move(team_id: str, agent_ref: str, to_team: str, alias: str | None = None,
                       write_scope=_uj(m["write_scope_json"], []), agent_id=m["agent_id"])
 
 
-def _latest_session(session_id: str) -> str:
+def _continuation_hops(session_id: str, max_hops: int = 8) -> list[str]:
+    """continued-in 사슬의 다음 세션들(자기 제외, 순서대로). 끝 세션만 주던 latest_session_id 와 달리 중간도."""
+    out: list[str] = []
+    seen = {session_id}
+    cur = session_id
+    for _ in range(max_hops):
+        nxt = _latest_session_step(cur)
+        if not nxt or nxt in seen:
+            break
+        out.append(nxt)
+        seen.add(nxt)
+        cur = nxt
+    return out
+
+
+def _latest_session_step(session_id: str) -> str | None:
+    """한 홉: 이 세션의 continued-in 대상(파일이 있을 때만)."""
+    nxt = _latest_session(session_id, one_hop=True)
+    return nxt if nxt and nxt != session_id else None
+
+
+def _latest_session(session_id: str, one_hop: bool = False) -> str:
     try:
         from session_manager import scanner
-        return scanner.latest_session_id(session_id)
+        return scanner.latest_session_id(session_id, max_hops=1 if one_hop else 8)
     except Exception:  # noqa: BLE001  스캐너 실패는 '그대로' 로 저하
         return session_id
 
@@ -349,19 +415,22 @@ def current_session(agent_id: str) -> str | None:
     if not r:
         return None
     sid = r["session_id"]
-    nxt = _latest_session(sid)
-    if nxt and nxt != sid:
+    hops = _continuation_hops(sid)
+    if not hops:
+        return sid
+    cur = sid
+    for nxt in hops:                                 # 중간 세션도 이력에 남긴다(Codex C2-3)
         try:
             with _Tx() as w:
                 if _bind(w, agent_id, nxt, "continued"):
                     tm = w.execute("SELECT team_id FROM memberships WHERE agent_id=? AND left_at IS NULL", (agent_id,)).fetchone()
                     if tm:
                         _event(w, tm["team_id"], "session_bound", agent_id=agent_id,
-                               payload={"session_id": nxt, "reason": "continued", "from": sid})
+                               payload={"session_id": nxt, "reason": "continued", "from": cur})
         except TeamError:
-            return sid                               # 다른 에이전트가 이미 가진 세션 — 옛 것 유지
-        return nxt
-    return sid
+            return cur                               # 다른 에이전트가 이미 가진 세션 — 거기서 멈춤
+        cur = nxt
+    return cur
 
 
 def _member_view(c, m, peers: dict) -> dict:
@@ -730,12 +799,18 @@ def watch_once() -> dict:
     od = overdue()
     for item in od:
         _notify_overdue(item)
-    return {"teams": n, "overdue": len(od)}
+    try:                                       # 단계 2: 세션 수집·원본 보존·위반 판정(teamlog)
+        from session_manager import teamlog
+        lg = teamlog.watch_teams()
+    except Exception as e:  # noqa: BLE001
+        print(f"[team] 수집 실패: {type(e).__name__}: {e}", flush=True)
+        lg = {}
+    return {"teams": n, "overdue": len(od), **({"ingest": lg} if lg else {})}
 
 
 _thread: threading.Thread | None = None
 _stop: threading.Event | None = None
-WATCH_INTERVAL_S = 60.0
+WATCH_INTERVAL_S = 30.0       # 단계 2 수집 주기(세션당 4MB 상한)
 
 
 def start(interval: float = WATCH_INTERVAL_S) -> threading.Thread:

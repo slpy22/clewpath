@@ -102,6 +102,13 @@ def delete_session(session_id: str, dry_run: bool = True, force: bool = False,
                     "error": "session_live", "reason": live,
                     "hint": "실행 중인 세션입니다. 터미널/프로세스를 먼저 종료한 뒤 삭제하세요."}
 
+    # 팀 세션이면 휴지통으로 옮기기 전에 마지막 꼬리까지 보존·색인(팀 경력 단계 2, Codex C2-3). 실패해도 삭제는 진행.
+    try:
+        from session_manager import teamlog
+        teamlog.final_ingest(session_id)
+    except Exception:  # noqa: BLE001
+        pass
+
     # 휴지통 버킷으로 '이동'(rmtree/unlink 아님). 같은 이름 충돌 방지 위해 인덱스 접두사.
     stamp = time.strftime("%Y%m%d-%H%M%S")
     bucket = _trash_root() / f"{session_id}_{stamp}"

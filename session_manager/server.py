@@ -1064,6 +1064,48 @@ def create_app() -> FastAPI:
             res["team"] = _team_sync_after(request, res["team"]["id"], res["team"])
         return res
 
+    # 단계 2 읽기(경력·장부, 비서의 바닥) — 전부 /api/v1/team 아래라 로컬 전용이 그대로 적용된다
+    from session_manager import teamlog as _teamlog
+
+    @app.get("/api/v1/team/agent/{agent_id}")
+    def team_agent_career(request: Request, agent_id: str):
+        return _team_call(request, _teamlog.agent_career, agent_id)
+
+    @app.get("/api/v1/team/archive/{session_id}")
+    def team_archive_lines(request: Request, session_id: str, offset: int = 0, limit: int = 200):
+        return _team_call(request, _teamlog.archive_lines, session_id, offset, limit)
+
+    @app.get("/api/v1/team/{team_id}/members/{agent}/history")
+    def team_member_history(request: Request, team_id: str, agent: str):
+        return _team_call(request, _teamlog.member_history, team_id, agent)
+
+    @app.get("/api/v1/team/{team_id}/tasks/{task_id}/timeline")
+    def team_task_timeline(request: Request, team_id: str, task_id: str):
+        return _team_call(request, _teamlog.timeline, team_id, task_id)
+
+    @app.get("/api/v1/team/{team_id}/usage")
+    def team_usage(request: Request, team_id: str):
+        return _team_call(request, _teamlog.usage_summary, team_id)
+
+    @app.get("/api/v1/team/{team_id}/inputs")
+    def team_inputs(request: Request, team_id: str, q: str = "", limit: int = 50, before: int | None = None,
+                    kind: str = "human_input"):
+        return _team_call(request, _teamlog.inputs, team_id, q, limit, before, kind)
+
+    @app.get("/api/v1/team/{team_id}/violations")
+    def team_violations(request: Request, team_id: str):
+        return _team_call(request, lambda: {"violations": _teamlog.violations(team_id)})
+
+    @app.post("/api/v1/team/{team_id}/purge")
+    def team_purge(request: Request, team_id: str, body: dict = Body(default={})):
+        # '이 팀 보존본 지우기'(S2-5): 화면의 확인창을 거친 요청만 — confirm 이 팀 코드와 같아야 한다
+        def _do():
+            t = _team.get_team(team_id)
+            if str(body.get("confirm") or "").upper() != t["code"]:
+                raise _team.TeamError("confirm_required", 400)
+            return _teamlog.purge_team(team_id)
+        return _team_call(request, _do)
+
     @app.get("/api/v1/team/{team_id}")
     def team_get(request: Request, team_id: str):
         return _team_call(request, _team.get_team, team_id)

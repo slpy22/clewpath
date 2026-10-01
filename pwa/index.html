@@ -3881,6 +3881,7 @@ function showSettings(){
   row('📥','세션 가져오기','내보낸 세션 파일 불러오기',importSession);
   row('🗑','휴지통','삭제한 세션 복구 (30일 보관)',showTrash,{local:true});
   row('📦','워커 스킬 설치','하위 세션 분배 스킬(clewpath-workers)을 ~/.claude/skills 에 설치',installWorkersSkill,{local:true});
+  row('👥','팀 · 경력','에이전트 이력 · 일감 타임라인 · 토큰 · 위반 · 사람 입력',showTeams,{local:true});
 
   sec('정보 · 진단');
   // 업데이트 적용: 로컬은 바로, 원격(폰)은 2차 인증 뒤(사장님 2026-09-30 — 원격에서도 Host 업데이트). 서명 검증은 Host 가 한다.
@@ -3892,6 +3893,137 @@ function showSettings(){
   row('🩺','진단','설치 상태 · 세션 수 · 설정 파일 위치',showDiagnostics,{local:true});
 
   openModal('⚙ 설정', body, []);
+}
+// ---- 👥 팀 · 경력(워커 P2P 단계 2) — PC 로컬 전용(팀 API 는 로컬에서만, eng E-2 / S2-4) ----
+// 모든 내용은 textContent 로만 그린다(세션 원문이 섞이므로 HTML 해석 금지).
+const TEAM_KIND={assigned:'📌 배정',submitted:'📤 제출',accepted:'✅ 승인',rejected:'↩ 반려',reopened:'🔁 재개',
+  reassigned:'👤 재배정',blocked:'⛔ 막힘',note:'📝 메모',overdue:'⏰ 기한 초과',msg:'💬 메시지',msg_in:'📨 외부 수신',
+  msg_failed:'❌ 전달 실패',violation:'⚠ 위반',human_input:'🙋 사장님 입력',violation_notified:'🔔 위반 알림'};
+const TEAM_STATUS={assigned:'진행',submitted:'제출됨',accepted:'승인',rejected:'반려',blocked:'막힘'};
+function fmtTok(n){ n=+n||0; return n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(1)+'k':String(n); }
+function tsText(sec){ try{ return sec?new Date(sec*1000).toLocaleString():''; }catch(e){ return ''; } }
+function teamRow(icon,title,sub,fn){
+  const b=el('button','setrow'); b.appendChild(el('span','si',icon));
+  const st=el('span','st'); st.appendChild(el('span',null,title));
+  if(sub){ const s=document.createElement('small'); s.textContent=sub; st.appendChild(s); }
+  b.appendChild(st); if(fn) b.onclick=fn; else b.style.cursor='default';
+  return b;
+}
+async function showTeams(){
+  let r; try{ r=await T.api('GET','/api/v1/team',{query:{archived:1}}); }catch(e){ toast('팀 목록 실패: '+e.message); return; }
+  const body=el('div'); const teams=(r&&r.teams)||[];
+  if(!teams.length) body.appendChild(el('div','cwd','아직 팀이 없습니다 — 관리 세션에서 clewpath-workers 스킬로 팀을 만들면 여기에 이력이 쌓입니다.'));
+  teams.forEach(t=>body.appendChild(teamRow(t.archived?'🗄':'👥', t.name+' ('+t.code+')',
+    '구성원 '+t.members+' · 열린 일감 '+t.open_tasks+(t.archived?' · 보관됨':''), ()=>{ closeModal(); showTeam(t.code); })));
+  openModal('👥 팀 · 경력', body, []);
+}
+async function showTeam(code){
+  let t,u,v,tk;
+  try{ [t,u,v,tk]=await Promise.all([T.api('GET','/api/v1/team/'+encodeURIComponent(code)),
+         T.api('GET','/api/v1/team/'+encodeURIComponent(code)+'/usage'),
+         T.api('GET','/api/v1/team/'+encodeURIComponent(code)+'/violations'),
+         T.api('GET','/api/v1/team/'+encodeURIComponent(code)+'/tasks',{query:{limit:100}})]); }
+  catch(e){ toast('팀 조회 실패: '+e.message); return; }
+  const body=el('div');
+  const tokBy={}; ((u&&u.by_agent)||[]).forEach(x=>{ tokBy[x.agent_id]=x.total; });
+  body.appendChild(el('div','diag','🧮 토큰 합 '+fmtTok(u&&u.total&&u.total.total)+' · 일감별은 추정'));
+  body.appendChild(el('div','setsec','구성원'));
+  (t.members||[]).forEach(m=>body.appendChild(teamRow(m.live?'🟢':'⚪',
+    m.alias+(m.member_role==='manager'?' (관리)':'')+(m.role?' · '+m.role:''),
+    '토큰 '+fmtTok(tokBy[m.agent_id])+(m.session_id?' · 세션 '+m.session_id.slice(0,8):''),
+    ()=>{ closeModal(); showAgentCareer(code, m.agent_id); })));
+  body.appendChild(el('div','setsec','일감'));
+  const tasks=(tk&&tk.tasks)||[];
+  if(!tasks.length) body.appendChild(el('div','cwd','일감이 없습니다.'));
+  tasks.forEach(x=>body.appendChild(teamRow('📋', x.id+' · '+(TEAM_STATUS[x.status]||x.status), x.goal,
+    ()=>{ closeModal(); showTaskTimeline(code, x.id); })));
+  const vs=(v&&v.violations)||[];
+  if(vs.length){
+    body.appendChild(el('div','setsec','규칙 위반 '+vs.length));
+    vs.slice(0,10).forEach(x=>body.appendChild(teamRow('⚠', x.text+(x.task?' · '+x.task:''),
+      (x.who||[]).join(' → ')+(x.thread?' · '+x.thread:'')+' · '+tsText(x.t)+(x.notified?' · 알림됨':''))));
+  }
+  body.appendChild(el('div','setsec','기록'));
+  body.appendChild(teamRow('🙋','사람 입력 검색','이 팀 세션에서 사장님이 친 내용', ()=>{ closeModal(); showTeamInputs(code); }));
+  const purge=teamRow('🧽','이 팀 보존본 지우기','보존 원본·사람 입력·메시지 전문 삭제(일감·토큰 수는 남음)', ()=>purgeTeamArchive(code, t.name));
+  body.appendChild(purge);
+  openModal('👥 '+t.name+' ('+t.code+')', body, []);
+}
+function purgeTeamArchive(code, name){
+  return confirmSheet({title:'보존본 지우기', main:'"'+name+'" 팀의 보존 원본과 대화 전문을 지울까요?',
+    sub:'세션 원본 기록(claude)은 그대로입니다. 일감·배정·승인 기록과 토큰 수는 남습니다. 되돌릴 수 없습니다.',
+    action:'지우기', danger:true, busyText:'지우는 중…',
+    run: async()=>{ await T.api('POST','/api/v1/team/'+encodeURIComponent(code)+'/purge',{body:{confirm:code}}); }})
+    .then(ok=>{ if(ok){ toast('보존본을 지웠습니다'); closeModal(); showTeam(code); } return ok; });
+}
+function teamEventText(e){
+  const p=e.payload||{};
+  if(e.kind==='msg'||e.kind==='msg_in'){ const cw=p.cw||{}; const first=String(p.body||'').split('\n')[0];
+    return (cw.type?cw.type+' ':'')+(cw.thread?'['+cw.thread+'] ':'')+first; }
+  if(e.kind==='human_input') return String(p.text||'').slice(0,200);
+  if(e.kind==='submitted'){ const ev=p.evidence||{}; return '산출물 '+((ev.artifacts||[]).length)+'개'+(p.note?' · '+p.note:''); }
+  if(e.kind==='violation') return (p.rule||'')+(p.thread?' · '+p.thread:'');
+  if(e.kind==='msg_failed') return String(p.error||'').slice(0,120);
+  return p.note||p.goal||'';
+}
+async function showTaskTimeline(code, taskId){
+  let r; try{ r=await T.api('GET','/api/v1/team/'+encodeURIComponent(code)+'/tasks/'+encodeURIComponent(taskId)+'/timeline'); }
+  catch(e){ toast('타임라인 실패: '+e.message); return; }
+  const body=el('div');
+  body.appendChild(el('div','cwd',r.goal));
+  body.appendChild(el('div','diag',(TEAM_STATUS[r.status]||r.status)+' · 배정 v'+r.assignment_ver+' · 토큰(추정) '+fmtTok(r.tokens_estimate&&r.tokens_estimate.total)));
+  (r.events||[]).forEach(e=>{
+    const who=(e.agent||'')+(e.to?' → '+e.to:'');
+    const row=teamRow('', (TEAM_KIND[e.kind]||e.kind)+(who?' · '+who:''), tsText(e.t)+' · '+teamEventText(e));
+    row.classList.add('tl-'+e.kind);
+    const full=(e.payload&&(e.payload.body||e.payload.text))||'';
+    if(full){ row.onclick=()=>{ const pre=el('pre','tl-full',full); pre.style.whiteSpace='pre-wrap';
+      if(row.nextSibling&&row.nextSibling.classList&&row.nextSibling.classList.contains('tl-full')) row.nextSibling.remove();
+      else row.after(pre); }; }
+    body.appendChild(row);
+  });
+  openModal('📋 '+r.id, body, []);
+}
+async function showAgentCareer(code, agentId){
+  let h,c;
+  try{ [h,c]=await Promise.all([T.api('GET','/api/v1/team/'+encodeURIComponent(code)+'/members/'+encodeURIComponent(agentId)+'/history'),
+                                T.api('GET','/api/v1/team/agent/'+encodeURIComponent(agentId))]); }
+  catch(e){ toast('경력 조회 실패: '+e.message); return; }
+  const body=el('div'); const k=h.counts||{};
+  body.appendChild(el('div','diag','토큰 '+fmtTok(h.tokens&&h.tokens.total)+' · 메시지 '+(k.messages_sent|0)+' · 제출 '+(k.submitted|0)
+    +' · 승인 '+(k.accepted|0)+' · 반려 '+(k.rejected|0)+' · 사장님 입력 '+(k.human_inputs|0)));
+  if(h.role) body.appendChild(el('div','cwd',h.role+((h.tags||[]).length?' · '+h.tags.join(', '):'')));
+  body.appendChild(el('div','setsec','소속 이력(전체 팀)'));
+  ((c&&c.memberships)||[]).forEach(m=>body.appendChild(teamRow(m.left_at?'↪':'👥', m.name+' ('+m.code+') · '+m.alias,
+    tsText(m.joined)+(m.left_at?' ~ '+tsText(m.left_at):' ~ 현재'))));
+  body.appendChild(el('div','setsec','세션 이력'));
+  (h.sessions||[]).forEach(s=>body.appendChild(teamRow(s.ended?'·':'●', s.session_id.slice(0,8)+' · '+s.reason,
+    tsText(s.started)+(s.ended?' ~ '+tsText(s.ended):''))));
+  body.appendChild(el('div','setsec','맡은 일감'));
+  const owned=h.tasks_owned||[];
+  if(!owned.length) body.appendChild(el('div','cwd','없음'));
+  owned.forEach(x=>body.appendChild(teamRow('📋', x.id+' · '+(TEAM_STATUS[x.status]||x.status), x.goal,
+    ()=>{ closeModal(); showTaskTimeline(code, x.id); })));
+  if((h.tasks_collab||[]).length){
+    body.appendChild(el('div','setsec','협업한 일감'));
+    h.tasks_collab.forEach(x=>body.appendChild(teamRow('🤝', x.id+' · '+(TEAM_STATUS[x.status]||x.status), x.goal,
+      ()=>{ closeModal(); showTaskTimeline(code, x.id); })));
+  }
+  openModal('🧑‍💼 '+h.alias, body, []);
+}
+async function showTeamInputs(code, q, before){
+  let r; try{ r=await T.api('GET','/api/v1/team/'+encodeURIComponent(code)+'/inputs',{query:Object.assign({limit:50}, q?{q}:{}, before?{before}:{})}); }
+  catch(e){ toast('검색 실패: '+e.message); return; }
+  const body=el('div');
+  const inp=el('input','inp'); inp.placeholder='검색어(3자 이상은 전문 검색)'; inp.value=q||'';
+  inp.onkeydown=(ev)=>{ if(ev.key==='Enter'){ closeModal(); showTeamInputs(code, inp.value.trim()); } };
+  body.appendChild(inp);
+  const items=(r&&r.items)||[];
+  if(!items.length) body.appendChild(el('div','cwd','결과가 없습니다.'));
+  items.forEach(x=>{ const row=teamRow('🙋', (x.agent||'')+(x.task?' · '+x.task:''), tsText(x.t));
+    const pre=el('pre','tl-full',x.text); pre.style.whiteSpace='pre-wrap'; body.appendChild(row); body.appendChild(pre); });
+  if(r&&r.next_before){ const more=el('button','btn ghost','더 보기'); more.onclick=()=>{ closeModal(); showTeamInputs(code, q, r.next_before); }; body.appendChild(more); }
+  openModal('🙋 사람 입력', body, []);
 }
 // 동봉 스킬 설치(v0.9.0) — claude 가 읽는 ~/.claude/skills 에 새 파일을 만드는 행위라 반드시
 // 확인창을 거친다(불가침 원칙 예외, 2026-09-23). 이미 있으면 덮어쓰기를 다시 묻는다.

@@ -12,7 +12,7 @@ from session_manager import team
 def T(fake_claude_home, monkeypatch):
     chain: dict[str, str] = {}
     peers: dict[str, dict] = {}
-    monkeypatch.setattr(team, "_latest_session", lambda sid: chain.get(sid, sid))
+    monkeypatch.setattr(team, "_latest_session", lambda sid, one_hop=False: chain.get(sid, sid))
     monkeypatch.setattr(team, "_peer_by_session", lambda: dict(peers))
     team.chain, team.peers_stub = chain, peers
     return team
@@ -302,7 +302,8 @@ def test_archive_hides_team_from_list_watch_and_overdue(T, monkeypatch):
     T.create_task(t["id"], "늦은 일", "백엔드", due=1000)
     T.archive(t["id"])
     assert T.list_teams() == [] and T.list_teams(include_archived=True)[0]["archived"] is True
-    assert T.watch_once() == {"teams": 0, "overdue": 0} and sent == [], "보관 팀은 감시·알림 제외"
+    w = T.watch_once()
+    assert w["teams"] == 0 and w["overdue"] == 0 and sent == [], "보관 팀은 감시·알림 제외"
     assert T.get_team(t["id"])["members"], "이력은 그대로"
     T.archive(t["id"], on=False)
     assert len(T.list_teams()) == 1
