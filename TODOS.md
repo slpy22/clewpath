@@ -277,16 +277,18 @@ svcmon(사장님 모니터)이 13:07 `up → down` 을 기록했으나 복구 �
 - [ ] 관제 화면에 워커 큐 상태(대기/실행/실패) 패널
 - [ ] 기존 `-p` 관리 세션의 새 방식 이전 가이드(세션별 선택)
 
-### 워커 직접 통신(P2P) — 스킬 v2 (2026-10-01 기획, 정본 docs/designs/workers-p2p.md, 사장님 확정 대기)
-#### Phase 1 — 스킬만(Host 변경 없음)
-- [ ] SKILL.md v2: 직접 통신 허용 기준표·`[cw]` 메시지 규약(ASK/ANSWER/REVIEW/RESULT/BLOCKED)·1-hop·스레드 4회·BLOCKED 1회·owner 가 최종 1회 보고
-- [ ] 등록부 v2 스키마(version/revision/manager/workers.tags·write_scope/tasks{owner,collaborators,write_scope,done_when,status}) + v1 → v2 이전 절차
-- [ ] 「워커 모드」 절 + 새 워커 생성 프롬프트에 등록부 절대 경로·별칭, 기존 워커 온보딩 메시지
-- [ ] P2P 사전 점검(권한 모드 동일·워커 전원 관제 그룹 등록)
-- [ ] 실사용 1회: 워커 2개 + 관리 1개로 ASK/REVIEW 왕복 → 관제에 워커↔워커 호출선, 관리 세션 수신은 RESULT 1건만인지
-#### Phase 2 — 필요 확인 후
-- [ ] Host `GET /api/v1/team?registry=` (등록부+살아 있는 이름 한 번에) · 관제 labels 에 역할 미러·task/thread 묶음
-- [ ] monwatch 위반 감지 알림(턴 초과·무응답 ASK·전달 사슬·순환) · 업무 트리(parent)+보드 · 워커별 worktree · 업무별 비용 집계
+### 팀·에이전트 명부 + 워커 직접 통신(P2P) — 개인 비서 인프라 (2026-10-01 기획, 정본 docs/designs/workers-p2p.md)
+목적: 일반 프로젝트 협업 + 세션·에이전트를 사장님 작업 이력으로 축적 → 나중에 개인 비서 에이전트가 대신 관리. **결정(2026-10-01 사장님): Host 전역 명부부터**(프로젝트 파일 등록부 안 함). 에이전트(영속) ≠ 세션, 팀 안 평면·팀 위 1단(비서), 작성자는 Host API 하나.
+#### 단계 1 — 명부 + 스킬 v2 (M) · 다음 게이트: /plan-eng-review
+- [ ] Host `team` 모듈: 데이터 폴더 JSON(팀·에이전트·세션 교체 이력) + 일감 장부 jsonl(append) + API(팀/에이전트 CRUD·세션 교체·일감 배정/결과·`GET /api/v1/team/<팀>` 살아 있는 이름 포함)
+- [ ] 관제 그룹 자동 동기화(팀 구성원 → monitor group subs/labels)
+- [ ] 스킬 v2: P2P 허용 기준·`[cw]` 규약(ASK/ANSWER/REVIEW/RESULT/BLOCKED)·1-hop·스레드 4회·owner 최종 1회 보고·워커 모드·권한 모드 점검, 등록부 대신 Host API
+- [ ] 기존 `.clewpath/workers.json`(v1) 가져오기 경로
+- [ ] 실사용 1회: 워커 2 + 관리 1, ASK/REVIEW 왕복 → 관제 워커↔워커 호출선, 관리 세션 수신 RESULT 1건, 장부에 배정·결과
+#### 단계 2 — 장부 자동 채움·경력 화면 (M)
+- [ ] `[cw]` 헤더 인덱서(jsonl 읽기 전용, 토큰 0) · 에이전트 이력/일감 화면(PWA) · monwatch 위반 감지(턴 초과·무응답 ASK·전달 사슬·순환) · 일감별 비용
+#### 단계 3 — 개인 비서 (L)
+- [ ] MCP 도구(list_agents·agent_history·team_status·delegate_task) · 팀 위 포트폴리오 층(팀.parent=비서) · 비서 에이전트 스킬
 
 ## 참고(완료): 알림 → 탭 점프 (v0.8.6 PWA)
 
