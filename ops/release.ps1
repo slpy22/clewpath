@@ -70,7 +70,13 @@ if (-not (Test-Path (Join-Path $Root "ops\release-keys\private.pem"))) { Fail "�
 $uvExe = Join-Path $env:LOCALAPPDATA "ClewPath\bin\uv.exe"
 if (-not (Test-Path $uvExe)) { $uvExe = (Get-Command uv -ErrorAction SilentlyContinue).Source }
 if ($uvExe) {
-    & $uvExe lock --check 2>$null | Out-Null
+    # lock 검사는 의존성 해석만 한다 — 프로젝트 .venv 를 건드리지 않게 임시 환경 경로 + 시스템 파이썬을 쓴다
+    # (2026-10-01: Windows 응용 프로그램 제어가 .venv\Scripts\python.exe 실행을 막아 uv lock 이 실패한 사례).
+    $prevUvEnv = $env:UV_PROJECT_ENVIRONMENT
+    $env:UV_PROJECT_ENVIRONMENT = Join-Path $env:TEMP 'clewpath-uv-lock-env'
+    $pyExe = (Get-Command $Python -ErrorAction SilentlyContinue).Source
+    if ($pyExe) { & $uvExe lock --check --python $pyExe 2>$null | Out-Null } else { & $uvExe lock --check 2>$null | Out-Null }
+    $env:UV_PROJECT_ENVIRONMENT = $prevUvEnv
     if ($LASTEXITCODE -ne 0) { Fail "uv.lock 이 pyproject.toml 과 어긋납니다 - uv lock 으로 갱신하고 커밋하세요(설치본 의존성 누락 방지)" }
 } else { Log "uv 를 못 찾아 lock 검사를 건너뜁니다" }
 if (-not $SkipTests) {
