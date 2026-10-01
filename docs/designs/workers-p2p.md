@@ -139,7 +139,7 @@ v1 스킬은 관리 세션 관점만 있다. v2 는 같은 SKILL.md 에 **「워
 
 ### Phase 1 성공 기준
 
-관리 세션으로 오는 중계 메시지가 줄고(관제 타임라인에서 관리 세션 수신 수 비교), 완료 책임 누락·편집 충돌은 늘지 않는다.
+같은 종류의 일감을 v1(중앙 경유)과 v2(직접)로 한 번씩 돌려 **전체 세션 토큰 합·완료 시간·재작업(반려) 수**를 비교한다(관리 세션 수신 수만 보면 당연히 줄어 의미 없음 — Codex). 완료 책임 누락·편집 충돌은 늘지 않아야 한다.
 
 ## Phase 2 — 고도화(필요가 확인되면)
 
@@ -158,3 +158,134 @@ v1 스킬은 관리 세션 관점만 있다. v2 는 같은 SKILL.md 에 **「워
 - **워커가 등록부를 직접 수정**(Gemini 의 board.md 자율 분배 포함): 동시 쓰기 충돌·책임 불명. 관리 세션 단일 작성자 유지. 업무 보드는 Phase 2 에서 Host API(트랜잭션) 뒤로.
 - **응답 타임아웃**: claude 세션은 시간을 잴 수 없다 — '턴 수' 와 'BLOCKED 1회' 로 대체(강제는 Phase 2 감지 알림).
 - **`.clewpath/locks/` 빈 파일 잠금**(Gemini): 프로세스가 죽으면 잠금이 남는다. Phase 1 은 `write_scope` 배정으로 충분.
+
+## 엔지니어링 리뷰 (단계 1, /plan-eng-review 2026-10-01)
+
+### 결정
+
+| # | 결정 | 이유 |
+|---|---|---|
+| E-1 | **저장 = SQLite 1개**(`<데이터 폴더>/team.db`, stdlib sqlite3, WAL) | 이력이 제품. `jsonl_log` 는 8MB 에서 한 세대만 남김(`jsonl_log.py:14`) → 경력 유실. SQL 로 비서가 바로 분석 |
+| E-2 | **팀 API 는 읽기·쓰기 모두 로컬 전용**(`_LOCAL_ONLY_API` 에 `/api/v1/team` 전 동사) | 사장님: 폰이 API 를 직접 부를 일이 없다 — 필요하면 릴레이로 **세션에 요청**하고 세션이 PC 안에서 API 를 부른다. 원격 출발 작업도 세션 경유라 장부에는 항상 남는다 |
+| E-3 | **관제 그룹: 구성원(manager·subs·역할 라벨)만 팀이 정본**, 이름·알림 설정은 사용자 값 유지. 워커 세션 교체는 에이전트의 현재 세션을 continued-in 사슬로 찾아 그룹도 갱신 | 지금 monwatch 는 관리 세션만 따라감(`monwatch.py:115`) — 워커가 교체되면 그룹에서 빠지는 구멍을 같이 막는다 |
+| E-4 | **SKILL.md ↔ 라우트 대조 테스트**: 문서의 모든 `/api/…` 경로가 FastAPI 라우트에 존재 | 에이전트가 읽는 문서라 어긋나면 조용히 실패 |
+| E-5 | **로컬 전용은 서버 라우트에서 검사**(`_is_local(request)` 아니면 403, 전 동사) + 커넥터 목록에도 추가(이중) | 커넥터 목록은 기기 API 외엔 POST 만 막음(`connector.py:107`) — Codex |
+| E-6 | **전송 주소 = 파이프 주소 `uds:<messagingSocketPath>`**(팀 GET 이 이름과 함께 줌), 이름은 표시용 | 이름은 동명이면 모호(`peers.py:222`), 교체 중 경쟁 — Codex |
+| E-7 | **관제 그룹 = 목표 상태 맞추기**(DB 가 원하는 구성원 → `mongroups` 에 적용, 실패면 `monitor_sync:'pending'` 응답 후 다음 변경·기동 때 재시도, 그룹 id 는 DB 에 1개만 → 중복 생성 없음) | DB 성공·그룹 실패의 부분 성공 — Codex |
+| E-8 | **관제 화면 상한 8→12** + 열린 관제 화면에 구성원 변경 반영(그룹 변경 시 열린 webmonitor 에 add/remove) | `webmonitor.py:28` 상한 8, 열린 화면은 연결 시 목록 고정 — Codex |
+| E-9 | **일감 상태기계**: `assigned → submitted → accepted / rejected → (reopened → assigned)`, 이벤트·상태는 **같은 트랜잭션**, 쓰기 요청에 `idem_key`(재시도 중복 방지), 배정마다 `assignment_ver` +1 → 옛 담당자의 제출은 409 | RESULT 와 승인 구분·재시도·재배정 경쟁 — Codex |
+| E-10 | **에이전트를 팀에서 분리**: `agents`(전역 페르소나: 별칭·역할·태그) + `memberships(team, agent, role, write_scope, joined, left)` | 팀 이동·여러 팀 이력 보존 — 경력의 단위가 에이전트 — Codex |
+| E-11 | **쓰기 권한 = 프롬프트 약속 + 기록**(강제 토큰 없음). `actor_session` 은 자기 신고로 표시 | 사장님 6B. **업그레이드 조건**: 비서가 사람 승인 없이 여러 팀을 관리하거나 다른 사용자 세션이 생기면 팀별 관리자 토큰(결정 로그 e2457b66) |
+| E-12 | **일감 기한 감지**: 일감 `due`(선택) 를 Host 가 재고, 넘기면 관리자 세션에 웹푸시(monwatch 경로 재사용). ASK 단위 감지는 단계 2 | 무응답이면 '4턴' 이 작동 안 함 — Codex |
+| E-13 | **산출물 증거**: 제출 시 Host 가 산출물 파일의 sha256·크기·mtime 과 그 폴더의 git HEAD(있으면)를 이벤트에 기록 | 경로만 남기면 덮어쓴 파일을 당시 산출물로 오인 — 경력 데이터 신뢰도 — Codex |
+
+### 데이터 흐름
+
+```
+ 관리 세션 ──curl(127.0.0.1)──▶ Host /api/v1/team/*  ──▶ team.db (teams·agents·agent_sessions·tasks·events)
+   │  배정·결과 기록                    │                          ▲
+   │                                   ├─ peers.snapshot(2s) ── 살아 있는 이름
+   │                                   ├─ scanner continued_in ─ 현재 세션(사슬 끝) → agent_sessions 에 append
+   ▼                                   └─ mongroups.save(구성원만) ── 관제 그룹(호출선·알림)
+ 워커 A ──GET team(보낼 때만)──▶ 이름 ──SendMessage──▶ 워커 B   (관리 세션 컨텍스트 무유입)
+                                                    └─ 관제가 호출선으로 표시(monitor.py:189)
+ 폰 ──릴레이──▶ (팀 API 직접 불가, E-2) ──▶ 관리/비서 세션에 말로 요청
+```
+
+### 테이블(초안)
+
+- `teams(id, name, root, manager_agent, parent, monitor_group_id, monitor_sync, created, archived)`
+- `agents(id, alias, role, tags_json, status, created, retired)` — 전역 페르소나(E-10)
+- `memberships(team_id, agent_id, role, write_scope_json, joined, left)` — 팀 안 별칭 유일
+- `agent_sessions(agent_id, session_id, started, ended, reason)` — `session_id UNIQUE`(한 세션은 한 에이전트), reason=`created|continued|replaced|imported`
+- `tasks(id, team_id, goal, owner_agent, collaborators_json, write_scope_json, done_when, due, status, assignment_ver, parent, created, closed)` — id 는 `<팀 약칭>-T<n>`, status 는 E-9 상태기계
+- `events(id, ts, team_id, task_id, agent_id, kind, actor_session, idem_key UNIQUE, payload_json)` — append 전용(수정·삭제 API 없음), 제출 이벤트 payload 에 산출물 sha256·git HEAD(E-13)
+
+### 테스트 범위
+
+```
+[+] session_manager/team.py
+  ├── 팀/에이전트 생성·중복 별칭 거절·세션 바인딩 멱등(같은 session_id 두 번)   [GAP→단위]
+  ├── 한 세션을 다른 에이전트에 붙이기 → 409                                    [GAP→단위]
+  ├── current_session: continued-in 사슬 2단 → 끝 세션 + agent_sessions append   [GAP→단위]
+  ├── 일감 배정/결과 → events append, 상태 전이(open→done/blocked)            [GAP→단위]
+  ├── v1 workers.json 가져오기(정상·이미 존재·손상 파일)                        [GAP→단위]
+  └── DB 손상/잠김 → 503 + 기동 유지(다른 기능 무영향)                           [GAP→단위]
+[+] server.py /api/v1/team/*
+  ├── GET 팀: 살아 있는 이름 포함(peers 스텁) · 없는 팀 404                      [GAP→API]
+  ├── 릴레이 경유 모든 동사 차단(_is_local_only_api)                            [GAP→API, 보안]
+  └── 구성원 변경 → mongroups 구성원 갱신, 이름·notify 는 보존                   [GAP→API]
+[+] skills/clewpath-workers/SKILL.md
+  └── 문서의 /api/… 경로 전부 라우트 존재(E-4)                                  [GAP→단위]
+USER FLOW: 실사용 1회(워커 2 + 관리 1, ASK/REVIEW 왕복, 관제 호출선, 장부 배정·결과) [→E2E 수동]
+```
+
+### 테스트 범위 추가(E-5~E-13)
+
+```
+  ├── 서버 라우트 로컬 검사: 비루프백 클라이언트 GET/POST 모두 403 (E-5)             [GAP→API, 보안]
+  ├── 팀 GET 의 address = uds:<pipe>, 살아 있지 않으면 address=null·live=false (E-6) [GAP→API]
+  ├── 그룹 맞추기: mongroups.save 예외 → monitor_sync=pending, 재호출 시 같은 그룹 id (E-7) [GAP→단위]
+  ├── webmonitor 상한 12 · 그룹 변경이 열린 관제에 add/remove (E-8)                 [GAP→단위]
+  ├── 상태기계: 허용 전이만, 같은 idem_key 재요청 = 같은 결과, 옛 assignment_ver 제출 409 (E-9) [GAP→단위]
+  ├── 에이전트 팀 이동: 옛 membership left 기록, 이력 유지 (E-10)                    [GAP→단위]
+  ├── 기한 초과 일감 → 알림 1회(중복 없음), 제출되면 해제 (E-12)                     [GAP→단위]
+  └── 제출 증거: 파일 sha256·크기, git HEAD(저장소 아니면 null), 없는 파일은 missing 표기 (E-13) [GAP→단위]
+```
+
+### NOT in scope (단계 1)
+
+- 워커 간 ASK 단위 무응답·턴 초과 감지, `[cw]` 헤더 인덱서 — 단계 2(jsonl 읽기 인덱서와 함께).
+- 폰/원격에서 팀 API — 사장님 결정 E-2(세션 경유로 충분).
+- 쓰기 권한 강제(팀 토큰) — E-11, 업그레이드 조건부 TODO.
+- 일감별 비용 집계·경력 화면·업무 보드 UI — 단계 2.
+- MCP 비서 도구·포트폴리오 층 — 단계 3(스키마에 `teams.parent` 자리만).
+
+### What already exists (재사용)
+
+| 필요 | 기존 코드 | 처리 |
+|---|---|---|
+| 세션 교체 추적 | scanner `continued_in`(`scanner.py:110`) · monwatch 관리자 추적(`monwatch.py:115`) | 사슬 따라가기 재사용, 워커까지 확장 |
+| 살아 있음·주소 | `peers.snapshot`(socket 포함) | 팀 GET 에서 조인 |
+| 관제 그룹 | `mongroups.save/set_manager` | 목표 상태 맞추기로 호출 |
+| 워커 기동 | `POST /api/sessions/<id>/terminal/start`(멱등) | 그대로 |
+| 웹푸시 | monwatch `notify_error` 경로 | 기한 초과 알림에 재사용 |
+| 스킬 배포 | `skillinstall`(digest 비교·덮어쓰기 확인) | 그대로 |
+
+### Failure modes
+
+| 경로 | 현실적 실패 | 테스트 | 처리 | 사용자에게 |
+|---|---|---|---|---|
+| team.db | 손상·잠김 | O | 503 + Host 기동 유지 | 스킬이 BLOCKED 보고 |
+| 그룹 맞추기 | mongroups 쓰기 실패 | O | pending + 재시도 | 응답에 pending |
+| 주소 조회 | 조회 직후 세션 교체 | O(교체 사슬) | SendMessage 실패 → 재조회 1회 → BLOCKED | 관제 호출 실패 알림(기존) |
+| 제출 | 재시도 중복·옛 담당자 | O | idem_key·assignment_ver 409 | 409 사유 문구 |
+| 증거 | 산출물 파일 없음 | O | missing 표기, 제출은 받음 | 이벤트에 missing |
+| 기한 | Host 재기동 사이 초과 | O | 기동 시 1회 재평가 | 알림 1회 |
+
+**critical gap 0**(모든 경로에 테스트 또는 처리 있음).
+
+## Implementation Tasks
+
+- [ ] **T1 (P1, CC ~40분)** — `session_manager/team.py`: SQLite 스키마(teams·agents·memberships·agent_sessions·tasks·events, WAL·user_version 마이그레이션), CRUD·상태기계(E-9)·idem_key·assignment_ver·팀 이동(E-10)
+- [ ] **T2 (P1, CC ~20분)** — 현재 세션 해석(continued-in 사슬 → agent_sessions append) + 주소(`uds:`)·live 조인(E-6)
+- [ ] **T3 (P1, CC ~25분)** — `server.py` `/api/v1/team/*` 라우트 + 서버측 로컬 검사(E-5) + 커넥터 목록 이중화 + v1 `workers.json` 가져오기
+- [ ] **T4 (P1, CC ~20분)** — 관제 그룹 목표 상태 맞추기(E-7) + 기동 시 재동기화 + webmonitor 상한 12·열린 화면 반영(E-8)
+- [ ] **T5 (P2, CC ~20분)** — 제출 증거(sha256·git HEAD, E-13) + 일감 기한 감지 웹푸시(E-12, monwatch 경로)
+- [ ] **T6 (P1, CC ~30분)** — 스킬 v2(관리자/워커 모드·P2P 규칙·`[cw]`·팀 API 사용법·사전 점검·v1 이전) + 문서↔라우트 대조 테스트(E-4)
+- [ ] **T7 (P1)** — 테스트 전부(위 두 다이어그램) · 실사용 1회 v1/v2 비교(토큰·시간·반려)
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | — |
+| Codex Review | `/codex review` | Independent 2nd opinion | 1 (plan) | issues_found → 결정에 반영 | 10건: 7건 일괄 반영(E-5~E-10), 2건 단계 1 로 앞당김(E-12·E-13), 1건 사장님 6B(E-11, 업그레이드 TODO) |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR (2026-10-01, FULL_REVIEW) | 13 decisions(E-1~E-13), 0 critical gaps |
+| Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | 단계 1 은 UI 없음(관제 상한·열린 화면 반영만) |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
+
+- **CROSS-MODEL:** Codex 10건 중 코드로 확인된 3건(커넥터 POST 만 차단·루프백 인증 생략·관제 상한 8) 포함 전부 결정에 흡수. 쓰기 권한만 사장님이 약속+기록(6B) 선택.
+- **VERDICT:** ENG CLEARED — ready to implement (단계 1 T1~T7).
+
+NO UNRESOLVED DECISIONS
