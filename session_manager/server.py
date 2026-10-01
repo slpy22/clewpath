@@ -1068,6 +1068,10 @@ def create_app() -> FastAPI:
     def team_get(request: Request, team_id: str):
         return _team_call(request, _team.get_team, team_id)
 
+    @app.post("/api/v1/team/{team_id}/archive")
+    def team_archive(request: Request, team_id: str, body: dict = Body(default={})):
+        return _team_call(request, _team.archive, team_id, bool(body.get("on", True)))
+
     @app.post("/api/v1/team/{team_id}/sync")
     def team_sync(request: Request, team_id: str):
         return _team_call(request, _team.sync_group, team_id)

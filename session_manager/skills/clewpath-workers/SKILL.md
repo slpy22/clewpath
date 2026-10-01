@@ -36,11 +36,14 @@ description: 여러 Claude 세션이 한 팀으로 일하는 운영 규칙(v2). 
 | 일감 배정 | `POST /api/v1/team/<team>/tasks` `{"goal","owner","collaborators":[],"write_scope":{},"done_when","due"?,"idem_key"}` |
 | 일감 상태 바꾸기 | `POST /api/v1/team/<team>/tasks/<task>/<action>` — action = `submit`·`accept`·`reject`·`reopen`·`reassign`·`block`·`note` |
 | 관제 그룹 다시 맞추기 | `POST /api/v1/team/<team>/sync` |
+| 팀 보관(끝난 프로젝트, 이력은 유지) | `POST /api/v1/team/<team>/archive` `{"on":true}` |
 
 - `<team>` 은 팀 id(`tm_…`) 또는 코드(`PORTAL`), `<agent>` 는 에이전트 id(`ag_…`) 또는 팀 안 별칭, `<task>` 는 `PORTAL-T3` 형식.
 - **모든 쓰기에 `idem_key`** 를 붙인다(예: `<task>:submit:<assignment_ver>`). 같은 요청을 다시 보내도 한 번만 반영된다.
 - `actor_session` 에 **자기 세션 uuid** 를 적는다(장부의 '누가' — 자기 신고).
 - 제출(`submit`)은 `{"assignment_ver": <배정 버전>, "artifacts": ["상대 또는 절대 경로", …], "note"}` — Host 가 파일 해시·git 커밋을 증거로 남긴다. 재배정되면 버전이 올라가 옛 제출은 409(`stale_assignment`).
+- **Windows(Git Bash) 에서 한글 본문**: `curl -d '<json>'` 처럼 인자로 넘기면 코드 페이지 변환으로 깨져 400 이 난다. 본문은 표준 입력으로: `printf '%s' '<json>' | curl -s -H 'Content-Type: application/json' -X POST <url> --data-binary @-`.
+- 주소(`address`)는 **전체 문자열 그대로** 쓴다(잘리면 'unvouched pipe' 로 거절된다).
 - 오류: 404 없음 · 409 충돌(`alias_taken`·`session_owned_by_other_agent`·`bad_transition:…`·`stale_assignment`) · 503 명부 사용 불가 → 멈추고 사용자에게 보고.
 
 일감 상태: `assigned → submitted → accepted`, `submitted → rejected → (reopen/reassign) → assigned`, `assigned → blocked → (reassign) → assigned`.
@@ -59,6 +62,8 @@ description: 여러 Claude 세션이 한 팀으로 일하는 운영 규칙(v2). 
 cd <워커 작업 폴더> && claude -p --output-format json "너는 '<별칭>' 워커다(역할: <역할>). 팀 <팀 코드>, 명부는 http://127.0.0.1:5100/api/v1/team/<team>(<team> = 팀 코드). 동료와의 통신은 clewpath-workers 스킬의 워커 모드를 따른다. 지금은 'ready' 라고만 답하라."
 # 응답 JSON 의 session_id 로 → POST /api/v1/team/<team>/members {"alias":"<별칭>","role":"<역할>","session_id":"…","write_scope":["<경로 패턴>"]}
 ```
+
+**처음 쓰는 폴더**면 터미널로 띄운 워커가 Claude Code 의 '이 폴더를 신뢰합니까?' 질문에서 멈춘다(팀 GET 에서 `live:false` 가 계속됨). 사용자에게 ClewPath 에서 그 세션 탭을 열어 'Yes, I trust this folder' 를 고르게 하거나, 이미 신뢰한 폴더를 작업 폴더로 쓴다. 이 질문에 대신 답하지 않는다(보안 확인은 사람 몫).
 
 이 `-p` 는 **아직 살아 있지 않은 새 세션을 만드는 1회성**이라 규칙 1 과 충돌하지 않는다. 이미 있는 워커(v1)에는 위 문장과 같은 **온보딩 메시지를 SendMessage 로 1회** 보낸다.
 

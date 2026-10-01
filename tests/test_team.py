@@ -292,3 +292,17 @@ def test_integrity_race_is_409(T):
         with T._Tx() as c:                       # 다른 요청이 같은 세션을 먼저 넣은 상황을 직접 재현
             c.execute("INSERT INTO agent_sessions(agent_id,session_id,started,reason) VALUES('x','s-be',1,'created')")
     assert e.value.status == 409 and e.value.code == "conflict"
+
+
+def test_archive_hides_team_from_list_watch_and_overdue(T, monkeypatch):
+    sent = []
+    from session_manager import push
+    monkeypatch.setattr(push, "send", lambda *a, **k: sent.append(a) or 1)
+    t, a, b = _mk(T)
+    T.create_task(t["id"], "늦은 일", "백엔드", due=1000)
+    T.archive(t["id"])
+    assert T.list_teams() == [] and T.list_teams(include_archived=True)[0]["archived"] is True
+    assert T.watch_once() == {"teams": 0, "overdue": 0} and sent == [], "보관 팀은 감시·알림 제외"
+    assert T.get_team(t["id"])["members"], "이력은 그대로"
+    T.archive(t["id"], on=False)
+    assert len(T.list_teams()) == 1

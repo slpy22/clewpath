@@ -214,6 +214,16 @@ def list_teams(include_archived: bool = False) -> list[dict]:
         c.close()
 
 
+def archive(team_id: str, on: bool = True) -> dict:
+    """팀 보관(끝난 프로젝트). 장부·이력은 그대로, 목록·감시(그룹 맞추기·기한 알림)에서 빠진다.
+    관제 그룹은 지우지 않는다 — 사용자가 관제 화면에서 지운다(감시가 다시 만들지 않음)."""
+    with _Tx() as c:
+        t = _team_row(c, team_id)
+        c.execute("UPDATE teams SET archived=? WHERE id=?", (_now() if on else None, t["id"]))
+        _event(c, t["id"], "team_archived" if on else "team_unarchived")
+    return {"id": t["id"], "archived": bool(on)}
+
+
 # ---------------------------------------------------------------- 에이전트·소속·세션
 
 def _bind(c, agent_id: str, session_id: str, reason: str) -> bool:
@@ -676,7 +686,8 @@ def overdue(now: int | None = None) -> list[dict]:
     c = _read()
     try:
         rows = c.execute("SELECT t.*, tm.name AS team_name, tm.manager_agent FROM tasks t JOIN teams tm ON tm.id=t.team_id"
-                         " WHERE t.due IS NOT NULL AND t.due < ? AND t.status IN ('assigned','blocked')", (now,)).fetchall()
+                         " WHERE t.due IS NOT NULL AND t.due < ? AND t.status IN ('assigned','blocked')"
+                         " AND tm.archived IS NULL", (now,)).fetchall()
         out = []
         for r in rows:
             seen = c.execute("SELECT 1 FROM events WHERE task_id=? AND kind='overdue' AND idem_key=?",
