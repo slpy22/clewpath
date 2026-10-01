@@ -307,3 +307,22 @@ def test_archive_hides_team_from_list_watch_and_overdue(T, monkeypatch):
     assert T.get_team(t["id"])["members"], "이력은 그대로"
     T.archive(t["id"], on=False)
     assert len(T.list_teams()) == 1
+
+
+def test_same_session_reused_across_teams_and_failed_create_leaves_no_team(T, monkeypatch):
+    t1 = T.create_team("One", manager_session="s-mgr")
+    t2 = T.create_team("Two", manager_session="s-mgr")                       # 같은 관리 세션 → 같은 에이전트, 두 팀 소속
+    assert T.get_team(t1["id"])["manager_agent"] == T.get_team(t2["id"])["manager_agent"]
+    w = T.add_member(t1["id"], "w", session_id="s-w")
+    with pytest.raises(T.TeamError) as e:
+        T.add_member(t1["id"], "w2", session_id="s-w")                        # 같은 팀에 같은 에이전트 두 번
+    assert e.value.code == "already_member"
+    t3 = T.create_team("Three", manager_session="s-w")                      # 워커 세션이 다른 팀 관리자 = 같은 에이전트
+    assert T.get_team(t3["id"])["manager_agent"] == w["agent_id"]
+    n = len(T.list_teams())
+    def boom(*a, **k):
+        raise T.TeamError("session_owned_by_other_agent", 409)
+    monkeypatch.setattr(T, "add_member", boom)
+    with pytest.raises(T.TeamError):
+        T.create_team("Bad", manager_session="s-x")
+    assert len(T.list_teams()) == n, "관리자 등록 실패 시 반쪽 팀이 남지 않는다"

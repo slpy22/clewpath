@@ -226,7 +226,13 @@ def create_team(name: str, root: str | None = None, code: str | None = None,
                   (tid, code, name, _clean(root, 400) or None, parent or None, _now()))
         _event(c, tid, "team_created", payload={"name": name, "code": code, "root": root})
     if manager_session:
-        add_member(tid, manager_alias or "관리", role="관리", session_id=manager_session, member_role="manager")
+        try:
+            add_member(tid, manager_alias or "관리", role="관리", session_id=manager_session, member_role="manager")
+        except TeamError:
+            with _Tx() as c:                     # 관리자 등록이 실패하면 팀도 만들지 않은 것으로(반쪽 팀 방지)
+                c.execute("DELETE FROM events WHERE team_id=?", (tid,))
+                c.execute("DELETE FROM teams WHERE id=?", (tid,))
+            raise
     return get_team(tid)
 
 
@@ -300,9 +306,17 @@ def add_member(team_id: str, alias: str, role: str = "", tags=None, session_id: 
         if c.execute("SELECT 1 FROM memberships WHERE team_id=? AND alias=? AND left_at IS NULL",
                      (t["id"], alias)).fetchone():
             raise TeamError("alias_taken", 409)
+        if not agent_id and session_id:
+            # 이미 다른 팀에서 일하는 세션 = 같은 에이전트(페르소나)가 이 팀에도 소속된다(한 관리자가 여러 팀)
+            own = c.execute("SELECT agent_id FROM agent_sessions WHERE session_id=?", (str(session_id),)).fetchone()
+            if own:
+                agent_id = own["agent_id"]
         if agent_id:
             if not c.execute("SELECT 1 FROM agents WHERE id=?", (agent_id,)).fetchone():
                 raise TeamError("agent_not_found", 404)
+            if c.execute("SELECT 1 FROM memberships WHERE team_id=? AND agent_id=? AND left_at IS NULL",
+                         (t["id"], agent_id)).fetchone():
+                raise TeamError("already_member", 409)
             aid = agent_id
         else:
             aid = "ag_" + secrets.token_hex(4)
