@@ -3909,7 +3909,7 @@ function showSettings(){
 // 모든 내용은 textContent 로만 그린다(세션 원문이 섞이므로 HTML 해석 금지).
 const TEAM_KIND={assigned:'📌 배정',submitted:'📤 제출',accepted:'✅ 승인',rejected:'↩ 반려',reopened:'🔁 재개',
   reassigned:'👤 재배정',blocked:'⛔ 막힘',note:'📝 메모',overdue:'⏰ 기한 초과',msg:'💬 메시지',msg_in:'📨 외부 수신',
-  msg_failed:'❌ 전달 실패',violation:'⚠ 위반',human_input:'🙋 사장님 입력',violation_notified:'🔔 위반 알림'};
+  msg_failed:'❌ 전달 실패',violation:'⚠ 위반',human_input:'🙋 사장님 입력',prompt_in:'🤖 프로그램 입력',violation_notified:'🔔 위반 알림'};
 const TEAM_STATUS={assigned:'진행',submitted:'제출됨',accepted:'승인',rejected:'반려',blocked:'막힘'};
 function fmtTok(n){ n=+n||0; return n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(1)+'k':String(n); }
 function tsText(sec){ try{ return sec?new Date(sec*1000).toLocaleString():''; }catch(e){ return ''; } }
@@ -3971,7 +3971,7 @@ function teamEventText(e){
   const p=e.payload||{};
   if(e.kind==='msg'||e.kind==='msg_in'){ const cw=p.cw||{}; const first=String(p.body||'').split('\n')[0];
     return (cw.type?cw.type+' ':'')+(cw.thread?'['+cw.thread+'] ':'')+first; }
-  if(e.kind==='human_input') return String(p.text||'').slice(0,200);
+  if(e.kind==='human_input'||e.kind==='prompt_in') return String(p.text||'').slice(0,200);
   if(e.kind==='submitted'){ const ev=p.evidence||{}; return '산출물 '+((ev.artifacts||[]).length)+'개'+(p.note?' · '+p.note:''); }
   if(e.kind==='violation') return (p.rule||'')+(p.thread?' · '+p.thread:'');
   if(e.kind==='msg_failed') return String(p.error||'').slice(0,120);

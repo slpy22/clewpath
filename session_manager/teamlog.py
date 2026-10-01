@@ -421,7 +421,11 @@ def _apply(w, row, rec: dict, ctx: str | None) -> tuple[int, str | None]:
     if human:
         h = redact(human)
         uid = rec.get("uuid")
-        n += _ev(w, row, "human_input", ctx, {"text": h, "uuid": uid}, f"human:{uid}" if uid else None, ts, h)
+        # claude 가 기록하는 turnOrigin: 터미널에서 사람이 친 것 = 'human', claude -p(프로그램·다른 세션이 만든 프롬프트) = 'sdk'.
+        # 사장님 입력(비서가 습관을 배우는 근거)에는 사람 것만 — 프로그램 입력은 prompt_in 으로 따로 남긴다.
+        origin = rec.get("turnOrigin")
+        kind = "human_input" if origin in (None, "human") else "prompt_in"
+        n += _ev(w, row, kind, ctx, {"text": h, "uuid": uid, "origin": origin}, f"human:{uid}" if uid else None, ts, h)
     return n, ctx
 
 
@@ -677,7 +681,7 @@ def purge_team(team_id: str) -> dict:
             removed += 1
     with team._Tx() as w:
         ids = [r["id"] for r in w.execute("SELECT id FROM events WHERE team_id=? AND kind IN"
-                                          " ('human_input','msg','msg_in','msg_failed')", (t["id"],))]
+                                          " ('human_input','prompt_in','msg','msg_in','msg_failed')", (t["id"],))]
         for i in range(0, len(ids), 500):
             part = ids[i:i + 500]
             q = ",".join("?" * len(part))
@@ -811,7 +815,7 @@ def usage_summary(team_id: str) -> dict:
 
 def inputs(team_id: str, q: str = "", limit: int = 50, before: int | None = None, kind: str = "human_input") -> dict:
     """사람 입력(또는 메시지) 목록·검색. q 가 3자 이상이면 전문 색인(trigram), 짧으면 LIKE."""
-    if kind not in ("human_input", "msg", "msg_in"):
+    if kind not in ("human_input", "prompt_in", "msg", "msg_in"):
         raise team.TeamError("bad_kind")
     limit = max(1, min(int(limit), 200))
     c = team._read()

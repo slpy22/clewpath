@@ -389,3 +389,14 @@ def test_existing_session_ingests_only_after_joining(env, monkeypatch):
     env["write"]("s-mg", [human("new3", "추가", joined + 20)], append=True)
     teamlog.ingest_all()
     assert len(_events("human_input")) == 3, "이후 수집은 정상 이어감(첫 수집이 재작성으로 오인되지 않음)"
+
+
+def test_sdk_prompt_is_not_owner_input(env):
+    """claude -p 로 만든 세션의 첫 프롬프트(turnOrigin=sdk)는 사장님 입력이 아니라 프로그램 입력(prompt_in)."""
+    sdk = human("p1", "너는 백엔드 워커다", 1); sdk["turnOrigin"] = "sdk"; sdk["promptSource"] = "sdk"
+    typed = human("p2", "사장님이 친 말", 2); typed["turnOrigin"] = "human"
+    env["write"]("s-be", [sdk, typed])
+    teamlog.ingest_all()
+    assert [json.loads(e["payload_json"])["text"] for e in _events("human_input")] == ["사장님이 친 말"]
+    assert [json.loads(e["payload_json"])["origin"] for e in _events("prompt_in")] == ["sdk"]
+    assert teamlog.inputs("WEB", kind="prompt_in")["items"][0]["text"] == "너는 백엔드 워커다"
