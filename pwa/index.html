@@ -3908,9 +3908,9 @@ function showSettings(){
 // ---- 👥 팀 · 경력(워커 P2P 단계 2) — PC 로컬 전용(팀 API 는 로컬에서만, eng E-2 / S2-4) ----
 // 모든 내용은 textContent 로만 그린다(세션 원문이 섞이므로 HTML 해석 금지).
 const TEAM_KIND={assigned:'📌 배정',submitted:'📤 제출',accepted:'✅ 승인',rejected:'↩ 반려',reopened:'🔁 재개',
-  reassigned:'👤 재배정',blocked:'⛔ 막힘',note:'📝 메모',overdue:'⏰ 기한 초과',msg:'💬 메시지',msg_in:'📨 외부 수신',
+  reassigned:'👤 재배정',blocked:'⛔ 막힘',cancelled:'🚫 취소',note:'📝 메모',overdue:'⏰ 기한 초과',msg:'💬 메시지',msg_in:'📨 외부 수신',
   msg_failed:'❌ 전달 실패',violation:'⚠ 위반',human_input:'🙋 사장님 입력',prompt_in:'🤖 프로그램 입력',violation_notified:'🔔 위반 알림'};
-const TEAM_STATUS={assigned:'진행',submitted:'제출됨',accepted:'승인',rejected:'반려',blocked:'막힘'};
+const TEAM_STATUS={assigned:'진행',submitted:'제출됨',accepted:'승인',rejected:'반려',blocked:'막힘',cancelled:'취소'};
 function fmtTok(n){ n=+n||0; return n>=1e6?(n/1e6).toFixed(1)+'M':n>=1e3?(n/1e3).toFixed(1)+'k':String(n); }
 function tsText(sec){ try{ return sec?new Date(sec*1000).toLocaleString():''; }catch(e){ return ''; } }
 function teamRow(icon,title,sub,fn){
@@ -4039,7 +4039,7 @@ async function showTeamInputs(code, q, before){
 // ---- ✅ 승인 요청(개인 비서 단계 3, A-1~A-3) ----
 // 영향이 큰 실행은 '사람만 가진 것' 으로만 승인된다: 폰(페어링 기기) 탭, 또는 PC 에서는 2차 인증 코드.
 const APPROVAL_KIND={team_create:'팀 만들기', team_archive:'팀 보관', team_purge:'보존본 지우기', assistant_set:'비서 지정',
-  delegate:'일감 위임', task_decide:'결과 승인/반려', profile_decide:'사장님 프로필 결정'};
+  delegate:'일감 위임', task_decide:'결과 승인/반려/취소', profile_decide:'사장님 프로필 결정'};
 async function showApprovals(){
   let r; try{ r=await T.api('GET','/api/owner/approvals'); }catch(e){ toast('승인 목록 실패: '+e.message); return; }
   const body=el('div'); const list=(r&&r.approvals)||[];

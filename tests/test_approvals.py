@@ -240,3 +240,22 @@ def test_team_import_is_approval_only(env, tmp_path):
     (proj / ".clewpath" / "workers.json").write_text(json.dumps({"workers": {"fe": {"session_id": "s-fe"}}}), encoding="utf-8")
     r = _ok("team_import", {"path": str(proj)})["result"]
     assert r["added"] == ["fe"] and r["code"]
+
+
+def test_task_cancel_via_approval_and_rules(env):
+    _ok("team_create", {"name": "Web", "manager_session": "s-m", "members": [{"alias": "fe", "session_id": "s-fe"}]})
+    k = team.create_task("WEB", "잘못 만든 일감", "fe")
+    team.transition("WEB", k["id"], "block", note="막힘")
+    with pytest.raises(team.TeamError) as e:
+        _ok("task_decide", {"team": "WEB", "task": k["id"], "action": "reject"})        # 제출 안 된 일감은 반려 불가(실사용 발견)
+    assert "blocked->reject" in e.value.code
+    ap = A.create("task_decide", {"team": "WEB", "task": k["id"], "action": "cancel", "note": "정리"})
+    assert ap["summary"].endswith("취소")
+    A.decide(ap["id"], True, "otp")
+    r = A.execute(ap["id"])["result"]
+    assert r["status"] == "cancelled" and r["closed"]
+    assert all(x["id"] != k["id"] for x in team.get_team("WEB")["open_tasks"]), "취소는 열린 일감에서 빠짐"
+    k2 = team.create_task("WEB", "제출된 일감", "fe")
+    team.transition("WEB", k2["id"], "submit", assignment_ver=1)
+    with pytest.raises(team.TeamError):
+        team.transition("WEB", k2["id"], "cancel")                                       # 제출된 건 승인/반려로 결정

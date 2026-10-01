@@ -34,7 +34,7 @@ description: 여러 Claude 세션이 한 팀으로 일하는 운영 규칙(v2). 
 | 구성원 빼기 / 다른 팀으로 | `POST /api/v1/team/<team>/members/<agent>/leave` · `…/members/<agent>/move` `{"to_team","alias"?}` |
 | 일감 목록 / 상세(이력) | `GET /api/v1/team/<team>/tasks` · `GET /api/v1/team/<team>/tasks/<task>` |
 | 일감 배정 | `POST /api/v1/team/<team>/tasks` `{"goal","owner","collaborators":[],"write_scope":{},"done_when","due"?,"idem_key"}` |
-| 일감 상태 바꾸기 | `POST /api/v1/team/<team>/tasks/<task>/<action>` — action = `submit`·`accept`·`reject`·`reopen`·`reassign`·`block`·`note` |
+| 일감 상태 바꾸기 | `POST /api/v1/team/<team>/tasks/<task>/<action>` — action = `submit`·`accept`·`reject`·`reopen`·`reassign`·`block`·`cancel`·`note` |
 | 관제 그룹 다시 맞추기 | `POST /api/v1/team/<team>/sync` |
 
 **승인이 필요한 일**(직접 API 는 `403 approval_required`): 팀 만들기 `team_create` `{"name","root","code"?,"manager_session","members":[{"alias","role","session_id","write_scope"}]}` ·
@@ -50,7 +50,7 @@ v1 등록부로 팀 만들기 `team_import` `{"path":"<프로젝트 루트>"}` �
 - 주소(`address`)는 **전체 문자열 그대로** 쓴다(잘리면 'unvouched pipe' 로 거절된다).
 - 오류: 404 없음 · 409 충돌(`alias_taken`·`session_owned_by_other_agent`·`bad_transition:…`·`stale_assignment`) · 503 명부 사용 불가 → 멈추고 사용자에게 보고.
 
-일감 상태: `assigned → submitted → accepted`, `submitted → rejected → (reopen/reassign) → assigned`, `assigned → blocked → (reassign) → assigned`.
+일감 상태: `assigned → submitted → accepted`, `submitted → rejected → (reopen/reassign) → assigned`, `assigned → blocked → (reassign) → assigned`, 진행·막힘·반려 일감은 `cancel` 로 닫는다(잘못 만들었거나 필요 없어진 일감).
 
 ## 관리 모드
 

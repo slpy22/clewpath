@@ -12,6 +12,7 @@
     assigned ──submit(ver 일치)──▶ submitted ──accept──▶ accepted ──reopen(ver+1)──▶ assigned
        │  ▲                          └──reject──▶ rejected ──reopen/reassign(ver+1)──┘
        │  └──reassign(ver+1)── blocked ◀──block── assigned
+       └─(assigned·blocked·rejected)──cancel──▶ cancelled(닫힘)
 
 저장 = SQLite(eng E-1: jsonl_log 는 8MB 에서 한 세대만 남겨 경력이 사라진다). 데이터 폴더의 team.db.
 쓰기는 Host API 하나로만 들어온다(eng E-2/E-5: 로컬 전용). '관리 세션만 쓴다' 는 프롬프트 약속이고
@@ -570,6 +571,7 @@ _TRANSITIONS = {
     "reopen":   (("rejected", "accepted"), "assigned", True),
     "reassign": (("assigned", "blocked", "rejected"), "assigned", True),
     "block":    (("assigned",), "blocked", False),
+    "cancel":   (("assigned", "blocked", "rejected"), "cancelled", False),   # 잘못 만들었거나 더는 필요 없는 일감 닫기
     "note":     (None, None, False),
 }
 
@@ -607,7 +609,7 @@ def transition(team_id: str, task_id: str, action: str, actor_session: str | Non
         if action == "reassign" and owner:
             new_owner = _agent_in_team(c, t["id"], owner)
         status = to or r["status"]
-        closed = _now() if status == "accepted" else None
+        closed = _now() if status in ("accepted", "cancelled") else None
         c.execute("UPDATE tasks SET status=?, assignment_ver=?, owner_agent=?, closed=? WHERE id=?",
                   (status, ver, new_owner, closed, task_id))
         payload = {"from": r["status"], "to": status, "assignment_ver": ver, "note": _clean(note, 2000) or None}
@@ -616,7 +618,7 @@ def transition(team_id: str, task_id: str, action: str, actor_session: str | Non
         if evidence is not None:
             payload["evidence"] = evidence
         kind = {"submit": "submitted", "accept": "accepted", "reject": "rejected", "reopen": "reopened",
-                "reassign": "reassigned", "block": "blocked", "note": "note"}[action]
+                "reassign": "reassigned", "block": "blocked", "note": "note", "cancel": "cancelled"}[action]
         _event(c, t["id"], kind, task_id, new_owner, actor_session, idem_key, payload)
         return _task_get(c, task_id)
 

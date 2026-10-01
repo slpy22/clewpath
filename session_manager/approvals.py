@@ -51,7 +51,7 @@ def _summary(kind: str, a: dict) -> str:
     if kind == "delegate":
         return f"[{a.get('team')}] 일감 위임: {a.get('goal')}" + (f" → {a.get('owner')}" if a.get("owner") else "")
     if kind == "task_decide":
-        return f"[{a.get('team')}] {a.get('task')} {'승인' if a.get('action') == 'accept' else '반려'}"
+        return f"[{a.get('team')}] {a.get('task')} " + {"accept": "승인", "reject": "반려", "cancel": "취소"}.get(a.get("action"), "?")
     if kind == "profile_decide":
         return f"사장님 프로필 {a.get('decision')}: {str(a.get('statement') or a.get('id'))[:60]}"
     return kind
@@ -67,7 +67,7 @@ def _validate(kind: str, a: dict) -> None:
             raise team.TeamError(f"missing:{k}")
     if kind == "assistant_set" and not (a.get("create") or a.get("session_id")):
         raise team.TeamError("missing:session_id")
-    if kind == "task_decide" and a.get("action") not in ("accept", "reject"):
+    if kind == "task_decide" and a.get("action") not in ("accept", "reject", "cancel"):
         raise team.TeamError("bad_action")
     if kind == "profile_decide" and a.get("decision") not in ("confirm", "reject", "edit", "delete"):
         raise team.TeamError("bad_decision")

@@ -52,7 +52,7 @@ API 는 모두 `http://127.0.0.1:5100`(이 PC 안에서만 된다). 한글이 �
 | `team_create` | `{"name","root","code"?,"manager_session","members":[{"alias","role","session_id","write_scope"}]}` | 팀 코드·관제 그룹 |
 | `team_archive` / `team_purge` | `{"team","on":true}` / `{"team"}` | 보관 / 보존본 삭제 |
 | `delegate` | `{"team","goal","owner"?,"collaborators":[],"done_when","due"?}` | 일감 + `send_to`(관리 세션 주소) |
-| `task_decide` | `{"team","task","action":"accept"|"reject","assignment_ver","note"}` | 일감 상태(버전이 바뀌었으면 409 — 다시 확인) |
+| `task_decide` | `{"team","task","action":"accept"|"reject"|"cancel","assignment_ver","note"}` | 승인·반려는 **제출된** 일감만, 취소는 진행·막힘·반려 일감(버전이 바뀌었으면 409 — 다시 확인) |
 | `profile_decide` | `{"id","decision":"confirm"|"reject"|"edit"|"delete","statement"?}` | 프로필 항목 |
 
 ### 위임 절차
