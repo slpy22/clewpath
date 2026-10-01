@@ -386,6 +386,13 @@ USER FLOW: 실사용 1회(워커 2 + 관리 1, ASK/REVIEW 왕복, 관제 호출�
 ### 테스트
 비서 지정·생성(claude -p 스텁)·교체 추적·원격 읽기 허용 범위, 프로필 CRUD·가림·근거, 전체 검색, 새 팀 parent, 비서 스킬 문서↔라우트, 스킬 설치 일반화(workers·assistant), MCP 도구(httpx 스텁), PWA 헤더 버튼 3분기·프로필 화면.
 
+### 단계 3 배포 결과 (0.14.0~0.14.1, 2026-10-02)
+
+| 원래 설계 | 바뀐 동작(버전) | 이유 |
+|---|---|---|
+| 일감 상태기계에 '닫기' 는 승인(accepted)뿐 | **cancel** 추가: 진행·막힘·반려 → cancelled(닫힘). 비서는 `task_decide action=cancel` 승인 요청으로(0.14.1) | 비서 첫 브리핑이 막힌 시험 일감을 '반려' 로 정리하자고 제안 — 반려는 제출된 일감만이라 실행하면 bad_transition |
+| user 텍스트 = 사람 입력(C2-4) | claude 레코드의 `turnOrigin` 이 `sdk`(claude -p) 면 **prompt_in**(🤖 프로그램 입력)(0.14.1) | 비서 생성 프롬프트가 사장님 입력으로 색인됨 — 워커 생성 프롬프트도 같은 문제. 한계: 폰 웹 재개로 친 말도 sdk(TODO) |
+
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |
