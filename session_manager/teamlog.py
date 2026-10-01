@@ -122,6 +122,36 @@ def _ts(rec: dict) -> int | None:
         return None
 
 
+def _prompt_hash(text: str) -> str:
+    return hashlib.sha1(re.sub(r"\s+", " ", (text or "").strip()).encode("utf-8")).hexdigest()[:24]
+
+
+WEB_PROMPT_WINDOW_S = 15 * 60
+
+
+def note_web_prompt(session_id: str, text: str) -> None:
+    """PWA 웹 재개(resume-inplace, API 토큰 없음 = 사람)로 보낸 프롬프트를 기억한다. claude 는 이걸 turnOrigin=sdk 로
+    적으므로, 수집기가 같은 글을 사람 입력(origin=web)으로 되돌린다. 실패해도 전송을 막지 않는다."""
+    if not (text or "").strip():
+        return
+    try:
+        with team._Tx() as w:
+            w.execute("INSERT INTO web_prompts(text_hash,session_id,ts) VALUES(?,?,?)",
+                      (_prompt_hash(text), session_id, team._now()))
+            w.execute("DELETE FROM web_prompts WHERE ts < ?", (team._now() - 7 * 86400,))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _was_web_prompt(w, text: str, ts: int | None) -> bool:
+    r = w.execute("SELECT ts FROM web_prompts WHERE text_hash=? ORDER BY ts DESC LIMIT 5", (_prompt_hash(text),)).fetchall()
+    if not r:
+        return False
+    if ts is None:
+        return True
+    return any(abs(int(x["ts"]) - ts) <= WEB_PROMPT_WINDOW_S for x in r)
+
+
 def _human_text(rec: dict) -> str | None:
     """user 레코드에서 '사람이 친' 텍스트만(C2-4). 도구 결과·세션 간 수신·명령/메타/요약은 제외."""
     if rec.get("type") != "user" or rec.get("isMeta") or rec.get("isCompactSummary") or rec.get("isSidechain"):
@@ -424,7 +454,9 @@ def _apply(w, row, rec: dict, ctx: str | None) -> tuple[int, str | None]:
         # claude 가 기록하는 turnOrigin: 터미널에서 사람이 친 것 = 'human', claude -p(프로그램·다른 세션이 만든 프롬프트) = 'sdk'.
         # 사장님 입력(비서가 습관을 배우는 근거)에는 사람 것만 — 프로그램 입력은 prompt_in 으로 따로 남긴다.
         origin = rec.get("turnOrigin")
-        kind = "human_input" if origin in (None, "human") else "prompt_in"
+        if origin == "sdk" and _was_web_prompt(w, human, ts):
+            origin = "web"                                     # 사장님이 폰 웹 재개로 친 말
+        kind = "human_input" if origin in (None, "human", "web") else "prompt_in"
         n += _ev(w, row, kind, ctx, {"text": h, "uuid": uid, "origin": origin}, f"human:{uid}" if uid else None, ts, h)
     return n, ctx
 

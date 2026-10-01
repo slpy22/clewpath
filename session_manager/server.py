@@ -1335,7 +1335,9 @@ def create_app() -> FastAPI:
         await webapi.run_resume_api(websocket, session_id, skip_permissions=skip,
                                     fork_id=None,       # ← in-place(실제 세션)
                                     guardrails=None,    # ← full power(소유자)
-                                    on_finish=_finish)
+                                    on_finish=_finish,
+                                    # API 토큰 없이 들어온 연결 = PWA(로컬·릴레이 페어링 기기) = 사람이 친 말
+                                    human=not auth.valid_api_token(token))
 
     # ---- 외부 API v1: 세션 목록 조회 (HTTP, 토큰 인증) ----
     # ---- Claude 훅 이벤트 수신 (루프백 전용 - 인증 미들웨어가 로컬은 통과) ----

@@ -400,3 +400,35 @@ def test_sdk_prompt_is_not_owner_input(env):
     assert [json.loads(e["payload_json"])["text"] for e in _events("human_input")] == ["사장님이 친 말"]
     assert [json.loads(e["payload_json"])["origin"] for e in _events("prompt_in")] == ["sdk"]
     assert teamlog.inputs("WEB", kind="prompt_in")["items"][0]["text"] == "너는 백엔드 워커다"
+
+
+def test_web_resume_prompt_from_pwa_is_owner_input(env, monkeypatch):
+    """폰 웹 재개(resume-inplace, 토큰 없음)로 친 말은 claude 가 sdk 로 적어도 사장님 입력(origin=web)."""
+    now = team._now()
+    teamlog.note_web_prompt("s-fe", "폰에서 친  말")                                # 공백 차이는 무시
+    a = human("w1", "폰에서 친 말", now); a["turnOrigin"] = "sdk"
+    b = human("w2", "프로그램 프롬프트", now); b["turnOrigin"] = "sdk"
+    old = human("w3", "폰에서 친 말", now - 3600); old["turnOrigin"] = "sdk"        # 같은 글이라도 시각이 멀면 아님
+    env["write"]("s-fe", [a, b, old])
+    teamlog.ingest_all()
+    hi = [json.loads(e["payload_json"]) for e in _events("human_input")]
+    assert [(x["text"], x["origin"]) for x in hi] == [("폰에서 친 말", "web")]
+    assert [json.loads(e["payload_json"])["text"] for e in _events("prompt_in")] == ["프로그램 프롬프트", "폰에서 친 말"]
+
+
+def test_webapi_parse_input_extracts_human_text():
+    import json as _j
+    from session_manager import webapi
+    line, text = webapi.parse_input({"type": "prompt", "text": "안녕"})
+    assert text == "안녕" and _j.loads(line)["type"] == "user" and line.endswith("\n")
+    line, text = webapi.parse_input({"type": "user", "message": {"role": "user", "content": [
+        {"type": "text", "text": "첫"}, {"type": "image"}, {"type": "text", "text": "둘"}]}})
+    assert text == "첫\n둘" and line.endswith("\n")
+    assert webapi.parse_input({"type": "weird"}) == (None, "")
+
+
+def test_inplace_route_marks_human_only_without_api_token(monkeypatch):
+    import inspect
+    from session_manager import server
+    src = inspect.getsource(server.create_app)
+    assert "human=not auth.valid_api_token(token)" in src, "토큰 없이 들어온 resume-inplace(PWA) 만 사람 입력"

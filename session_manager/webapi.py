@@ -143,6 +143,20 @@ def _claude_argv(session_id: str, skip_permissions: bool = True,
     return argv
 
 
+def parse_input(msg: dict) -> tuple[str | None, str]:
+    """웹 재개 입력 한 개 → (claude stdin 에 쓸 stream-json 줄, 사람이 친 글). 모르는 형식이면 (None, "")."""
+    mtype = msg.get("type")
+    if mtype == "prompt":
+        text = str(msg.get("text", ""))
+        return _user_message(text), text
+    if mtype == "user" and isinstance(msg.get("message"), dict):
+        c = msg["message"].get("content")
+        text = c if isinstance(c, str) else "\n".join(
+            b.get("text", "") for b in (c or []) if isinstance(b, dict) and b.get("type") == "text")
+        return json.dumps(msg, ensure_ascii=False) + "\n", text   # 원시 stream-json user 메시지 그대로
+    return None, ""
+
+
 def _user_message(text: str) -> str:
     """텍스트 프롬프트를 claude stream-json user 메시지 1줄로 만든다."""
     obj = {"type": "user",
@@ -154,8 +168,11 @@ def _user_message(text: str) -> str:
 async def run_resume_api(ws, session_id: str, skip_permissions: bool = True,
                          fork_id: str | None = None,
                          guardrails: dict | None = None,
-                         on_finish=None) -> None:
+                         on_finish=None, human: bool = False) -> None:
     """WebSocket 한 개에 대해 claude 재개(stream-json) 프로세스를 띄우고 중계한다.
+
+    human=True(API 토큰 없이 들어온 resume-inplace = PWA 의 사람): 보낸 프롬프트를 팀 장부에 알려
+    claude 가 turnOrigin=sdk 로 적은 그 입력을 '사장님 입력' 으로 분류하게 한다.
 
     fork_id 가 있으면 원본을 건드리지 않는 fork 로 재개하고, 연결 종료 시 fork 를 삭제한다.
     guardrails 는 실효 가드레일(도구·권한·모델 등).
@@ -240,17 +257,17 @@ async def run_resume_api(ws, session_id: str, skip_permissions: bool = True,
             except Exception:  # noqa: BLE001
                 await _send(ws, {"type": "error", "message": "JSON 파싱 실패"})
                 continue
-            mtype = msg.get("type")
-            line = None
-            if mtype == "prompt":
-                line = _user_message(str(msg.get("text", "")))
-            elif mtype == "user" and isinstance(msg.get("message"), dict):
-                # 원시 stream-json user 메시지 그대로 전달
-                line = json.dumps(msg, ensure_ascii=False) + "\n"
-            else:
+            line, text_in = parse_input(msg)
+            if line is None:
                 await _send(ws, {"type": "error",
                                  "message": "알 수 없는 메시지 타입(prompt 또는 user 필요)"})
                 continue
+            if human and text_in:                      # 사람이 친 말 — 팀 장부가 '사장님 입력' 으로 알아보게
+                try:
+                    from session_manager import teamlog
+                    teamlog.note_web_prompt(session_id, text_in)
+                except Exception:  # noqa: BLE001
+                    pass
             try:
                 proc.stdin.write(line.encode("utf-8"))
                 proc.stdin.flush()

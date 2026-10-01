@@ -34,7 +34,7 @@ from pathlib import Path
 
 from session_manager import config
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 _lock = threading.RLock()
 
 _SCHEMA = """
@@ -101,6 +101,13 @@ CREATE INDEX IF NOT EXISTS ix_profile_hash ON profile(stmt_hash);
 """
 
 
+# v4: 사람이 PWA 웹 재개(resume-inplace)로 보낸 프롬프트 — 수집기가 sdk 기록을 사람 입력으로 되돌릴 근거.
+_SCHEMA_V4 = """
+CREATE TABLE IF NOT EXISTS web_prompts(text_hash TEXT NOT NULL, session_id TEXT, ts INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS ix_web_prompts ON web_prompts(text_hash, ts);
+"""
+
+
 def _fts_sql() -> str:
     """사람 입력·메시지 전문 검색(한글 부분 일치 = trigram, 없는 SQLite 면 unicode61)."""
     for tok in ("trigram", "unicode61"):
@@ -157,6 +164,10 @@ def _connect() -> sqlite3.Connection:
                 if v < 3:
                     c.executescript(_SCHEMA_V3)
                     c.execute("PRAGMA user_version=3")
+                    v = 3
+                if v < 4:
+                    c.executescript(_SCHEMA_V4)
+                    c.execute("PRAGMA user_version=4")
         return c
     except sqlite3.DatabaseError as e:            # 손상·잠김 → 호출자는 503, Host 는 계속 산다
         raise TeamError("team_db_unavailable", 503) from e
