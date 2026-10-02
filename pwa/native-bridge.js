@@ -49,11 +49,20 @@
   var App = getPlugin('App');
   var Scanner = getPlugin('CapacitorBarcodeScanner');
 
-  // 네이티브 QR 스캔(전체 화면 스캐너 UI). 성공 시 내용 문자열, 취소/실패 시 ''.
+  // 네이티브 QR 스캔(전체 화면 스캐너 UI). 성공 시 내용 문자열, 사용자가 취소하면 ''.
+  // 그 밖의 실패(플러그인 미등록·카메라 권한 거부 등)는 이유를 담아 reject — 화면이 토스트로 알린다.
+  // (2026-10-02 실기: iOS 에서 플러그인이 등록되지 않아 버튼을 눌러도 아무 반응이 없었다 — 조용한 실패 금지)
   B.scanQr = function () {
+    if (!Scanner || typeof Scanner.scanBarcode !== 'function')
+      return Promise.reject(new Error('scanner_unavailable'));
     return Scanner.scanBarcode({ hint: 0, scanInstructions: 'PC 화면의 페어링 QR 을 비춰 주세요' })
       .then(function (r) { return (r && r.ScanResult) || ''; })
-      .catch(function () { return ''; });
+      .catch(function (e) {
+        // 플러그인 오류: code 'OS-PLUG-BARC-0006'(취소)·'-0007'(카메라 권한 거부) + message
+        var m = ((e && e.code) ? e.code + ' ' : '') + String((e && e.message) || (typeof e === 'string' ? e : '') || '');
+        if (/cancel|BARC-0006/i.test(m)) return '';
+        throw new Error(m.trim() || 'scan_failed');
+      });
   };
 
   // 앱은 항상 릴레이 클라이언트다(로컬 번들이라 경로 추론이 'local' 로 빠지는 것을 교정)

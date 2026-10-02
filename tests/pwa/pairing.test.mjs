@@ -159,16 +159,18 @@ test("refreshPcSelect: 옵션이 1개 이하면 select 를 숨기고 제목만(D
   const opts = []; sel.appendChild = (o) => { opts.push(o.value); };
   ev(ctx, "pcsUpsert({room:'rm1', cs:'c', cp:'p', dev:'d'}); localStorage.setItem('sm_room','rm1'); refreshPcSelect()");
   assert.ok(!cls.has("hidden"), "PC 1대여도 '🖧 PC 추가·관리…' 가 있어 select 는 보인다(전환 입구 유지, 2026-09-30)");
-  same(opts, ["rm1", "__manage__"]);
+  same(opts, ["rm1", "__add__", "__manage__"]);
   opts.length = 0;
   ev(ctx, "pcsUpsert({room:'rm2', cs:'c', cp:'p', dev:'d'}); refreshPcSelect()");
-  same(opts, ["rm1", "rm2", "__manage__"]);
+  same(opts, ["rm1", "rm2", "__add__", "__manage__"]);
   // 헤더 🖧 버튼은 릴레이에서 보인다
   const bp = stubEl("button"); const bcls = new Set(); bp.classList = { add: (c) => bcls.add(c), remove: (c) => bcls.delete(c), contains: (c) => bcls.has(c) };
   ctx.document._register("btn-pcs", bp); ev(ctx, "refreshPcSelect()"); assert.ok(!bcls.has("hidden"));
   // '__manage__' 선택 → showPcs, 값은 현재 PC 로 복귀
   ev(ctx, "globalThis.__pcs = 0; showPcs = () => { globalThis.__pcs++; }"); sel.value = "__manage__"; ev(ctx, "onPcSelect()");
   assert.equal(ev(ctx, "globalThis.__pcs"), 1); assert.equal(sel.value, "rm1");
+  ev(ctx, "globalThis.__add = 0; openAddPc = () => { globalThis.__add++; }"); sel.value = "__add__"; ev(ctx, "onPcSelect()");
+  assert.equal(ev(ctx, "globalThis.__add"), 1, "＋ 새 PC 추가 → 페어링 화면(2026-10-02)"); assert.equal(sel.value, "rm1");
   assert.equal(ev(ctx, "typeof relayPcsLoad"), "function", "로컬 헤더의 다른 PC 목록 거울(숨은 iframe 동기화, 2026-09-30 복구)");
   assert.equal(ev(ctx, "typeof refreshPcsBtn"), "undefined", "죽은 #btn-pcs 코드 제거(B-6)");
   assert.equal(ev(ctx, "typeof showLogoutChoice"), "undefined", "로그아웃 선택 모달 삭제(DR-2)");

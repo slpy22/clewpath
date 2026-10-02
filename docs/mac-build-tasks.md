@@ -3,6 +3,26 @@
 > 이 문서는 Windows 측(주 개발)에서 맥 측 Claude 에게 전달하는 작업 지시서다.
 > 위에서부터 순서대로 실행하면 된다. 완료 후 결과를 사용자에게 보고할 것.
 
+## ★★★★★★★★★ 업데이트 9 (2026-10-02 — 앱 QR 스캔이 열리지 않던 문제 + 새 PC 추가 입구, 다음 TestFlight 필수)
+
+**증상(사장님 1.10 실기)**: 앱의 'QR 스캔으로 연결' 을 눌러도 스캐너가 뜨지 않음(카메라 앱으로 찍으면 앱이 열려 진행됨).
+**원인**: `@capacitor/barcode-scanner` 1.0.4(Capacitor 6 용 마지막 버전)는 iOS 플러그인을 옛 방식(Obj-C `CAP_PLUGIN`)으로 등록한다.
+Capacitor 6 CLI 는 `CAPBridgedPlugin` Swift 클래스만 `ios/App/App/capacitor.config.json` 의 `packageClassList` 에 넣고, 앱은 그 목록만 등록한다
+→ 스캐너가 빠져 호출이 실패했고, 브리지가 실패를 조용히 삼켰다.
+**수정**: `app/scripts/patch-ios-plugins.mjs` 가 `packageClassList` 에 `CapacitorBarcodeScannerPlugin` 을 더한다. `package.json` 의
+`capacitor:sync:after`·`capacitor:copy:after` 훅이라 **`npx cap sync ios` 만 돌리면 자동 적용**된다. 화면도 이제 스캔 실패 이유를 토스트로 보인다.
+함께 들어가는 화면 변경: 🖧 내 PC 맨 위 **＋ 새 PC 추가**, 헤더 PC 목록의 **＋ 새 PC 추가…** → 페어링 화면(📷 스캔·링크)으로 갔다가 **← 돌아가기**.
+
+```bash
+git pull
+cd app && npm install && npm run bundle && npx cap sync ios      # 마지막 줄에 [patch-ios-plugins] packageClassList 보정(+1) 또는 이미 정상
+grep -n "CapacitorBarcodeScannerPlugin" ios/App/App/capacitor.config.json   # 반드시 1줄 나와야 함(없으면 node scripts/patch-ios-plugins.mjs 후 다시 확인)
+grep -n "openAddPc" ios/App/App/public/index.html | head -2                  # 새 PC 추가 화면이 번들에 들어갔는지
+```
+빌드 → 실기 확인: ① 🖧 → ＋ 새 PC 추가 → **📷 QR 스캔으로 연결** → 카메라 스캐너가 뜨는지(처음엔 카메라 권한 요청) ② 스캔 취소 시 조용히 돌아오는지
+③ 권한을 거부하면 '카메라 권한이 필요합니다' 토스트 ④ ← 돌아가기. 통과하면 TestFlight 업로드 → pbxproj 버전 커밋·push(업데이트 6 규칙).
+**절대 Capacitor/플러그인 메이저 버전을 올리지 말 것**(7·8 로 올리면 이 보정이 필요 없어지지만 별도 작업 — 사장님 확인 필요).
+
 ## ★★★★★★★★ 업데이트 8 (2026-09-30 — 0.11.0: 첫 실행 오버레이 폐기·폐기 큐 복원, 업데이트 7 과 같은 TestFlight 에 묶어도 됨)
 
 1. **첫 실행 오버레이 `#cb-pair` 폐기** — 앱을 처음 열면 브리지 오버레이 대신 `index.html` 의 페어링 화면(📷 QR 스캔 버튼·링크 붙여넣기)이 바로 뜬다.

@@ -6,7 +6,9 @@
   "scripts": {
     "bundle": "node scripts/copy-www.mjs",
     "sync": "npm run bundle && npx cap sync",
-    "android": "npm run sync && npx cap open android"
+    "android": "npm run sync && npx cap open android",
+    "capacitor:sync:after": "node scripts/patch-ios-plugins.mjs",
+    "capacitor:copy:after": "node scripts/patch-ios-plugins.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^6.2.0",

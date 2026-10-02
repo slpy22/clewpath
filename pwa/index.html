@@ -536,6 +536,7 @@
 
 <!-- ===== 페어링 ===== -->
 <div id="pair">
+  <button class="btn ghost" id="p-back" hidden>← 돌아가기</button>
   <div>
     <h1>ClewPath</h1>
     <p id="p-sit" class="sit">아직 페어링한 PC 가 없습니다. PC 의 ClewPath 에서 📱 → ＋ 기기 추가 로 QR 을 만드세요.</p>
@@ -3778,6 +3779,10 @@ function showPcs(){
       meta:[pc.room.slice(0,14)+'…', pc.last?('최근 '+relTs(Math.floor(pc.last/1000))):null]}));
   });
   if(!list.length) wrap.appendChild(el('div','cwd','아직 페어링한 PC 가 없습니다.'));
+  // 접속한 채로 다른 PC 를 더하는 입구(2026-10-02 사장님): 페어링 화면(📷 스캔·링크 붙여넣기)으로, 돌아오기 가능
+  const add=el('button','btn','＋ 새 PC 추가'); add.style.marginBottom='10px';
+  add.onclick=()=>{ closeModal(); openAddPc(); };
+  body.appendChild(add);
   body.appendChild(wrap);
   if(appScanAvailable()){
     // 앱: 첫 실행 오버레이에만 있던 네이티브 QR 스캔을 여기서도(PC 추가·재페어링). 카메라 앱으로 스캔하면
@@ -3796,8 +3801,18 @@ function appScanAvailable(){ const B=window.ClewBridge; return !!(B&&B.scanQr&&B
 async function appScanPair(){
   if(!appScanAvailable()) return false;
   const B=window.ClewBridge;
-  let v=''; try{ v=await B.scanQr(); }catch(e){ v=''; }
-  if(!v) return false;                                   // 취소/실패 — 조용히
+  let v='';
+  try{ v=await B.scanQr(); }
+  catch(e){                                              // 취소는 '' 로 오고, 여기는 진짜 실패 — 이유를 보인다
+    const m=String((e&&e.message)||e||'');
+    toast(/unavailable|not implemented|UNIMPLEMENTED/i.test(m)
+      ? 'QR 스캐너를 열 수 없습니다 — 앱을 최신 빌드로 업데이트하거나, 카메라 앱으로 QR 을 찍으세요'
+      : /permission|denied|authoriz|camera access|BARC-0007/i.test(m)
+        ? '카메라 권한이 필요합니다 — 설정 → ClewPath → 카메라를 켜세요'
+        : 'QR 스캔 실패: '+m);
+    return false;
+  }
+  if(!v) return false;                                   // 사용자가 취소 — 조용히
   const r=B.pairFromUrl(v);                              // 'ok' 면 리로드로 이어진다(부트 파서가 PC 추가)
   if(r!=='ok') toast(B.pairErrorText(r)||'링크를 인식하지 못했습니다');
   return r==='ok';
@@ -4198,6 +4213,7 @@ async function showDiagnostics(){
   }catch(e){ st.textContent='불러오기 실패: '+e.message; }
 }
 function enterApp(){ $('#pair').classList.add('hidden'); $('#app').classList.remove('hidden');
+  { const bk=$('#p-back'); if(bk) bk.hidden=true; }      // '새 PC 추가' 로 왔다가 연결되면 돌아가기 버튼 정리
   $('#app').setAttribute('data-view','list');
   const sel=$('#pcname'); if(sel && !sel.onchange) sel.onchange=onPcSelect;
   refreshPcSelect();
@@ -4209,6 +4225,25 @@ function enterApp(){ $('#pair').classList.add('hidden'); $('#app').classList.rem
       b.onclick=()=>toast('종단 암호화 활성 - 릴레이 서버도 대화 내용을 읽을 수 없습니다'); } }
   loadList(); maybeShowIosHint(); }
 $('#p-go').onclick=doPair;
+// ---- 접속한 채로 새 PC 추가(사장님 2026-10-02): 지금 PC 는 그대로 두고 페어링 화면으로 — 새 QR 로 연결되면
+// 그 PC 가 목록에 더해지고 전환된다(doPair·부트 파서 그대로). '← 돌아가기' 는 원래 화면으로.
+function openAddPc(){
+  const pair=$('#pair'), app=$('#app');
+  if(!pair) return;
+  const sit=$('#p-sit'); if(sit){ sit.textContent='새 PC 추가 — 추가할 PC 의 ClewPath(127.0.0.1:5100) → 📱 → ＋ 기기 추가 의 QR 을 스캔하거나 페어링 링크를 붙여넣으세요.'; sit.classList.remove('crit'); }
+  const li=$('#p-link'); if(li) li.value='';
+  const er=$('#p-err'); if(er) er.textContent='';
+  if(appScanAvailable()){ const sb=$('#p-scan'); if(sb){ sb.hidden=false; sb.onclick=appScanPair; } }
+  const back=$('#p-back');
+  if(back){ back.hidden=false; back.onclick=()=>leaveAddPc(); }
+  if(app) app.classList.add('hidden');
+  pair.classList.remove('hidden');
+  try{ renderPairPcs(); }catch(e){}
+}
+function leaveAddPc(){
+  const back=$('#p-back'); if(back) back.hidden=true;
+  $('#pair').classList.add('hidden'); $('#app').classList.remove('hidden');
+}
 // 폰이 auth 때 보고하는 자기 이름(B-1): 앱은 브리지의 기기 모델, 웹은 UA 요약. Host 가 40자·제어문자 정리.
 function deviceSelfName(){
   try{ const B=window.ClewBridge; if(B&&B.deviceName){ const n=B.deviceName(); if(n) return String(n); } }catch(e){}
@@ -4316,6 +4351,7 @@ function refreshPcSelect(){
     const seen=new Set();
     pcsLoad().forEach(pc=>{ opts.push({v:pc.room, t:'🖥 '+pcName(pc)}); seen.add(pc.room); });
     if(curRoom && !seen.has(curRoom)) opts.push({v:curRoom, t:'🖥 '+roomLabel(curRoom)});
+    opts.push({v:'__add__', t:'＋ 새 PC 추가…'});                // 접속한 채로 새 PC 페어링 화면으로(사장님 2026-10-02)
     opts.push({v:'__manage__', t:'🖧 PC 추가·관리…'});          // 1대뿐이어도 전환·추가 입구가 헤더에 남게(사장님 2026-09-30)
   } else {
     // 로컬: 릴레이 앱에 저장된 다른 PC 목록(room+name, 토큰 없음)을 숨은 iframe 으로 받아 그대로 나열한다(사장님 2026-09-30).
@@ -4425,6 +4461,7 @@ function onPcSelect(){
   if(v.indexOf('relay:')===0){ location.href=RELAY_APP_URL+'?switch='+encodeURIComponent(v.slice(6)); return; } // 로컬 → 릴레이의 그 PC
   if(v==='__sync__'){ sel.value='__local__'; try{ sessionStorage.removeItem('sm_pcs_rt'); }catch(e){} relayPcsRoundTrip(); return; }
   if(v==='__manage__'){ sel.value=LS.getItem('sm_room')||''; showPcs(); return; }         // 전환·추가·해제 관리
+  if(v==='__add__'){ sel.value=LS.getItem('sm_room')||''; openAddPc(); return; }           // 새 PC 페어링 화면
   if(v===LS.getItem('sm_room')){ return; }                                                // 현재와 같음
   if(MODE==='relay'){ const pc=pcsLoad().find(x=>x.room===v)||{room:v,name:''}; switchToPc(pc); }
 }
