@@ -427,8 +427,14 @@ def test_webapi_parse_input_extracts_human_text():
     assert webapi.parse_input({"type": "weird"}) == (None, "")
 
 
-def test_inplace_route_marks_human_only_without_api_token(monkeypatch):
+def test_inplace_human_only_from_pwa_or_relay_proof(monkeypatch):
+    """0.14.2 부작용 수정(2026-10-05): 토큰 없이 붙는 스크립트(session_bridge.py)는 사람 입력이 아니다."""
     import inspect
-    from session_manager import server
-    src = inspect.getsource(server.create_app)
-    assert "human=not auth.valid_api_token(token)" in src, "토큰 없이 들어온 resume-inplace(PWA) 만 사람 입력"
+    from session_manager import server, connector, auth
+    monkeypatch.setattr(auth, "valid_api_token", lambda t: t == "tok")
+    assert server.resume_from_human({"src": "pwa"}, None) is True
+    assert server.resume_from_human({}, None) is False, "표시 없는 로컬 스크립트"
+    assert server.resume_from_human({"src": "relay", "proof": connector.RELAY_PROOF}, None) is True
+    assert server.resume_from_human({"src": "relay", "proof": "forged"}, None) is False
+    assert server.resume_from_human({"src": "pwa"}, "tok") is False, "API 토큰 호출은 프로그램"
+    assert "human=resume_from_human(dict(websocket.query_params), token)" in inspect.getsource(server.create_app)

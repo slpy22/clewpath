@@ -173,6 +173,81 @@ def _human_text(rec: dict) -> str | None:
     return text
 
 
+# ---------------------------------------------------------------- 편집 범위 감시(브리지 '🚨 경계 이탈' 대체, 2026-10-05)
+# 구성원(또는 그 일감)의 write_scope 밖을 고치면 위반으로 남긴다. 규칙은 개발관리 세션의 session_bridge.py 와 같게:
+# Write/Edit 계열 파일 경로 + Bash 의 파괴적 명령(rm/mv/cp/git commit…)·리다이렉션 대상. 범위가 없는 구성원은 검사 안 함.
+SCOPE_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit", "Bash")
+_WRITE_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
+_DESTRUCTIVE = re.compile(r"^\s*(?:\w+=\S+\s+)*(rm|del|mv|cp|Move-Item|Remove-Item|Copy-Item|"
+                          r"git\s+(?:commit|push|reset|checkout)|docker\s+compose\s+(?:down|rm))\b")
+_ABS_PATH = re.compile(r"[A-Za-z]:[\\/][^\s\"'|;&]+")
+_REDIRECT = re.compile(r">{1,2}\s*\"?([A-Za-z]:[\\/][^\s\"'|;&]+)")
+
+
+def _norm_path(p: str) -> str:
+    return os.path.normpath(p).replace("\\", "/").lower().rstrip("/")
+
+
+def _always_allowed() -> list[str]:
+    """세션 자기 메모리·스크래치·gstack 작업공간은 늘 허용(브리지와 같음)."""
+    home = os.path.expanduser("~")
+    roots = [os.path.join(str(config.claude_home()), "projects"),          # projects/*/memory 는 접두로 충분히 좁다
+             os.path.join(os.environ.get("LOCALAPPDATA", os.path.join(home, "AppData", "Local")), "Temp", "claude"),
+             os.path.join(home, ".gstack")]
+    return [_norm_path(r) for r in roots]
+
+
+def _scope_roots(w, row, ctx: str | None) -> tuple[list[str], str]:
+    """(허용 루트들, 표시용 범위 문자열). 범위가 없으면 ([], '')."""
+    m = w.execute("SELECT m.write_scope_json, m.alias, t.root FROM memberships m JOIN teams t ON t.id=m.team_id"
+                  " WHERE m.team_id=? AND m.agent_id=? ORDER BY (m.left_at IS NULL) DESC LIMIT 1",
+                  (row["team_id"], row["agent_id"])).fetchone()
+    if not m:
+        return [], ""
+    scopes = list(team._uj(m["write_scope_json"], []) or [])
+    if ctx:
+        k = w.execute("SELECT write_scope_json FROM tasks WHERE id=?", (ctx,)).fetchone()
+        ws = team._uj(k["write_scope_json"], {}) if k else {}
+        if isinstance(ws, dict):
+            scopes += list(ws.get(m["alias"]) or [])
+    if not scopes:
+        return [], ""
+    root = m["root"] or ""
+    out = []
+    for s in scopes:
+        s = re.sub(r"[\\/]?\*\*?[\\/]?\*?$", "", str(s).strip())       # api/** · web/* → 접두
+        if not s:
+            continue
+        out.append(_norm_path(s if os.path.isabs(s) or not root else os.path.join(root, s)))
+    return out + _always_allowed(), ", ".join(str(x) for x in scopes)
+
+
+def scope_breach(w, row, ctx: str | None, tool: str, inp: dict, cwd: str) -> dict | None:
+    roots, label = _scope_roots(w, row, ctx)
+    if not roots:
+        return None
+
+    def inside(path: str) -> bool:
+        n = _norm_path(path if os.path.isabs(path) or not cwd else os.path.join(cwd, path))
+        return any(n == r or n.startswith(r + "/") for r in roots)
+
+    if tool in _WRITE_TOOLS:
+        fp = inp.get("file_path") or inp.get("notebook_path") or ""
+        if fp and not inside(fp):
+            return {"path": str(fp), "scope": label}
+        return None
+    cmd = str(inp.get("command") or "")
+    for seg in re.split(r"&&|\|\||;|\||\n", cmd):
+        targets = _ABS_PATH.findall(seg) if _DESTRUCTIVE.search(seg) else []
+        r = _REDIRECT.search(seg)
+        if r:
+            targets.append(r.group(1))
+        bad = [p for p in targets if not inside(p)]
+        if bad:
+            return {"path": bad[0], "scope": label}
+    return None
+
+
 # ---------------------------------------------------------------- 주소 이력(C2-6)
 
 def refresh_addresses() -> int:
@@ -385,6 +460,13 @@ def _apply(w, row, rec: dict, ctx: str | None) -> tuple[int, str | None]:
                       (row["session_id"], mid, row["agent_id"], row["team_id"], ctx, msg.get("model"), *vals, ts))
         if isinstance(content, list):
             for b in content:
+                if isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") in SCOPE_TOOLS:
+                    bad = scope_breach(w, row, ctx, b.get("name"), b.get("input") or {}, rec.get("cwd") or "")
+                    if bad:
+                        n += _ev(w, row, "scope_violation", ctx, {"tool": b.get("name"), "path": bad["path"],
+                                                                 "scope": bad["scope"], "tool_use_id": b.get("id")},
+                                 f"scope:{b.get('id')}" if b.get("id") else None, ts)
+                    continue
                 if not (isinstance(b, dict) and b.get("type") == "tool_use" and b.get("name") == "SendMessage"):
                     continue
                 inp = b.get("input") if isinstance(b.get("input"), dict) else {}
@@ -588,6 +670,18 @@ def judge(team_id: str, now: int | None = None) -> list[str]:
                     and now - a["t"] >= DEADLOCK_S and now - b["t"] >= DEADLOCK_S:
                 found.append((f"v:dead:{a['id']}:{b['id']}", "deadlock",
                               {"a": a["from"], "b": a["to"], "asks": [a["id"], b["id"]]}))
+    # 편집 범위 이탈: 이벤트는 전부 남기고, 알림 단위는 (구성원, 일감, 1시간) 하나 — 브리지 로그엔 194건이었다
+    c = team._read()
+    try:
+        for e in c.execute("SELECT id, agent_id, task_id, payload_json, COALESCE(src_ts, ts) AS t FROM events"
+                           " WHERE team_id=? AND kind='scope_violation' ORDER BY id", (t["id"],)):
+            p = team._uj(e["payload_json"], {})
+            hour = int(e["t"] or 0) // 3600
+            found.append((f"v:scope:{e['agent_id']}:{e['task_id'] or '-'}:{hour}", "out_of_scope",
+                          {"task": e["task_id"], "from": e["agent_id"], "path": p.get("path"), "scope": p.get("scope"),
+                           "tool": p.get("tool"), "first_event": e["id"]}))
+    finally:
+        c.close()
     if t["kind"] == "portfolio":                               # 비서의 위임 전달 실패는 바로 알린다(A-6)
         c = team._read()
         try:
@@ -608,7 +702,7 @@ def judge(team_id: str, now: int | None = None) -> list[str]:
 
 _RULE_TEXT = {"turn_overrun": "스레드 턴 초과", "forward_chain": "제3자에게 넘김(1-hop 위반)",
               "unanswered_ask": "답 없는 질문 30분", "deadlock": "서로 답을 기다리는 순환",
-              "delivery_failed": "비서 위임 전달 실패"}
+              "delivery_failed": "비서 위임 전달 실패", "out_of_scope": "편집 범위 이탈"}
 
 
 def notify_violations(team_id: str) -> int:
@@ -636,7 +730,8 @@ def notify_violations(team_id: str) -> int:
             continue
         p = team._uj(r["payload_json"], {})
         who = " → ".join(alias.get(x, "?") for x in (p.get("from") or p.get("a"), p.get("to") or p.get("b")) if x)
-        body = " · ".join(x for x in (p.get("task"), p.get("thread"), who) if x)
+        body = " · ".join(x for x in (p.get("task"), p.get("thread"), who,
+                                      (p.get("tool", "") + " " + str(p.get("path"))) if p.get("path") else None) if x)
         try:
             from session_manager import push
             push.send(f"team-violation:{key}", mgr_sid or "", f"[{t['name']}] {_RULE_TEXT.get(p.get('rule'), p.get('rule'))}",

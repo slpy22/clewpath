@@ -105,14 +105,18 @@ def _max_live_pty() -> int:
     메모리·CPU 가 폭주하고, 업데이트 재기동(shutdown_all → 전멸 → 콜드 재개)이
     무거워져 헬스체크를 넘긴다 — 세션 많은 PC 업데이트 사망 사고(v0.6.6)의 구역.
     UI 경고(가벼움)만으로는 다른 기기·복원 세트를 못 막으니 서버측 상한이 진짜다.
-    SM_MAX_TERMINALS 로 조정(기본 8). 0/음수/오타는 기본값으로 떨어진다.
+    SM_MAX_TERMINALS 로 조정(기본 12 — 팀(관리 1 + 워커 여럿)을 터미널로 띄우는 운영, 관제 상한 12 와 같게,
+    2026-10-05 사장님). 0/음수/오타는 기본값으로 떨어진다.
     """
     import os as _os
     try:
-        v = int(_os.environ.get("SM_MAX_TERMINALS", "8"))
-        return v if v >= 1 else 8
+        v = int(_os.environ.get("SM_MAX_TERMINALS", str(DEFAULT_MAX_TERMINALS)))
+        return v if v >= 1 else DEFAULT_MAX_TERMINALS
     except Exception:  # noqa: BLE001
-        return 8
+        return DEFAULT_MAX_TERMINALS
+
+
+DEFAULT_MAX_TERMINALS = 12
 
 
 def _live_count() -> int:

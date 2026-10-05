@@ -16,13 +16,13 @@ from session_manager import webterm
 
 def test_max_live_pty_env(monkeypatch):
     monkeypatch.delenv("SM_MAX_TERMINALS", raising=False)
-    assert webterm._max_live_pty() == 8            # 기본값
+    assert webterm._max_live_pty() == 12           # 기본값(2026-10-05 8→12)
     monkeypatch.setenv("SM_MAX_TERMINALS", "3")
     assert webterm._max_live_pty() == 3
     monkeypatch.setenv("SM_MAX_TERMINALS", "0")     # 0/음수/오타 → 기본값
-    assert webterm._max_live_pty() == 8
+    assert webterm._max_live_pty() == 12
     monkeypatch.setenv("SM_MAX_TERMINALS", "oops")
-    assert webterm._max_live_pty() == 8
+    assert webterm._max_live_pty() == 12
 
 
 def test_live_count_counts_alive_and_reaps_dead(monkeypatch):
@@ -62,8 +62,8 @@ async def test_new_spawn_refused_at_cap(monkeypatch):
     import winpty
     # 새 스폰 경로 강제(재접속 대상 없음) + 상한 도달
     monkeypatch.setattr(webterm, "_get_live", lambda key: None)
-    monkeypatch.setattr(webterm, "_live_count", lambda: 8)
-    monkeypatch.delenv("SM_MAX_TERMINALS", raising=False)   # cap=8
+    monkeypatch.setattr(webterm, "_live_count", lambda: 12)
+    monkeypatch.delenv("SM_MAX_TERMINALS", raising=False)   # cap=12
 
     def _boom(*a, **k):
         raise AssertionError("상한인데 스폰됨!")

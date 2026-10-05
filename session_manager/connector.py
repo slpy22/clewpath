@@ -483,7 +483,9 @@ class Connector:
             ep = "resume-inplace"
         else:
             ep = "resume"
-        local_ws = f"{_to_ws(self.local_base)}/api/v1/{ep}/{sid}?skip={skip}"
+        # src=relay + 메모리 비밀: 인증된 폰(사람)의 입력임을 Host 에 증명(팀 장부의 사장님 입력 판정)
+        local_ws = (f"{_to_ws(self.local_base)}/api/v1/{ep}/{sid}?skip={skip}"
+                    f"&src=relay&proof={RELAY_PROOF}")
         self.stream_in[rid] = asyncio.Queue()
         self.streams[rid] = asyncio.create_task(self._pipe_resume(rid, local_ws))
 

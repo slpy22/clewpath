@@ -113,6 +113,21 @@ def _is_local(scope_or_ws) -> bool:
     return TRUST_LOCAL and (_client_host(scope_or_ws) in _LOOPBACK) and not _via_relay(scope_or_ws)
 
 
+def resume_from_human(query: dict, token) -> bool:
+    """in-place 재개 연결이 '사람이 ClewPath 화면에서 친 말' 인가(팀 장부의 사장님 입력 판정).
+    로컬 PWA(src=pwa) 또는 인증된 폰(src=relay + 커넥터 메모리 비밀)만. API 토큰·표시 없는 스크립트는 아니다."""
+    if auth.valid_api_token(token):
+        return False
+    src = query.get("src") or ""
+    if src == "pwa":
+        return True
+    if src == "relay":
+        import hmac
+        from session_manager import connector as _c
+        return hmac.compare_digest(str(query.get("proof") or ""), _c.RELAY_PROOF)
+    return False
+
+
 def _display_title(md: dict, rec: dict | None = None) -> str:
     """표시 이름. claude 이름(custom-title/AI제목) 우선, 없으면 우리 라벨명,
     그다음 slug → id.
@@ -1336,8 +1351,9 @@ def create_app() -> FastAPI:
                                     fork_id=None,       # ← in-place(실제 세션)
                                     guardrails=None,    # ← full power(소유자)
                                     on_finish=_finish,
-                                    # API 토큰 없이 들어온 연결 = PWA(로컬·릴레이 페어링 기기) = 사람이 친 말
-                                    human=not auth.valid_api_token(token))
+                                    # 사람이 친 말 = ClewPath 화면에서 온 연결만: 로컬 PWA(src=pwa) 또는 인증된 폰(릴레이 증명).
+                                    # 토큰 없이 붙는 스크립트(예: 개발관리 세션의 session_bridge.py)는 사람으로 치지 않는다.
+                                    human=resume_from_human(dict(websocket.query_params), token))
 
     # ---- 외부 API v1: 세션 목록 조회 (HTTP, 토큰 인증) ----
     # ---- Claude 훅 이벤트 수신 (루프백 전용 - 인증 미들웨어가 로컬은 통과) ----

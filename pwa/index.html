@@ -976,7 +976,8 @@ const localT={
   resume(id,cb,opts){
     const proto=location.protocol==='https:'?'wss':'ws';
     const ep=(opts&&opts.inplace)?'resume-inplace':'resume';
-    const ws=new WebSocket(`${proto}://${location.host}${APIBASE}/api/v1/${ep}/${id}?skip=${(opts&&opts.safe)?0:1}`);
+    // src=pwa: 사람이 이 화면에서 친 말임을 Host 에 알린다(팀 장부의 '사장님 입력' 판정 — 스크립트의 in-place 재개와 구분)
+    const ws=new WebSocket(`${proto}://${location.host}${APIBASE}/api/v1/${ep}/${id}?skip=${(opts&&opts.safe)?0:1}&src=pwa`);
     ws.onmessage=(ev)=>{ let d; try{d=JSON.parse(ev.data);}catch(e){return;} cb({data:d}); };
     ws.onclose=()=>cb({eof:true});
     return { input:(text)=>ws.send(JSON.stringify(
