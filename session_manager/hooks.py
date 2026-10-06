@@ -244,6 +244,48 @@ def update_from_event(payload: dict) -> None:
     _persist_status()   # 재기동에도 상태 유지(스로틀 내장)
 
 
+# 응답 도중 상태 — 이 상태로 프로세스가 사라지면 Stop/SessionEnd 훅이 오지 않아 '작업중' 이 영영 남는다.
+ACTIVE_PHASES = ("thinking", "permission", "waiting")
+# 프로세스 흔적이 없고 jsonl 도 이만큼 조용하면 '응답 도중 종료' 로 본다(실행 중 claude 는 레지스트리·PTY·bg 점유 중
+# 하나엔 반드시 잡히고, 긴 도구 실행 중인 headless 도 이 시간 안에 한 번은 기록한다).
+GONE_QUIET_S = 15 * 60
+
+
+def mark_gone(session_id: str, reason: str = "process_exit") -> bool:
+    """세션 프로세스가 끝났다(ClewPath 터미널 종료·강제 종료 등). 응답 도중이었으면 '종료' 로 접는다.
+
+    2026-10-06 실사고: 관리 세션이 RESULT 직후 워커 터미널을 내려 Stop 훅이 오지 않았고, 그 세션이
+    목록에서 몇 시간째 '작업중' 으로 보였다. 이미 ready/idle/ended 면 그대로 둔다(정상 종료의 기록 보존).
+    """
+    _load_status_once()
+    st = _STATUS.get(session_id)
+    if not st or st.get("phase") not in ACTIVE_PHASES:
+        return False
+    now = int(time.time())
+    st["phase"] = "ended"
+    st["ended_at"] = now
+    st["note"] = "응답 도중 프로세스 종료" if reason == "process_exit" else str(reason)[:200]
+    st.pop("permission_at", None)
+    _persist_status()
+    return True
+
+
+def effective(st: dict[str, Any] | None, alive: bool, quiet_s: float | None, now: float | None = None) -> dict[str, Any] | None:
+    """목록에 내보낼 상태. 응답 도중인데 살아 있는 프로세스가 없고 오래 조용하면 '종료' 로 보정한 사본.
+
+    원본(_STATUS)은 바꾸지 않는다 — 판정 근거(alive·quiet)가 틀렸더라도 다음 훅 이벤트가 그대로 바로잡는다.
+    """
+    if not st or st.get("phase") not in ACTIVE_PHASES or alive:
+        return st
+    if quiet_s is None or quiet_s < GONE_QUIET_S:
+        return st
+    out = dict(st)
+    out["phase"] = "ended"
+    out["note"] = "응답 도중 종료된 것으로 보임(실행 중인 프로세스 없음)"
+    out["stale_from"] = st.get("phase")
+    return out
+
+
 def status_of(session_id: str) -> dict[str, Any] | None:
     _load_status_once()
     return _STATUS.get(session_id)

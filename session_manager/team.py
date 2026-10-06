@@ -482,6 +482,54 @@ def current_session(agent_id: str) -> str | None:
     return cur
 
 
+def continuation_bindings(new_sid: str) -> list[dict]:
+    """되돌리기 미리보기: 이 (잘못 생긴) 세션을 지금 쓰는 팀 구성원들(별칭·팀)."""
+    if not db_path().exists():
+        return []
+    c = _read()
+    try:
+        rows = c.execute(
+            "SELECT s.agent_id, s.team_id, s.reason, m.alias, t.name AS team_name FROM agent_sessions s"
+            " LEFT JOIN memberships m ON m.agent_id=s.agent_id AND m.left_at IS NULL"
+            " LEFT JOIN teams t ON t.id=m.team_id WHERE s.session_id=?", (new_sid,)).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        c.close()
+
+
+def revert_continuation(old_sid: str, new_sid: str) -> dict:
+    """이어하기 되돌리기의 명부 쪽: new_sid 가 남긴 흔적을 지우고 old_sid 를 다시 현재 세션으로.
+
+    잘못 생긴 사본(빈 입력칸 ← 백그라운드 전환 등)은 원래 대화의 복사본이라 수집하면 사용량·입력이 두 번 잡힌다.
+    지우는 것: 바인딩·수집 커서·사용량·주소·그 세션이 행위자인 이벤트(+검색 색인). 원래 줄은 ended 를 풀어 되살린다.
+    """
+    if not db_path().exists():
+        return {"agents": [], "removed": {}}
+    with _Tx() as c:
+        owners = [r["agent_id"] for r in c.execute("SELECT agent_id FROM agent_sessions WHERE session_id=?", (new_sid,))]
+        ev = [r["id"] for r in c.execute("SELECT id FROM events WHERE actor_session=?", (new_sid,))]
+        if ev:
+            c.execute(f"DELETE FROM texts WHERE event_id IN ({','.join('?' * len(ev))})", ev)
+        removed = {
+            "events": c.execute("DELETE FROM events WHERE actor_session=?", (new_sid,)).rowcount,
+            "usage": c.execute("DELETE FROM usage WHERE session_id=?", (new_sid,)).rowcount,
+            "ingest": c.execute("DELETE FROM ingest WHERE session_id=?", (new_sid,)).rowcount,
+            "addresses": c.execute("DELETE FROM addresses WHERE session_id=?", (new_sid,)).rowcount,
+            "agent_sessions": c.execute("DELETE FROM agent_sessions WHERE session_id=?", (new_sid,)).rowcount,
+        }
+        for aid in owners:
+            mine = c.execute("SELECT 1 FROM agent_sessions WHERE session_id=? AND agent_id=?", (old_sid, aid)).fetchone()
+            if not mine:
+                continue
+            c.execute("UPDATE agent_sessions SET ended=NULL WHERE session_id=? AND agent_id=?", (old_sid, aid))
+            tm = c.execute("SELECT team_id FROM memberships WHERE agent_id=? AND left_at IS NULL", (aid,)).fetchone()
+            if tm:
+                _event(c, tm["team_id"], "session_bound", agent_id=aid,
+                       payload={"session_id": old_sid, "reason": "replaced", "from": new_sid,
+                                "note": "이어하기 되돌리기 — 잘못 생긴 사본을 지우고 원래 세션으로 복귀"})
+    return {"agents": owners, "removed": removed}
+
+
 def _member_view(c, m, peers: dict) -> dict:
     sid = current_session(m["agent_id"])
     p = peers.get(sid or "") or {}

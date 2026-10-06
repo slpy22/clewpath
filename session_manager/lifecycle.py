@@ -456,4 +456,10 @@ def kill_session(session_id: str) -> dict:
             res["killed"].append({"how": "process", "pid": pid, "origin": (p.get("origin") or {}).get("origin")})
         except Exception as e:  # noqa: BLE001
             res["errors"].append({"pid": pid, "reason": type(e).__name__})
+    if res["killed"]:
+        try:
+            from session_manager import hooks
+            hooks.mark_gone(session_id, "강제 종료")
+        except Exception:  # noqa: BLE001
+            pass
     return res

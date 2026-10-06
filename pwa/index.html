@@ -1321,6 +1321,57 @@ function peerOriginLabel(peer){
 }
 // 이 세션이 어떤 경로로든 살아 있는가 — 상세의 ⛔ 강제 종료 노출 조건
 function sessionIsLive(s){ return !!(s&&(s.live_terminal||s.peer||(s.agent&&s.agent.kind))); }
+// ---- 이어하기 되돌리기(2026-10-06): 실수로 생긴 이어받은 세션(빈 입력칸 ← 등)을 지우고 원래 세션으로 ----
+// 이 세션이 '원래 세션'(continued_in 이 목록에 있음)이거나 '이어받은 세션'(누가 이 세션으로 이어짐)이면 노출
+function continuationPair(s){
+  if(!s) return null;
+  const L=SESSIONS||[];
+  if(s.continued_in && L.some(x=>x.session_id===s.continued_in)) return {old:s.session_id, neu:s.continued_in};
+  const o=L.find(x=>x.continued_in===s.session_id);
+  return o? {old:o.session_id, neu:s.session_id} : null;
+}
+function revertSummaryNode(p){
+  const box=el('div','sheet-sub'); box.style.whiteSpace='pre-line';
+  const kind=p.kind==='background'
+    ? '빈 입력칸에서 ← 를 눌러 백그라운드로 넘어가며 생긴 사본입니다.'
+    : '대화가 이어지며(요약 이어가기 등) 생긴 새 세션입니다.';
+  const lines=[
+    '원래 세션: '+(p.old_title||'')+' ('+p.old.slice(0,8)+') — 그대로 유지',
+    '이어받은 세션: '+(p.new_title||'')+' ('+p.new.slice(0,8)+') — 삭제',
+    kind, '',
+    '진행할 일:'].concat((p.steps||[]).map((x,i)=>(i+1)+'. '+x));
+  if(p.new_messages>0){
+    lines.push('', '⚠ 이어받은 세션에만 있는 대화 '+p.new_messages+'건(입력 '+p.new_inputs+'건)도 함께 휴지통으로 갑니다.');
+    (p.last_inputs||[]).forEach(x=>lines.push('   · '+String(x.text||'').replace(/\s+/g,' ').slice(0,80)));
+  } else {
+    lines.push('', '이어받은 세션에서 새로 진행된 대화는 없습니다(원래 대화의 복사본).');
+  }
+  lines.push('휴지통에서 복구하면 사본만 별도 세션으로 돌아옵니다.');
+  box.textContent=lines.join('\n');
+  return box;
+}
+async function revertContinuation(s){
+  let p;
+  try{ p=await T.api('GET',`/api/sessions/${s.session_id}/revert-continuation/preview`); }
+  catch(e){ toast((e.json&&e.json.message)||'되돌릴 수 없습니다'); return; }
+  if(!p||!p.ok){ toast((p&&p.message)||'되돌릴 수 없습니다'); return; }
+  const ok=await confirmSheet({title:'이어하기 되돌리기',
+    main:'이어받은 세션을 지우고 원래 세션을 그대로 쓸까요?', subNode:revertSummaryNode(p),
+    action:'되돌리기', danger:true, busyText:'되돌리는 중…',
+    run: async()=>{
+      let cred={};
+      if(MODE==='relay'){ cred=await ensurePriv(); if(cred===null) throw new Error('2차 인증이 필요합니다'); }
+      let r;
+      try{ r=await T.api('POST',`/api/sessions/${s.session_id}/revert-continuation`,{grace:cred.grace,otp:cred.otp}); }
+      catch(e){ throw new Error((e.json&&e.json.message)||e.message); }
+      if(!r||!r.ok) throw new Error((r&&r.message)||'되돌리지 못했습니다');
+      s._reverted=r;
+    }});
+  if(!ok) return;
+  toast('되돌렸습니다 — 원래 세션 '+p.old.slice(0,8)+' 를 쓰세요');
+  try{ await loadList(); }catch(e){}
+  const fresh=(SESSIONS||[]).find(x=>x.session_id===p.old); if(fresh) loadDetail(fresh);
+}
 async function killSession(s){
   const ways=[]; if(s.live_terminal) ways.push('클루패스 터미널');
   if(s.peer) ways.push(peerOriginLabel(s.peer).text+(s.peer.name?'('+s.peer.name+')':''));
@@ -1883,6 +1934,12 @@ async function loadDetail(s){
   act.appendChild(bFork); act.appendChild(bRename);
   act.appendChild(bView); act.appendChild(bProf);
   act.appendChild(bCwd); act.appendChild(bExport);
+  if(continuationPair(s)){
+    const bRev=el('button','btn danger full','↩ 이어하기 되돌리기');
+    bRev.title='실수로 생긴 이어받은 세션을 지우고 원래 세션을 그대로 씁니다(확인창에서 내용 확인)';
+    bRev.onclick=()=>revertContinuation(s);
+    act.appendChild(bRev);
+  }
   if(sessionIsLive(s)){
     // 어디서 띄웠든(클루패스 터미널·다른 터미널·헤드리스·다른 클로드가 띄움) 살아 있으면 끝낼 수 있게(2026-09-30)
     const bKill=el('button','btn danger full','⛔ 세션 강제 종료'+(s.peer&&!s.live_terminal?(' — '+peerOriginLabel(s.peer).icon+' '+peerOriginLabel(s.peer).text):''));
@@ -2817,6 +2874,7 @@ function confirmSheet(o){
     const body=el('div');
     body.appendChild(el('div','sheet-main',o.main||''));
     if(o.sub) body.appendChild(el('div','sheet-sub',o.sub));
+    if(o.subNode) body.appendChild(o.subNode);
     const err=el('div','err'); body.appendChild(err);
     const cancel=el('button','btn ghost','취소'); cancel.onclick=()=>{ closeModal(); resolve(false); };
     const go=el('button','btn'+(o.danger?' danger':''),o.action||'확인');

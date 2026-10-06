@@ -1420,6 +1420,22 @@ def create_app() -> FastAPI:
             return JSONResponse({"error": "not_live", **r}, status_code=404)
         return {"ok": bool(r["killed"]), **r}
 
+    # ---- 이어하기 되돌리기(2026-10-06): 실수로 생긴 이어받은 세션(빈 입력칸 ← 등)을 지우고 원래 세션으로 ----
+    #      미리보기는 읽기만, 실행은 확인창 경유. 원격 실행은 kill 과 같은 2FA 특권(커넥터 _PRIV_API_SUFFIXES).
+    @app.get("/api/sessions/{session_id}/revert-continuation/preview")
+    def revert_continuation_preview(session_id: str):
+        from session_manager import revert
+        r = revert.plan(session_id)
+        return r if r.get("ok") else JSONResponse(r, status_code=409 if r.get("error") != "no_continuation" else 404)
+
+    @app.post("/api/sessions/{session_id}/revert-continuation")
+    def revert_continuation_run(session_id: str):
+        from session_manager import revert
+        r = revert.execute(session_id)
+        if r.get("ok"):
+            return r
+        return JSONResponse(r, status_code=404 if r.get("error") == "no_continuation" else 409)
+
     @app.post("/api/sessions/{session_id}/terminal/stop")
     def terminal_stop(session_id: str):
         from session_manager import webterm
@@ -1507,6 +1523,7 @@ def create_app() -> FastAPI:
         sessions = scanner.scan_all()
         recs = labels.all_records()  # 라벨 1회 로드
         out = []
+        now_ts = time.time()
         for s in sessions:
             folder = Path(s.jsonl_path).parent.name
             if q:
@@ -1518,6 +1535,7 @@ def create_app() -> FastAPI:
                 continue
             md = {"session_id": s.session_id, "custom_title": s.custom_title,
                   "ai_title": s.ai_title, "slug": s.slug}
+            live_term = webterm.has_terminal(s.session_id)
             out.append({
                 "session_id": s.session_id,
                 "cwd": s.cwd,
@@ -1543,10 +1561,13 @@ def create_app() -> FastAPI:
                 "model_override": rec.get("model"),
                 "resume_model": rec.get("model") or s.last_model,
                 # 훅 기반 실시간 상태(없으면 None). 신선도 판정은 화면 쪽 책임.
-                "runtime": runtime.get(s.session_id),
+                "runtime": hooks.effective(
+                    runtime.get(s.session_id),
+                    alive=bool(live_term or peer_of.get(s.session_id) or occupancy.get(s.session_id)),
+                    quiet_s=(now_ts - s.mtime) if s.mtime else None, now=now_ts),
                 "agent": occupancy.get(s.session_id),
                 # 이 세션의 PTY 가 지금 살아있는가(화면 유무 무관 - 재접속 대상)
-                "live_terminal": webterm.has_terminal(s.session_id),
+                "live_terminal": live_term,
                 # 지금 화면이 붙어 있는가 + 그 screen_id(v0.9.4 인계 확인창의 근거; 20초 폴링이라 참고값)
                 "screen": webterm.screen_info(s.session_id),
                 # 살아 있는 claude 세션(어디서 띄웠든): {name, status(idle|busy), pid} — SendMessage 대상

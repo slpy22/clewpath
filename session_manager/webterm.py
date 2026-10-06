@@ -225,6 +225,12 @@ def _cleanup(sess: _TermSession) -> None:
     except Exception:  # noqa: BLE001
         pass
     _registry_remove(getattr(sess.proc, "pid", None))
+    # 응답 도중 끝났으면 Stop 훅이 오지 않는다 → '작업중' 이 남지 않게 접는다(2026-10-06)
+    try:
+        from session_manager import hooks
+        hooks.mark_gone(sess.key)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 # ---------------------------------------------------------------- PTY 등록부

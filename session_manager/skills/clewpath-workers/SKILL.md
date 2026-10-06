@@ -146,6 +146,10 @@ cd <워커 작업 폴더> && claude -p --output-format json "너는 '<별칭>' �
 
 - 워커 호출 간격이 **1시간을 넘기면** 캐시가 만료돼 다음 호출 때 대화 전체를 다시 읽는 비용이 든다. 묶을 수 있는 일감은 묶는다.
 - 워커 대화가 매우 커지면 **교체**: 인수인계 요약으로 새 세션을 만들고 `…/members/<agent>/session`(reason `replaced`)으로 붙인다 — **에이전트의 이력은 이어진다.** 옛 세션은 `POST /api/sessions/<session_id>/terminal/stop` 으로 내린다.
+- **워커 터미널은 턴이 끝난 뒤에만 내린다.** `RESULT` 는 워커 턴 **도중**에 도착한다(보낸 뒤에도 메모 갱신·마무리 답을 이어 쓴다).
+  RESULT 를 받자마자 `terminal/stop` 하면 마무리가 잘리고 그 세션이 '작업중' 으로 남는다(2026-10-06 실사고).
+  내리기 직전에 `GET …/api/v1/team/<team>` 의 그 구성원 `status` 를 **한 번** 보고 `idle` 일 때만 내린다.
+  `busy` 면 지금은 두고, 그 워커의 유휴 통지(`[Cross-session idle notice]`)가 온 뒤나 다음 배분 때 내린다(반복 조회 금지).
 
 ## 사람 개입
 
