@@ -155,7 +155,7 @@ test("페이지 쪽 계약: serviceWorker message open-session/open-monitor → 
 });
 
 // ---------------------------------------------------------------- 이어받기(continued-in, 0.9.9)
-test("renderRows: 옛 줄은 ⏩ 이어받음 칩+dim, 열기/재개는 이어받은 세션으로, 🏷 agent_name 칩, 삭제 409 안내", async () => {
+test("renderRows: 옛 줄은 ⏩ 이어받음 칩+dim, 열기/재개는 이어받은 세션으로, agent_name 은 목록에 안 보임, 삭제 409 안내", async () => {
   const ctx = await load();
   const OLD = "aaaaaaaa-1111-2222-3333-444444444444", NEW = "bbbbbbbb-1111-2222-3333-444444444444", MISS = "cccccccc-0000-0000-0000-000000000000";
   ev(ctx, `SESSIONS = [
@@ -171,7 +171,7 @@ test("renderRows: 옛 줄은 ⏩ 이어받음 칩+dim, 열기/재개는 이어�
   assert.ok(old.classList.contains("dim"), "옛 줄은 흐리게");
   same(chipsOf(old), ["⏩ 이어받음"]);
   assert.ok(old.children[0].children[0].children.find((k) => cls(k) === "schip cont").title.includes("열면 그 세션으로"));
-  same(chipsOf(byId[NEW]), ["🏷 dbcommon"], "메시지 주소 이름 표시");
+  same(chipsOf(byId[NEW]), [], "agent_name 칩은 목록에 없다(상세에서만)");
   old.children[0].onclick();                                        // 정보 클릭 → 이어받은 세션 상세
   old.children.at(-2).onclick();                                    // ▶ → 이어받은 세션 재개
   same(ev(ctx, "globalThis.__calls"), [["detail", NEW], ["resume", NEW]]);

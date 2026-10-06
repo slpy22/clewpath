@@ -1811,9 +1811,6 @@ function renderRows(wrap,q){
         g.title='이 세션은 '+s.continued_in.slice(0,8)+'… 로 이어졌습니다'+(tgt?' — 열면 그 세션으로 갑니다':' (이어받은 세션이 목록에 없음)');
         r1.appendChild(g); srow.classList.add('dim');
       }
-      if(s.agent_name&&s.agent_name!==(s.title||s.label_name||s.slug)){
-        const g=el('span','schip','🏷 '+s.agent_name); g.title='에이전트 이름(agent-name)'; r1.appendChild(g);
-      }
       if(s.labels&&s.labels.length)r1.appendChild(el('span','schip','#'+s.labels[0]));
       if(s.resume_model){
         const mc=el('span','schip model'+(s.model_override?' set':''),'🧠 '+modelShort(s.resume_model));
@@ -1864,6 +1861,8 @@ async function loadDetail(s){
     const add=(k,v)=>{kv.appendChild(el('div','k',k));kv.appendChild(el('div','v',v));};
     add('ID',s.session_id.slice(0,8)); add('폴더',s.project_folder||'-');
     if(s.continued_in) add('이어받음','⏩ '+s.continued_in.slice(0,8)+'… 로 이어짐 (이 파일은 옛 줄)');
+    // 에이전트 이름(agent-name) — 길고 영어인 경우가 많아 목록에선 빼고 상세에서만(2026-10-06)
+    if(s.agent_name&&s.agent_name!==(s.title||s.label_name||s.slug)) add('에이전트 이름',s.agent_name);
     add('메시지',(s.message_count||0)+''); add('크기',fmtBytes(s.size_bytes));
     { const ct=absTime(s.started_at); if(ct)add('생성',ct); }
     { const rt=relFrom(s), at=absTime(s.ended_at)||absTime(s.mtime);
