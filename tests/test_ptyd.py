@@ -281,3 +281,20 @@ def test_status_and_restart_api(broker, monkeypatch):
         assert st["running"] and st["sessions"] == 1 and st["update_pending"] is False
         r = c.post("/api/owner/ptyd/restart", json={"force": False})
         assert r.status_code == 409 and r.json()["error"] == "has_sessions", "세션이 있으면 확인(force) 없이 안 바꾼다"
+
+
+def test_launch_uses_hidden_console_not_detached(fake_claude_home, monkeypatch):
+    """DETACHED_PROCESS 면 venv 런처 아래 진짜 python 이 새 콘솔 창을 띄우고, 그 창을 닫으면 브로커·터미널이 다 죽는다(2026-10-10)."""
+    import subprocess
+    seen = {}
+
+    class P:
+        def __init__(self, args, **kw):
+            seen.update(kw, args=args)
+    monkeypatch.setattr(subprocess, "Popen", P)
+    monkeypatch.setattr(ptyclient.sys, "platform", "win32")
+    ptyclient.launch()
+    f = seen["creationflags"]
+    assert not f & 0x00000008, "DETACHED_PROCESS 금지(콘솔 창이 새로 뜸)"
+    assert f & 0x08000000 and f & 0x00000200, "CREATE_NO_WINDOW + NEW_PROCESS_GROUP"
+    assert seen["args"][1:] == ["-m", "session_manager.ptyd"]

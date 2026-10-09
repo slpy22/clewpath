@@ -97,7 +97,10 @@ def launch() -> None:
     log = ptyd.state_path().with_name("ptyd.log")
     flags = 0
     if sys.platform == "win32":
-        flags = 0x00000008 | 0x00000200 | 0x08000000     # DETACHED_PROCESS | NEW_PROCESS_GROUP | NO_WINDOW
+        # NEW_PROCESS_GROUP | CREATE_NO_WINDOW — '보이지 않는 콘솔' 을 준다. DETACHED_PROCESS 는 쓰지 않는다:
+        # venv 런처(.venv\Scripts\python.exe)가 그 아래 진짜 python 을 띄울 때 콘솔이 없으면 Windows 가 **새 콘솔 창**을
+        # 만들어 화면에 뜨고, 사용자가 그 창을 닫으면 브로커와 모든 터미널이 함께 죽는다(2026-10-10 실사고).
+        flags = 0x00000200 | 0x08000000
     with open(log, "ab") as fh:
         subprocess.Popen([sys.executable, "-m", "session_manager.ptyd"], stdin=subprocess.DEVNULL,
                          stdout=fh, stderr=subprocess.STDOUT, creationflags=flags, close_fds=True,
