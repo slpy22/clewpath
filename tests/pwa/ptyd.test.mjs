@@ -30,3 +30,21 @@ test("showPtyd: 터미널이 있으면 '종료하고 진행' 확인창 → force
   assert.equal(post[2].body.force, true); assert.equal(post[2].grace, "g");
   assert.ok(ev(ctx, "globalThis.__t")[0].includes("다시 시작"));
 });
+
+test("showUpdateApply: 브로커가 실행 중이면 '터미널은 계속 실행' 안내, 경고·빨간 버튼 없음", async () => {
+  const ctx = await load();
+  ev(ctx, "CLOCK_SKEW = 0");
+  const now = Date.now() / 1000;
+  ev(ctx, `loadList = async () => {}; SESSIONS = [{session_id:'a', title:'알파', live_terminal:true, runtime:{phase:'thinking', thinking_at:${now - 5}}},`
+    + `{session_id:'b', title:'베타', live_terminal:true, runtime:{phase:'ready', ready_at:${now - 5}}}];`
+    + "openModal = (t, b, f) => { globalThis.__b = b; globalThis.__f = f; };"
+    + "T = { api: async (m, p) => (p === '/api/owner/ptyd' ? { enabled: true, running: true, sessions: 2 } : {}) };");
+  await ev(ctx, "showUpdateApply('0.16.0', '0.16.1')");
+  const b = ev(ctx, "globalThis.__b");
+  const first = b.children[0];
+  assert.ok(!String(first.className).includes("err"), "빨간 경고 상자 없음");
+  assert.ok(first.textContent.includes("터미널 2개 (작업 중 1개: 알파)") && first.textContent.includes("계속 실행"));
+  assert.ok(b.children.some((c) => String(c.textContent).includes("웹 재개(채팅식) 화면에서 진행 중이던 응답만")));
+  const go = ev(ctx, "globalThis.__f")[0];
+  assert.ok(go.textContent.startsWith("지금 v0.16.1") && !String(go.className).includes("danger"));
+});
