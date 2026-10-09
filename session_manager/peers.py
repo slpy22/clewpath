@@ -201,7 +201,15 @@ def origin_of(pid, entrypoint: str = "") -> dict:
     if cached and cached.get("_ct") == ct and info is not None:
         return {k: v for k, v in cached.items() if not k.startswith("_")}
     import os
-    r = classify_origin(info, entrypoint, host_pid=os.getpid())
+    host = os.getpid()
+    if info is not None and info.get("parent_pid") not in (None, host):
+        try:   # 브로커가 띄운 터미널도 ClewPath 출처(🖥) — 브로커 pid 는 Host 가 마지막으로 본 값
+            from session_manager import ptyclient
+            if info.get("parent_pid") == ptyclient.broker_pid():
+                host = info.get("parent_pid")
+        except Exception:  # noqa: BLE001
+            pass
+    r = classify_origin(info, entrypoint, host_pid=host)
     if info is not None:
         _ORIGIN_CACHE[key] = {**r, "_ct": ct}
         if len(_ORIGIN_CACHE) > 500:

@@ -198,8 +198,12 @@ if (-not $healthy) {
     } catch {}
 
     try {
+        # 터미널 관리 프로세스(session_manager.ptyd)는 제외 — 열린 터미널을 들고 있고, 롤백과 무관하게 계속 산다
+        $keep = @(Get-CimInstance Win32_Process -Filter "Name='python.exe'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.CommandLine -and $_.CommandLine -like '*session_manager.ptyd*' } |
+            ForEach-Object { [int]$_.ProcessId })
         Get-Process python -ErrorAction SilentlyContinue | Where-Object {
-            $_.Path -and $_.Path.StartsWith($InstallRoot, [StringComparison]::OrdinalIgnoreCase)
+            $_.Path -and $_.Path.StartsWith($InstallRoot, [StringComparison]::OrdinalIgnoreCase) -and ($keep -notcontains $_.Id)
         } | Stop-Process -Force -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 2
         Copy-Payload $BackupDir $InstallRoot

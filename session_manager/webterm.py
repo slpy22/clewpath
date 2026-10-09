@@ -96,6 +96,7 @@ class _TermSession:
 
 
 _ACTIVE: dict[str, _TermSession] = {}
+_SHUTTING_DOWN = False      # Host 종료 중 — 브로커 스트림 끊김을 '브로커 사망' 으로 오인하지 않게
 
 
 def _max_live_pty() -> int:
@@ -286,13 +287,22 @@ def _registry_remove(pid: int | None) -> None:
 def shutdown_all() -> int:
     """Host 정상 종료 시 우리가 띄운 PTY 전부 종료(고아 예방의 제1방어선).
 
-    업데이트 = 재기동이므로, persist PTY 를 살려두면 재기동마다 고아→bg 승격→
+    (Host 내장 PTY 모드) 업데이트 = 재기동이므로, persist PTY 를 살려두면 재기동마다 고아→bg 승격→
     세션 잠금이 재발한다. 재기동 후엔 어차피 등록을 잃어 재접속도 불가하므로
     유지할 가치가 없다 - 함께 내리는 게 맞다.
+    (브로커 모드) 터미널은 브로커가 소유하고 브로커 Job 이 고아를 막는다 → 스트림만 뗀다.
     """
+    global _SHUTTING_DOWN
+    _SHUTTING_DOWN = True
     n = 0
     for sess in list(_ACTIVE.values()):
         try:
+            if getattr(sess.proc, "detach", None):
+                # 브로커 세션: Host 가 내려가도 계속 돈다(업데이트·재기동). 스트림만 떼고 다음 Host 가 다시 붙는다.
+                sess.dead = True
+                _ACTIVE.pop(sess.key, None)
+                sess.proc.detach()
+                continue
             _cleanup(sess)
             n += 1
         except Exception:  # noqa: BLE001
@@ -476,6 +486,10 @@ def _start_reader(sess: _TermSession) -> None:
                             if sess.client is client:
                                 sess.client = None
         finally:
+            if _SHUTTING_DOWN and getattr(sess.proc, "detach", None):
+                return                       # Host 종료로 브로커 스트림만 뗐다 — 세션은 브로커에서 계속
+            if getattr(sess.proc, "detach", None) and not getattr(sess.proc, "exited", True):
+                _on_broker_stream_lost(sess)
             # claude 자체가 끝났다(사용자 exit 등) → 진짜 정리.
             # '연결 끊김'과 구분되는 명시 문구를 먼저 보낸다(상태 모델: 세션 종료).
             client = sess.client
@@ -554,6 +568,15 @@ def _spawn(session_id: str, skip_permissions: bool = True,
                 "포크로 재개하거나, PC 터미널의 claude agents 에서 해당 "
                 "에이전트를 확인·종료한 뒤 다시 재개하세요.\r\n")
     argv = _claude_argv(session_id, skip_permissions, fork_id)
+    from session_manager import ptyclient
+    if ptyclient.enabled():
+        # 터미널 관리 프로세스(브로커)가 소유 — Host 재기동·업데이트에도 산다(docs/designs/pty-broker.md).
+        # 고아 방지는 브로커의 Job 이 맡는다(브로커가 죽으면 커널이 claude 를 함께 끝냄).
+        proc = _broker_spawn(key, session_id, argv, cwd, persist=not fork_id, cap=cap)
+        sess = _TermSession(key, proc, persist=not fork_id)
+        _ACTIVE[key] = sess
+        _start_reader(sess)
+        return sess
     try:
         proc = PtyProcess.spawn(argv, cwd=cwd, dimensions=(24, 80))
     except Exception as e:  # noqa: BLE001
@@ -568,6 +591,84 @@ def _spawn(session_id: str, skip_permissions: bool = True,
     _ACTIVE[key] = sess
     _start_reader(sess)
     return sess
+
+
+def _broker_spawn(key: str, session_id: str, argv: list[str], cwd: str, persist: bool, cap: int):
+    from session_manager import ptyclient
+    try:
+        return ptyclient.spawn(key, session_id, argv, cwd, 80, 24, persist, cap)
+    except ptyclient.SpawnRefused as e:
+        if e.code == "dup":          # 브로커엔 살아 있는데 Host 가 몰랐다(재기동 직후 등) → 새로 띄우지 않고 붙는다
+            try:
+                return ptyclient.attach(key)
+            except ptyclient.BrokerDown:
+                pass
+        if e.code == "cap":
+            raise TermStartError(
+                "cap", f"동시에 열 수 있는 터미널 상한({cap}개)에 도달했습니다",
+                f"\r\n\x1b[33m[ClewPath] 동시에 열 수 있는 터미널 상한({cap}개)에 도달했습니다.\x1b[0m\r\n"
+                "다른 터미널을 종료(탭 닫기 → 세션 종료)한 뒤 다시 여세요.\r\n")
+        raise TermStartError("spawn_failed", f"터미널 시작 실패: {e}",
+                             f"\r\n\x1b[31m[오류] 터미널 시작 실패: {e}\x1b[0m\r\n")
+    except ptyclient.BrokerDown as e:
+        # D3: 브로커가 없으면 열기를 거부한다 — 조용히 Host 내장 PTY 로 띄우면 '업데이트에도 산다' 는 약속이 깨진다
+        raise TermStartError(
+            "broker_down", f"터미널 관리 프로세스가 응답하지 않습니다({e})",
+            "\r\n\x1b[31m[ClewPath] 터미널 관리 프로세스가 응답하지 않아 터미널을 열 수 없습니다.\x1b[0m\r\n"
+            "잠시 뒤 다시 여세요. 계속되면 설정 → 터미널 관리 프로세스에서 상태를 확인하세요.\r\n")
+
+
+def adopt_broker_sessions() -> int:
+    """Host 기동 때: 브로커가 들고 있는 세션을 다시 붙인다(업데이트·재기동 뒤에도 목록·화면·워커 그대로).
+
+    브로커 코드가 바뀌었는데(업데이트 대기) 세션이 0개면 여기서 조용히 교체한다(D2).
+    """
+    from session_manager import ptyclient
+    if not ptyclient.enabled():
+        return 0
+    h = ptyclient.hello()
+    if not h or not h.get("ok"):
+        return 0
+    if h.get("hash") != ptyclient.ptyd.code_hash() and not h.get("sessions"):
+        ptyclient.restart(force=False)       # 다음 스폰이 새 코드로 띄운다
+        return 0
+    n = 0
+    for it in ptyclient.sessions():
+        key = it.get("key")
+        if not key or _get_live(key) is not None:
+            continue
+        try:
+            proc = ptyclient.attach(key)
+        except ptyclient.BrokerDown:
+            continue
+        sess = _TermSession(key, proc, persist=bool(it.get("persist", True)))
+        _ACTIVE[key] = sess
+        _start_reader(sess)
+        n += 1
+    if n:
+        print(f"[ptyd] 브로커 세션 {n}개 다시 연결", flush=True)
+    return n
+
+
+_BROKER_LOST_AT = 0.0
+
+
+def _on_broker_stream_lost(sess) -> None:
+    """세션 종료 표식 없이 스트림이 끊겼다 = 브로커가 죽었을 수 있다 → 확인 후 1분에 1번만 알린다."""
+    global _BROKER_LOST_AT
+    import time as _t
+    from session_manager import ptyclient
+    if _SHUTTING_DOWN or _t.time() - _BROKER_LOST_AT < 60:
+        return
+    if ptyclient.hello():
+        return                               # 브로커는 살아 있다(이 세션만 끝남 등)
+    _BROKER_LOST_AT = _t.time()
+    try:
+        from session_manager import push
+        push.send("ptyd-lost", "", "ClewPath 터미널 종료",
+                  "터미널 관리 프로세스가 멈춰 열려 있던 터미널이 종료됐습니다. 다시 열면 새로 시작합니다.", {})
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def start_terminal(session_id: str, skip_permissions: bool = True) -> dict:

@@ -41,8 +41,15 @@ ClewPath 는 claude 를 **관찰·중계·실행**하는 도구이지, claude �
 이 목록에 없는 claude 파일 접근을 추가할 때는 위 1·2 를 적용할 것.
 
 프로세스 정리 예외(2026-08-21 사장님 협의 — 실사용자 세션 잠금 사고로 승인):
-- ClewPath 가 낳는 자식은 **Job Object(KILL_ON_JOB_CLOSE)** 에 편입 — Host 가
+- ClewPath 가 낳는 자식은 **Job Object(KILL_ON_JOB_CLOSE)** 에 편입 — 주인이
   어떻게 죽든 커널이 동반 종료(고아 원천 차단). jobguard.py
+  · **2026-10-08 개정(사장님 승인 D1, docs/designs/pty-broker.md)**: 웹 터미널·워커 PTY 의 주인은
+    Host 가 아니라 **터미널 관리 프로세스(브로커, `python -m session_manager.ptyd`)** 다. 브로커의 Job 이
+    claude 를 묶는다 → 브로커가 죽으면 함께 종료, **Host 재기동·업데이트는 터미널을 죽이지 않는다.**
+    브로커는 Host 잡에 넣지 않고 분리 기동하며, 업데이트 롤백의 python 일괄 종료에서 제외한다.
+    브로커 무응답 시 터미널 열기 거부(D3), 일회성(fork)은 Host 스트림이 끊기면 즉시 종료(D4),
+    브로커 교체는 터미널 0개면 자동·있으면 확인창(D2). 비상 스위치 `[terminal] broker = "off"` = Host 내장 PTY.
+    웹 재개(`-p stream-json`)는 지금처럼 Host 잡. 가드 테스트: test_ptyd.py
 - 구버전(≤0.3.24) 잔재는 부팅 시 소급 정리: '레거시 서명(--resume <UUID>
   --dangerously-skip-permissions) + 부모 사망' 이중 조건에서만. 픽커 재개·safe
   모드·bg 승격체(--bg-pty-host)·사용자 bg 에이전트는 계속 불가침.

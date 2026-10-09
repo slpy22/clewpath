@@ -3968,6 +3968,7 @@ function showSettings(){
   row('📦','비서 스킬 설치','개인 비서 스킬(clewpath-assistant)을 ~/.claude/skills 에 설치',()=>installBundledSkill('assistant'),{local:true});
 
   sec('정보 · 진단');
+  row('🖥','터미널 관리 프로세스','Host 업데이트에도 터미널을 살려 두는 프로세스 · 상태 · 업데이트',showPtyd);
   // 업데이트 적용: 로컬은 바로, 원격(폰)은 2차 인증 뒤(사장님 2026-09-30 — 원격에서도 Host 업데이트). 서명 검증은 Host 가 한다.
   row('⬆','업데이트',
       VERSTATE.latest?('새 버전 v'+VERSTATE.latest+' 설치 가능'):'현재 버전 확인 · 재설치',
@@ -4254,6 +4255,44 @@ async function installBundledSkill(key){
          closeModal(); toast('스킬 설치됨 — 새 claude 세션부터 /'+k.name+' 사용 가능'); }
     catch(e){ ok.disabled=false; toast('설치 실패: '+e.message); } };
   openModal('📦 '+k.title+' 설치', body, [ok]);
+}
+// ---- 터미널 관리 프로세스(PTY 브로커, docs/designs/pty-broker.md) ----
+// 상태를 보여 주고, 업데이트 대기·재시작은 확인창으로(D2: 열린 터미널이 있으면 그 수와 '종료됨' 을 먼저 알린다)
+function ptydSummary(st){
+  if(!st||!st.enabled) return '꺼져 있음 — 터미널은 Host 안에서 돌고 Host 업데이트 때 종료됩니다';
+  if(!st.running) return '실행 중이 아님 — 터미널을 열면 자동으로 시작합니다';
+  return '실행 중 (pid '+st.pid+') · 터미널 '+(st.sessions||0)+'개'
+    +(st.update_pending?' · ⬆ 업데이트 대기':'');
+}
+async function showPtyd(){
+  let st; try{ st=await T.api('GET','/api/owner/ptyd'); }catch(e){ toast('상태 조회 실패: '+e.message); return; }
+  const body=el('div');
+  body.appendChild(el('p',null,ptydSummary(st)));
+  const why=el('div','cwd'); why.style.whiteSpace='pre-line';
+  why.textContent='ClewPath 가 띄운 터미널(워커 포함)은 이 프로세스가 들고 있어서 Host 가 업데이트·재시작돼도 계속 돕니다.'
+    +'\n이 프로세스가 멈추면 그 터미널들도 함께 종료됩니다(주인 없는 claude 가 남지 않게).';
+  body.appendChild(why);
+  const btns=[];
+  if(st&&st.running){
+    const n=st.sessions||0;
+    const b=el('button','btn'+(n?' danger':''), st.update_pending?'⬆ 지금 업데이트':'↻ 재시작');
+    b.onclick=async()=>{
+      closeModal();
+      const ok=await confirmSheet({title:st.update_pending?'터미널 관리 프로세스 업데이트':'터미널 관리 프로세스 재시작',
+        main:n?('열려 있는 터미널 '+n+'개가 종료됩니다. 진행할까요?'):'열린 터미널이 없어 바로 바꿉니다.',
+        sub:'대화 기록은 그대로 남고, 터미널은 다시 열면 새로 시작합니다.',
+        action:n?'종료하고 진행':'진행', danger:!!n, busyText:'진행 중…',
+        run: async()=>{
+          let cred={};
+          if(MODE==='relay'){ cred=await ensurePriv(); if(cred===null) throw new Error('2차 인증이 필요합니다'); }
+          try{ await T.api('POST','/api/owner/ptyd/restart',{body:{force:!!n},grace:cred.grace,otp:cred.otp}); }
+          catch(e){ throw new Error((e.json&&(e.json.error||e.json.message))||e.message); }
+        }});
+      if(ok) toast('터미널 관리 프로세스를 다시 시작했습니다');
+    };
+    btns.push(b);
+  }
+  openModal('🖥 터미널 관리 프로세스', body, btns);
 }
 async function showDiagnostics(){
   const body=el('div'); const st=el('p',null,'불러오는 중…'); body.appendChild(st);

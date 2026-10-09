@@ -126,7 +126,7 @@ def _otp_error() -> str:
 # 새는 비대칭 갭이 있었다 — 원격에서 OTP 없이 남의 claude 프로세스를 죽일 수 있었다.
 # start 와 대칭이 되도록 stop 도 특권 경로로 취급한다(릴레이 경유 한정; 소유자
 # 로컬 직접 호출은 이 프록시를 안 타므로 무영향 — start 2FA 와 같은 원리).
-_PRIV_API_SUFFIXES = ("/terminal/stop", "/kill", "/update/apply", "/revert-continuation")   # kill: 세션 강제 종료, update/apply: 원격 Host 업데이트, revert-continuation: 이어하기 되돌리기 — 모두 2FA 게이트
+_PRIV_API_SUFFIXES = ("/terminal/stop", "/kill", "/update/apply", "/revert-continuation", "/ptyd/restart")   # kill: 세션 강제 종료, update/apply: 원격 Host 업데이트, revert-continuation: 이어하기 되돌리기 — 모두 2FA 게이트
 
 
 def _is_privileged_api(path: str) -> bool:

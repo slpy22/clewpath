@@ -6,6 +6,13 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _pty_broker_off(monkeypatch):
+    """기존 테스트는 Host 내장 PTY 경로를 검증한다 — 진짜 브로커를 띄우지 않게 기본 off.
+    브로커 테스트(test_ptyd.py)는 스스로 on 으로 바꾼다."""
+    monkeypatch.setenv("SM_PTY_BROKER", "off")
+
+
 @pytest.fixture
 def fake_claude_home(tmp_path, monkeypatch):
     """가짜 ~/.claude 구조를 만들고 환경변수로 주입한다."""

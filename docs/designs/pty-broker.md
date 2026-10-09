@@ -1,6 +1,6 @@
 # 설계: 터미널 관리 프로세스 분리 (PTY 브로커, 가칭 `clewpath-ptyd`)
 
-- 상태: **설계·검토 단계 (구현 금지 — 사장님 2026-10-08: 작업 중 세션 보호)**
+- 상태: **구현 완료(Host 0.16.0, 2026-10-09)** — 설계·검토 2026-10-08, 구현 승인 2026-10-09(작업 중 세션 없음 확인)
 - 요청: 2026-10-07 사장님 "클루패스가 띄운 세션이 서비스의 하위 프로세스로 뜨는데, 독자 프로세스로" → 선택지 A 승인
 - 관련: CLAUDE.md 「프로세스 정리 예외」(2026-08-21), jobguard.py, webterm.py, docs/designs/workers-p2p.md
 
@@ -155,3 +155,32 @@ Host 업데이트는 이 디렉토리를 건드리지 않고, 롤백의 python �
 - D5 Phase 2 후보(미결): 장기 무활동 알림, 바탕화면 창 보기 옵션, 웹 재개 프로세스 분리
 
 다음 단계: 작업 중 세션이 없을 때 S1 스파이크(스크래치, 운영 Host 무접촉) → 결과로 §3.2 기동 경로 확정 → 구현.
+
+## 9. S1 스파이크 결과 (2026-10-09, 스크래치·운영 Host 무접촉)
+
+| 확인 | 결과 |
+|---|---|
+| 운영 Host(pid 54144) 잡 소속 | `IsProcessInJob` = **True**(예약 작업/업데이트 러너 사슬에서 물려받음). 그러나 업데이트 러너가 띄운 새 Host 가 옛 Host 사망 뒤에도 사는 것으로 보아 바깥 잡은 KILL_ON_CLOSE 아님 |
+| Host 흉내 → 브로커(Popen, DETACHED+NEW_GROUP, 잡 지정 없음) → ConPTY claude(브로커 잡) | 브로커 in_job=False, claude in_job=True, ppid 사슬 정상 |
+| Host 흉내만 `taskkill /F`(트리 아님 — 실제 크래시·`Stop-Process -Force` 와 같음) | **브로커·claude 생존**(부모 사망 후에도) |
+| 브로커 `taskkill /F` | **claude 3초 안 종료**(브로커 잡) → 고아 0 |
+| 피어 레지스트리·SendMessage 주소 | 브로커 아래 claude 정상 등록(`kind interactive`, `cc-msg-…` 파이프). 출처는 `script` 로 오판 → R6 수정 필요 |
+| `CREATE_BREAKAWAY_FROM_JOB` | 불필요 — 바깥 잡이 자식 동반 종료를 하지 않으므로 Host 의 자식으로 띄워도 독립 생존. §3.2 의 1순위를 **Host 가 필요할 때 기동**(런처 경유는 자기 회복 보조)으로 |
+
+추가 발견
+- **환경변수 오염**: claude 세션 안에서 띄운 프로세스는 `CLAUDECODE`·`CLAUDE_CODE_CHILD_SESSION`·`CLAUDE_CODE_SESSION_ID`·`CLAUDE_CODE_MESSAGING_*` 등을 물려받고,
+  그 아래 claude 는 "Transcript saving is off — inherited CLAUDE_CODE_CHILD_SESSION" 로 **기록 저장·레지스트리 등록이 꺼진다.**
+  → 브로커는 claude 를 띄울 때 `CLAUDECODE`, `CLAUDE_CODE_*`, `CLAUDE_PID`, `CLAUDE_EFFORT` 를 지운 환경을 쓴다(Host 를 손으로 띄운 개발 환경 방어).
+- **레지스트리 잔재**: 강제 종료된 claude 의 `~/.claude/sessions/<pid>.json` 이 남는다(지금 Host 강제 종료와 같음). `peers` 는 pid 생존을 보지 않아
+  죽은 세션이 '실행 중' 으로 보일 수 있다 → peers 에 pid 생존 + `procStart` 일치 검사를 추가(파일은 읽기만, 정리는 claude 몫).
+
+## 10. 구현 메모 (0.16.0)
+
+- 브로커 `session_manager/ptyd.py`(stdlib `multiprocessing.connection` AF_PIPE + authkey HMAC, ConPTY 소유, 링 버퍼, 종료 표식으로
+  '세션 종료' 와 '브로커 사망' 구분). Host 쪽 `ptyclient.py` 의 `BrokerProc` 가 winpty 와 같은 모양이라 webterm 의 버퍼·델타·인계 로직 무변경.
+- **§3.1 변경**: 별도 venv 대신 **Host 와 같은 venv** 에서 `python -m session_manager.ptyd` 로 돈다. 근거 — ① `uv sync --frozen` 은 버전이 같은
+  pywinpty 를 다시 설치하지 않아 .pyd 잠금 충돌이 없다(락 파일을 `--upgrade` 로 갱신할 때만 주의) ② .py 는 기동 때 읽힌 뒤라 페이로드 교체와 무관
+  ③ 롤백의 python 일괄 종료는 명령줄 `session_manager.ptyd` 를 제외하도록 고쳤다(update_runner.ps1). 브로커 코드가 바뀌면 해시가 달라져 D2 흐름.
+- 기동: 첫 터미널 스폰 때 Host 가 분리 기동(DETACHED·NEW_GROUP·NO_WINDOW, Claude 세션 환경변수 제거). Host 기동 시 `adopt_broker_sessions`.
+- 테스트: test_ptyd.py 14(실제 파이프·authkey, 가짜 PTY) + PWA ptyd.test.mjs 2. 격리 e2e(실제 브로커·실제 claude): Host 크래시 후 생존·재접속 꼬리·
+  피어 레지스트리 정상 / `/exit` 정상 종료 / 브로커 kill → claude 동반 종료·'브로커 사망' 판정.

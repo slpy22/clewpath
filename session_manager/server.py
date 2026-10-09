@@ -320,6 +320,10 @@ async def _lifespan(app: FastAPI):
         _webapi.sweep_orphan_streams()
         _webterm.sweep_orphan_ptys()
         _webterm.sweep_legacy_orphans()   # 구버전(≤0.3.24) 잔재 소급 정리
+        try:                               # 브로커가 들고 있는 터미널에 다시 붙는다(업데이트·재기동 뒤에도 유지)
+            _webterm.adopt_broker_sessions()
+        except Exception as e:  # noqa: BLE001
+            print(f"[ptyd] 다시 연결 실패: {e}", flush=True)
     try:
         threading.Thread(target=_sweep_all, name="orphan-sweep", daemon=True).start()
     except Exception as e:  # noqa: BLE001
@@ -697,6 +701,28 @@ def create_app() -> FastAPI:
     def owner_update_check():
         from session_manager import updater
         return updater.check()
+
+    # ---- 터미널 관리 프로세스(PTY 브로커, docs/designs/pty-broker.md) ----
+    @app.get("/api/owner/ptyd")
+    def owner_ptyd_status():
+        from session_manager import ptyclient
+        return ptyclient.status()
+
+    @app.post("/api/owner/ptyd/restart")
+    def owner_ptyd_restart(request: Request, force: bool = Body(False, embed=True)):
+        """브로커 교체(D2). 세션이 있으면 force 일 때만 — 그 터미널들은 종료된다(확인창 경유)."""
+        from session_manager import ptyclient
+        if not (_is_local(request) or _via_relay(request)):
+            return JSONResponse({"error": "이 PC(로컬) 또는 페어링된 기기(2차 인증)에서만 가능합니다."}, status_code=403)
+        r = ptyclient.restart(force=force)
+        if not r.get("ok"):
+            return JSONResponse(r, status_code=409)
+        try:
+            ptyclient.ensure(start=True)        # 새 코드로 바로 띄워 둔다(다음 터미널이 기다리지 않게)
+        except ptyclient.BrokerDown as e:
+            r["start_error"] = str(e)
+        r["status"] = ptyclient.status()
+        return r
 
     @app.post("/api/owner/update/apply")
     def owner_update_apply(request: Request):
