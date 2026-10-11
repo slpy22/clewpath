@@ -298,3 +298,12 @@ def test_launch_uses_hidden_console_not_detached(fake_claude_home, monkeypatch):
     assert not f & 0x00000008, "DETACHED_PROCESS 금지(콘솔 창이 새로 뜸)"
     assert f & 0x08000000 and f & 0x00000200, "CREATE_NO_WINDOW + NEW_PROCESS_GROUP"
     assert seen["args"][1:] == ["-m", "session_manager.ptyd"]
+
+
+def test_test_process_never_reaches_real_broker():
+    """테스트 프로세스의 브로커 주소는 진짜 Host 의 것과 달라야 한다(2026-10-11 터미널 스트림 탈취 사고 가드)."""
+    from pathlib import Path
+    from session_manager import config
+    real = Path.home() / ".claude"
+    assert config.claude_home().resolve() != real.resolve()
+    assert ptyd.pipe_address() != ptyd.pipe_address(real / "session_manager")

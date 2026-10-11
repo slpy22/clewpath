@@ -3,7 +3,15 @@ import json
 import os
 from pathlib import Path
 
+import tempfile
+
 import pytest
+
+# 테스트 프로세스 전체를 진짜 ~/.claude·터미널 관리 프로세스(브로커)와 격리한다. 앱 기동 스레드(_sweep_all)는
+# 테스트가 끝난 뒤(monkeypatch 복원 후)에도 돌아, 진짜 브로커에 붙어 실행 중인 Host 의 터미널 스트림을
+# 빼앗았다(2026-10-11: Host 가 터미널 11개를 놓침). 브로커 파이프 주소·키는 data_dir(= claude_home 아래)로 정해진다.
+os.environ["SESSION_MANAGER_CLAUDE_HOME"] = tempfile.mkdtemp(prefix="sm-test-home-")
+os.environ["SM_PTY_BROKER"] = "off"
 
 
 @pytest.fixture(autouse=True)
