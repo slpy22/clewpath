@@ -366,6 +366,15 @@
     font-family:ui-monospace,"Cascadia Code",Consolas,monospace}
   .term-keybar button:active{background:#30363d}
   .term-keybar button.armed{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .term-kbwrap{min-width:0}
+  .term-compose{gap:4px;padding:6px 8px 0;background:#161b22;border-top:1px solid #30363d}
+  .term-compose input{flex:1;min-width:0;padding:9px 10px;border:1px solid #30363d;border-radius:8px;
+    background:#0d1117;color:#e6edf3;font-size:16px}
+  .term-compose input:focus{outline:none;border-color:var(--accent)}
+  .term-compose button{padding:9px 12px;border:1px solid #30363d;border-radius:8px;background:#21262d;
+    color:#e6edf3;font-size:13px;-webkit-user-select:none;user-select:none}
+  .term-compose button.go{background:var(--accent);border-color:var(--accent);color:#fff}
+  .term-compose+.term-keybar{border-top:0}
   .term-jump{position:absolute;right:14px;bottom:14px;z-index:5;padding:8px 14px;
     border-radius:18px;border:1px solid #30363d;background:rgba(33,38,45,.92);
     color:#58a6ff;font-size:13px;display:none}
@@ -2036,7 +2045,9 @@ const termView={
         send:(d)=>{ if(this.active===key) this.send({type:'input',data:d}); },
         onFont:(fs)=>{ LS.setItem('sm_term_fs',String(fs)); this.resize(); }});
       // Ctrl 토글(보조키 바)은 실키보드 입력에도 적용된다 — transform 경유
-      term.onData(d=>{ if(this.active===key) this.send({type:'input',data:t.ux.transform(d)}); });
+      term.onData(d=>{ if(this.active!==key) return;
+        if(matchMedia('(pointer: coarse)').matches && t.ux.intercept(d)) return;   // 깨진 한글 자모 → 입력창으로
+        this.send({type:'input',data:t.ux.transform(d)}); });
     }
     this.tabs[key]=t; return t;
   },
@@ -2432,7 +2443,25 @@ function attachMobileTermUX(host, term, opts){
   // 키 구성은 실기기 사용 피드백으로 확정: Tab/좌우/숫자는 실사용 빈도가 낮아 제거
   const KEYS=[['Esc','\x1b'],['Ctrl',null],['↑','\x1b[A'],['↓','\x1b[B'],
               ['PgUp','\x1b[5~'],['PgDn','\x1b[6~'],['Enter','\r']];
-  const bar=el('div','term-keybar');
+  const keys=el('div','term-keybar');
+  const bar=el('div','term-kbwrap');       // [입력창 행(접힘)] + [보조키 행]
+  // 한글 입력창: iOS 키보드는 조합 중 글자를 '지우고 다시 쓰기'로 고치는데, xterm 은 입력마다 숨은
+  // textarea 를 비워서 조합이 안 되고 자모가 하나씩 PTY 로 간다(iPhone Chrome 실기기, 2026-10-11).
+  // 일반 입력칸에서 조합을 끝낸 뒤 한 번에 보낸다.
+  const comp=termComposer({ send:opts.send,
+    onClose:()=>{ cbtn.classList.remove('armed'); try{ term.focus(); }catch(e){} } });
+  bar.appendChild(comp.row); bar.appendChild(keys);
+  const cbtn=el('button',null,'가'); cbtn.title='한글 입력창';
+  cbtn.addEventListener('pointerdown',ev=>{ ev.preventDefault();
+    if(comp.isOpen()){ comp.close(); } else { comp.open(); cbtn.classList.add('armed'); } });
+  keys.appendChild(cbtn);
+  if(LS.getItem('sm_term_compose')==='1'){ comp.open(false); cbtn.classList.add('armed'); }
+  // xterm 으로 한글 자모가 들어오면 PTY 로 보내지 않고 입력창을 열어 그쪽으로 옮긴다
+  const intercept=(d)=>{
+    if(!isHangulJamo(d)) return false;
+    if(!comp.isOpen()){ comp.open(); cbtn.classList.add('armed'); }
+    comp.append(d); return true;
+  };
   for(const [label,seq] of KEYS){
     const b=el('button',null,label);
     b.addEventListener('pointerdown',ev=>{
@@ -2444,11 +2473,46 @@ function attachMobileTermUX(host, term, opts){
       }
       opts.send(transform(seq));
     });
-    bar.appendChild(b);
+    keys.appendChild(b);
   }
 
-  return { bar, transform,
+  return { bar, transform, intercept, composer:comp,
     dispose(){ stopInertia(); try{offScroll.dispose();}catch(e){} } };
+}
+// 한글 자모(호환 자모 ㄱ~ㆎ, 첫가끝 자모) 낱자만으로 된 입력 — iOS 에서 xterm 으로 조합이 깨져 들어온 모양
+function isHangulJamo(d){ return typeof d==='string' && d.length>0 && /^[ㄱ-ㆎᄀ-ᇿ]+$/.test(d); }
+// 터미널 아래 한글 입력창(일반 input 이라 OS 키보드 조합이 정상 동작). Enter = 보내고 Enter, '넣기' = 글자만.
+// Enter 는 글자와 따로 보낸다 — 한 덩어리로 가면 claude 입력칸이 붙여넣기로 보고 줄바꿈으로 넣는다.
+function termComposer(o){
+  const row=el('div','term-compose'); row.style.display='none';
+  const inp=el('input'); inp.type='text'; inp.placeholder='여기에 입력 → Enter 로 보내기';
+  inp.setAttribute('enterkeyhint','send'); inp.setAttribute('autocomplete','off');
+  inp.setAttribute('autocapitalize','off'); inp.setAttribute('autocorrect','off'); inp.spellcheck=false;
+  const ins=el('button',null,'넣기'); ins.title='Enter 없이 글자만 보내기';
+  const go=el('button','go','↵'); go.title='보내고 Enter';
+  const x=el('button',null,'✕'); x.title='입력창 닫기';
+  row.appendChild(inp); row.appendChild(ins); row.appendChild(go); row.appendChild(x);
+  let open=false;
+  const submit=(withEnter)=>{
+    const v=inp.value; inp.value='';
+    if(v) o.send(v);
+    if(withEnter) setTimeout(()=>o.send('\r'), v?80:0);
+  };
+  const btn=(b,fn)=>b.addEventListener('pointerdown',ev=>{ ev.preventDefault(); fn(); });
+  btn(ins,()=>submit(false)); btn(go,()=>submit(true)); btn(x,()=>api.close());
+  inp.addEventListener('keydown',ev=>{
+    if(ev.isComposing||ev.keyCode===229) return;          // 조합 확정용 Enter 는 보내지 않는다
+    if(ev.key==='Enter'){ ev.preventDefault(); submit(true); }
+    else if(ev.key==='Escape'){ ev.preventDefault(); api.close(); }
+  });
+  const api={ row, input:inp, submit,
+    isOpen:()=>open,
+    open(focus=true){ open=true; row.style.display='flex'; try{ LS.setItem('sm_term_compose','1'); }catch(e){}
+      if(focus){ try{ inp.focus(); }catch(e){} } },
+    close(){ open=false; row.style.display='none'; try{ LS.setItem('sm_term_compose','0'); }catch(e){}
+      if(o.onClose) o.onClose(); },
+    append(d){ inp.value+=d; try{ inp.focus(); }catch(e){} } };
+  return api;
 }
 async function loadTerminal(s, safe){
   closeLiveViewer();                       // 뷰어 실시간 스트림 정리(있으면)
