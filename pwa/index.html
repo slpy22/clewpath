@@ -135,6 +135,16 @@
     font-family:var(--mono);white-space:nowrap}
   .empty{padding:40px 20px;text-align:center;color:var(--muted)}
   /* 폴더 그룹 헤더 — 강한 대비 */
+  /* 목록 보기 전환(세션 | 그룹) */
+  .lview{display:flex;gap:4px;margin:12px 14px 0;padding:3px;border-radius:11px;background:var(--surface);border:1px solid var(--line)}
+  .lview button{flex:1;padding:8px 0;border-radius:8px;color:var(--ink2);font-size:.88rem;background:transparent}
+  .lview button.on{background:var(--accent2);color:#fff;font-weight:600}
+  .lview+.search{padding-top:10px}
+  .ghead.grp{display:flex;align-items:center;gap:6px}
+  .ghead.grp .gtext{flex:1;min-width:0;text-align:left;background:transparent;color:inherit}
+  .ghead.grp .gopen{padding:7px 12px;border-radius:9px;background:var(--accent2);color:#fff;font-size:.8rem;flex:none}
+  .ghead.grp .gset{width:34px;height:34px;border-radius:9px;color:var(--muted);flex:none}
+  .gnew{display:block;margin:16px 14px 24px;width:calc(100% - 28px)}
   .ghead{width:100%;display:flex;align-items:center;gap:10px;padding:14px 14px;
     background:var(--surface2);border:none;border-top:1px solid var(--line);
     border-bottom:1px solid var(--line);border-left:4px solid var(--accent2);text-align:left}
@@ -1096,15 +1106,28 @@ function fmtBytes(b){ if(!b)return'0'; const u=['B','KB','MB','GB']; let i=0;
 
 // ---- 목록 ----
 let ACTIVE_LABEL='';  // 선택된 라벨 필터('' = 전체)
+// 목록 보기: 'sessions'(폴더별 세션) | 'groups'(저장된 관제 그룹). 기기별 기억
+let LIST_VIEW=(()=>{ try{ return LS.getItem('sm_list_view')==='groups'?'groups':'sessions'; }catch(e){ return 'sessions'; } })();
+let MON_GROUPS=null;  // 그룹 보기용 캐시(null = 아직 못 받음)
+function setListView(v){ LIST_VIEW=v==='groups'?'groups':'sessions'; try{ LS.setItem('sm_list_view',LIST_VIEW); }catch(e){} }
 async function loadList(q){
   const main=paneList(); $('#head').textContent='세션';
   main.innerHTML='';
+  // 세션 목록 ↔ 관제 그룹 목록 전환(2026-10-11 사장님: 그룹을 팝업에서 고르지 말고 목록으로)
+  const seg=el('div','lview');
+  const segBtn=(v,label)=>{ const b=el('button',LIST_VIEW===v?'on':'',label);
+    b.onclick=()=>{ if(LIST_VIEW===v) return; setListView(v); loadList(inp.value); }; return b; };
+  seg.appendChild(segBtn('sessions','세션')); seg.appendChild(segBtn('groups','🎬 그룹'));
+  main.appendChild(seg);
   const sb=el('div','search'); const inp=el('input');
   inp.placeholder='검색 (경로·이름)'; inp.value=q||''; sb.appendChild(inp); main.appendChild(sb);
   const chipsWrap=el('div','chips hidden'); main.appendChild(chipsWrap);
   const listWrap=el('div'); main.appendChild(listWrap);
   const spin=el('div','spin'); listWrap.appendChild(spin);
-  const rerender=()=>{ renderChips(chipsWrap,rerender); renderRows(listWrap,inp.value); };
+  if(LIST_VIEW==='groups'){ sb.style.display='none'; fetchMonGroups().then(g=>{ MON_GROUPS=g; if(LIST_VIEW==='groups'&&SESSIONS) rerender(); }); }
+  const rerender=()=>{
+    if(LIST_VIEW==='groups'){ renderGroupRows(listWrap); return; }
+    renderChips(chipsWrap,rerender); renderRows(listWrap,inp.value); };
   inp.oninput=()=>{ clearTimeout(inp._t); inp._t=setTimeout(rerender,200); };
   showListPane();
   // 데스크톱: 우측 안내. 단 살아있는 터미널 뷰(term-mode)는 비우지 않는다 — 재연결
@@ -1134,6 +1157,7 @@ setInterval(async()=>{
     const d=await T.list({limit:0});
     SESSIONS=d.sessions||[];
     if(typeof d.now==='number') CLOCK_SKEW=d.now-Date.now()/1000;
+    if(LIST_VIEW==='groups') MON_GROUPS=await fetchMonGroups();
     const pl=$('#paneList'); const st=pl?pl.scrollTop:0;
     LIST_CTX.rerender();
     if(pl) pl.scrollTop=st;
@@ -2994,37 +3018,70 @@ function consumePendingMonitor(){
 const MON_NOTIFY_LABELS={manager_stop:'관리 턴 종료', sub_stop:'하위 응답 완료', sub_start:'하위 작업 시작', error:'하위 호출 실패'};
 const MON_NOTIFY_DEFAULT={manager_stop:true, sub_stop:true, sub_start:false, error:true}; // 옛 Host 가 키를 빠뜨려도 실효값 표시
 
+// 그룹 보기(목록 전환): 저장된 관제 그룹마다 헤더(탭 = 관전) + 구성원 상태. 맨 아래 '새 그룹'.
+function renderGroupRows(wrap){
+  wrap.innerHTML='';
+  if(MON_GROUPS===null){ wrap.appendChild(el('div','spin')); return; }
+  const byId=new Map((SESSIONS||[]).map(s=>[s.session_id,s]));
+  if(!MON_GROUPS.length) wrap.appendChild(el('div','empty','저장된 관제 그룹이 없습니다. 아래에서 새로 만드세요.'));
+  for(const g of MON_GROUPS){
+    const ids=[g.manager].concat((g.subs||[]).filter(x=>x!==g.manager));
+    const busy=ids.filter(id=>{ const b=byId.get(id)&&sessionBadge(byId.get(id)); return b&&b.pulse; }).length;
+    const gh=el('div','ghead grp');
+    const gt=el('button','gtext');
+    gt.appendChild(el('div','gbase','🎬 '+g.name));
+    gt.appendChild(el('div','gpath',`${ids.length}개 세션`+(busy?` · 진행 ${busy}`:'')));
+    gt.onclick=()=>openMonitorGroup(g);
+    gh.appendChild(gt);
+    const op=el('button','gopen','관전'); op.onclick=()=>openMonitorGroup(g); gh.appendChild(op);
+    const st=el('button','gset','⚙'); st.title='알림 설정·삭제'; st.onclick=()=>showGroupSettings(g); gh.appendChild(st);
+    wrap.appendChild(gh);
+    const glist=el('div','glist');
+    for(const id of ids){
+      const s=byId.get(id);
+      const lbl=(g.labels&&g.labels[id])||(s?monSessName(s):id.slice(0,8));
+      const srow=el('div','srow'); srow.dataset.sid=id;
+      const info=el('button','sinfo'); const r1=el('div','sr1');
+      const bd=s&&sessionBadge(s);
+      if(bd){ const d=el('span','sdot'+(bd.pulse?' pulse':'')); d.style.setProperty('--c',bd.c); r1.appendChild(d); }
+      r1.appendChild(el('span','sname',lbl));
+      if(id===g.manager) r1.appendChild(el('span','schip','관리'));
+      if(bd){ const t=el('span','sstate',bd.text); t.style.setProperty('--c',bd.c); r1.appendChild(t); }
+      if(!s){ r1.appendChild(el('span','schip','목록에 없음')); srow.classList.add('dim'); }
+      info.appendChild(r1);
+      if(s) info.onclick=()=>loadDetail(s);
+      srow.appendChild(info); glist.appendChild(srow);
+    }
+    wrap.appendChild(glist);
+  }
+  const add=el('button','btn gnew','＋ 새 관제 그룹'); add.onclick=()=>showMonitorPicker();
+  wrap.appendChild(add);
+}
+// 저장 그룹 하나의 알림 켜기/끄기·삭제(그룹 보기의 ⚙)
+function showGroupSettings(g){
+  const body=el('div');
+  body.appendChild(el('div','cwd','알림은 앱을 닫아도 옵니다(훅 기반). 삭제해도 세션은 그대로이고 알림만 멈춥니다.'));
+  Object.keys(MON_NOTIFY_LABELS).forEach(k=>{
+    const lab=el('label','mp-mgr'); lab.style.display='flex'; lab.style.padding='8px 0';
+    const cb=el('input'); cb.type='checkbox';
+    cb.checked=!!((g.notify&&(k in g.notify))?g.notify[k]:MON_NOTIFY_DEFAULT[k]);
+    cb.onchange=async()=>{ try{ await T.api('POST',`/api/owner/monitor/groups/${encodeURIComponent(g.id)}/notify`,{body:{notify:{[k]:cb.checked}}});
+        g.notify=Object.assign({},g.notify||{},{[k]:cb.checked}); toast('알림 설정 저장됨'); }
+      catch(e){ cb.checked=!cb.checked; toast('저장 실패: '+e.message); } };
+    lab.appendChild(cb); lab.appendChild(document.createTextNode(' 🔔 '+MON_NOTIFY_LABELS[k]));
+    body.appendChild(lab);
+  });
+  const del=el('button','btn ghost','그룹 삭제'); del.style.color='#e66';
+  del.onclick=async()=>{ if(!confirm(`'${g.name}' 그룹을 지울까요? (세션은 그대로, 알림만 멈춥니다)`)) return;
+    try{ await T.api('POST',`/api/owner/monitor/groups/${encodeURIComponent(g.id)}/delete`);
+      MON_GROUPS=(MON_GROUPS||[]).filter(x=>x.id!==g.id); closeModal(); toast('그룹 삭제됨'); if(LIST_CTX) LIST_CTX.rerender(); }
+    catch(e){ toast('삭제 실패: '+e.message); } };
+  openModal('⚙ '+g.name, body, [del]);
+}
+
+// 새 관제 그룹 고르기(그룹 보기의 '＋ 새 관제 그룹'). 저장된 그룹은 목록의 그룹 보기에서 연다.
 function showMonitorPicker(){
   const body=el('div');
-  // ── 저장된 그룹 ──
-  const savedWrap=el('div'); savedWrap.style.marginBottom='10px'; body.appendChild(savedWrap);
-  const renderSaved=(groups)=>{
-    savedWrap.innerHTML='';
-    if(!groups.length) return;
-    savedWrap.appendChild(el('div','cwd','저장된 관제 그룹 — 열거나, 알림을 켜고 끄거나, 지웁니다. 알림은 앱을 닫아도 옵니다(훅 기반).'));
-    groups.forEach(g=>{
-      const row=el('div','mpick'); row.style.flexWrap='wrap';
-      const nm=el('div','mp-name',`${g.name}  ·  ${1+(g.subs||[]).length}개 세션`); nm.style.flex='1 1 100%';
-      const open=el('button','btn','열기'); open.style.padding='6px 12px';
-      open.onclick=()=>{ closeModal(); openMonitorGroup(g); };
-      row.appendChild(nm); row.appendChild(open);
-      Object.keys(MON_NOTIFY_LABELS).forEach(k=>{
-        const lab=el('label','mp-mgr'); const cb=el('input'); cb.type='checkbox';
-        cb.checked=!!((g.notify&&(k in g.notify))?g.notify[k]:MON_NOTIFY_DEFAULT[k]);
-        cb.onchange=async()=>{ try{ await T.api('POST',`/api/owner/monitor/groups/${encodeURIComponent(g.id)}/notify`,{body:{notify:{[k]:cb.checked}}}); toast('알림 설정 저장됨'); }
-          catch(e){ cb.checked=!cb.checked; toast('저장 실패: '+e.message); } };
-        lab.appendChild(cb); lab.appendChild(document.createTextNode('🔔 '+MON_NOTIFY_LABELS[k]));
-        row.appendChild(lab);
-      });
-      const del=el('button','btn ghost','삭제'); del.style.cssText='padding:6px 10px;color:#e66';
-      del.onclick=async()=>{ if(!confirm(`'${g.name}' 그룹을 지울까요? (세션은 그대로, 알림만 멈춥니다)`)) return;
-        try{ await T.api('POST',`/api/owner/monitor/groups/${encodeURIComponent(g.id)}/delete`); renderSaved(await fetchMonGroups()); toast('그룹 삭제됨'); }
-        catch(e){ toast('삭제 실패: '+e.message); } };
-      row.appendChild(del);
-      savedWrap.appendChild(row);
-    });
-  };
-  fetchMonGroups().then(renderSaved);
   // ── 새 그룹 고르기 ──
   body.appendChild(el('div','cwd','관리 에이전트 1개 + 하위 세션들을 골라 실시간 관전합니다. 관리는 하위를 claude -p 로 호출하는 세션입니다. 읽기전용이라 세션에 영향을 주지 않습니다.'));
   const list=el('div'); list.style.margin='10px 0'; body.appendChild(list);
@@ -3057,8 +3114,8 @@ function showMonitorPicker(){
   save.onclick=async()=>{ const p=pick(); if(!p) return; let r;
     try{ r=await T.api('POST','/api/owner/monitor/groups',{body:{name:nameIn.value.trim(), manager:p.mgr, subs:p.ids.filter(s=>s!==p.mgr), labels:p.labels}}); toast('관제 그룹 저장됨 — 알림이 켜졌습니다'); }
     catch(e){ toast('저장 실패: '+e.message); return; }
-    closeModal(); openMonitor(p.ids, p.mgr, p.labels, {gid:r&&r.id, name:r&&r.name}); };
-  openModal('🎬 오케스트레이션 관제 — 그룹 선택', body, [go, save]);
+    fetchMonGroups().then(g=>{ MON_GROUPS=g; if(LIST_CTX) LIST_CTX.rerender(); }); closeModal(); openMonitor(p.ids, p.mgr, p.labels, {gid:r&&r.id, name:r&&r.name}); };
+  openModal('🎬 새 관제 그룹 — 세션 선택', body, [go, save]);
 }
 
 // opts.gid/name: 저장 그룹으로 열었을 때 — 💾 가 '갱신' 모드로 동작(세션 추가/제거 시 💾* 표시).
@@ -3970,7 +4027,7 @@ conn.onnotice=(m)=>{
   else if(m.kind==='device_reissued'){ pcMarkState(room,'reissued'); showAuthLost('reissued'); }
 };
 $('#btn-refresh').onclick=()=>loadList();
-$('#btn-monitor').onclick=()=>showMonitorPicker();
+$('#btn-monitor').onclick=()=>{ setListView('groups'); loadList(); };   // 관제 그룹은 목록의 그룹 보기로
 { const b=$('#btn-pcs'); if(b) b.onclick=()=>showPcs(); }
 { const b=$('#btn-assist'); if(b) b.onclick=()=>openAssistant(); }   // 🧑‍💼: PC·폰 어디서든 비서 세션(단계 3)   // 헤더 🖧: 폰에서 PC 전환·추가·해제(1대일 때도 보임)
 $('#btn-settings').onclick=()=>showSettings();
