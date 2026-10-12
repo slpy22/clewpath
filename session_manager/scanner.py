@@ -9,8 +9,10 @@
 from __future__ import annotations
 
 import json
+import re
+from datetime import datetime
 import os
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from pathlib import Path
 
 from session_manager.config import projects_dir
@@ -47,6 +49,9 @@ class SessionMeta:
     # 헤드리스(claude -p · Agent SDK) 단발 실행 기록: entrypoint 가 보였고 그중 'cli' 가 하나도 없다.
     # 다른 세션·스크립트가 일감 하나씩 돌린 산물이라 목록에서 접어 둔다(2026-10-12 번역 스크립트 56개 실측).
     headless: bool = False
+    # 아직 끝났다는 표시가 없는 백그라운드 작업(쉘·모니터): [[task_id, "shell"|"monitor", 시작 epoch 초], ...]
+    # claude 가 다시 뜨면 이전 작업은 함께 죽으므로, '지금 몇 개' 는 프로세스 시작 이후 것만 센다(bg_counts).
+    bg_open: list = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -62,7 +67,7 @@ class _Fold:
     """
     __slots__ = ("meta", "started_at", "last_ts", "line_count", "message_count", "custom_title",
                  "interactive_markers", "ai_title", "agent_name", "last_model", "continued_in", "offset", "sig",
-                 "ep_cli", "ep_other")
+                 "ep_cli", "ep_other", "bg")
 
     def __init__(self):
         # 메타 필드는 첫 줄에 없을 수 있다(사이드체인 메시지 등) → '처음 등장하는 값'
@@ -84,6 +89,7 @@ class _Fold:
         self.sig = b""                        # 오프셋 직전 64바이트 — 앞부분 재작성 감지용
         self.ep_cli = False                   # entrypoint 'cli'(대화형) 를 본 적 있나
         self.ep_other = False                 # 그 밖의 entrypoint(sdk-cli 등 헤드리스)를 본 적 있나
+        self.bg: dict[str, tuple[str, float]] = {}   # 열린 백그라운드 작업 id → (종류, 시작 시각)
 
     def feed(self, line: str) -> None:
         line = line.strip()
@@ -120,6 +126,8 @@ class _Fold:
             # stop_hook_summary 는 Stop 훅이 있으면 헤드리스(-p) 에도 남는다(claude 2.1.29x 실측) —
             # 대화형 마커로 세면 -p 산물이 일반 세션처럼 보인다(2026-10-12 번역 56개 사례).
             self.interactive_markers += 1
+        if t in ("user", "attachment"):
+            self._bg_feed(obj, ts)
         ep = obj.get("entrypoint")
         if ep:
             if ep == "cli":
@@ -134,6 +142,27 @@ class _Fold:
                 _mdl = _m.get("model")
                 if _mdl and _mdl != "<synthetic>":
                     self.last_model = _mdl
+
+    def _bg_feed(self, obj: dict, ts) -> None:
+        """백그라운드 쉘·모니터의 시작/끝 표식(claude 가 jsonl 에 남기는 도구 결과·작업 알림, 실측 2.1.x).
+        시작: Bash 결과 'Command running in background with ID: X' / '…moved to the background (ID: X)',
+              Monitor 결과 'Monitor started (task X, …'. 끝: '<task-notification>' 의 <status>, TaskStop 결과.
+        문장 **앞머리**만 본다 — 다른 도구 출력에 같은 글귀가 인용돼도(이 파일을 grep 한 결과 등) 세지 않게."""
+        for text, is_result in _bg_texts(obj):
+            if is_result:
+                m = _BG_START.match(text)
+                if m:
+                    tid = m.group(2) or m.group(3) or m.group(4)
+                    kind = "monitor" if m.group(4) else "shell"
+                    self.bg[tid] = (kind, _epoch(ts))
+                    continue
+                m = _BG_STOPPED.match(text)
+                if m:
+                    self.bg.pop(m.group(1), None)
+                    continue
+            if text.startswith("<task-notification>") and "<status>" in text:
+                for tid in _TASK_ID.findall(text):
+                    self.bg.pop(tid, None)
 
     def feed_bytes(self, chunk: bytes) -> int:
         """완성된 줄만 접고, 접은 바이트 수를 돌려준다(부분 줄은 접지 않음)."""
@@ -179,7 +208,65 @@ class _Fold:
                            and self.line_count > 0),
             continued_in=self.continued_in,
             headless=(self.ep_other and not self.ep_cli),
+            bg_open=[[k, v[0], v[1]] for k, v in self.bg.items()],
         )
+
+
+_BG_START = re.compile(r"(Command running in background with ID: (\w+)"
+                       r"|Command did not complete within .{0,40}?moved to the background \(ID: (\w+)\)"
+                       r"|Monitor started \(task (\w+))")
+_BG_STOPPED = re.compile(r'\{"message":"Successfully stopped task: (\w+)')
+_TASK_ID = re.compile(r"<task-id>(\w+)</task-id>")
+
+
+def _epoch(ts) -> float:
+    try:
+        return datetime.fromisoformat(str(ts).replace("Z", "+00:00")).timestamp()
+    except Exception:  # noqa: BLE001
+        return 0.0
+
+
+def _bg_texts(obj: dict):
+    """(문자열, 도구 결과인가) — user 메시지의 tool_result·본문, queued_command 첨부의 prompt."""
+    if obj.get("type") == "attachment":
+        a = obj.get("attachment") or {}
+        if a.get("type") == "queued_command" and isinstance(a.get("prompt"), str):
+            yield a["prompt"], False
+        return
+    msg = obj.get("message")
+    if not isinstance(msg, dict):
+        return
+    c = msg.get("content")
+    if isinstance(c, str):
+        yield c, False
+        return
+    if not isinstance(c, list):
+        return
+    for b in c:
+        if not isinstance(b, dict):
+            continue
+        if b.get("type") == "tool_result":
+            rc = b.get("content")
+            if isinstance(rc, str):
+                yield rc, True
+            elif isinstance(rc, list):
+                for x in rc:
+                    if isinstance(x, dict) and isinstance(x.get("text"), str):
+                        yield x["text"], True
+        elif b.get("type") == "text" and isinstance(b.get("text"), str):
+            yield b["text"], False
+
+
+def bg_counts(meta: "SessionMeta", since: float | None) -> dict:
+    """지금 살아 있는 claude 프로세스(시작 시각 since, epoch 초) 이후에 시작해 아직 안 끝난 쉘·모니터 수."""
+    out = {"shells": 0, "monitors": 0}
+    if since is None:
+        return out
+    for _tid, kind, t0 in meta.bg_open or []:
+        if t0 and t0 + 2 < since:      # 이전 프로세스의 작업 = 함께 죽었다(2초 여유: 시계 오차)
+            continue
+        out["shells" if kind == "shell" else "monitors"] += 1
+    return out
 
 
 _SIG_BYTES = 64

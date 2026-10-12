@@ -50,7 +50,7 @@ test("renderRows: 폴더 그룹(최신순)·상태 점/문구·🔗 피어 칩(�
   assert.equal(cls(a1.children[0]), "sdot pulse"); assert.equal(a1.children[0].style["--c"], "#2f81f7");
   assert.equal(a1.children[1].textContent, "알파");
   assert.equal(a1.children[2].textContent, "작업 중");
-  same(chipsOf(a), ["#팀", "🧠 Opus 5"], "피어 이름 칩은 없앴다(2026-09-30) — 출처는 재개 버튼 아이콘");
+  same(chipsOf(a), ["🧠 Opus 5"], "#라벨 칩은 목록에서 뺐다(2026-10-12) · 피어 이름 칩도 없음 — 출처는 재개 버튼 아이콘");
   assert.ok(a1.children.find((k) => cls(k) === "schip model set"), "설정된 모델은 set 클래스");
   assert.equal(a.children.at(-2).textContent, "🔗", "피어(출처 불명) → 재개 버튼이 출처 아이콘"); assert.ok(a.children.at(-2).title.includes("작업 중"));
   assert.equal(a.children.at(-1).textContent, "⋯", "맨 오른쪽 ⋯ 메뉴(2026-10-12)");

@@ -138,3 +138,52 @@ def test_v1_list_hides_finished_headless(fake_claude_home, monkeypatch):
         assert "aaaa1111" in ids2
         local = [s["session_id"] for p in c.get("/api/sessions", headers=H).json()["projects"] for s in p["sessions"]]
         assert "aaaa1111" not in local and "bbbb1111" in local
+
+
+def test_bg_shell_monitor_tracking(fake_claude_home, monkeypatch):
+    """백그라운드 쉘·모니터: 도구 결과 앞머리로 시작, <task-notification> status·TaskStop 으로 끝.
+    인용된 글귀(다른 도구 출력 속)는 세지 않고, 프로세스 시작 전 작업은 죽은 것으로 본다."""
+    from tests.conftest import write_session
+    from session_manager import bgtasks
+
+    def res(text, ts):
+        return {"type": "user", "timestamp": ts, "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t", "content": text}]}}
+    lines = [
+        {"type": "permission-mode"},
+        res("Command running in background with ID: bsh1. Output is being written to: x", "2026-10-12T05:00:00Z"),
+        res("Command did not complete within its 120s timeout and was moved to the background (ID: bsh2). Output", "2026-10-12T05:00:01Z"),
+        res("Monitor started (task bmo1, timeout 90000ms). You will be notified", "2026-10-12T05:00:02Z"),
+        res("Monitor started (task bmo2, timeout 90000ms).", "2026-10-12T05:00:03Z"),
+        res("grep output: Command running in background with ID: bquoted", "2026-10-12T05:00:04Z"),
+        {"type": "attachment", "timestamp": "2026-10-12T05:01:00Z", "attachment": {"type": "queued_command",
+         "prompt": "<task-notification>\n<task-id>bsh1</task-id>\n<status>completed</status>\n</task-notification>"}},
+        {"type": "user", "timestamp": "2026-10-12T05:01:01Z", "message": {"role": "user",
+         "content": "<task-notification>\n<task-id>bmo2</task-id>\n<summary>Monitor event</summary>\n<event>READY</event>\n</task-notification>"}},
+        res('{"message":"Successfully stopped task: bmo2 (until …)","task_id":"bmo2"}', "2026-10-12T05:02:00Z"),
+        res("Command running in background with ID: bold. Output", "2026-10-12T04:00:00Z"),
+    ]
+    write_session(fake_claude_home, "P--x", "ffff0001", lines)
+    m = scanner.scan_one("ffff0001")
+    assert sorted(x[0] for x in m.bg_open) == ["bmo1", "bold", "bsh2"], "모니터 이벤트(상태 없음)로는 안 끝난다"
+    since = scanner._epoch("2026-10-12T04:30:00Z") * 1000
+    c = bgtasks.counts(m, {"started_at": since})
+    assert c == {"shells": 1, "monitors": 1}, "프로세스 시작 전(bold) 작업은 함께 죽었다"
+    assert bgtasks.counts(m, None) is None
+    rt = {"phase": "ready", "ready_at": 1}
+    assert bgtasks.hold_ready(rt, c)["phase"] == "background" and rt["phase"] == "ready"
+    assert bgtasks.hold_ready(rt, {"shells": 0, "monitors": 0}) is rt
+    assert bgtasks.hold_ready({"phase": "thinking"}, c)["phase"] == "thinking"
+
+
+def test_stop_push_held_while_background(monkeypatch):
+    from session_manager import push, bgtasks
+    sent = []
+    monkeypatch.setattr(push, "send", lambda *a, **k: sent.append(a))
+    monkeypatch.setattr(push, "_notify_groups", lambda sid, ev: False)
+    monkeypatch.setattr(bgtasks, "counts_by_id", lambda sid: {"shells": 1, "monitors": 0})
+    push.notify_from_event({"session_id": "s1", "hook_event_name": "Stop", "cwd": "E:/p"})
+    assert sent == [], "쉘이 남아 있으면 '작업 완료' 를 보내지 않는다"
+    monkeypatch.setattr(bgtasks, "counts_by_id", lambda sid: {"shells": 0, "monitors": 0})
+    push.notify_from_event({"session_id": "s1", "hook_event_name": "Stop", "cwd": "E:/p"})
+    assert sent and sent[0][0] == "ready"

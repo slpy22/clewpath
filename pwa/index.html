@@ -119,6 +119,7 @@
   .srow.dim .sname{color:var(--muted)}
   .srow.dim .sinfo{opacity:.62}
   .srow.dim.sel .sinfo{opacity:1}   /* 선택 시엔 또렷하게 */
+  .schip.bg{background:color-mix(in srgb,#a371f7 14%,transparent);color:#a371f7;border-color:color-mix(in srgb,#a371f7 40%,transparent);font-family:var(--sans)}
   .schip.gear{background:color-mix(in srgb,var(--muted) 16%,transparent);
     color:var(--muted);border-color:color-mix(in srgb,var(--muted) 30%,transparent)}
   /* 재개 모델 칩: 감지값=흐리게, 설정됨(오버라이드)=또렷하게. 클릭=모델 설정 */
@@ -1502,9 +1503,14 @@ function sessionBadge(s){
   if(rt.phase==='waiting'  &&fresh(rt.waiting_at,30*M))     return {c:'#e8a03c',pulse:true,text:'입력 대기'};
   // thinking 은 턴이 길 수 있어 창을 넉넉히(2h) - 정상 종료는 Stop 이 ready 로 바꾼다
   if(rt.phase==='thinking' &&fresh(rt.thinking_at,120*M))   return {c:'#2f81f7',pulse:true,text:'작업 중'};
+  // 턴은 끝났지만 백그라운드 쉘·모니터가 남아 있음(Host 가 판정, 매 목록마다 새로 — 신선도 게이트 불필요)
+  if(rt.phase==='background') return {c:'#a371f7',pulse:true,text:'백그라운드'};
   if(rt.phase==='ready'    &&fresh(rt.ready_at,60*M))       return {c:'#3fb950',pulse:false,text:'완료'};
   return null;
 }
+// 돌고 있는 백그라운드 쉘·모니터 수 문구(없으면 '')
+function bgText(s){ const b=s&&s.bg; if(!b) return '';
+  const p=[]; if(b.shells) p.push('🐚 쉘 '+b.shells); if(b.monitors) p.push('📡 모니터 '+b.monitors); return p.join(' · '); }
 // 목록 행의 재개 버튼 아이콘 = 세션 상태(2026-09-30): 🖥 클루패스 터미널 실행 중 / ⌨·🧬·🤖… 다른 곳에서 실행 중(출처) / ▶ 재개
 function rowResumeIcon(s){
   if(s.live_terminal) return '🖥';
@@ -2032,7 +2038,9 @@ function renderRows(wrap,q){
         g.title='이 세션은 '+s.continued_in.slice(0,8)+'… 로 이어졌습니다'+(tgt?' — 열면 그 세션으로 갑니다':' (이어받은 세션이 목록에 없음)');
         r1.appendChild(g); srow.classList.add('dim');
       }
-      if(s.labels&&s.labels.length)r1.appendChild(el('span','schip','#'+s.labels[0]));
+      // #라벨 칩은 목록에서 뺐다(2026-10-12 사장님) — 위 라벨 필터는 그대로. 대신 돌고 있는 쉘·모니터 수.
+      { const t=bgText(s); if(t){ const g=el('span','schip bg',t);
+        g.title='백그라운드에서 돌고 있는 쉘·모니터 — 남아 있는 동안은 「완료」로 바뀌지 않습니다'; r1.appendChild(g); } }
       if(s.resume_model){
         const mc=el('span','schip model'+(s.model_override?' set':''),'🧠 '+modelShort(s.resume_model));
         mc.title='재개 모델'+(s.model_override?'(설정됨)':'(감지값)')+' — 클릭해 변경';

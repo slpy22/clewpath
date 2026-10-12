@@ -25,6 +25,16 @@ def _pty_broker_off(monkeypatch):
     monkeypatch.setenv("SM_PTY_BROKER", "off")
 
 
+@pytest.fixture(autouse=True)
+def _fresh_peer_cache():
+    """피어 레지스트리 스냅샷은 몇 초 캐시된다 — 앞 테스트의 (가짜 홈) 결과가 다음 테스트로 새지 않게
+    (전체 실행에서만 가끔 실패하던 test_peer_map_carries_origin)."""
+    from session_manager import peers
+    peers._cache["at"] = 0
+    yield
+    peers._cache["at"] = 0
+
+
 @pytest.fixture
 def fake_claude_home(tmp_path, monkeypatch):
     """가짜 ~/.claude 구조를 만들고 환경변수로 주입한다."""

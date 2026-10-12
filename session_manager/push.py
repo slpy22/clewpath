@@ -241,6 +241,16 @@ def notify_from_event(payload: dict) -> None:
     cwd = str(payload.get("cwd") or "")
     proj = Path(cwd).name if cwd else "세션"
 
+    # 턴이 끝났어도 백그라운드 쉘·모니터가 남아 있으면 '완료' 가 아니다 — 알리지 않는다(2026-10-12 사장님).
+    # 그 작업이 끝나면 claude 가 알림을 받아 다시 턴을 돌리고, 그 Stop 에서 남은 게 없을 때 '완료' 가 간다.
+    if ev == "Stop":
+        try:
+            from session_manager import bgtasks
+            if bgtasks.busy(bgtasks.counts_by_id(sid)):
+                return
+        except Exception:  # noqa: BLE001  판정 실패는 평소대로 알린다
+            pass
+
     # 관제 그룹 소속 세션은 그룹의 알림 설정이 결정한다(일반 '작업 완료' 대신 그룹 맥락으로).
     # 권한요청(Notification)은 그룹과 무관하게 항상 일반 처리 — 승인은 어디서든 급하다.
     if ev in ("Stop", "UserPromptSubmit") and _notify_groups(sid, ev):

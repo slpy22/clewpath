@@ -1574,7 +1574,7 @@ def create_app() -> FastAPI:
     @app.get("/api/v1/sessions")
     def api_v1_sessions(q: str | None = None, label: str | None = None,
                         limit: int = 0, include_headless: bool = False):
-        from session_manager import agents, hooks, peers, webterm
+        from session_manager import agents, bgtasks, hooks, peers, webterm
         runtime = hooks.status_map()   # 훅이 채운 세션별 '지금' 상태
         # claude 공식 실시간 점유(대화형·bg) - 재개 잠금 예고/동시재개 판정의 1차 근거
         occupancy = agents.occupancy_map()
@@ -1596,6 +1596,7 @@ def create_app() -> FastAPI:
             md = {"session_id": s.session_id, "custom_title": s.custom_title,
                   "ai_title": s.ai_title, "slug": s.slug}
             live_term = webterm.has_terminal(s.session_id)
+            bg = bgtasks.counts(s, peer_of.get(s.session_id))
             # claude -p 단발 기록(자동 실행)은 목록에 싣지 않는다(2026-10-12 사장님: claude --resume 에도 안 나오는
             # 것이라 ClewPath 에서도 볼 필요 없음). 지금 살아 돌고 있는 것만 예외로 보인다.
             if s.headless and not include_headless and not (
@@ -1627,10 +1628,13 @@ def create_app() -> FastAPI:
                 "model_override": rec.get("model"),
                 "resume_model": rec.get("model") or s.last_model,
                 # 훅 기반 실시간 상태(없으면 None). 신선도 판정은 화면 쪽 책임.
-                "runtime": hooks.effective(
+                # 쉘·모니터가 남아 있으면 턴이 끝나도 '완료' 가 아니다(2026-10-12 사장님) → phase 'background'
+                "runtime": bgtasks.hold_ready(hooks.effective(
                     runtime.get(s.session_id),
                     alive=bool(live_term or peer_of.get(s.session_id) or occupancy.get(s.session_id)),
-                    quiet_s=(now_ts - s.mtime) if s.mtime else None, now=now_ts),
+                    quiet_s=(now_ts - s.mtime) if s.mtime else None, now=now_ts), bg),
+                # 지금 돌고 있는 백그라운드 쉘·모니터 수(살아 있는 세션만, 없으면 None)
+                "bg": bg,
                 "agent": occupancy.get(s.session_id),
                 # 이 세션의 PTY 가 지금 살아있는가(화면 유무 무관 - 재접속 대상)
                 "live_terminal": live_term,
