@@ -74,13 +74,7 @@ COOKIE_PATH = (BASE_PATH + "/") if BASE_PATH else "/"
 
 # 세션별 재개 모델로 고를 수 있는 목록(현행 라인업). --model 유효값 기준.
 # (실측: message.model 문자열이 곧 유효 --model 값은 아님 - 여기 값들로 검증됨)
-SELECTABLE_MODELS = [
-    {"id": "claude-opus-5", "label": "Opus 5"},
-    {"id": "claude-sonnet-5", "label": "Sonnet 5"},
-    {"id": "claude-opus-4-8", "label": "Opus 4.8"},
-    {"id": "claude-fable-5-1", "label": "Fable 5.1"},
-    {"id": "claude-haiku-4-5-20251001", "label": "Haiku 4.5"},
-]
+from session_manager.housekeeping import BUILTIN_MODELS as SELECTABLE_MODELS  # noqa: E402  내장 기본(2026-10-12 갱신)
 # --model 값 안전 토큰(argv 리스트라 셸 주입 위험은 없으나 오타·쓰레기 차단).
 _MODEL_TOKEN_RE = __import__("re").compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
@@ -336,6 +330,13 @@ async def _lifespan(app: FastAPI):
     except Exception as e:  # noqa: BLE001
         print(f"[monwatch] 시작 실패: {e}", flush=True)
 
+    # 정기 작업 줄(2026-10-12): 쉬는 세션 정리·모델 목록 갱신 — 기동 +5분부터, 한 번에 하나씩
+    from session_manager import housekeeping as _hk
+    try:
+        _hk.start()
+    except Exception as e:  # noqa: BLE001
+        print(f"[housekeeping] 시작 실패: {e}", flush=True)
+
     # 기기 자격 CP 동기화(0.11.0): 기동 +60초 첫 실행·5분 주기·잠금 밖 네트워크. CP 미설정이면 무동작.
     from session_manager import devsync as _devsync
     try:
@@ -509,6 +510,11 @@ def create_app() -> FastAPI:
     @app.get("/api/models")
     def list_models():
         # 운영측(CP) 중앙 관리 목록 우선, CP 미설정·불통이면 내장 기본으로 폴백.
+        # 정기 작업(모델 목록 갱신)이 만든 합본(운영측 + 이 PC 실사용) 우선 → 없으면 운영측 → 내장 기본.
+        from session_manager import housekeeping
+        saved = housekeeping.saved_models()
+        if saved:
+            return {"models": saved["models"], "source": "merged", "updated_at": saved.get("updated_at")}
         m = None
         try:
             from session_manager import cp_client
@@ -934,6 +940,35 @@ def create_app() -> FastAPI:
         if r.get("error") == "session_live":
             return JSONResponse(r, status_code=409)
         return r
+
+    @app.post("/api/sessions/{session_id}/keep")
+    def set_keep(session_id: str, keep: bool = Body(..., embed=True)):
+        """「항상 켜 두기」 — 쉬는 세션 정리에서 제외(ClewPath 자체 저장소에만 기록)."""
+        labels.set_record(session_id, keep=("1" if keep else None))
+        return {"session_id": session_id, "keep": keep}
+
+    # ---- 정기 작업(housekeeping) ----
+    @app.get("/api/owner/housekeeping")
+    def housekeeping_status():
+        from session_manager import housekeeping
+        st = housekeeping.status()
+        st["idle_candidates"] = housekeeping.idle_candidates()
+        return st
+
+    @app.post("/api/owner/housekeeping")
+    def housekeeping_set(body: dict = Body(...)):
+        from session_manager import housekeeping
+        try:
+            return housekeeping.set_options(job=body.get("job"), on=body.get("on"), hours=body.get("hours"))
+        except ValueError:
+            return JSONResponse({"error": "bad_hours"}, status_code=400)
+
+    @app.post("/api/owner/housekeeping/{job}/run")
+    def housekeeping_run(job: str):
+        from session_manager import housekeeping
+        if not housekeeping.kick(job):
+            return JSONResponse({"error": "unknown_job"}, status_code=404)
+        return {"queued": job}
 
     @app.post("/api/sessions/{session_id}/picker-expose")
     def picker_expose(session_id: str, expose: bool = Body(..., embed=True)):
@@ -1623,6 +1658,7 @@ def create_app() -> FastAPI:
                 "mtime": s.mtime,
                 "labels": rec.get("labels", []),
                 "label_name": rec.get("name"),
+                "keep": bool(rec.get("keep")),      # 항상 켜 두기(쉬는 세션 정리 제외)
                 # 재개 모델: 오버라이드 있으면 그것, 없으면 감지(마지막 실사용).
                 "last_model": s.last_model,
                 "model_override": rec.get("model"),

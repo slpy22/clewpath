@@ -24,7 +24,9 @@ import asyncio
 import json
 import os
 import threading
+import time
 from collections import deque
+from contextlib import contextmanager
 
 from session_manager.scanner import scan_one, resolve_launch_cwd, latest_session_id
 
@@ -57,6 +59,10 @@ class _TermSession:
         self.base_off = 0
         self.screens: dict[str, int] = {}
         self.client_screen: str | None = None   # 지금 붙은 화면의 screen_id(없으면 구버전)
+        # ---- 활동 시각(쉬는 세션 정리, 2026-10-12) — 이 Host 가 띄우거나 다시 붙인 시각부터 센다 ----
+        self.started_at = time.time()
+        self.last_input = 0.0           # 화면·원격 승인으로 키가 들어간 마지막 시각
+        self.last_attach = 0.0          # 화면이 붙거나 떨어진 마지막 시각(보고 있던 것도 활동)
 
     def feed(self, data: str) -> None:
         self.chunks.append(data)
@@ -137,6 +143,7 @@ def write_to(session_id: str, data: str) -> bool:
         return False
     try:
         sess.proc.write(data)
+        sess.last_input = time.time()
         return True
     except Exception:  # noqa: BLE001
         _cleanup(sess)
@@ -164,6 +171,41 @@ def _get_live(key: str) -> _TermSession | None:
         _cleanup(sess)
         return None
     return sess
+
+
+# ---- 세션별 수명 잠금(2026-10-12): 띄우기·끄기·쉬는 세션 정리가 한 세션에서 겹치지 않게 한 줄로 세운다 ----
+# 예: 관리 세션이 워커를 깨우는(start) 순간 정리 작업이 그 워커를 끄면(stop) 방금 보낸 일감이 사라진다.
+# 같은 세션의 띄우기/끄기는 이 잠금 안에서만 결정하고, 정리 작업은 잠금 안에서 조건을 **다시** 확인한다.
+_LIFE_LOCKS: dict[str, threading.RLock] = {}
+_LIFE_GUARD = threading.Lock()
+
+
+@contextmanager
+def session_lock(key: str):
+    with _LIFE_GUARD:
+        lk = _LIFE_LOCKS.setdefault(key, threading.RLock())
+    with lk:
+        yield
+
+
+def activity(session_id: str) -> dict | None:
+    """살아 있는 PTY 의 활동 시각(초) — 쉬는 세션 판정용. 없으면 None."""
+    sess = _get_live(session_id)
+    if sess is None:
+        return None
+    return {"started_at": sess.started_at, "last_input": sess.last_input, "last_attach": sess.last_attach,
+            "attached": sess.client is not None, "persist": sess.persist}
+
+
+def stop_if(session_id: str, still_idle) -> str:
+    """잠금 안에서 still_idle(activity) 를 다시 확인하고 맞을 때만 끈다 → 'stopped'|'busy'|'gone'."""
+    with session_lock(session_id):
+        a = activity(session_id)
+        if a is None:
+            return "gone"
+        if not still_idle(a):
+            return "busy"
+        return "stopped" if stop_terminal(session_id) else "gone"
 
 
 def has_terminal(session_id: str) -> bool:
@@ -207,9 +249,14 @@ def stop_terminal(session_id: str) -> bool:
     이것뿐이다(터미널 안에서 claude 를 종료하는 것 외에). 프로세스가 죽으면
     reader 의 EOF 경로가 등록부 정리·화면 닫기를 수행한다.
     """
-    sess = _get_live(session_id)
-    if sess is None:
-        return False            # 없거나 이미 시체(그 자리에서 정리됨)
+    with session_lock(session_id):
+        sess = _get_live(session_id)
+        if sess is None:
+            return False            # 없거나 이미 시체(그 자리에서 정리됨)
+        return _terminate(sess)
+
+
+def _terminate(sess) -> bool:
     try:
         sess.proc.terminate(force=True)
     except Exception:  # noqa: BLE001
@@ -678,11 +725,12 @@ def start_terminal(session_id: str, skip_permissions: bool = True) -> dict:
     대화 분기 사고라 절대 만들지 않는다. 띄운 PTY 는 여느 persist 터미널과 같은
     객체라, 나중에 탭으로 열면(재접속) 화면이 붙고 닫아도 계속 산다.
     """
-    live = _get_live(session_id)
-    if live is not None:
-        return {"status": "already_live", "pid": getattr(live.proc, "pid", None)}
-    sess = _spawn(session_id, skip_permissions, None)
-    return {"status": "started", "pid": getattr(sess.proc, "pid", None)}
+    with session_lock(session_id):
+        live = _get_live(session_id)
+        if live is not None:
+            return {"status": "already_live", "pid": getattr(live.proc, "pid", None)}
+        sess = _spawn(session_id, skip_permissions, None)
+        return {"status": "started", "pid": getattr(sess.proc, "pid", None)}
 
 
 async def run_terminal(ws, session_id: str, skip_permissions: bool = True,
@@ -697,9 +745,29 @@ async def run_terminal(ws, session_id: str, skip_permissions: bool = True,
     key = fork_id or session_id
     # 살아있는 세션만 재접속 대상 - 시체는 _get_live 가 정리해 새 스폰으로 떨어진다.
     # (연결 버튼은 항상 1번이면 되어야 한다는 상태 모델 - 시체 상태를 사용자에게 노출 금지)
-    sess = _get_live(key)
+    # 재접속/새 스폰 결정은 세션 수명 잠금 안에서 — 정리 작업·워커 기동과 겹치지 않게(2026-10-12)
+    spawn_err = None
+    spawned = False
+    with session_lock(key):
+        sess = _get_live(key)
+        if sess is not None:
+            sess.last_attach = time.time()
+        else:
+            try:
+                sess = _spawn(session_id, skip_permissions, fork_id)
+                sess.client = (ws, loop)
+                sess.client_screen = screen_id
+                sess.mark_sent(screen_id, 0)
+                sess.last_attach = time.time()
+                spawned = True
+            except TermStartError as e:
+                spawn_err = e
+    if spawn_err is not None:
+        await ws.send_text(spawn_err.tty_text)
+        await _safe_close(ws)
+        return
 
-    if sess is not None:
+    if not spawned:
         # ---- 재접속: 스폰하지 않고 기존 프로세스에 붙는다 ----
         with sess.lock:
             old = sess.client
@@ -730,16 +798,7 @@ async def run_terminal(ws, session_id: str, skip_permissions: bool = True,
             pass
         rejoined = True
     else:
-        # ---- 새 스폰(화면 있음) — 스폰 본체는 _spawn(화면 없는 start_terminal 과 공유) ----
-        try:
-            sess = _spawn(session_id, skip_permissions, fork_id)
-        except TermStartError as e:
-            await ws.send_text(e.tty_text)
-            await _safe_close(ws)
-            return
-        sess.client = (ws, loop)
-        sess.client_screen = screen_id     # 첫 화면: 커서 0 부터 reader 가 전진시킨다
-        sess.mark_sent(screen_id, 0)
+        # ---- 새 스폰(화면 있음): 위 잠금 안에서 _spawn 으로 띄우고 화면을 붙였다 ----
         rejoined = False
 
     me = (ws, loop)
@@ -754,6 +813,7 @@ async def run_terminal(ws, session_id: str, skip_permissions: bool = True,
             if mtype == "input":
                 try:
                     sess.proc.write(msg.get("data", ""))
+                    sess.last_input = time.time()
                 except Exception:  # noqa: BLE001
                     # 쓰기 실패 = 프로세스가 죽었을 가능성 - persist 라도 좀비로
                     # 남기지 않는다(안 지우면 다음 재접속이 또 시체에 붙는다)
@@ -778,6 +838,7 @@ async def run_terminal(ws, session_id: str, skip_permissions: bool = True,
         with sess.lock:
             if sess.client is not None and sess.client[0] is me[0]:
                 sess.client = None
+        sess.last_attach = time.time()       # 보다가 닫은 시각까지는 활동
         if not sess.persist:
             _cleanup(sess)               # fork 는 일회용 - 종료(삭제 흐름 전제)
 

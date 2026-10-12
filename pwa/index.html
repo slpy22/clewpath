@@ -257,6 +257,15 @@
   .dtitle h2{margin:0;font-size:1.15rem;line-height:1.3;word-break:break-word}
   .dren{height:28px;padding:0 11px;border-radius:999px;border:1px solid var(--line2);color:var(--ink2);font-size:.78rem;flex:none;white-space:nowrap}
   .dren:hover,.dren:active{background:var(--surface2);color:var(--ink)}
+  .hkcard{border:1px solid var(--line);border-radius:12px;padding:12px;margin:10px 0;background:var(--surface)}
+  .hkh{display:flex;align-items:center;gap:8px}
+  .hkh b{flex:1}
+  .hkev{font-size:.74rem;color:var(--muted)}
+  .hktog{padding:4px 12px;border-radius:999px;font-size:.78rem;border:1px solid var(--line2);color:var(--muted)}
+  .hktog.on{background:var(--accent2);color:#fff;border-color:transparent;font-weight:650}
+  .hkd{font-size:.8rem;color:var(--ink2);margin:6px 0;line-height:1.5}
+  .hkhours{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:8px 0;font-size:.8rem;color:var(--muted)}
+  .hkhours .fchip{padding:5px 10px}
   .dtags{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:8px}
   .dtag{display:inline-flex;align-items:center;gap:2px;padding:2px 4px 2px 10px;border-radius:999px;font-size:.78rem;
     background:var(--accent-wash);color:var(--accent);border:1px solid color-mix(in srgb,var(--accent) 35%,transparent)}
@@ -2134,6 +2143,65 @@ function editSessionTags(s,onDone){
   return {body,inp,box,save,cur};
 }
 
+// ---- 🧹 정기 작업(2026-10-12): Host 의 작업 줄 하나가 차례로 돈다 — 쉬는 세션 정리 · 모델 목록 갱신 ----
+async function hkPost(path,body){
+  let cred={};
+  if(MODE==='relay'){ cred=await ensurePriv(); if(cred===null) throw new Error('2차 인증이 필요합니다'); }
+  return T.api('POST',path,{body,grace:cred.grace,otp:cred.otp});
+}
+async function toggleKeep(s,redraw){
+  const next=!s.keep;
+  try{ await T.api('POST','/api/sessions/'+s.session_id+'/keep',{body:{keep:next}}); }
+  catch(e){ toast('바꾸지 못했습니다: '+e.message); return; }
+  s.keep=next; const o=(SESSIONS||[]).find(x=>x.session_id===s.session_id); if(o) o.keep=next;
+  if(redraw) redraw();
+  toast(next?'항상 켜 둡니다 — 오래 쉬어도 자동으로 끄지 않습니다':'쉬는 세션 정리 대상에 다시 넣었습니다');
+}
+function hkAgo(sec){ if(!sec) return '아직 안 돎'; const d=Date.now()/1000+CLOCK_SKEW-sec;
+  if(d<90) return '방금'; if(d<3600) return Math.floor(d/60)+'분 전'; if(d<86400) return Math.floor(d/3600)+'시간 전'; return Math.floor(d/86400)+'일 전'; }
+function hkEvery(s){ return s>=86400?(s/86400)+'일마다':s>=3600?(s/3600)+'시간마다':(s/60)+'분마다'; }
+async function showHousekeeping(){
+  const body=el('div'); body.appendChild(el('div','spin'));
+  openModal('🧹 정기 작업', body, []);
+  let st; try{ st=await T.api('GET','/api/owner/housekeeping'); }
+  catch(e){ body.innerHTML=''; body.appendChild(el('div','cwd','불러오지 못했습니다: '+e.message)); return; }
+  renderHousekeeping(body,st);
+}
+function renderHousekeeping(body,st){
+  body.innerHTML='';
+  body.appendChild(el('div','cwd','PC 안의 작업 줄 하나가 아래 작업을 차례로 돌립니다(겹쳐 돌지 않음). Host 를 켠 뒤 5분 지나 시작합니다.'));
+  const reload=async()=>{ try{ renderHousekeeping(body,await T.api('GET','/api/owner/housekeeping')); }catch(e){} };
+  for(const j of (st.jobs||[])){
+    const card=el('div','hkcard');
+    const h=el('div','hkh'); h.appendChild(el('b',null,j.name)); h.appendChild(el('span','hkev',hkEvery(j.interval_s)));
+    const tog=el('button','hktog'+(j.enabled?' on':''),j.enabled?'켜짐':'꺼짐'); tog.title=j.enabled?'끄기':'켜기';
+    tog.onclick=async()=>{ try{ renderHousekeeping(body,Object.assign(await hkPost('/api/owner/housekeeping',{job:j.id,on:!j.enabled}),{idle_candidates:st.idle_candidates})); }
+      catch(e){ toast('바꾸지 못했습니다: '+e.message); } };
+    h.appendChild(tog); card.appendChild(h);
+    card.appendChild(el('div','hkd',j.desc));
+    card.appendChild(el('div','hkd','마지막: '+(j.running?'지금 도는 중…':hkAgo(j.last_run))+(j.last_summary?' · '+j.last_summary:'')+(j.last_ok===false?' ⚠':'')));
+    if(j.id==='idle_sessions'){
+      const hr=el('div','hkhours'); hr.appendChild(el('span',null,'기준:'));
+      for(const n of (st.idle_hours_choices||[])){ const b=el('button','fchip'+(n===st.idle_hours?' on':''),n+'시간');
+        b.onclick=async()=>{ if(n===st.idle_hours) return; try{ const r=await hkPost('/api/owner/housekeeping',{hours:n}); r.idle_candidates=null; renderHousekeeping(body,r); reload(); }
+          catch(e){ toast('바꾸지 못했습니다: '+e.message); } }; hr.appendChild(b); }
+      card.appendChild(hr);
+      const c=st.idle_candidates;
+      if(Array.isArray(c)) card.appendChild(el('div','hkd',c.length?('지금 기준이면 끌 세션 '+c.length+'개: '+c.slice(0,4).map(x=>x.title+'('+Math.floor(x.idle_s/3600)+'시간)').join(', ')+(c.length>4?' 외':'')):'지금 기준이면 끌 세션 없음'));
+      card.appendChild(el('div','hkd','끄지 않는 경우: 화면을 보고 있음 · 권한 승인 대기 · 백그라운드 쉘·모니터가 남음 · 📌 항상 켜 두기(세션 상세 → 더 보기). 터미널에서 직접 띄운 claude 는 건드리지 않습니다. 끈 세션은 다시 열면 이어집니다.'));
+    }
+    const run=el('button','btn ghost sm','지금 실행');
+    run.onclick=async()=>{ run.disabled=true; try{ await hkPost('/api/owner/housekeeping/'+j.id+'/run',{}); toast(j.name+' — 줄에 세웠습니다');
+        setTimeout(reload,2500); }catch(e){ toast('실행하지 못했습니다: '+e.message); run.disabled=false; } };
+    card.appendChild(run);
+    body.appendChild(card);
+  }
+  if(st.builtin&&st.builtin.length){
+    body.appendChild(el('div','setsec','항상 도는 것(설정 없음)'));
+    for(const b of st.builtin) body.appendChild(el('div','hkd','· '+b.name+' — '+b.every+' · '+b.desc));
+  }
+}
+
 // ---- 상세 ----
 function backbar(label,onback,cls){ const b=el('div','backbar'+(cls?' '+cls:''));
   const btn=el('button',null,'‹ '+label); btn.onclick=onback; b.appendChild(btn); return b; }
@@ -2157,6 +2225,7 @@ async function loadDetail(s){
   const bd=sessionBadge(s);
   if(bd){ const b=el('span','dbadge',bd.text); b.style.setProperty('--c',bd.c); t1.appendChild(b); }
   else if(sessionIsLive(s)){ const b=el('span','dbadge','실행 중'); b.style.setProperty('--c','#3fb950'); t1.appendChild(b); }
+  if(s.keep){ const b=el('span','dbadge','📌 항상 켜 둠'); b.style.setProperty('--c','#8b949e'); b.title='쉬는 세션 정리에서 빠져 있습니다'; t1.appendChild(b); }
   hd.appendChild(t1);
   if(s.cwd) hd.appendChild(el('div','dpath',s.cwd));
   // 태그: 목록 줄에선 뺐고(2026-10-12) 여기서 보고 바꾼다. 위 목록의 태그 필터는 이 값을 쓴다.
@@ -2250,14 +2319,18 @@ async function loadDetail(s){
   }
   // 5. 더 보기(접힘): 가끔 쓰는 것
   const moreBox=el('div','dmorebox');
-  const moreBtn=el('button','dmorebtn','▸ 더 보기 — 포크 · API 정책 · 내보내기 · 폴더 변경');
+  const moreBtn=el('button','dmorebtn','▸ 더 보기 — 포크 · API 정책 · 내보내기 · 폴더 변경 · 항상 켜 두기');
   const act=el('div','actions hidden');
   const bFork=el('button','btn ghost','🔱 포크로 재개'); bFork.title='원래 대화는 그대로 두고 갈라진 사본으로 이어 갑니다';
   bFork.onclick=()=>loadResume(s,false);
   const bProf=el('button','btn ghost','🛡 API 정책'); bProf.onclick=()=>editProfile(s);
   const bExport=el('button','btn ghost','📤 내보내기'); bExport.onclick=()=>exportSession(s);
   const bCwd=el('button','btn ghost','📁 폴더 변경'); bCwd.onclick=()=>changeCwd(s);
-  act.appendChild(bFork); act.appendChild(bProf); act.appendChild(bExport); act.appendChild(bCwd);
+  // 쉬는 세션 정리(정기 작업)에서 빼기 — 늘 깨어 있어야 하는 세션(서비스 모니터·관리 세션 등)
+  const bKeep=el('button','btn ghost'); const drawKeep=()=>{ bKeep.textContent=s.keep?'📌 항상 켜 두기: 켬':'📌 항상 켜 두기: 끔';
+    bKeep.title=s.keep?'쉬는 세션 정리에서 빠져 있습니다(눌러서 해제)':'오래 쉬어도 자동으로 끄지 않게 합니다'; };
+  drawKeep(); bKeep.onclick=()=>toggleKeep(s,drawKeep);
+  act.appendChild(bFork); act.appendChild(bProf); act.appendChild(bExport); act.appendChild(bCwd); act.appendChild(bKeep);
   moreBtn.onclick=()=>{ const open=act.classList.toggle('hidden')===false; moreBtn.textContent=(open?'▾':'▸')+' 더 보기 — 포크 · API 정책 · 내보내기 · 폴더 변경'; };
   moreBox.appendChild(moreBtn); moreBox.appendChild(act);
   d.appendChild(moreBox);
@@ -4840,6 +4913,7 @@ function showSettings(){
   row('🗑','휴지통','삭제한 세션 복구 (30일 보관)',showTrash,{local:true});
   row('📥','세션 가져오기','내보낸 세션 파일 불러오기',importSession);
   row('📈','API 사용량','토큰 · 환산 비용 통계',showUsage);
+  row('🧹','정기 작업','쉬는 세션 정리(메모리 확보) · 모델 목록 갱신 — 켜기/끄기 · 기준 시간 · 지금 실행',showHousekeeping);
 
   // 고급: 처음 한 번 쓰거나 문제 생길 때만 보는 것 — 접어 둔다
   flushSec();

@@ -192,3 +192,39 @@ test("상세 태그: 이름 아래 #태그 칩(× 로 빼기) + ＋ 태그 → �
   const hd = pd.children[1].children[0];
   assert.equal(String(hd.children.at(-1).className), "dtags");
 });
+
+test("🧹 정기 작업 화면: 작업별 켜짐·마지막 결과·지금 실행, 기준 시간 칩, 끌 후보 · 원격은 2FA 로 바꾼다 · 📌 항상 켜 두기", async () => {
+  const ctx = await load();   // 릴레이(폰)
+  ev(ctx, `globalThis.__c=[]; toast=()=>{}; ensurePriv=async()=>({grace:'g1'});
+    globalThis.__st={jobs:[{id:'idle_sessions',name:'쉬는 세션 정리',desc:'d',interval_s:900,enabled:true,last_run:0,last_ok:null,last_summary:null},
+                          {id:'models',name:'모델 목록 갱신',desc:'m',interval_s:86400,enabled:false,last_run:Date.now()/1000-120,last_ok:true,last_summary:'7개'}],
+      idle_hours:4, idle_hours_choices:[1,2,4,8], builtin:[{name:'업데이트 확인',every:'주기',desc:'x'}],
+      idle_candidates:[{session_id:'a',title:'논문',idle_s:5*3600}]};
+    T.api=async(m,p,o)=>{ __c.push([m,p,o&&o.body,o&&o.grace]); return m==='GET'?__st:Object.assign({},__st,{idle_hours:(o.body&&o.body.hours)||4}); };`);
+  const body = stubEl("div"); ctx.__b = body;
+  ev(ctx, "renderHousekeeping(globalThis.__b, __st)");
+  const cards = body.children.filter((k) => String(k.className) === "hkcard");
+  assert.equal(cards.length, 2);
+  const txt = (k) => k.text;
+  assert.ok(txt(cards[0]).includes("15분마다") && txt(cards[0]).includes("켜짐") && txt(cards[0]).includes("아직 안 돎"));
+  assert.ok(txt(cards[0]).includes("끌 세션 1개: 논문(5시간)"));
+  assert.ok(txt(cards[1]).includes("1일마다") && txt(cards[1]).includes("꺼짐") && txt(cards[1]).includes("7개"));
+  assert.ok(body.text.includes("항상 도는 것"));
+  // 모델 목록 켜기(원격 → grace 동봉)
+  await cards[1].children[0].children.at(-1).onclick();
+  const last = ev(ctx, "__c").at(-1);
+  assert.equal(last[1], "/api/owner/housekeeping"); assert.equal(JSON.stringify(last[2]), JSON.stringify({ job: "models", on: true })); assert.equal(last[3], "g1");
+  // 기준 8시간
+  const hours = cards[0].children.find((k) => String(k.className) === "hkhours");
+  await hours.children.find((k) => k.textContent === "8시간").onclick();
+  assert.equal(JSON.stringify(ev(ctx, "__c").find((c) => c[2] && c[2].hours)[2]), JSON.stringify({ hours: 8 }));
+  // 지금 실행
+  await cards[1].children.at(-1).onclick();
+  assert.ok(ev(ctx, "__c").some((c) => c[1] === "/api/owner/housekeeping/models/run"));
+  // 📌 항상 켜 두기
+  ev(ctx, "SESSIONS=[{session_id:'s1', keep:false}]");
+  let drawn = 0; ctx.__redraw = () => drawn++;
+  await ev(ctx, "toggleKeep(SESSIONS[0], globalThis.__redraw)");
+  assert.equal(JSON.stringify(ev(ctx, "__c").at(-1).slice(0, 3)), JSON.stringify(["POST", "/api/sessions/s1/keep", { keep: true }]));
+  assert.equal(ev(ctx, "SESSIONS[0].keep"), true); assert.equal(drawn, 1);
+});

@@ -127,7 +127,9 @@ def _otp_error() -> str:
 # start 와 대칭이 되도록 stop 도 특권 경로로 취급한다(릴레이 경유 한정; 소유자
 # 로컬 직접 호출은 이 프록시를 안 타므로 무영향 — start 2FA 와 같은 원리).
 _PRIV_API_SUFFIXES = ("/terminal/stop", "/kill", "/update/apply", "/revert-continuation", "/ptyd/restart",
-                      "/file/download")   # file/download: 📁 파일 내려받기(보기는 허용, 내려받기는 2FA — file-browser §10), kill: 세션 강제 종료, update/apply: 원격 Host 업데이트, revert-continuation: 이어하기 되돌리기 — 모두 2FA 게이트
+                      "/file/download", "/owner/housekeeping", "/housekeeping/idle_sessions/run")
+# owner/housekeeping(설정 변경, POST)·idle_sessions/run(지금 정리): 원격에서 세션을 끄게 되는 조작이라 2FA(2026-10-12)
+# file/download: 📁 파일 내려받기(보기는 허용, 내려받기는 2FA — file-browser §10), kill: 세션 강제 종료, update/apply: 원격 Host 업데이트, revert-continuation: 이어하기 되돌리기 — 모두 2FA 게이트
 
 
 def _is_privileged_api(path: str) -> bool:

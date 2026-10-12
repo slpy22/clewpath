@@ -252,7 +252,7 @@ test("loadDetail(재배치): 머리(이름·✎·상태·경로) → 주 동작 
   // 더 보기: 접혀 있음, 가끔 쓰는 4개
   const act = more.children[1];
   assert.ok(act.classList.contains("hidden"));
-  same(act.children.map((b) => b.textContent), ["🔱 포크로 재개", "🛡 API 정책", "📤 내보내기", "📁 폴더 변경"]);
+  same(act.children.map((b) => b.textContent), ["🔱 포크로 재개", "🛡 API 정책", "📤 내보내기", "📁 폴더 변경", "📌 항상 켜 두기: 끔"]);
   more.children[0].onclick(); assert.ok(!act.classList.contains("hidden"));
   // 위험 구역: 실행 중이 아니면 삭제만, 되돌릴 수 있다는 설명
   const rows = zone.children.filter((k) => String(k.className) === "dzrow");

@@ -30,7 +30,8 @@ from session_manager import config
 
 _LOCK = threading.Lock()
 # picker: 피커 미표시 세션의 노출 정책 - "expose"(claude 재개 목록에 노출 허용) 또는 없음(은닉 유지)
-_FIELDS = ("labels", "name", "color", "note", "picker", "model")
+# keep: "1" 이면 쉬는 세션 정리(housekeeping)에서 제외 — 항상 켜 두는 세션(2026-10-12)
+_FIELDS = ("labels", "name", "color", "note", "picker", "model", "keep")
 
 
 def _now() -> str:
@@ -114,7 +115,7 @@ def set_record(session_id: str, **fields) -> dict:
         # None/빈 값 정리
         rec = {k: v for k, v in rec.items()
                if k == "labels" or v not in (None, "")}
-        if not rec.get("labels") and not any(rec.get(k) for k in ("name", "color", "note", "picker", "model")):
+        if not rec.get("labels") and not any(rec.get(k) for k in ("name", "color", "note", "picker", "model", "keep")):
             data["sessions"].pop(session_id, None)
             _save(data)
             return {}
