@@ -52,7 +52,8 @@ test("renderRows: 폴더 그룹(최신순)·상태 점/문구·🔗 피어 칩(�
   assert.equal(a1.children[2].textContent, "작업 중");
   same(chipsOf(a), ["#팀", "🧠 Opus 5"], "피어 이름 칩은 없앴다(2026-09-30) — 출처는 재개 버튼 아이콘");
   assert.ok(a1.children.find((k) => cls(k) === "schip model set"), "설정된 모델은 set 클래스");
-  assert.equal(a.children.at(-2).textContent, "🔗", "피어(출처 불명) → 재개 버튼이 출처 아이콘"); assert.ok(a.children.at(-2).title.includes("작업 중")); assert.equal(a.children.at(-1).textContent, "✎");
+  assert.equal(a.children.at(-1).textContent, "🔗", "피어(출처 불명) → 재개 버튼이 출처 아이콘"); assert.ok(a.children.at(-1).title.includes("작업 중"));
+  assert.ok(!a.children.some((k) => k.textContent === "✎"), "✎ 이름은 상세 머리로(오터치 방지, 2026-10-12)");
   assert.equal(a.children[0].children[1].children.map((k) => k.textContent).join("|"), "3 msgs|2.0KB|1분 전");
   assert.equal(a.children[0].children.length, 2, "cwd 가 대표와 같으면 경로 줄 없음");
   // B: 권한 대기 → ✋ 버튼 + 상태 문구 클릭 가능, 우리 PTY(live_terminal) → 🔗 없음, 🖥, 이름은 slug, 경로 줄 있음
@@ -60,7 +61,7 @@ test("renderRows: 폴더 그룹(최신순)·상태 점/문구·🔗 피어 칩(�
   assert.equal(b1.children[2].textContent, "권한 대기"); assert.equal(b1.children[2].style.cursor, "pointer");
   same(chipsOf(b), [], "우리 PTY 가 떠 있으면 피어 칩을 달지 않는다");
   assert.equal(b1.children[1].textContent, "beta-slug");
-  same(b.children.map((k) => k.textContent), ["", "✋", "🖥", "✎"]);
+  same(b.children.map((k) => k.textContent), ["", "✋", "🖥"]);
   assert.equal(b.children[0].children[2].textContent, "F:/p1/sub");
   assert.ok(b.children[0].children[1].children.map((k) => k.textContent).includes("5시간 전"));
   // C: 🤖 배경 에이전트 + ⚙(피커 미표시) + dim
@@ -173,7 +174,7 @@ test("renderRows: 옛 줄은 ⏩ 이어받음 칩+dim, 열기/재개는 이어�
   assert.ok(old.children[0].children[0].children.find((k) => cls(k) === "schip cont").title.includes("열면 그 세션으로"));
   same(chipsOf(byId[NEW]), [], "agent_name 칩은 목록에 없다(상세에서만)");
   old.children[0].onclick();                                        // 정보 클릭 → 이어받은 세션 상세
-  old.children.at(-2).onclick();                                    // ▶ → 이어받은 세션 재개
+  old.children.at(-1).onclick();                                    // ▶ → 이어받은 세션 재개
   same(ev(ctx, "globalThis.__calls"), [["detail", NEW], ["resume", NEW]]);
   const orphan = byId["dddddddd-1111-2222-3333-444444444444"];
   assert.ok(chipsOf(orphan)[0].includes("이어받음"));

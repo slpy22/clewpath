@@ -203,12 +203,14 @@ function pinPaneDetail(ctx) {
 const byClass = (el, c) => el.children.filter((k) => String(k.className) === c);
 const kvOf = (kv) => { const o = {}; for (let i = 0; i < kv.children.length; i += 2) o[kv.children[i].textContent] = kv.children[i + 1].textContent; return o; };
 
-test("loadDetail: 정보 카드 kv·⚙ 안내 카드 토글(picker-expose API)·통계 카드(성공/실패)·버튼 문구(실행 중이면 🖥)", async () => {
+test("loadDetail(재배치): 머리(이름·✎·상태·경로) → 주 동작 → 요약(자세히: ID 전체·통계) → ⚙ 알림 띠 → 더 보기 → 위험 구역", async () => {
   const ctx = await load();
   const pd = pinPaneDetail(ctx);
   ev(ctx, "globalThis.__api = []; T.api = async (v, p, o) => { globalThis.__api.push([v, p, o && o.body]);"
         + "  if (p.endsWith('/stats')) return { model: 'claude-opus-5', tokens: { input_tokens: 12345, output_tokens: 6, cache_read_input_tokens: 7 }, est_cost_usd: 0.12 }; return {}; };"
-        + "globalThis.__toasts = []; toast = (m) => globalThis.__toasts.push(m); CURRENT_TERM_SID = 'zzz'");
+        + "globalThis.__toasts = []; toast = (m) => globalThis.__toasts.push(m); CURRENT_TERM_SID = 'zzz';"
+        + "globalThis.__calls = []; renameNative = (s) => __calls.push(['rename', s.session_id]); doDelete = (s) => __calls.push(['delete', s.session_id]);"
+        + "killSession = (s) => __calls.push(['kill', s.session_id]); showResumeChooser = (s) => __calls.push(['resume', s.session_id]);");
   const s = { session_id: A, title: "알파", project_folder: "F--p1", message_count: 4, size_bytes: 3 * 1024 * 1024, cwd: "F:/p1",
               started_at: "2026-09-01T00:00:00Z", ended_at: new Date(Date.now() - 120000).toISOString(), picker_hidden: true, picker_expose: false, live_terminal: false };
   await ctx.loadDetail(s);
@@ -216,35 +218,60 @@ test("loadDetail: 정보 카드 kv·⚙ 안내 카드 토글(picker-expose API)�
   assert.ok(!pd.classList.contains("term-mode"));
   const [bar, detail] = pd.children;
   assert.equal(String(bar.className), "backbar tolist"); assert.equal(bar.children[0].textContent, "‹ 목록");
-  const cards = byClass(detail, "card");
-  assert.equal(cards.length, 3, "정보·⚙ 안내·통계");
-  assert.equal(cards[0].children[0].textContent, "알파");
-  const kv = kvOf(cards[0].children[1]);
-  assert.equal(kv["ID"], A.slice(0, 8)); assert.equal(kv["폴더"], "F--p1"); assert.equal(kv["메시지"], "4"); assert.equal(kv["크기"], "3.0MB");
+  // 순서: 머리 → 주 동작 → 요약 → ⚙ 알림 → 더 보기 → 위험 구역
+  same(detail.children.map((c) => String(c.className)), ["dhead", "dprim", "card dsum", "dnote", "dmorebox", "dzone"]);
+  const [hd, prim, sum, note, more, zone] = detail.children;
+  assert.equal(hd.children[0].children[0].textContent, "알파");
+  hd.children[0].children[1].onclick();                              // ✎ → 이름 바꾸기(목록 줄에서 옮겨 옴)
+  assert.equal(hd.children[1].textContent, "F:/p1");
+  same(prim.children.map((b) => b.textContent), ["▶ 재개", "💬 대화 보기", "📂 파일"]);
+  prim.children[0].onclick();
+  // 요약: 접혀 있고, 펼치면 ID 전체·통계
+  const [line, body] = sum.children;
+  assert.ok(body.classList.contains("hidden"));
+  assert.ok(line.children[0].textContent.startsWith("마지막 2분 전 · 메시지 4"));
+  assert.ok(line.children[0].textContent.endsWith("opus-5 · $0.12"), "통계가 오면 요약 줄에 모델·비용");
+  line.onclick(); assert.ok(!body.classList.contains("hidden"));
+  const kv = kvOf(body.children[0]);
+  assert.equal(kv["세션 ID"], A, "ID 는 전체(복사 가능), 저장 폴더 인코딩은 안 보여 준다");
+  assert.ok(!("폴더" in kv)); assert.equal(kv["메시지"], "4"); assert.equal(kv["크기"], "3.0MB");
   assert.ok(kv["생성"] && kv["마지막"].endsWith("(2분 전)"));
-  assert.equal(cards[0].children[2].textContent, "F:/p1");
-  // ⚙ 카드: 토글 → API POST {expose:true} → 문구 반전 → 다시 → false
-  const tog = cards[1].children.find((k) => String(k.className) === "btn ghost");
+  const st = kvOf(body.children[1].children[0]);
+  assert.equal(st["모델"], "claude-opus-5"); assert.equal(st["입력토큰"], (12345).toLocaleString()); assert.equal(st["환산비용"], "$0.12");
+  // ⚙ 알림 띠: 한 줄, 자세히 펼치면 설명+토글 → API POST {expose:true} → 문구 반전
+  const [nline, nbody] = note.children;
+  assert.ok(nbody.classList.contains("hidden"));
+  nline.onclick();
+  const tog = nbody.children.find((k) => String(k.className) === "btn ghost");
   assert.ok(tog.textContent.startsWith("👌"));
   await tog.onclick();
   same(ev(ctx, "globalThis.__api").find((c) => c[1].includes("picker-expose")), ["POST", `/api/sessions/${A}/picker-expose`, { expose: true }]);
   assert.equal(s.picker_expose, true); assert.ok(tog.textContent.startsWith("🔔"));
   assert.ok(ev(ctx, "globalThis.__toasts").at(-1).includes("경고 없이"));
   await tog.onclick(); assert.equal(s.picker_expose, false);
-  // 통계 카드
-  const st = kvOf(cards[2].children[1].children[0]);
-  assert.equal(st["모델"], "claude-opus-5"); assert.equal(st["입력토큰"], (12345).toLocaleString()); assert.equal(st["환산비용"], "$0.12");
-  // 버튼
-  const act = byClass(detail, "actions")[0];
-  same(act.children.map((b) => b.textContent), ["▶ 재개", "🔱 포크로 재개", "✎ 이름", "💬 뷰어", "📂 파일 보기", "🛡 API 정책", "📁 폴더 변경", "📤 내보내기", "🗑 삭제"]);
-  assert.equal(String(act.children.at(-1).className), "btn danger full");
-  // 실행 중 세션 + 통계 실패 + picker_hidden 아님
+  // 더 보기: 접혀 있음, 가끔 쓰는 4개
+  const act = more.children[1];
+  assert.ok(act.classList.contains("hidden"));
+  same(act.children.map((b) => b.textContent), ["🔱 포크로 재개", "🛡 API 정책", "📤 내보내기", "📁 폴더 변경"]);
+  more.children[0].onclick(); assert.ok(!act.classList.contains("hidden"));
+  // 위험 구역: 실행 중이 아니면 삭제만, 되돌릴 수 있다는 설명
+  const rows = zone.children.filter((k) => String(k.className) === "dzrow");
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].children[1].children[0].textContent, "삭제");
+  assert.ok(rows[0].children[1].children[1].textContent.includes("30일"));
+  rows[0].onclick();
+  same(ev(ctx, "globalThis.__calls"), [["rename", A], ["resume", A], ["delete", A]]);
+  // 실행 중 세션(릴레이) + 통계 실패 + picker_hidden 아님
   ev(ctx, "T.api = async () => { throw new Error('boom'); }");
   await ctx.loadDetail({ session_id: A, slug: "s", live_terminal: true, size_bytes: 0 });
   const detail2 = pd.children[1];
-  assert.equal(byClass(detail2, "card").length, 2);
-  assert.equal(byClass(detail2, "actions")[0].children[0].textContent, "🖥 터미널로 돌아가기 (실행 중)");
-  assert.equal(byClass(detail2, "card")[1].children[1].children[0].textContent, "통계 실패: boom");
+  same(detail2.children.map((c) => String(c.className)), ["dhead", "dprim", "card dsum", "dmorebox", "dzone"]);
+  assert.equal(detail2.children[1].children[0].textContent, "🖥 터미널로 돌아가기 (실행 중)");
+  assert.equal(detail2.children[0].children[0].children.at(-1).textContent, "실행 중", "상태 배지");
+  assert.equal(detail2.children[2].children[1].children[1].children[0].textContent, "통계 실패: boom");
+  const rows2 = detail2.children[4].children.filter((k) => String(k.className) === "dzrow");
+  same(rows2.map((r) => r.children[1].children[0].textContent), ["세션 강제 종료", "삭제"]);
+  assert.ok(rows2[0].children[1].children[1].textContent.endsWith("· 2차 인증"), "원격이면 2차 인증을 미리 알린다");
 });
 
 test("showResumeChooser: 실행 중이면 바로 터미널 / ⚙ 사전 확인 / bg 잠금 / 동시 재개 경고 / 선택 저장 후 web·term 분기", async () => {
