@@ -257,6 +257,16 @@
   .dtitle h2{margin:0;font-size:1.15rem;line-height:1.3;word-break:break-word}
   .dren{height:28px;padding:0 11px;border-radius:999px;border:1px solid var(--line2);color:var(--ink2);font-size:.78rem;flex:none;white-space:nowrap}
   .dren:hover,.dren:active{background:var(--surface2);color:var(--ink)}
+  .dtags{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:8px}
+  .dtag{display:inline-flex;align-items:center;gap:2px;padding:2px 4px 2px 10px;border-radius:999px;font-size:.78rem;
+    background:var(--accent-wash);color:var(--accent);border:1px solid color-mix(in srgb,var(--accent) 35%,transparent)}
+  .dtagx{width:24px;height:22px;border-radius:999px;color:var(--accent);font-size:.95rem;line-height:1}
+  .dtagx:hover,.dtagx:active{background:color-mix(in srgb,var(--accent) 18%,transparent)}
+  .dtagadd{padding:3px 10px;border-radius:999px;font-size:.78rem;color:var(--ink2);border:1px dashed var(--line2)}
+  .dtagadd:hover,.dtagadd:active{background:var(--surface2)}
+  .dtaginp{width:100%;margin-top:10px;padding:11px 12px;border-radius:10px;background:var(--surface2);border:1px solid var(--line2);color:var(--ink);font-size:1rem;outline:none}
+  .dtaginp:focus{border-color:var(--accent)}
+  .dtagpick{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
   .dbadge{font-size:.72rem;font-weight:600;padding:2px 9px;border-radius:999px;color:var(--c);border:1px solid var(--c);white-space:nowrap}
   .dpath{margin-top:4px;font-size:.8rem;color:var(--muted);word-break:break-all;font-family:var(--mono)}
   .dprim{display:grid;grid-template-columns:2fr 1fr 1fr;gap:8px;margin-bottom:12px}
@@ -2078,6 +2088,52 @@ function renderRows(wrap,q){
   }
 }
 
+// ---- 상세: 태그(라벨) 보기·설정 — ClewPath 자체 저장소(labels)만 쓴다(claude 파일 무접촉) ----
+function allLabelNames(){ const m=new Map(); for(const x of (SESSIONS||[])) for(const l of (x.labels||[])) m.set(l,(m.get(l)||0)+1);
+  return [...m.entries()].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).map(e=>e[0]); }
+async function saveSessionLabels(s,next){
+  const clean=[...new Set((next||[]).map(x=>String(x).trim().replace(/^#/,'')).filter(Boolean))];
+  try{ await T.api('POST','/api/sessions/'+s.session_id+'/labels',{body:{labels:clean}}); }
+  catch(e){ toast('태그 저장 실패: '+e.message); return false; }
+  s.labels=clean;
+  const o=(SESSIONS||[]).find(x=>x.session_id===s.session_id); if(o&&o!==s) o.labels=clean.slice();
+  if(ACTIVE_LABEL&&!allLabelNames().includes(ACTIVE_LABEL)) ACTIVE_LABEL='';
+  if(LIST_CTX&&LIST_VIEW==='sessions') LIST_CTX.rerender();      // 위 태그 필터 칩도 함께
+  return true;
+}
+function renderDetailTags(wrap,s){
+  wrap.innerHTML='';
+  for(const l of (s.labels||[])){
+    const c=el('span','dtag'); c.appendChild(el('span',null,'#'+l));
+    const x=el('button','dtagx','×'); x.title='태그 빼기: '+l; x.setAttribute('aria-label','태그 빼기 '+l);
+    x.onclick=async()=>{ if(await saveSessionLabels(s,(s.labels||[]).filter(v=>v!==l))) renderDetailTags(wrap,s); };
+    c.appendChild(x); wrap.appendChild(c);
+  }
+  const add=el('button','dtagadd',(s.labels&&s.labels.length)?'＋ 태그':'＋ 태그 달기');
+  add.title='태그를 달면 목록 위 태그 필터로 모아 볼 수 있습니다';
+  add.onclick=()=>editSessionTags(s,()=>renderDetailTags(wrap,s));
+  wrap.appendChild(add);
+}
+function editSessionTags(s,onDone){
+  const body=el('div'); const cur=new Set(s.labels||[]);
+  body.appendChild(el('div','cwd','새 태그를 적거나(쉼표로 여러 개), 아래에서 눌러 고르세요.'));
+  const inp=el('input','inp dtaginp'); inp.placeholder='예: 북한법, 논문'; inp.setAttribute('autocapitalize','off'); body.appendChild(inp);
+  const box=el('div','dtagpick'); body.appendChild(box);
+  const draw=()=>{ box.innerHTML='';
+    const names=[...new Set([...cur,...allLabelNames()])];
+    if(!names.length) box.appendChild(el('div','cwd','아직 다른 태그가 없습니다.'));
+    for(const l of names){ const b=el('button','fchip'+(cur.has(l)?' on':''),'#'+l);
+      b.onclick=()=>{ if(cur.has(l)) cur.delete(l); else cur.add(l); draw(); }; box.appendChild(b); } };
+  draw();
+  const save=el('button','btn','저장');
+  save.onclick=async()=>{ for(const t of String(inp.value||'').split(/[,，\s]+/)) { const v=t.trim().replace(/^#/,''); if(v) cur.add(v); }
+    if(await saveSessionLabels(s,[...cur])){ closeModal(); toast('태그를 저장했습니다'); if(onDone) onDone(); } };
+  inp.onkeydown=(e)=>{ if(e.key==='Enter'){ e.preventDefault&&e.preventDefault(); save.onclick(); } };
+  const cancel=el('button','btn ghost','취소'); cancel.onclick=()=>closeModal();
+  openModal('🏷 태그 — '+sessLabel(s), body, [cancel, save]);
+  return {body,inp,box,save,cur};
+}
+
 // ---- 상세 ----
 function backbar(label,onback,cls){ const b=el('div','backbar'+(cls?' '+cls:''));
   const btn=el('button',null,'‹ '+label); btn.onclick=onback; b.appendChild(btn); return b; }
@@ -2103,6 +2159,8 @@ async function loadDetail(s){
   else if(sessionIsLive(s)){ const b=el('span','dbadge','실행 중'); b.style.setProperty('--c','#3fb950'); t1.appendChild(b); }
   hd.appendChild(t1);
   if(s.cwd) hd.appendChild(el('div','dpath',s.cwd));
+  // 태그: 목록 줄에선 뺐고(2026-10-12) 여기서 보고 바꾼다. 위 목록의 태그 필터는 이 값을 쓴다.
+  const tg=el('div','dtags'); renderDetailTags(tg,s); hd.appendChild(tg);
   d.appendChild(hd);
   // 2. 주 동작: 재개(실행 중이면 터미널로) · 대화 보기 · 파일
   const prim=el('div','dprim');

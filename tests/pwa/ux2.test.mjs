@@ -160,3 +160,35 @@ test("쉘·모니터: 목록 줄에 🐚 쉘 n · 📡 모니터 m 칩, phase ba
   // 🔔 최근 끝난 작업에 안 들어간다
   assert.equal(ev(ctx, "todoSessions().ready.length"), 0);
 });
+
+test("상세 태그: 이름 아래 #태그 칩(× 로 빼기) + ＋ 태그 → 입력·기존 태그 골라 저장, 목록 필터도 갱신", async () => {
+  const ctx = await load();
+  seed(ctx, `SESSIONS[0].labels=['북한법']; SESSIONS[1].labels=['논문','북한법'];
+    globalThis.__c=[]; T.api=async(m,p,o)=>{ __c.push([m,p,o&&o.body]); return {}; }; toast=()=>{};
+    globalThis.__rr=0; LIST_CTX={rerender(){ __rr++; }}; setListView('sessions');
+    globalThis.__modal=null; openModal=(t,b,f)=>{ __modal={t,b,f}; }; closeModal=()=>{};`);
+  const wrap = stubEl("div"); ctx.__w = wrap;
+  ev(ctx, "renderDetailTags(globalThis.__w, SESSIONS[1])");
+  same(wrap.children.map((k) => k.children.length ? k.children[0].textContent : k.textContent), ["#논문", "#북한법", "＋ 태그"]);
+  // × → 그 태그만 빼고 저장
+  await wrap.children[0].children[1].onclick();
+  same(ev(ctx, "__c").at(-1), ["POST", `/api/sessions/${B}/labels`, { labels: ["북한법"] }]);
+  same(ev(ctx, "SESSIONS[1].labels"), ["북한법"]);
+  assert.ok(ev(ctx, "__rr") >= 1, "목록(태그 필터) 다시 그림");
+  same(wrap.children.map((k) => k.children.length ? k.children[0].textContent : k.textContent), ["#북한법", "＋ 태그"]);
+  // ＋ 태그 → 입력 '#연구, 메모' + 기존 '북한법' 눌러 빼기 → 저장
+  const ed = ev(ctx, "editSessionTags(SESSIONS[1])");
+  assert.ok(ev(ctx, "__modal.t").startsWith("🏷 태그"));
+  const picks = ed.box.children.map((k) => k.textContent);
+  same(picks, ["#북한법"], "고를 수 있는 기존 태그");
+  ed.box.children[0].onclick();
+  ed.inp.value = "#연구, 메모";
+  await ed.save.onclick();
+  same(ev(ctx, "__c").at(-1)[2], { labels: ["연구", "메모"] });
+  // 상세(loadDetail) 머리에 태그 줄이 들어간다
+  const pd = stubEl("div"); ctx.document._register("paneDetail", pd);
+  ev(ctx, "T.api=async()=>({})");
+  await ctx.loadDetail(ev(ctx, "SESSIONS[1]"));
+  const hd = pd.children[1].children[0];
+  assert.equal(String(hd.children.at(-1).className), "dtags");
+});
