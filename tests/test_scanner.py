@@ -112,3 +112,29 @@ def test_headless_detection_and_stop_hook_summary(fake_claude_home):
     # 다른 system 줄(turn_duration 등)은 계속 대화형 마커
     write_session(fake_claude_home, "P--x", "eeee5555", [{"type": "system", "subtype": "turn_duration"}, U])
     assert scanner.scan_one("eeee5555").picker_hidden is False
+
+
+def test_v1_list_hides_finished_headless(fake_claude_home, monkeypatch):
+    """claude -p 단발 기록은 목록에서 뺀다(2026-10-12 사장님) — 지금 살아 있는 것만 보이고,
+    include_headless=1 로는 진단용으로 볼 수 있다. 일반 세션은 그대로."""
+    from fastapi.testclient import TestClient
+    from tests.conftest import write_session
+    for k in ("SM_RELAY_URL", "SM_RELAY_ROOM", "SM_RELAY_AGENT_TOKEN", "SM_CP_URL"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("SM_HOST", "127.0.0.1")
+    monkeypatch.setenv("SM_API_TOKEN", "t-123")
+    H = {"Authorization": "Bearer t-123"}
+    U = lambda ep: {"type": "user", "cwd": "E:\c", "entrypoint": ep, "timestamp": "2026-10-12T04:00:00.000Z"}
+    write_session(fake_claude_home, "E--c", "aaaa1111", [U("sdk-cli")])
+    write_session(fake_claude_home, "E--c", "aaaa2222", [U("sdk-cli")])
+    write_session(fake_claude_home, "E--c", "bbbb1111", [{"type": "permission-mode"}, U("cli")])
+    monkeypatch.setattr("session_manager.peers.peer_map",
+                        lambda: {"aaaa2222": {"name": "p", "status": "busy", "pid": 1}})
+    from session_manager.server import create_app
+    with TestClient(create_app()) as c:
+        ids = {s["session_id"] for s in c.get("/api/v1/sessions", headers=H).json()["sessions"]}
+        assert ids == {"aaaa2222", "bbbb1111"}, "끝난 -p 기록은 빠지고, 지금 도는 것·일반 세션은 보인다"
+        ids2 = {s["session_id"] for s in c.get("/api/v1/sessions?include_headless=true", headers=H).json()["sessions"]}
+        assert "aaaa1111" in ids2
+        local = [s["session_id"] for p in c.get("/api/sessions", headers=H).json()["projects"] for s in p["sessions"]]
+        assert "aaaa1111" not in local and "bbbb1111" in local

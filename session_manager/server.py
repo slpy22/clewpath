@@ -479,8 +479,9 @@ def create_app() -> FastAPI:
 
     # ---- 목록 / 통계 ----
     @app.get("/api/sessions")
-    def list_sessions():
-        sessions = scanner.scan_all()
+    def list_sessions(include_headless: bool = False):
+        # claude -p 단발 기록은 목록에서 뺀다(v1 목록과 같은 규칙, 2026-10-12)
+        sessions = [m for m in scanner.scan_all() if include_headless or not m.headless]
         recs = labels.all_records()  # 라벨은 1회만 로드(세션마다 파일 읽지 않음)
         groups = scanner.group_by_project(sessions)
         project_list = []
@@ -933,31 +934,6 @@ def create_app() -> FastAPI:
         if r.get("error") == "session_live":
             return JSONResponse(r, status_code=409)
         return r
-
-    @app.post("/api/sessions/trash-headless")
-    def trash_headless(ids: list[str] = Body(..., embed=True)):
-        """🤖 자동 실행 기록(claude -p 단발) 한꺼번에 휴지통(2026-10-12 사장님 요청).
-
-        화면이 보낸 id 를 믿지 않고 **서버가 다시 읽어 headless 인 것만** 옮긴다 — 일반 세션이 섞여
-        들어와도 건드리지 않는다. 하나씩 옮기는 삭제(휴지통·30일 복구)와 같은 규칙: 실행 중이면 건너뜀.
-        """
-        moved, skipped = [], []
-        for sid in list(dict.fromkeys(ids or []))[:500]:
-            if not isinstance(sid, str) or not sid:
-                continue
-            m = scanner.scan_one(sid)
-            if m is None:
-                skipped.append({"session_id": sid, "reason": "not_found"})
-                continue
-            if not m.headless:
-                skipped.append({"session_id": sid, "reason": "not_headless"})
-                continue
-            r = lifecycle.delete_session(sid, dry_run=False)
-            if r.get("error"):
-                skipped.append({"session_id": sid, "reason": r["error"]})
-            else:
-                moved.append(sid)
-        return {"moved": moved, "skipped": skipped}
 
     @app.post("/api/sessions/{session_id}/picker-expose")
     def picker_expose(session_id: str, expose: bool = Body(..., embed=True)):
@@ -1597,7 +1573,7 @@ def create_app() -> FastAPI:
 
     @app.get("/api/v1/sessions")
     def api_v1_sessions(q: str | None = None, label: str | None = None,
-                        limit: int = 0):
+                        limit: int = 0, include_headless: bool = False):
         from session_manager import agents, hooks, peers, webterm
         runtime = hooks.status_map()   # 훅이 채운 세션별 '지금' 상태
         # claude 공식 실시간 점유(대화형·bg) - 재개 잠금 예고/동시재개 판정의 1차 근거
@@ -1620,6 +1596,11 @@ def create_app() -> FastAPI:
             md = {"session_id": s.session_id, "custom_title": s.custom_title,
                   "ai_title": s.ai_title, "slug": s.slug}
             live_term = webterm.has_terminal(s.session_id)
+            # claude -p 단발 기록(자동 실행)은 목록에 싣지 않는다(2026-10-12 사장님: claude --resume 에도 안 나오는
+            # 것이라 ClewPath 에서도 볼 필요 없음). 지금 살아 돌고 있는 것만 예외로 보인다.
+            if s.headless and not include_headless and not (
+                    live_term or peer_of.get(s.session_id) or occupancy.get(s.session_id)):
+                continue
             out.append({
                 "session_id": s.session_id,
                 "cwd": s.cwd,
@@ -1631,7 +1612,7 @@ def create_app() -> FastAPI:
                 # 이 대화가 이어진 새 세션 id(있으면 '옛 줄' — 화면은 접고 재개는 그쪽으로)
                 "continued_in": s.continued_in,
                 "picker_hidden": s.picker_hidden,   # ⚙ 배지 - v1(폰·릴레이) 누락 버그 수정
-                "headless": s.headless,             # claude -p 단발 기록 → 목록에서 접음
+                "headless": s.headless,             # claude -p 단발 기록(평소엔 목록에서 빠짐)
                 "title": _display_title(md, rec),
                 "git_branch": s.git_branch,
                 "message_count": s.message_count,

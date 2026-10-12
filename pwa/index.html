@@ -295,11 +295,6 @@
   .lview .assist{flex:1;padding:8px 0;border-radius:8px;color:var(--ink2);font-size:.88rem;background:transparent}
   /* ---- 화면 재배치 2단계(2026-10-12): 목록 줄 ⋯ 메뉴 · 🔔 할 일 · 폰 아래 탭 막대 · 자동 실행 기록 접기 ---- */
   .sbtn.more{width:40px;font-size:1.15rem;color:var(--ink2)}
-  .sauto{display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:10px 14px;color:var(--muted);font-size:.8rem;
-    border-left:2px solid var(--line2);border-bottom:1px solid var(--line)}
-  .sauto:active{background:var(--surface2)}
-  .sauto small{margin-left:auto;font-size:.72rem;opacity:.85;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
-  .gcount small{font-weight:500;opacity:.7;margin-left:3px}
   .popbg{position:fixed;inset:0;z-index:40;background:transparent}
   .pop{position:fixed;z-index:41;top:60px;right:12px;min-width:230px;max-width:min(92vw,360px);max-height:min(72vh,540px);overflow-y:auto;
     background:var(--surface);border:1px solid var(--line2);border-radius:14px;box-shadow:0 14px 36px rgba(0,0,0,.38);padding:6px}
@@ -313,9 +308,6 @@
   .pop .popi.warn .pi{color:#e8a03c}
   .pop .popi.danger>.pt>span{color:#e5534b}
   .pop .popsep{height:1px;background:var(--line);margin:4px 6px}
-  .sautobar{display:flex;justify-content:flex-end;padding:8px 12px;border-left:2px solid var(--line2);border-bottom:1px solid var(--line)}
-  .sautobar .btn{padding:8px 12px;font-size:.82rem;color:#e5534b;border-color:#e5534b66}
-  .pop .popempty{padding:12px;color:var(--muted);font-size:.85rem;line-height:1.55;white-space:pre-line}
   #btn-todo{position:relative}
   #btn-todo .tbadge{position:absolute;top:2px;right:0;min-width:17px;height:17px;padding:0 4px;border-radius:999px;background:#e8a03c;
     color:#14110a;font-size:.66rem;font-weight:800;line-height:17px;text-align:center}
@@ -1491,7 +1483,6 @@ function renderChips(wrap,rerender){
     wrap.appendChild(mk(l,`${l} ${n}`,ACTIVE_LABEL===l));
 }
 const COLLAPSED=new Set();  // 접힌 그룹 키(project_folder)
-const AUTO_OPEN=new Set();  // 「🤖 자동 실행 기록」을 펼친 그룹 키(기본 접힘)
 function baseName(p){ if(!p)return''; const parts=p.split(/[\\/]/).filter(Boolean);
   return parts[parts.length-1]||p; }
 function groupRepr(list){ // 대표 cwd: 가장 짧은(루트) 경로
@@ -1985,14 +1976,10 @@ function renderRows(wrap,q){
   const groups=new Map();
   for(const s of rows){ const k=s.project_folder||'(기타)';
     if(!groups.has(k))groups.set(k,[]); groups.get(k).push(s); }
-  // 자동 실행 기록(claude -p 단발, 2026-10-12): 다른 세션·스크립트가 일감 하나씩 돌리고 끝난 기록이라
-  // 폴더 안 「🤖 자동 실행 기록 N개」 한 줄로 접는다. 검색 중엔 펼쳐서 보여 준다. 폴더 순서도 이 기록은 빼고 정한다.
-  const isAuto=(s)=>!!s.headless&&!q;
-  const tsOf=(s)=>Date.parse(s.ended_at||'')||0;
-  const arr=[...groups.entries()].map(([k,list])=>{ const main=list.filter(s=>!isAuto(s));
-    return {k,list,main,auto:list.filter(isAuto),
-      latest:(main.length?main:list).reduce((m,s)=>Math.max(m,tsOf(s)),0)}; });
-  arr.sort((a,b)=>((b.main.length>0)-(a.main.length>0))||(b.latest-a.latest));   // 자동 기록뿐인 폴더는 맨 아래
+  // (claude -p 단발 기록은 Host 가 목록에서 아예 뺀다 — 2026-10-12 사장님. 지금 돌고 있는 것만 🤖 칩으로 보인다)
+  const arr=[...groups.entries()].map(([k,list])=>({k,list,
+    latest:list.reduce((m,s)=>Math.max(m,Date.parse(s.ended_at||'')||0),0)}));
+  arr.sort((a,b)=>b.latest-a.latest);
 
   for(const g of arr){
     const repr=groupRepr(g.list);
@@ -2003,8 +1990,7 @@ function renderRows(wrap,q){
     gt.appendChild(el('div','gbase','📁 '+baseName(repr)));
     gt.appendChild(el('div','gpath',repr));
     gh.appendChild(gt);
-    { const gc=el('span','gcount',(g.main.length||g.auto.length)+''); if(g.main.length&&g.auto.length) gc.appendChild(el('small',null,'+'+g.auto.length+'🤖'));
-      else if(!g.main.length) gc.textContent='🤖 '+g.auto.length; gh.appendChild(gc); }
+    gh.appendChild(el('span','gcount',g.list.length+''));
     gh.onclick=()=>{ if(COLLAPSED.has(g.k))COLLAPSED.delete(g.k); else COLLAPSED.add(g.k);
       renderRows(wrap,q); };
     wrap.appendChild(gh);
@@ -2032,7 +2018,7 @@ function renderRows(wrap,q){
       // 'worker-3-ax-52' 같은 SendMessage 이름 칩은 봐도 이해가 안 됨)
       if(s.headless){
         const g=el('span','schip gear','🤖 자동 실행');
-        g.title='claude -p(비대화형) 단발 실행 기록 — 다른 세션·스크립트가 일감 하나를 맡기고 끝난 것. 프로세스는 남아 있지 않습니다';
+        g.title='claude -p(비대화형) 단발 실행 — 다른 세션·스크립트가 맡긴 일감. 끝나면 목록에서 사라집니다';
         r1.appendChild(g);
       } else if(s.picker_hidden&&!s.picker_expose){
         const g=el('span','schip gear','⚙ 에이전트');
@@ -2079,25 +2065,7 @@ function renderRows(wrap,q){
       srow.appendChild(bM);
       return srow;
     };
-    for(const s of g.main) glist.appendChild(mkRow(s));
-    if(g.auto.length){
-      const open=AUTO_OPEN.has(g.k);
-      const tg=el('button','sauto'); tg.setAttribute('aria-expanded',open?'true':'false');
-      tg.appendChild(el('span',null,(open?'▾ ':'▸ ')+'🤖 자동 실행 기록 '+g.auto.length+'개'));
-      tg.appendChild(el('small',null,'claude -p 단발 작업 · 끝남'));
-      tg.title='다른 세션·스크립트가 claude -p 로 일감 하나씩 맡기고 끝난 기록입니다. 실행 중인 프로세스는 없습니다';
-      tg.onclick=()=>{ if(AUTO_OPEN.has(g.k)) AUTO_OPEN.delete(g.k); else AUTO_OPEN.add(g.k); renderRows(wrap,q); };
-      glist.appendChild(tg);
-      if(open){
-        // 한꺼번에 휴지통(2026-10-12 사장님): 확인창 + 서버가 다시 읽어 자동 실행 기록인 것만 옮긴다
-        const bar=el('div','sautobar');
-        const bt=el('button','btn ghost','🗑 '+g.auto.length+'개 모두 휴지통으로');
-        bt.title='claude -p 단발 기록만 휴지통으로(30일 안에 PC 설정 → 휴지통에서 되살리기). 실행 중인 것은 건너뜀';
-        bt.onclick=()=>trashHeadless(g.auto,baseName(groupRepr(g.list)));
-        bar.appendChild(bt); glist.appendChild(bar);
-        for(const s of g.auto) glist.appendChild(mkRow(s));
-      }
-    }
+    for(const s of g.list) glist.appendChild(mkRow(s));
     wrap.appendChild(glist);
   }
 }
@@ -3105,23 +3073,6 @@ async function doDelete(s){
   }catch(e){
     if(e.status===409) toast('실행 중인 세션은 삭제할 수 없습니다 — 터미널/프로세스를 먼저 종료하세요');
     else toast('삭제 실패: '+e.message); }
-}
-// 🤖 자동 실행 기록 한꺼번에 휴지통(2026-10-12 사장님). 하나씩 지우는 것과 같은 휴지통(30일 복구)이고,
-// 서버(/api/sessions/trash-headless)가 각 id 를 다시 읽어 claude -p 단발 기록인 것만 옮긴다 — 일반 세션은 못 지운다.
-async function trashHeadless(list,where){
-  const ids=list.filter(s=>s.headless&&!sessionIsLive(s)).map(s=>s.session_id);
-  const liveN=list.filter(s=>s.headless).length-ids.length;
-  if(!ids.length){ toast('휴지통으로 보낼 기록이 없습니다(실행 중인 것은 건너뜁니다)'); return; }
-  if(!confirm('「'+where+'」의 🤖 자동 실행 기록 '+ids.length+'개를 휴지통으로 보낼까요?\n\n'
-    +'claude -p 로 한 번 돌고 끝난 기록입니다. 영구 삭제가 아니라 30일 안에는 PC 의 설정 → 휴지통에서 되살릴 수 있습니다.'
-    +(liveN?'\n실행 중인 '+liveN+'개는 건너뜁니다.':''))) return;
-  try{
-    const r=await T.api('POST','/api/sessions/trash-headless',{body:{ids}});
-    const moved=(r&&r.moved)||[], sk=((r&&r.skipped)||[]).length;
-    toast('휴지통으로 '+moved.length+'개 옮김'+(sk?' · '+sk+'개 건너뜀':'')+' (30일 복구 가능)');
-    if(SELECTED_ID&&moved.includes(SELECTED_ID)){ SELECTED_ID=null; detailPlaceholder('삭제됨'); }
-    loadList();
-  }catch(e){ toast('휴지통 이동 실패: '+e.message); }
 }
 // ---- 휴지통: 복구 가능한 삭제 세션 ----
 async function showTrash(){

@@ -19,46 +19,29 @@ function seed(ctx, extra = "") {
     {session_id:${JSON.stringify(H1)}, project_folder:'E--p', cwd:'E:/p', ended_at:${JSON.stringify(iso(5))}, headless:true, picker_hidden:true},
     {session_id:${JSON.stringify(H2)}, project_folder:'E--p-cache', cwd:'E:/p/cache', ended_at:${JSON.stringify(iso(1))}, headless:true, picker_hidden:true},
     {session_id:${JSON.stringify(H3)}, project_folder:'E--p-cache', cwd:'E:/p/cache', ended_at:${JSON.stringify(iso(2))}, headless:true, picker_hidden:true}
-  ]; SELECTED_ID=null; ACTIVE_LABEL=''; COLLAPSED.clear(); AUTO_OPEN.clear(); ${extra}`);
+  ]; SELECTED_ID=null; ACTIVE_LABEL=''; COLLAPSED.clear(); ${extra}`);
 }
 const flat = (pop) => [pop.children[0], ...pop.children[1].children];   // 팝 = [제목, 내용]
 const render = (ctx, q = "") => { const wrap = stubEl("div"); ctx.__wrap = wrap; ev(ctx, `renderRows(globalThis.__wrap, ${JSON.stringify(q)})`); return wrap; };
 const rowsOf = (glist) => glist.children.filter((k) => cls(k).startsWith("srow"));
 
-test("renderRows: claude -p 자동 실행 기록은 폴더 안 한 줄로 접히고, 자동 기록뿐인 폴더는 맨 아래, 검색 중엔 펼침", async () => {
+test("renderRows: (Host 가 빼고 남은) 지금 돌고 있는 claude -p 는 🤖 자동 실행 칩·흐리게, 묶음 접기 없음", async () => {
   const ctx = await load();
   seed(ctx);
-  let wrap = render(ctx);
-  const heads = wrap.children.filter((k) => cls(k) === "ghead");
-  same(heads.map((h) => h.children[1].children[0].textContent), ["📁 p", "📁 cache"], "더 최근이어도 자동 기록뿐인 폴더는 아래");
-  assert.equal(heads[0].children[2].textContent, "2", "일반 세션 수");
-  assert.equal(heads[0].children[2].children[0].textContent, "+1🤖");
-  assert.equal(heads[1].children[2].textContent, "🤖 2");
-  const [g1, g2] = wrap.children.filter((k) => cls(k) === "glist");
-  same(rowsOf(g1).map((r) => r.dataset.sid), [A, B], "자동 기록은 접혀서 안 보인다");
-  const tg = g1.children.at(-1);
-  assert.equal(cls(tg), "sauto");
-  assert.ok(tg.children[0].textContent.includes("🤖 자동 실행 기록 1개"));
-  same(rowsOf(g2), []);
-  // 펼치기 → 자동 기록 줄이 🤖 칩·흐리게
-  tg.onclick();
-  const g1b = wrap.children.filter((k) => cls(k) === "glist")[0];
-  const h = rowsOf(g1b).find((r) => r.dataset.sid === H1);
-  assert.ok(h, "펼치면 보인다");
+  const wrap = render(ctx);
+  assert.ok(!wrap.children.some((g) => (g.children || []).some((k) => cls(k) === "sauto")), "접기 줄 없음");
+  const all = wrap.children.filter((k) => cls(k) === "glist").flatMap(rowsOf);
+  assert.equal(all.length, 5);
+  const h = all.find((r) => r.dataset.sid === H1);
   assert.ok(h.classList.contains("dim"));
-  same(h.children[0].children[0].children.filter((k) => cls(k).startsWith("schip")).map((k) => k.textContent), ["🤖 자동 실행"],
-    "⚙ 에이전트 대신 🤖 자동 실행");
-  // 검색 중엔 접지 않는다
-  ev(ctx, "AUTO_OPEN.clear()");
-  wrap = render(ctx, "cache");
-  same(rowsOf(wrap.children.filter((k) => cls(k) === "glist")[0]).map((r) => r.dataset.sid), [H2, H3]);
+  same(h.children[0].children[0].children.filter((k) => cls(k).startsWith("schip")).map((k) => k.textContent), ["🤖 자동 실행"]);
 });
 
 test("목록 줄 클릭: 실행 중인 클루패스 터미널이면 바로 터미널, 열린 탭이면 그 탭, 아니면 상세", async () => {
   const ctx = await load();
   seed(ctx, "globalThis.__c=[]; loadTerminal=(s)=>__c.push(['term',s.session_id]); loadDetail=(s)=>__c.push(['detail',s.session_id]); switchTab=(k)=>__c.push(['tab',k]);");
   const wrap = render(ctx);
-  const [a, b] = rowsOf(wrap.children.filter((k) => cls(k) === "glist")[0]);
+  const [a, b] = rowsOf(wrap.children.filter((k) => cls(k) === "glist").find((g) => rowsOf(g).some((r) => r.dataset.sid === A)));
   a.children[0].onclick(); b.children[0].onclick();
   ev(ctx, `TABS.list=[{key:'k-b', s:{session_id:${JSON.stringify(B)}}}]`);
   b.children[0].onclick();
@@ -71,7 +54,7 @@ test("⋯ 메뉴: 자주 쓰는 것만(재개/터미널·대화·이름·파일�
     + "loadTerminal=(s)=>__c.push(['term',s.session_id]); loadViewer=(s)=>__c.push(['view',s.session_id]); loadDetail=(s)=>__c.push(['detail',s.session_id]);"
     + "openFilesFor=(s)=>__c.push(['files',s.session_id]); showApprove=(s)=>__c.push(['approve',s.session_id]); doDelete=(s)=>__c.push(['delete',s.session_id]);");
   const wrap = render(ctx);
-  const [a, b] = rowsOf(wrap.children.filter((k) => cls(k) === "glist")[0]);
+  const [a, b] = rowsOf(wrap.children.filter((k) => cls(k) === "glist").find((g) => rowsOf(g).some((r) => r.dataset.sid === A)));
   const more = b.children.at(-1);
   assert.equal(more.textContent, "⋯"); assert.equal(more.getAttribute("aria-haspopup"), "menu");
   let stopped = false;
@@ -159,30 +142,4 @@ test("파일 탐색기 뿌리: 자동 실행 기록 폴더는 올리지 않는�
   const ctx = await load();
   seed(ctx);
   same(ev(ctx, "fbRoots().map(r=>r.cwd)"), ["E:/p"]);
-});
-
-test("🤖 자동 실행 기록 모두 휴지통: 펼치면 버튼, 확인창 뒤 서버에 headless id 만(실행 중 제외), 취소하면 아무것도 안 함", async () => {
-  const ctx = await load();
-  seed(ctx, "globalThis.__c=[]; T.api=async(m,p,o)=>{ __c.push([m,p,o&&o.body]); return {moved:o.body.ids.slice(0,1), skipped:[{session_id:'x',reason:'session_live'}]}; };"
-    + "globalThis.__t=[]; toast=(m)=>__t.push(m); loadList=()=>__c.push(['list']);");
-  ev(ctx, `SESSIONS.find(s=>s.session_id===${JSON.stringify(H3)}).live_terminal=true; AUTO_OPEN.add('E--p-cache')`);
-  const wrap = render(ctx);
-  const g2 = wrap.children.filter((k) => cls(k) === "glist")[1];
-  const bar = g2.children[1];
-  assert.equal(cls(bar), "sautobar");
-  const bt = bar.children[0];
-  assert.equal(bt.textContent, "🗑 2개 모두 휴지통으로");
-  let msg = ""; ctx.confirm = (m) => { msg = m; return false; };
-  await bt.onclick();
-  same(ev(ctx, "__c"), [], "취소하면 요청 없음");
-  ctx.confirm = (m) => { msg = m; return true; };
-  await bt.onclick();
-  assert.ok(msg.includes("자동 실행 기록 1개") && msg.includes("30일") && msg.includes("실행 중인 1개는 건너뜁니다"));
-  same(ev(ctx, "__c")[0], ["POST", "/api/sessions/trash-headless", { ids: [H2] }]);
-  assert.ok(ev(ctx, "__t").at(-1).startsWith("휴지통으로 1개 옮김 · 1개 건너뜀"));
-  same(ev(ctx, "__c").at(-1), ["list"]);
-  // 일반 세션은 버튼이 보내지 않는다(서버도 다시 확인)
-  ev(ctx, "__c.length=0");
-  await ev(ctx, `trashHeadless([{session_id:'n', headless:false}], 'x')`);
-  same(ev(ctx, "__c"), []);
 });
