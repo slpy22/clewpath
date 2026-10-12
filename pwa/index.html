@@ -467,6 +467,9 @@
 
   /* ---- 오케스트레이션 관제 타임라인 ---- */
   .mon-ov{position:fixed;inset:0;background:var(--bg);z-index:60;display:flex;flex-direction:column}
+  .mon-ov.inline{position:relative;inset:auto;z-index:auto;flex:1;min-height:0}
+  #paneDetail.mon-mode{padding:0;overflow:hidden;display:flex;flex-direction:column;min-height:0}
+  .ghead.grp.sel{background:var(--accent-wash)}
   .mon-head{padding:12px 16px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;background:var(--surface)}
   .mon-head h3{margin:0;font-size:1rem;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .mon-head .x{width:34px;height:34px;border-radius:9px;font-size:1.1rem;color:var(--muted);flex:none}
@@ -575,7 +578,8 @@
     /* 데스크톱 2단: 두 pane 을 항상 표시. 단 term-mode(터미널)는 grid 로 둬야 하므로 제외 —
        이 !important 가 term-mode 의 display:grid 를 뭉개면 iframe 영역이 무너진다(실측 확인). */
     #app[data-view] #paneList,
-    #app[data-view] #paneDetail:not(.term-mode):not(.fb-mode){display:block!important}
+    #app[data-view] #paneDetail:not(.term-mode):not(.fb-mode):not(.mon-mode){display:block!important}
+    #app[data-view] #paneDetail.mon-mode{display:flex!important}
     #app[data-view] #paneDetail.fb-mode{display:flex!important}   /* 파일 편집기는 목록(탐색기)과 나란히 항상 보임 */
     #paneDetail{font-size:15px}
     /* 드래그 구분선 */
@@ -1089,7 +1093,7 @@ let SELECTED_ID=null;
 const paneList=()=>$('#paneList'), paneDetail=()=>$('#paneDetail');
 function showListPane(){ $('#app').setAttribute('data-view','list'); }
 function showDetailPane(){ $('#app').setAttribute('data-view','detail'); }
-function detailPlaceholder(txt){ const p=paneDetail(); p.classList.remove('term-mode','fb-mode'); p.innerHTML='';
+function detailPlaceholder(txt){ const p=paneDetail(); closeInlineMonitor(); p.classList.remove('term-mode','fb-mode','mon-mode'); p.innerHTML='';
   p.appendChild(el('div','detail-empty',txt||'왼쪽에서 세션을 선택하세요')); }
 function highlightSelected(){ document.querySelectorAll('.srow').forEach(r=>
   r.classList.toggle('sel', r.dataset.sid===SELECTED_ID)); }
@@ -1160,7 +1164,8 @@ let ACTIVE_LABEL='';  // 선택된 라벨 필터('' = 전체)
 // 목록 보기: 'sessions'(폴더별 세션) | 'groups'(저장된 관제 그룹). 기기별 기억
 const LIST_VIEWS=['sessions','groups','files'];
 let LIST_VIEW=(()=>{ try{ const v=LS.getItem('sm_list_view'); return LIST_VIEWS.includes(v)?v:'sessions'; }catch(e){ return 'sessions'; } })();
-let MON_GROUPS=null;  // 그룹 보기용 캐시(null = 아직 못 받음)
+let MON_GROUPS=null;
+let MON_AUTO=false;   // 사용자가 그룹 칸을 눌러 들어왔으면 오른쪽에 그룹 관제를 띄운다  // 그룹 보기용 캐시(null = 아직 못 받음)
 function setListView(v){ LIST_VIEW=LIST_VIEWS.includes(v)?v:'sessions'; try{ LS.setItem('sm_list_view',LIST_VIEW); }catch(e){} }
 async function loadList(q){
   const main=paneList(); $('#head').textContent='세션';
@@ -1168,7 +1173,8 @@ async function loadList(q){
   // 세션 목록 ↔ 관제 그룹 목록 전환(2026-10-11 사장님: 그룹을 팝업에서 고르지 말고 목록으로)
   const seg=el('div','lview');
   const segBtn=(v,label)=>{ const b=el('button',LIST_VIEW===v?'on':'',label);
-    b.onclick=()=>{ if(LIST_VIEW===v) return; if(v==='files') FB.autoShow=true; setListView(v); loadList(inp.value); }; return b; };
+    b.onclick=()=>{ if(LIST_VIEW===v) return; if(v==='files') FB.autoShow=true; if(v==='groups') MON_AUTO=true;
+      setListView(v); loadList(inp.value); }; return b; };
   seg.appendChild(segBtn('sessions','세션')); seg.appendChild(segBtn('groups','🎬 그룹')); seg.appendChild(segBtn('files','📁 파일'));
   main.appendChild(seg);
   const sb=el('div','search'); const inp=el('input');
@@ -1177,7 +1183,8 @@ async function loadList(q){
   const listWrap=el('div'); main.appendChild(listWrap);
   const spin=el('div','spin'); listWrap.appendChild(spin);
   if(LIST_VIEW==='files') sb.style.display='none';
-  if(LIST_VIEW==='groups'){ sb.style.display='none'; fetchMonGroups().then(g=>{ MON_GROUPS=g; if(LIST_VIEW==='groups'&&SESSIONS) rerender(); }); }
+  if(LIST_VIEW==='groups'){ sb.style.display='none'; fetchMonGroups().then(g=>{ MON_GROUPS=g; if(LIST_VIEW==='groups'&&SESSIONS) rerender();
+    if(MON_AUTO&&LIST_VIEW==='groups'){ MON_AUTO=false; monAutoOpen(); } }); }
   const rerender=()=>{
     if(LIST_VIEW==='groups'){ renderGroupRows(listWrap); return; }
     // 파일 보기: 탐색기는 한 번만 그린다(20초 목록 갱신이 펼친 트리를 갈아엎지 않게)
@@ -1939,7 +1946,7 @@ async function loadDetail(s){
   closeLiveViewer();                       // 뷰어 실시간 스트림 정리(있으면)
   SELECTED_ID=s.session_id; highlightSelected();
   CURRENT_TERM_SID=null;                   // 터미널 화면에서 벗어남
-  const main=paneDetail(); main.classList.remove('term-mode','fb-mode'); main.innerHTML=''; $('#head').textContent='세션 상세';
+  const main=paneDetail(); closeInlineMonitor(); main.classList.remove('term-mode','fb-mode','mon-mode'); main.innerHTML=''; $('#head').textContent='세션 상세';
   main.appendChild(backbar('목록',()=>showListPane(),'tolist'));
   showDetailPane();
   const d=el('div','detail');
@@ -2629,7 +2636,7 @@ async function loadTerminal(s, safe){
   // 재접속'이 된다(relay e2e 실측 2026-09-10: 화면은 비고 클릭은 허공).
   if(termView.mounted(main)){ showDetailPane(); termView.attach(s, cred, safe, wasDead, wasTaken); renderTabBar(); saveTabs(); return; }
   termView.dispose();                       // 이전 화면(있으면) 전부 해체 후 새로 구축
-  main.classList.remove('term-mode','fb-mode'); main.innerHTML='';
+  closeInlineMonitor(); main.classList.remove('term-mode','fb-mode','mon-mode'); main.innerHTML='';
   // 바의 버튼들은 '지금 전경인 탭'에 작동해야 한다 — 구축 시점의 s 를 붙들면 탭 전환 뒤
   // 엉뚱한(첫) 세션에 작동한다. 활성 탭을 그때그때 읽는다.
   const cur=()=>{ const t=findTab(TABS.active); return t?t.s:s; };
@@ -2655,10 +2662,10 @@ async function loadTerminal(s, safe){
   // 탭 스트립(모니터 범례 칩 재사용) — 뒤로가기 바 다음 행(위 CSS grid 행 참고)
   const strip=el('div','mon-legend term-tabs'); main.appendChild(strip);
   showDetailPane();
-  main.classList.remove('fb-mode'); main.classList.add('term-mode');
+  closeInlineMonitor(); main.classList.remove('fb-mode','mon-mode'); main.classList.add('term-mode');
   // 터미널 영역(wrap)을 만들고 그 안에 탭별 host(xterm 또는 iframe)를 보유한다 — termView.mount.
   try{ await termView.mount(main); }catch(e){
-    main.classList.remove('term-mode','fb-mode'); main.innerHTML='';
+    closeInlineMonitor(); main.classList.remove('term-mode','fb-mode','mon-mode'); main.innerHTML='';
     main.appendChild(el('div','term-note','xterm 로드 실패: '+e.message)); return; }
   termView.strip=strip;
   termView.attach(s, cred, safe, wasDead, wasTaken);
@@ -2670,7 +2677,7 @@ function closeLiveViewer(){ if(_liveViewer){ try{_liveViewer.close();}catch(e){}
 
 async function loadViewer(s){
   closeLiveViewer();
-  const main=paneDetail(); main.classList.remove('term-mode','fb-mode'); main.innerHTML=''; $('#head').textContent='뷰어';
+  const main=paneDetail(); closeInlineMonitor(); main.classList.remove('term-mode','fb-mode','mon-mode'); main.innerHTML=''; $('#head').textContent='뷰어';
   const bar=backbar('상세',()=>loadDetail(s));
   const badge=el('div','vlive off'); badge.appendChild(el('span','vdot'));
   const bt=el('span',null,'실시간 연결 중…'); badge.appendChild(bt); bar.appendChild(badge);
@@ -2773,7 +2780,7 @@ async function loadResume(s, inplace, safe){
   let cred={};
   if(isIn){ cred=await ensurePriv(); if(cred===null) return; }   // 외부 in-place → grace/2차 인증
   if(safe) cred={...cred, safe:true};   // 일반 모드: 도구 자동허용 없이(웹은 물을 수 없어 거부됨)
-  const main=paneDetail(); main.classList.remove('term-mode','fb-mode'); main.innerHTML='';
+  const main=paneDetail(); closeInlineMonitor(); main.classList.remove('term-mode','fb-mode','mon-mode'); main.innerHTML='';
   $('#head').textContent='재개'+(safe?' (일반)':'');
   main.appendChild(backbar('상세',()=>{sess&&sess.close();loadDetail(s);}));
   showDetailPane();
@@ -3062,9 +3069,20 @@ function monSessName(s){ return s.title||s.label_name||s.slug||s.session_id.slic
 // 그룹은 Host 의 monitor_groups.json 에 산다. 알림 소스는 훅(관리 Stop/하위 Stop/하위 시작),
 // 발송은 Host 의 웹푸시. 알림 클릭 → #monitor=<gid> → 그 그룹 오버레이.
 async function fetchMonGroups(){ try{ const r=await T.api('GET','/api/owner/monitor/groups'); return (r&&r.groups)||[]; }catch(e){ return []; } }
-function openMonitorGroup(g){
+function openMonitorGroup(g, o){
   const ids=[g.manager].concat((g.subs||[]).filter(s=>s!==g.manager));
-  openMonitor(ids, g.manager, Object.assign({}, g.labels||{}), {gid:g.id, name:g.name});   // 저장 그룹 → 💾 는 갱신 모드
+  const inline=(o&&o.inline!==undefined)?o.inline:monInlineWanted();
+  if(inline){ if(MON_INLINE&&MON_INLINE.gid===g.id&&paneDetail().classList.contains('mon-mode')) return;   // 이미 보고 있음
+    try{ LS.setItem('sm_mon_last',g.id); }catch(e){} }
+  openMonitor(ids, g.manager, Object.assign({}, g.labels||{}), {gid:g.id, name:g.name, inline});   // 저장 그룹 → 💾 는 갱신 모드
+}
+function highlightGroup(gid){ document.querySelectorAll('.ghead.grp').forEach(h=>h.classList.toggle('sel', !!gid&&h.dataset.gid===gid)); }
+// 그룹 보기로 들어오면(데스크톱) 오른쪽 칸에 마지막으로 본 그룹(없으면 첫 그룹)을 띄운다 — 터미널을 보고 있으면 건드리지 않는다
+function monAutoOpen(){
+  if(!monInlineWanted()||!MON_GROUPS||!MON_GROUPS.length) return;
+  const pd=paneDetail(); if(pd.classList.contains('term-mode')||pd.classList.contains('mon-mode')) return;
+  let last=null; try{ last=LS.getItem('sm_mon_last'); }catch(e){}
+  openMonitorGroup(MON_GROUPS.find(g=>g.id===last)||MON_GROUPS[0], {inline:true});
 }
 async function openMonitorGroupById(gid){
   if(!gid) return;
@@ -3179,7 +3197,7 @@ function renderFbExplorer(wrap){
   const tree=el('div','fbtree'); wrap.appendChild(tree); FB.tree=tree;
   const p=fbRenderTree();
   if(FB.autoShow){ FB.autoShow=false;
-    if(innerWidth>=880&&FB.tabs.length&&!paneDetail().classList.contains('term-mode')) fbShowEditor(); }
+    if(innerWidth>=880&&!paneDetail().classList.contains('term-mode')) fbShowEditor(); }
   return p;
 }
 function fbAncestorsOpen(p){ const parts=p.split('/'); for(let i=1;i<parts.length;i++){ if(!FB.open.has(parts.slice(0,i).join('/'))) return false; } return true; }
@@ -3260,7 +3278,7 @@ function fbShowEditor(){
     if(main.classList.contains('term-mode')) leaveTerminalView();
     closeLiveViewer(); CURRENT_TERM_SID=null;
     if(FB.ed){ try{ FB.ed.dispose(); }catch(e){} FB.ed=null; }   // 다른 화면이 DOM 을 지웠다 — 편집기는 새로(모델은 탭이 보유)
-    main.classList.remove('term-mode','fb-mode'); main.innerHTML=''; main.classList.add('fb-mode');
+    closeInlineMonitor(); main.classList.remove('term-mode','fb-mode','mon-mode'); main.innerHTML=''; main.classList.add('fb-mode');
     main.appendChild(backbar('탐색기',()=>showListPane(),'tolist'));
     FB.tabsEl=el('div','fbtabs'); FB.crumbEl=el('div','fbcrumb');
     const body=el('div','fbbody'); FB.edHost=el('div','fbed'); FB.alt=el('div','fbscroll');
@@ -3418,7 +3436,7 @@ function renderGroupRows(wrap){
   for(const g of MON_GROUPS){
     const ids=[g.manager].concat((g.subs||[]).filter(x=>x!==g.manager));
     const busy=ids.filter(id=>{ const b=byId.get(id)&&sessionBadge(byId.get(id)); return b&&b.pulse; }).length;
-    const gh=el('div','ghead grp');
+    const gh=el('div','ghead grp'+(MON_INLINE&&MON_INLINE.gid===g.id?' sel':'')); gh.dataset.gid=g.id;
     const gt=el('button','gtext');
     gt.appendChild(el('div','gbase','🎬 '+g.name));
     gt.appendChild(el('div','gpath',`${ids.length}개 세션`+(busy?` · 진행 ${busy}`:'')));
@@ -3510,11 +3528,16 @@ function showMonitorPicker(){
 }
 
 // opts.gid/name: 저장 그룹으로 열었을 때 — 💾 가 '갱신' 모드로 동작(세션 추가/제거 시 💾* 표시).
+// 데스크톱 그룹 보기: 왼쪽 = 그룹 목록, 오른쪽(상세 칸) = 그 그룹 관제(2026-10-12 사장님). 폰은 전체 화면 오버레이 그대로.
+let MON_INLINE=null;   // {gid, close}
+function closeInlineMonitor(){ const m=MON_INLINE; MON_INLINE=null; if(m){ try{ m.close(); }catch(e){} } }
+function monInlineWanted(){ return innerWidth>=880; }
 function openMonitor(ids, manager, labels, opts){
   opts=opts||{};
-  const ov=el('div','mon-ov'); ov.id='mon-ov';
+  const inline=!!opts.inline;
+  const ov=el('div','mon-ov'+(inline?' inline':'')); ov.id='mon-ov';
   const head=el('div','mon-head');
-  head.appendChild(el('h3',null,'🎬 오케스트레이션 관제'));
+  head.appendChild(el('h3',null,opts.name?'🎬 '+opts.name:'🎬 오케스트레이션 관제'));
   const live=el('div','mon-live off'); live.appendChild(el('span','dot2'));
   const lt=el('span',null,'연결 중…'); live.appendChild(lt); head.appendChild(live);
   const saveBtn=el('button','mon-vtoggle mon-save','💾'); head.appendChild(saveBtn);   // 그룹 저장/갱신(v0.8.5)
@@ -3534,7 +3557,16 @@ function openMonitor(ids, manager, labels, opts){
   const rez=el('div','mon-resizer'); rez.title='드래그로 좌우 폭 조절 · 더블클릭 초기화';
   split.appendChild(bodyW); split.appendChild(rez); split.appendChild(viewer);
   ov.appendChild(head); ov.appendChild(legend); ov.appendChild(fbar); ov.appendChild(split);
-  document.body.appendChild(ov);
+  if(inline){
+    const main=paneDetail();
+    if(main.classList.contains('term-mode')) leaveTerminalView();
+    closeLiveViewer(); CURRENT_TERM_SID=null;
+    closeInlineMonitor(); main.classList.remove('term-mode','fb-mode'); main.innerHTML=''; main.classList.add('mon-mode');
+    main.appendChild(ov); $('#head').textContent='관제'; showDetailPane();
+  } else {
+    const old=document.getElementById('mon-ov'); if(old&&old.classList.contains('inline')) closeInlineMonitor();
+    document.body.appendChild(ov);
+  }
   vtoggle.onclick=()=>{ const hid=viewer.classList.toggle('hide'); rez.classList.toggle('gone',hid); };
   // 좌우 폭 드래그 조절(저장·복원, 더블클릭 초기화). 폰(오버레이)은 CSS 로 숨김.
   (function(){
@@ -3785,7 +3817,14 @@ function openMonitor(ids, manager, labels, opts){
 
   try{ handle=T.monitor(ids.join(','), manager, onMsg, savedGid); }
   catch(e){ setLive(false,'연결 실패'); toast('관제 연결 실패: '+e.message); }
-  x.onclick=()=>{ try{ handle&&handle.close(); }catch(e){} ov.remove(); };
+  const shut=()=>{ try{ handle&&handle.close(); }catch(e){} };
+  if(inline){
+    MON_INLINE={gid:opts.gid||null, close:shut};
+    x.title='관제 닫기';
+    x.onclick=()=>{ closeInlineMonitor(); paneDetail().classList.remove('mon-mode'); detailPlaceholder('왼쪽에서 그룹을 고르세요');
+      highlightGroup(null); };
+    highlightGroup(opts.gid||null);
+  } else x.onclick=()=>{ shut(); ov.remove(); };
 }
 
 // 관전 중 추가할 세션 고르기(현재 그룹에 없는 세션만)
@@ -4418,7 +4457,7 @@ conn.onnotice=(m)=>{
   else if(m.kind==='device_reissued'){ pcMarkState(room,'reissued'); showAuthLost('reissued'); }
 };
 $('#btn-refresh').onclick=()=>loadList();
-$('#btn-monitor').onclick=()=>{ setListView('groups'); loadList(); };   // 관제 그룹은 목록의 그룹 보기로
+$('#btn-monitor').onclick=()=>{ MON_AUTO=true; setListView('groups'); loadList(); };   // 관제 그룹은 목록의 그룹 보기로
 { const b=$('#btn-pcs'); if(b) b.onclick=()=>showPcs(); }
 { const b=$('#btn-assist'); if(b) b.onclick=()=>openAssistant(); }   // 🧑‍💼: PC·폰 어디서든 비서 세션(단계 3)   // 헤더 🖧: 폰에서 PC 전환·추가·해제(1대일 때도 보임)
 $('#btn-settings').onclick=()=>showSettings();

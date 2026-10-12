@@ -61,7 +61,7 @@ test("openMonitorGroupById: 저장 그룹 조회 → openMonitor(ids=관리+하�
   const o = ev(ctx, "globalThis.__opens")[0];
   same(o.ids, [A, B], "관리 세션이 앞, 중복 제거");
   assert.equal(o.mgr, A);
-  assert.equal(JSON.stringify(o.opts), JSON.stringify({ gid: "g1", name: "팀" }));
+  assert.equal(JSON.stringify(o.opts), JSON.stringify({ gid: "g1", name: "팀", inline: true }), "데스크톱 폭이면 오른쪽 칸에");
   await ctx.openMonitorGroupById("nope");
   assert.ok(ev(ctx, "globalThis.__toasts").at(-1).includes("찾을 수 없습니다"));
   ctx.document._register("mon-ov", stubEl("div"));                  // 이미 관제 오버레이가 떠 있음
