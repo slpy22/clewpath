@@ -131,7 +131,7 @@ def test_models_merge(fake_claude_home, monkeypatch):
     metas = [NS(last_model="claude-opus-5-5", mtime=200), NS(last_model="claude-opus-5", mtime=300),
              NS(last_model="claude-haiku-4-5-20251001", mtime=100), NS(last_model="<synthetic>", mtime=400),
              NS(last_model=None, mtime=1)]
-    r = hk.refresh_models(metas)
+    r = hk.refresh_models(metas, probe=False)
     assert r["added"] == ["claude-opus-5-5", "claude-haiku-4-5-20251001"]
     ids = [m["id"] for m in hk.saved_models()["models"]]
     assert ids == ["claude-opus-5-5", "claude-haiku-4-5-20251001", "claude-opus-5"]
@@ -139,7 +139,7 @@ def test_models_merge(fake_claude_home, monkeypatch):
     assert hk.model_label("claude-haiku-4-5-20251001") == "Haiku 4.5"
     assert hk.model_label("claude-fable-5-1") == "Fable 5.1" and hk.model_label("claude-opus-5") == "Opus 5"
     monkeypatch.setattr("session_manager.cp_client.fetch_models", lambda ttl=3600: None)   # CP 불통 → 내장 + 실사용
-    r2 = hk.refresh_models([NS(last_model="claude-zeta-9", mtime=1)])
+    r2 = hk.refresh_models([NS(last_model="claude-zeta-9", mtime=1)], probe=False)
     assert r2["source"] == "builtin" and hk.saved_models()["models"][0]["id"] == "claude-zeta-9"
 
 
@@ -163,10 +163,54 @@ def test_api_and_remote_privilege(fake_claude_home, monkeypatch):
         assert labels.get("abc").get("keep") == "1"
         c.post("/api/sessions/abc/keep", json={"keep": False})
         assert not labels.get("abc").get("keep")
-        hk.refresh_models([])
+        hk.refresh_models([], probe=False)
         assert c.get("/api/models").json()["source"] == "merged"
     while not hk._q.empty():
         hk._q.get_nowait()
     assert connector._is_privileged_api("/api/owner/housekeeping")
     assert connector._is_privileged_api("/api/owner/housekeeping/idle_sessions/run")
     assert not connector._is_privileged_api("/api/owner/housekeeping/models/run")
+
+
+def test_models_merge_with_picker(fake_claude_home, monkeypatch):
+    """claude /model 화면 목록이 맨 앞(화면 순서), 이름이 같으면 알려진 id(Haiku 4.5 → 날짜 붙은 id), 그다음 실사용 · 운영측."""
+    monkeypatch.setattr("session_manager.cp_client.fetch_models",
+                        lambda ttl=3600: [{"id": "claude-haiku-4-5-20251001", "label": "Haiku 4.5"},
+                                          {"id": "claude-opus-4-8", "label": "Opus 4.8"}])
+    pick = [{"label": "Opus 5.5", "family": "Opus", "ver": "5.5", "one_m": False},
+            {"label": "Haiku 4.5", "family": "Haiku", "ver": "4.5", "one_m": False},
+            {"label": "Fable 5.1 (1M)", "family": "Fable", "ver": "5.1", "one_m": True}]
+    monkeypatch.setattr(hk, "_maybe_probe", lambda d, force=False: ({"ok_models": pick}, "화면 목록 3개"))
+    r = hk.refresh_models([NS(last_model="claude-zeta-9", mtime=1)])
+    ids = [m["id"] for m in hk.saved_models()["models"]]
+    assert ids == ["claude-opus-5-5", "claude-haiku-4-5-20251001", "claude-fable-5-1[1m]", "claude-zeta-9", "claude-opus-4-8"]
+    assert "화면 목록 3개" in r["summary"]
+
+
+def test_maybe_probe_runs_on_version_change_only(fake_claude_home, monkeypatch):
+    from session_manager import modelprobe
+    calls = []
+    monkeypatch.setattr("session_manager.config.claude_exe", lambda: "claude.exe")
+    monkeypatch.setattr(modelprobe, "pick_cwd", lambda: "E:/t")
+    ver = {"v": "2.1.296"}
+    monkeypatch.setattr(modelprobe, "claude_version", lambda exe: ver["v"])
+
+    def fake_probe(exe, cwd):
+        calls.append(cwd)
+        return {"ok": True, "models": [{"label": "Opus 5.5", "family": "Opus", "ver": "5.5", "one_m": False}],
+                "session_id": f"sid{len(calls)}"}
+    monkeypatch.setattr(modelprobe, "probe", fake_probe)
+    d = {}
+    pr, note = hk._maybe_probe(d)
+    assert len(calls) == 1 and "새로 읽음" in note and d["probe_sessions"] == ["sid1"]
+    pr, note = hk._maybe_probe(d)
+    assert len(calls) == 1 and "다시 읽을 때 아님" in note, "같은 버전·7일 안이면 안 띄운다"
+    ver["v"] = "2.1.300"
+    hk._maybe_probe(d)
+    assert len(calls) == 2, "claude 가 업데이트되면 다시 읽는다"
+    monkeypatch.setattr(modelprobe, "probe", lambda exe, cwd: {"ok": False, "models": [], "session_id": "sid9", "error": "no_picker"})
+    ver["v"] = "2.1.301"
+    pr, note = hk._maybe_probe(d)
+    assert "실패" in note and pr["ok_models"][0]["label"] == "Opus 5.5", "실패하면 이전 목록 유지"
+    hk._save(d)
+    assert hk.hidden_session_ids() == {"sid1", "sid2", "sid9"}

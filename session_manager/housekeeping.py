@@ -33,7 +33,7 @@ JOBS = {
     "idle_sessions": {"name": "쉬는 세션 정리", "interval": 15 * 60, "default_on": True,
                       "desc": "오래 아무 일도 안 한 ClewPath 터미널을 끕니다(기록은 남아 다시 열면 이어짐)"},
     "models": {"name": "모델 목록 갱신", "interval": 24 * 3600, "default_on": True,
-               "desc": "운영측 목록 + 이 PC 에서 실제로 쓴 모델을 합쳐 재개 모델 목록을 새로 만듭니다"},
+               "desc": "claude /model 화면(claude 가 업데이트됐을 때·7일마다 숨은 터미널로 읽음) + 운영측 목록 + 이 PC 실사용 모델로 재개 모델 목록을 새로 만듭니다"},
 }
 # 화면에 '자동(항상)' 으로만 보여 주는 기존 주기 작업(켜고 끄는 대상 아님)
 BUILTIN_INFO = [
@@ -45,13 +45,15 @@ BUILTIN_INFO = [
 ]
 
 # 내장 기본 재개 모델 목록(CP 불통·미설정 때). 운영측 목록·이 PC 실사용 모델과 합쳐진다(refresh_models).
-BUILTIN_MODELS = [
+BUILTIN_MODELS = [      # claude /model 화면 순서(2026-10-12, Claude Code 2.1.296) — CP 내장 목록과 같게
     {"id": "claude-opus-5-5", "label": "Opus 5.5"},
-    {"id": "claude-sonnet-5-5", "label": "Sonnet 5.5"},
     {"id": "claude-fable-5-1", "label": "Fable 5.1"},
+    {"id": "claude-sonnet-5-5", "label": "Sonnet 5.5"},
     {"id": "claude-haiku-5-5", "label": "Haiku 5.5"},
-    {"id": "claude-opus-5", "label": "Opus 5"},
+    {"id": "claude-haiku-4-5-20251001", "label": "Haiku 4.5"},
     {"id": "claude-sonnet-5", "label": "Sonnet 5"},
+    {"id": "claude-opus-5", "label": "Opus 5"},
+    {"id": "claude-fable-5", "label": "Fable 5"},
     {"id": "claude-opus-4-8", "label": "Opus 4.8"},
 ]
 
@@ -250,29 +252,89 @@ def _models_file() -> Path:
     return config.data_dir() / "models.json"
 
 
-def refresh_models(metas=None) -> dict:
+PROBE_MAX_AGE_S = 7 * 86400     # claude 버전이 그대로여도 이만큼 지나면 화면을 다시 읽는다
+_PROBE_KEEP_IDS = 50
+
+
+def _maybe_probe(d: dict, force: bool = False) -> tuple[dict | None, str]:
+    """claude /model 화면 읽기(modelprobe) — claude 가 업데이트됐거나 7일 지났을 때만. → (마지막 성공 결과, 메모)."""
+    from session_manager import config as _cfg, modelprobe
+    pr = d.get("probe") or {}
+    exe = _cfg.claude_exe()
+    ver = modelprobe.claude_version(exe) if exe else None
+    due = force or not pr.get("ok_models") or (ver and ver != pr.get("version"))         or time.time() - float(pr.get("at") or 0) > PROBE_MAX_AGE_S
+    if not due:
+        return pr, f"화면 목록 {len(pr.get('ok_models') or [])}개(claude {pr.get('version')}, 다시 읽을 때 아님)"
+    cwd = modelprobe.pick_cwd()
+    if not exe or not cwd:
+        return pr, "화면 읽기 건너뜀(" + ("claude 없음" if not exe else "띄울 신뢰 폴더 없음") + ")"
+    r = modelprobe.probe(exe, cwd)
+    ids = (d.get("probe_sessions") or []) + [r["session_id"]]
+    d["probe_sessions"] = ids[-_PROBE_KEEP_IDS:]
+    pr = dict(pr, at=int(time.time()), version=ver, last_error=r.get("error"))
+    if r.get("ok"):
+        pr["ok_models"] = r["models"]
+        note = f"화면 목록 {len(r['models'])}개 새로 읽음(claude {ver})"
+    else:
+        note = f"⚠ 화면 읽기 실패({r.get('error')}) — 이전 목록 사용"
+    d["probe"] = pr
+    return pr, note
+
+
+def hidden_session_ids() -> set[str]:
+    """화면 읽기용으로 잠깐 띄운 claude 가 남긴 빈 세션 — 목록에서 숨긴다."""
+    return set(_load().get("probe_sessions") or [])
+
+
+def refresh_models(metas=None, probe: bool = True) -> dict:
+    """재개 모델 목록 합본: ① claude /model 화면(이 계정이 고를 수 있는 것, 화면 순서) ② 운영측(CP) ③ 이 PC 실사용."""
     from session_manager import cp_client
+    from session_manager import modelprobe
     cp = None
     try:
         cp = cp_client.fetch_models(ttl=0)
     except Exception:  # noqa: BLE001
         cp = None
     base = [dict(x) for x in (cp or BUILTIN_MODELS) if isinstance(x, dict) and x.get("id")]
-    have = {x["id"] for x in base}
+    observed = observed_models(metas)
+    known = {}
+    for x in base:
+        known.setdefault(model_label(x["id"]), x["id"])
+    for mid, _t in observed:
+        known.setdefault(model_label(mid), mid)
+    note = ""
+    shown = []
+    if probe:
+        with _lock:
+            d = _load()
+        pr, note = _maybe_probe(d)
+        with _lock:
+            d2 = _load()
+            for k in ("probe", "probe_sessions"):
+                if k in d:
+                    d2[k] = d[k]
+            _save(d2)
+        for it in (pr or {}).get("ok_models") or []:
+            shown.append({"id": modelprobe.to_id(it, known), "label": it["label"], "picker": True})
+    models, have = [], set()
+    for x in shown + base:
+        if x["id"] not in have:
+            models.append(x)
+            have.add(x["id"])
     added = []
-    for mid, _t in observed_models(metas):
+    for mid, _t in observed:
         if mid not in have:
             added.append({"id": mid, "label": model_label(mid), "seen": True})
             have.add(mid)
-    models = added + base           # 이 PC 에서 새로 쓰인 모델(대개 최신)이 위로
+    models = (models[:len(shown)] + added + models[len(shown):]) if shown else (added + models)
     doc = {"models": models, "updated_at": int(time.time()), "source": "cp" if cp else "builtin",
-           "observed_added": [x["id"] for x in added]}
+           "picker_count": len(shown), "observed_added": [x["id"] for x in added]}
     f = _models_file()
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text(json.dumps(doc, ensure_ascii=False, indent=1), encoding="utf-8")
+    summ = f"{len(models)}개" + (f" (실사용 추가: {', '.join(model_label(a) for a in doc['observed_added'])})" if added else "")
     return {"count": len(models), "added": doc["observed_added"], "source": doc["source"],
-            "summary": f"{len(models)}개" + (f" (새로 추가: {', '.join(model_label(a) for a in doc['observed_added'])})"
-                                            if added else "")}
+            "summary": summ + (" · " + note if note else "")}
 
 
 def saved_models() -> dict | None:

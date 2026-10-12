@@ -482,7 +482,10 @@ def create_app() -> FastAPI:
     @app.get("/api/sessions")
     def list_sessions(include_headless: bool = False):
         # claude -p 단발 기록은 목록에서 뺀다(v1 목록과 같은 규칙, 2026-10-12)
-        sessions = [m for m in scanner.scan_all() if include_headless or not m.headless]
+        from session_manager import housekeeping as _hk
+        hidden = _hk.hidden_session_ids()            # 모델 목록 읽기용으로 잠깐 띄운 claude 의 빈 기록
+        sessions = [m for m in scanner.scan_all()
+                    if (include_headless or not m.headless) and m.session_id not in hidden]
         recs = labels.all_records()  # 라벨은 1회만 로드(세션마다 파일 읽지 않음)
         groups = scanner.group_by_project(sessions)
         project_list = []
@@ -1617,6 +1620,8 @@ def create_app() -> FastAPI:
         peer_of = peers.peer_map()
         sessions = scanner.scan_all()
         recs = labels.all_records()  # 라벨 1회 로드
+        from session_manager import housekeeping as _hk
+        hidden = _hk.hidden_session_ids()            # 모델 목록 읽기용으로 잠깐 띄운 claude 의 빈 기록(숨김)
         out = []
         now_ts = time.time()
         for s in sessions:
@@ -1630,6 +1635,8 @@ def create_app() -> FastAPI:
                 continue
             md = {"session_id": s.session_id, "custom_title": s.custom_title,
                   "ai_title": s.ai_title, "slug": s.slug}
+            if s.session_id in hidden and not include_headless:
+                continue
             live_term = webterm.has_terminal(s.session_id)
             bg = bgtasks.counts(s, peer_of.get(s.session_id))
             # claude -p 단발 기록(자동 실행)은 목록에 싣지 않는다(2026-10-12 사장님: claude --resume 에도 안 나오는
