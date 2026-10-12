@@ -1606,6 +1606,7 @@ def create_app() -> FastAPI:
                 # 이 대화가 이어진 새 세션 id(있으면 '옛 줄' — 화면은 접고 재개는 그쪽으로)
                 "continued_in": s.continued_in,
                 "picker_hidden": s.picker_hidden,   # ⚙ 배지 - v1(폰·릴레이) 누락 버그 수정
+                "headless": s.headless,             # claude -p 단발 기록 → 목록에서 접음
                 "title": _display_title(md, rec),
                 "git_branch": s.git_branch,
                 "message_count": s.message_count,

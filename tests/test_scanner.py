@@ -85,3 +85,30 @@ def test_picker_hidden_detection(fake_claude_home):
     assert metas["00007777"].picker_hidden is False   # 빈 세션
     assert metas["55558888"].picker_hidden is False   # agent-name 스텁(픽커 뜸)
 
+
+def test_headless_detection_and_stop_hook_summary(fake_claude_home):
+    """claude -p 단발 기록(entrypoint sdk-cli)은 headless. Stop 훅의 stop_hook_summary system 줄은
+    -p 에도 남으므로 대화형 마커로 세지 않는다(2026-10-12 번역 스크립트 56개가 일반 세션처럼 보인 사례)."""
+    from tests.conftest import write_session
+    Q = {"type": "queue-operation", "operation": "enqueue", "content": "translate"}
+    U = {"type": "user", "cwd": "E:\c", "entrypoint": "sdk-cli", "message": {"role": "user", "content": "x"},
+         "timestamp": "2026-10-12T04:09:24.579Z"}
+    A = {"type": "assistant", "entrypoint": "sdk-cli", "message": {"model": "claude-opus-5"},
+         "timestamp": "2026-10-12T04:09:30.000Z"}
+    H = {"type": "system", "subtype": "stop_hook_summary", "entrypoint": "sdk-cli"}
+    write_session(fake_claude_home, "P--x", "aaaa1111", [Q, U, A, H])
+    ci = dict(U, entrypoint="cli")
+    write_session(fake_claude_home, "P--x", "bbbb2222",
+                  [{"type": "permission-mode"}, ci, dict(H, entrypoint="cli")])
+    # 대화형 세션을 SDK 로 이어 쓴 경우(cli+sdk 혼재) → headless 아님
+    write_session(fake_claude_home, "P--x", "cccc3333", [{"type": "mode"}, ci, U])
+    # entrypoint 가 없는 옛 기록 → headless 아님
+    write_session(fake_claude_home, "P--x", "dddd4444", [{"type": "user", "cwd": "E:\c"}])
+    m = {x.session_id: x for x in scanner.scan_all()}
+    assert m["aaaa1111"].headless is True and m["aaaa1111"].picker_hidden is True
+    assert m["bbbb2222"].headless is False and m["bbbb2222"].picker_hidden is False
+    assert m["cccc3333"].headless is False
+    assert m["dddd4444"].headless is False
+    # 다른 system 줄(turn_duration 등)은 계속 대화형 마커
+    write_session(fake_claude_home, "P--x", "eeee5555", [{"type": "system", "subtype": "turn_duration"}, U])
+    assert scanner.scan_one("eeee5555").picker_hidden is False

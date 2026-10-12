@@ -254,7 +254,7 @@
   .dhead{margin:2px 2px 12px}
   .dtitle{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
   .dtitle h2{margin:0;font-size:1.15rem;line-height:1.3;word-break:break-word}
-  .dren{width:30px;height:30px;border-radius:8px;color:var(--muted);flex:none}
+  .dren{height:28px;padding:0 11px;border-radius:999px;border:1px solid var(--line2);color:var(--ink2);font-size:.78rem;flex:none;white-space:nowrap}
   .dren:hover,.dren:active{background:var(--surface2);color:var(--ink)}
   .dbadge{font-size:.72rem;font-weight:600;padding:2px 9px;border-radius:999px;color:var(--c);border:1px solid var(--c);white-space:nowrap}
   .dpath{margin-top:4px;font-size:.8rem;color:var(--muted);word-break:break-all;font-family:var(--mono)}
@@ -293,6 +293,44 @@
   .search input{flex:1;min-width:0}
   .search .sref{flex:none;width:42px;height:44px;border-radius:11px;background:var(--surface);border:1px solid var(--line);color:var(--ink2);font-size:1.05rem}
   .lview .assist{flex:1;padding:8px 0;border-radius:8px;color:var(--ink2);font-size:.88rem;background:transparent}
+  /* ---- 화면 재배치 2단계(2026-10-12): 목록 줄 ⋯ 메뉴 · 🔔 할 일 · 폰 아래 탭 막대 · 자동 실행 기록 접기 ---- */
+  .sbtn.more{width:40px;font-size:1.15rem;color:var(--ink2)}
+  .sauto{display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:10px 14px;color:var(--muted);font-size:.8rem;
+    border-left:2px solid var(--line2);border-bottom:1px solid var(--line)}
+  .sauto:active{background:var(--surface2)}
+  .sauto small{margin-left:auto;font-size:.72rem;opacity:.85;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+  .gcount small{font-weight:500;opacity:.7;margin-left:3px}
+  .popbg{position:fixed;inset:0;z-index:40;background:transparent}
+  .pop{position:fixed;z-index:41;top:60px;right:12px;min-width:230px;max-width:min(92vw,360px);max-height:min(72vh,540px);overflow-y:auto;
+    background:var(--surface);border:1px solid var(--line2);border-radius:14px;box-shadow:0 14px 36px rgba(0,0,0,.38);padding:6px}
+  .pop .poph{font-size:.74rem;font-weight:700;color:var(--muted);padding:8px 10px 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pop .popi{display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:10px;border-radius:9px;color:var(--ink);font-size:.92rem}
+  .pop .popi:hover,.pop .popi:active,.pop .popi:focus-visible{background:var(--surface2);outline:none}
+  .pop .popi .pi{flex:none;width:22px;text-align:center}
+  .pop .popi .pt{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+  .pop .popi .pt>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pop .popi .pt small{color:var(--muted);font-size:.74rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pop .popi.warn .pi{color:#e8a03c}
+  .pop .popempty{padding:12px;color:var(--muted);font-size:.85rem;line-height:1.55;white-space:pre-line}
+  #btn-todo{position:relative}
+  #btn-todo .tbadge{position:absolute;top:2px;right:0;min-width:17px;height:17px;padding:0 4px;border-radius:999px;background:#e8a03c;
+    color:#14110a;font-size:.66rem;font-weight:800;line-height:17px;text-align:center}
+  #tabbar{display:flex;flex:none;border-top:1px solid var(--line);background:var(--surface);padding:0 0 var(--safe-b)}
+  #tabbar button{flex:1;display:flex;flex-direction:column;align-items:center;gap:1px;padding:7px 0 6px;color:var(--muted);font-size:.68rem;background:transparent}
+  #tabbar button .ti{font-size:1.25rem;line-height:1.25;filter:grayscale(.7);opacity:.75}
+  #tabbar button.on{color:var(--accent);font-weight:650}
+  #tabbar button.on .ti{filter:none;opacity:1}
+  #app:has(#paneDetail.term-mode)[data-view=detail] #tabbar,
+  #app:has(#paneDetail.fb-mode)[data-view=detail] #tabbar{display:none}   /* 터미널·편집기 전체 화면엔 숨김 */
+  @media (max-width:879px){
+    .lview{display:none}          /* 폰: 보기 전환은 아래 탭 막대로(엄지 자리) */
+    .lview+.search{padding-top:12px}
+    #app:has(#tabbar) #paneList,#app:has(#tabbar) #paneDetail{padding-bottom:16px}
+    .popbg{background:rgba(0,0,0,.38)}
+    .pop{left:8px;right:8px;top:auto;bottom:calc(8px + var(--safe-b));max-width:none;border-radius:16px;max-height:76vh}
+    .pop .popi{padding:13px 12px;font-size:1rem}
+  }
+  @media (min-width:880px){ #tabbar{display:none} }
   .setadv{width:100%;text-align:left;padding:12px 4px 8px;margin-top:10px;color:var(--ink2);font-size:.86rem;border-top:1px solid var(--line)}
   .actions .btn{padding:15px}
   .actions .btn.full{grid-column:1/-1}
@@ -726,9 +764,16 @@
     <select class="pcname hidden" id="pcname" title="PC 선택 (localhost / 저장된 PC)"></select>
     <span class="grow"></span>
     <button class="icon hidden" id="btn-pcs" title="내 PC 전환 · 추가 · 페어링 해제">🖧</button>
+    <button class="icon" id="btn-todo" title="할 일 — 승인·권한·입력 대기" aria-label="할 일">🔔<span class="tbadge hidden"></span></button>
     <button class="icon" id="btn-settings" title="설정">⚙</button>
   </header>
   <main id="main"><div id="paneList"></div><div id="resizer" title="드래그로 폭 조절 · 더블클릭 초기화"></div><div id="paneDetail"></div></main>
+  <nav id="tabbar" aria-label="보기 전환">
+    <button data-v="sessions"><span class="ti">💬</span>세션</button>
+    <button data-v="groups"><span class="ti">🎬</span>그룹</button>
+    <button data-v="files"><span class="ti">📁</span>파일</button>
+    <button data-v="assist"><span class="ti">🧑‍💼</span>비서</button>
+  </nav>
 </div>
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
@@ -1244,7 +1289,7 @@ let MON_AUTO=false;   // 사용자가 그룹 칸을 눌러 들어왔으면 오�
 function setListView(v){ LIST_VIEW=LIST_VIEWS.includes(v)?v:'sessions'; try{ LS.setItem('sm_list_view',LIST_VIEW); }catch(e){} }
 async function loadList(q){
   const main=paneList(); $('#head').textContent='세션';
-  main.innerHTML='';
+  main.innerHTML=''; syncTabbar();
   // 세션 목록 ↔ 관제 그룹 목록 전환(2026-10-11 사장님: 그룹을 팝업에서 고르지 말고 목록으로)
   const seg=el('div','lview');
   const segBtn=(v,label)=>{ const b=el('button',LIST_VIEW===v?'on':'',label);
@@ -1284,7 +1329,8 @@ async function loadList(q){
     restoreTabsOnce();             // 저장된 터미널 탭 워킹셋 복원(1회, 화면 탈취 없이 목록만)
     consumePendingMonitor();       // 관제 알림 클릭으로 진입한 경우 그 그룹 오버레이 열기
     if(PENDING_APPROVAL){ const a=PENDING_APPROVAL; PENDING_APPROVAL=''; openApprovalById(a); }
-    LIST_CTX={rerender};           // 자동 갱신(뱃지 실시간화)이 쓸 컨텍스트
+    LIST_CTX={rerender};
+    refreshTodo();                 // 🔔 배지(승인 요청 수는 서버에서, 권한·입력 대기는 방금 받은 목록에서)           // 자동 갱신(뱃지 실시간화)이 쓸 컨텍스트
   }catch(e){ listWrap.innerHTML=''; listWrap.appendChild(el('div','empty','목록 실패: '+e.message)); }
 }
 
@@ -1301,6 +1347,7 @@ setInterval(async()=>{
     const pl=$('#paneList'); const st=pl?pl.scrollTop:0;
     LIST_CTX.rerender();
     if(pl) pl.scrollTop=st;
+    if(Date.now()-TODO_AT>55000) refreshTodo(); else renderTodoBadge();
     // 터미널 탭 칩의 상태 밑줄도 같은 훅 상태를 쓴다 — 목록과 함께 갱신(term-mode 일 때만 의미)
     if(paneDetail().classList.contains('term-mode')) renderTabBarSoon();
   }catch(e){}
@@ -1440,6 +1487,7 @@ function renderChips(wrap,rerender){
     wrap.appendChild(mk(l,`${l} ${n}`,ACTIVE_LABEL===l));
 }
 const COLLAPSED=new Set();  // 접힌 그룹 키(project_folder)
+const AUTO_OPEN=new Set();  // 「🤖 자동 실행 기록」을 펼친 그룹 키(기본 접힘)
 function baseName(p){ if(!p)return''; const parts=p.split(/[\\/]/).filter(Boolean);
   return parts[parts.length-1]||p; }
 function groupRepr(list){ // 대표 cwd: 가장 짧은(루트) 경로
@@ -1933,9 +1981,14 @@ function renderRows(wrap,q){
   const groups=new Map();
   for(const s of rows){ const k=s.project_folder||'(기타)';
     if(!groups.has(k))groups.set(k,[]); groups.get(k).push(s); }
-  const arr=[...groups.entries()].map(([k,list])=>({k,list,
-    latest:list.reduce((m,s)=>Math.max(m,Date.parse(s.ended_at||'')||0),0)}));
-  arr.sort((a,b)=>b.latest-a.latest);
+  // 자동 실행 기록(claude -p 단발, 2026-10-12): 다른 세션·스크립트가 일감 하나씩 돌리고 끝난 기록이라
+  // 폴더 안 「🤖 자동 실행 기록 N개」 한 줄로 접는다. 검색 중엔 펼쳐서 보여 준다. 폴더 순서도 이 기록은 빼고 정한다.
+  const isAuto=(s)=>!!s.headless&&!q;
+  const tsOf=(s)=>Date.parse(s.ended_at||'')||0;
+  const arr=[...groups.entries()].map(([k,list])=>{ const main=list.filter(s=>!isAuto(s));
+    return {k,list,main,auto:list.filter(isAuto),
+      latest:(main.length?main:list).reduce((m,s)=>Math.max(m,tsOf(s)),0)}; });
+  arr.sort((a,b)=>((b.main.length>0)-(a.main.length>0))||(b.latest-a.latest));   // 자동 기록뿐인 폴더는 맨 아래
 
   for(const g of arr){
     const repr=groupRepr(g.list);
@@ -1946,16 +1999,17 @@ function renderRows(wrap,q){
     gt.appendChild(el('div','gbase','📁 '+baseName(repr)));
     gt.appendChild(el('div','gpath',repr));
     gh.appendChild(gt);
-    gh.appendChild(el('span','gcount',g.list.length+''));
+    { const gc=el('span','gcount',(g.main.length||g.auto.length)+''); if(g.main.length&&g.auto.length) gc.appendChild(el('small',null,'+'+g.auto.length+'🤖'));
+      else if(!g.main.length) gc.textContent='🤖 '+g.auto.length; gh.appendChild(gc); }
     gh.onclick=()=>{ if(COLLAPSED.has(g.k))COLLAPSED.delete(g.k); else COLLAPSED.add(g.k);
       renderRows(wrap,q); };
     wrap.appendChild(gh);
     if(collapsed) continue;
     const glist=el('div','glist');
-    for(const s of g.list){
+    const mkRow=(s)=>{
       const srow=el('div','srow'); srow.dataset.sid=s.session_id;
       if(s.session_id===SELECTED_ID) srow.classList.add('sel');
-      if(s.picker_hidden && !s.picker_expose) srow.classList.add('dim');  // 픽커 미표시 = 흐리게
+      if((s.picker_hidden && !s.picker_expose) || s.headless) srow.classList.add('dim');  // 픽커 미표시·자동 실행 = 흐리게
       // 탭 영역(정보) → 상세
       const info=el('button','sinfo');
       const r1=el('div','sr1');
@@ -1972,7 +2026,11 @@ function renderRows(wrap,q){
       }
       // 피어(다른 곳에서 살아 있는 세션)는 칩 대신 오른쪽 재개 버튼 아이콘이 출처를 보여 준다(2026-09-30 사장님:
       // 'worker-3-ax-52' 같은 SendMessage 이름 칩은 봐도 이해가 안 됨)
-      if(s.picker_hidden&&!s.picker_expose){
+      if(s.headless){
+        const g=el('span','schip gear','🤖 자동 실행');
+        g.title='claude -p(비대화형) 단발 실행 기록 — 다른 세션·스크립트가 일감 하나를 맡기고 끝난 것. 프로세스는 남아 있지 않습니다';
+        r1.appendChild(g);
+      } else if(s.picker_hidden&&!s.picker_expose){
         const g=el('span','schip gear','⚙ 에이전트');
         g.title='claude 재개 목록(피커)에 없는 세션 - 에이전트/포크 산물. 상세에서 설명 보기';
         r1.appendChild(g);
@@ -1998,7 +2056,8 @@ function renderRows(wrap,q){
       { const rt=relFrom(s); if(rt)meta.appendChild(el('span',null,rt)); }
       info.appendChild(meta);
       if(s.cwd&&s.cwd!==repr) info.appendChild(el('div','spath',s.cwd));
-      info.onclick=()=>loadDetail(continuedTarget(s));
+      // 실행 중인 클루패스 터미널(또는 열린 탭)이면 바로 그 화면, 아니면 상세(2026-10-12 사장님)
+      info.onclick=()=>jumpToSession(continuedTarget(s));
       // 큰 터치 버튼: (권한대기면 승인) / 재개
       if(bd&&bd.text==='권한 대기'){
         const bA=el('button','sbtn resume','✋'); bA.title='원격 승인';
@@ -2008,8 +2067,24 @@ function renderRows(wrap,q){
       const bR=el('button','sbtn resume', rowResumeIcon(s));
       bR.title=rowResumeTitle(s);
       bR.onclick=()=>showResumeChooser(continuedTarget(s));
-      srow.appendChild(bR);   // ✎ 이름은 상세 머리로(오터치 방지, ux-reorg §4-4)
-      glist.appendChild(srow);
+      srow.appendChild(bR);
+      // ⋯ 메뉴: 재개·대화 보기·이름 바꾸기·파일·상세(위험 동작은 넣지 않는다 — 상세의 위험 구역에서만)
+      const bM=el('button','sbtn more','⋯'); bM.title='메뉴 — 재개 · 대화 보기 · 이름 바꾸기 · 파일 · 상세';
+      bM.setAttribute('aria-label','세션 메뉴'); bM.setAttribute('aria-haspopup','menu');
+      bM.onclick=(e)=>{ if(e&&e.stopPropagation) e.stopPropagation(); return rowMenu(continuedTarget(s),bM); };
+      srow.appendChild(bM);
+      return srow;
+    };
+    for(const s of g.main) glist.appendChild(mkRow(s));
+    if(g.auto.length){
+      const open=AUTO_OPEN.has(g.k);
+      const tg=el('button','sauto'); tg.setAttribute('aria-expanded',open?'true':'false');
+      tg.appendChild(el('span',null,(open?'▾ ':'▸ ')+'🤖 자동 실행 기록 '+g.auto.length+'개'));
+      tg.appendChild(el('small',null,'claude -p 단발 작업 · 끝남'));
+      tg.title='다른 세션·스크립트가 claude -p 로 일감 하나씩 맡기고 끝난 기록입니다. 실행 중인 프로세스는 없습니다';
+      tg.onclick=()=>{ if(AUTO_OPEN.has(g.k)) AUTO_OPEN.delete(g.k); else AUTO_OPEN.add(g.k); renderRows(wrap,q); };
+      glist.appendChild(tg);
+      if(open) for(const s of g.auto) glist.appendChild(mkRow(s));
     }
     wrap.appendChild(glist);
   }
@@ -2033,7 +2108,7 @@ async function loadDetail(s){
   const hd=el('div','dhead');
   const t1=el('div','dtitle');
   t1.appendChild(el('h2',null,s.title||s.label_name||s.slug||'세션'));
-  const ren=el('button','dren','✎'); ren.title='이름 바꾸기'; ren.setAttribute('aria-label','이름 바꾸기'); ren.onclick=()=>renameNative(s);
+  const ren=el('button','dren','✎ 이름'); ren.title='이름 바꾸기'; ren.setAttribute('aria-label','이름 바꾸기'); ren.onclick=()=>renameNative(s);
   t1.appendChild(ren);
   const bd=sessionBadge(s);
   if(bd){ const b=el('span','dbadge',bd.text); b.style.setProperty('--c',bd.c); t1.appendChild(b); }
@@ -3257,7 +3332,7 @@ function fbSplit(id){ id=String(id||''); const i=id.indexOf(FB_SEP); return i<0?
 function fbParentId(id){ const [rk,rel]=fbSplit(id); if(!rel) return null; const j=rel.lastIndexOf('/'); return fbId(rk, j<0?'':rel.slice(0,j)); }
 function fbRoots(){
   const m=new Map();
-  for(const s of (SESSIONS||[])){ const cwd=s.cwd||''; if(!cwd) continue; const k=cwd.toLowerCase();
+  for(const s of (SESSIONS||[])){ const cwd=s.cwd||''; if(!cwd||s.headless) continue; const k=cwd.toLowerCase();
     let r=m.get(k); if(!r){ r={key:k, cwd, name:baseName(cwd)||cwd, sessions:[], mtime:0, live:false}; m.set(k,r); }
     r.sessions.push(s); r.mtime=Math.max(r.mtime, s.mtime||0); if(s.live_terminal||s.peer) r.live=true; }
   const out=[...m.values()];
@@ -4657,6 +4732,8 @@ conn.onnotice=(m)=>{
 // 머리줄 재배치(2026-10-12, ux-reorg §4-1): 🎬 관제 = 목록의 「그룹」, 🧑‍💼 비서 = 보기 전환 칸, ⟳ = 검색 칸 옆
 { const b=$('#btn-pcs'); if(b) b.onclick=()=>showPcs(); }
 $('#btn-settings').onclick=()=>showSettings();
+$('#btn-todo').onclick=()=>showTodo();
+for(const b of document.querySelectorAll('#tabbar button')) b.onclick=()=>tabbarGo(b.dataset.v);
 
 // ---- ⚙ 설정 화면: 흩어져 있던 도구를 한곳에(5개 섹션). 로컬 전용 항목은
 // 원격에서 숨기지 않고 🔒+안내로 보여준다 — 기능의 존재와 보안 설계를 설명.
@@ -4703,10 +4780,10 @@ function showSettings(){
       add(el('div','cwd','홈 화면에 추가해 앱처럼 열어보세요 — Safari 탭은 오래 안 쓰면 페어링이 지워질 수 있습니다.'));
   }
 
-  sec('알림 · 승인');
+  sec('알림');
   if(pushSupported()) row('🔔','알림 설정','권한 요청·작업 완료 푸시 · 받는 기기 관리',togglePush);
   else add(el('div','cwd','이 브라우저는 웹 푸시를 지원하지 않습니다'));
-  row('✅','승인 대기','비서·관리 세션의 실행 요청을 확인하고 승인/거절',showApprovals);
+  add(el('div','cwd','승인 요청 · 권한 요청은 머리줄 🔔 할 일에 모입니다.'));   // 2단계(ux-reorg §4-5): 설정 깊숙이 두지 않는다
 
   sec('보안');
   row('🔒','2차 인증(2FA)','원격 접속 보호 · 설정 변경',showSecurity,{local:true});
@@ -4933,6 +5010,110 @@ async function requestApproval(kind, args, onDone){
   if(!a || a.error){ toast('요청 실패: '+((a&&a.error)||'')); return null; }
   closeModal(); showApprovalSheet(a, {execute:true, onDone});
   return a;
+}
+
+// ---- 팝 메뉴(⋯ · 🔔, 화면 재배치 2단계): PC 는 버튼 옆 작은 상자, 폰은 아래에서 올라오는 시트 ----
+let POP=null;
+function closePop(){
+  if(!POP) return; const p=POP; POP=null;
+  try{ p.bg.remove(); p.box.remove(); }catch(e){}
+  try{ document.removeEventListener('keydown',p.onKey); }catch(e){}
+}
+function popItem(icon,label,sub,fn,cls){
+  const b=el('button','popi'+(cls?' '+cls:'')); b.setAttribute('role','menuitem');
+  b.appendChild(el('span','pi',icon)); const t=el('span','pt'); t.appendChild(el('span',null,label));
+  if(sub) t.appendChild(el('small',null,sub)); b.appendChild(t);
+  b.onclick=(e)=>{ if(e&&e.stopPropagation) e.stopPropagation(); closePop(); return fn&&fn(); };
+  return b;
+}
+function openPop(anchor,content,title){
+  closePop();
+  const bg=el('div','popbg'), box=el('div','pop'); box.setAttribute('role','menu');
+  if(title) box.appendChild(el('div','poph',title));
+  box.appendChild(content);
+  bg.onclick=()=>closePop();
+  document.body.appendChild(bg); document.body.appendChild(box);
+  const onKey=(e)=>{ if(e.key==='Escape') closePop(); };
+  document.addEventListener('keydown',onKey);
+  POP={bg,box,anchor,onKey};
+  // PC: 누른 버튼 바로 아래(화면 밖이면 위로). 폰은 CSS 가 아래 시트로 고정한다.
+  try{ if(innerWidth>=880&&anchor&&anchor.getBoundingClientRect){ const r=anchor.getBoundingClientRect();
+    const bw=box.offsetWidth||260, bh=box.offsetHeight||240;
+    let top=r.bottom+4; if(top+bh>innerHeight-8) top=Math.max(8,r.top-bh-4);
+    box.style.left=Math.max(8,Math.min(innerWidth-bw-8,r.right-bw))+'px'; box.style.top=top+'px'; box.style.right='auto'; } }catch(e){}
+  try{ const f=box.querySelector('.popi'); if(f&&f.focus) f.focus(); }catch(e){}
+  return box;
+}
+// 목록 줄 ⋯ 메뉴(2026-10-12 사장님: 재개·뷰어·이름 변경·상세 보기…). 삭제·강제 종료·되돌리기는 넣지 않는다 —
+// 상세 맨 아래 「위험 구역」에서만(무엇을 하는지·되돌릴 수 있는지·원격 2차 인증 안내와 함께).
+function rowMenuItems(s){
+  const it=[]; const bd=sessionBadge(s);
+  if(bd&&bd.text==='권한 대기') it.push(['✋','원격 승인','claude 가 도구 사용 허락을 기다립니다',()=>showApprove(s),'warn']);
+  if(s.live_terminal||TABS.list.some(x=>x.s.session_id===s.session_id)) it.push(['🖥','터미널 열기','실행 중인 화면으로 바로',()=>jumpToSession(s)]);
+  else if(s.peer) it.push([rowResumeIcon(s),'재개…',peerOriginLabel(s.peer).text+'에서 실행 중 — 방식 선택',()=>showResumeChooser(s)]);
+  else it.push(['▶','재개','웹 / 터미널 선택',()=>showResumeChooser(s)]);
+  it.push(['💬','대화 보기',null,()=>loadViewer(s)]);
+  it.push(['✎','이름 바꾸기',null,()=>renameNative(s)]);
+  if(s.cwd) it.push(['📂','파일 보기',baseName(s.cwd),()=>openFilesFor(s)]);
+  it.push(['ℹ','상세 보기','정보 · 포크 · 내보내기 · 위험 구역',()=>loadDetail(s)]);
+  return it;
+}
+function rowMenu(s,anchor){
+  const box=el('div');
+  for(const [i,l,sub,fn,cls] of rowMenuItems(s)) box.appendChild(popItem(i,l,sub,fn,cls));
+  return openPop(anchor,box,sessLabel(s));
+}
+// ---- 🔔 할 일(ux-reorg §4-5): 사람이 손대야 풀리는 것만 모은다 — 승인 요청 · 권한 대기 · 입력 대기 (+ 최근 완료 참고) ----
+let TODO_APPROVALS=[], TODO_AT=0;
+function todoSessions(){
+  const by=(t)=>(SESSIONS||[]).filter(s=>{ const b=sessionBadge(s); return !!b&&b.text===t; });
+  const ra=(s)=>(s.runtime&&s.runtime.ready_at)||0;
+  return {perm:by('권한 대기'), wait:by('입력 대기'), ready:by('완료').sort((a,b)=>ra(b)-ra(a)).slice(0,6)};
+}
+function todoCount(){ const t=todoSessions(); return TODO_APPROVALS.length+t.perm.length+t.wait.length; }
+function renderTodoBadge(){
+  const b=$('#btn-todo'); if(!b) return;
+  const n=todoCount(), bd=b.querySelector('.tbadge');
+  if(bd){ bd.textContent=n>99?'99+':String(n); bd.classList.toggle('hidden',!n); }
+  b.title=n?('할 일 '+n+'건 — 승인·권한·입력 대기'):'할 일 — 승인·권한·입력 대기';
+}
+async function refreshTodo(){
+  TODO_AT=Date.now();
+  try{ const r=await T.api('GET','/api/owner/approvals');
+    TODO_APPROVALS=((r&&r.approvals)||[]).filter(a=>!a.status||a.status==='pending'); }catch(e){}
+  renderTodoBadge();
+}
+async function showTodo(){
+  await refreshTodo();
+  const box=el('div'), t=todoSessions();
+  const sec=(x)=>box.appendChild(el('div','poph',x));
+  const sub=(s)=>[baseName(s.cwd||''),relFrom(s)].filter(Boolean).join(' · ');
+  if(TODO_APPROVALS.length){ sec('✅ 승인 요청 '+TODO_APPROVALS.length);
+    for(const a of TODO_APPROVALS) box.appendChild(popItem('✅',a.summary||APPROVAL_KIND[a.kind]||a.kind,
+      (APPROVAL_KIND[a.kind]||a.kind)+' · 만료 '+tsText(a.expires),()=>showApprovalSheet(a),'warn')); }
+  if(t.perm.length){ sec('✋ 권한 대기 '+t.perm.length);
+    for(const s of t.perm) box.appendChild(popItem('✋',sessLabel(s),sub(s),()=>showApprove(s),'warn')); }
+  if(t.wait.length){ sec('⌨ 입력 대기 '+t.wait.length);
+    for(const s of t.wait) box.appendChild(popItem('⌨',sessLabel(s),sub(s),()=>jumpToSession(s),'warn')); }
+  if(!TODO_APPROVALS.length&&!t.perm.length&&!t.wait.length)
+    box.appendChild(el('div','popempty','지금 기다리는 일이 없습니다.\n승인 요청 · 권한 대기 · 입력 대기 세션이 생기면 🔔 에 숫자로 표시됩니다.'));
+  if(t.ready.length){ sec('✔ 최근 끝난 작업');
+    for(const s of t.ready) box.appendChild(popItem('✔',sessLabel(s),sub(s),()=>jumpToSession(s))); }
+  openPop($('#btn-todo'),box,'🔔 할 일');   // (async 라 상자를 돌려주지 않는다 — 열린 팝은 POP.box)
+}
+// ---- 폰 아래 탭 막대(ux-reorg §4-2) — PC 는 목록 위 분할 버튼(.lview)이 같은 일을 한다 ----
+function syncTabbar(){
+  for(const b of document.querySelectorAll('#tabbar button')) b.classList.toggle('on',b.dataset.v===LIST_VIEW);
+}
+function tabbarGo(v){
+  if(v==='assist') return openAssistant();
+  const changed=LIST_VIEW!==v;
+  if(changed){ if(v==='files') FB.autoShow=true; if(v==='groups') MON_AUTO=true; setListView(v); }
+  const onList=$('#app').getAttribute('data-view')==='list';
+  showListPane();
+  if(changed||!LIST_CTX) return loadList();
+  if(onList){ const pl=paneList(); if(pl) pl.scrollTop=0; }   // 보던 탭을 또 누르면 맨 위로
+  syncTabbar();
 }
 
 // ---- 🧑‍💼 개인 비서(단계 3, A-7) — 헤더 버튼: PC·폰 어디서든 비서 세션 터미널 ----

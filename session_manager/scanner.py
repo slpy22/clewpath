@@ -44,6 +44,9 @@ class SessionMeta:
     picker_hidden: bool = False
     # claude 가 이 대화를 이어간 새 세션 id(continued-in 레코드). 있으면 이 파일은 '옛 줄'.
     continued_in: str | None = None
+    # 헤드리스(claude -p · Agent SDK) 단발 실행 기록: entrypoint 가 보였고 그중 'cli' 가 하나도 없다.
+    # 다른 세션·스크립트가 일감 하나씩 돌린 산물이라 목록에서 접어 둔다(2026-10-12 번역 스크립트 56개 실측).
+    headless: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -58,7 +61,8 @@ class _Fold:
     다음 스캔으로 미룬다(claude 가 쓰는 중인 줄을 반만 읽지 않게).
     """
     __slots__ = ("meta", "started_at", "last_ts", "line_count", "message_count", "custom_title",
-                 "interactive_markers", "ai_title", "agent_name", "last_model", "continued_in", "offset", "sig")
+                 "interactive_markers", "ai_title", "agent_name", "last_model", "continued_in", "offset", "sig",
+                 "ep_cli", "ep_other")
 
     def __init__(self):
         # 메타 필드는 첫 줄에 없을 수 있다(사이드체인 메시지 등) → '처음 등장하는 값'
@@ -78,6 +82,8 @@ class _Fold:
         self.continued_in: str | None = None  # continued-in 레코드: 이 대화가 이어진 새 세션 id
         self.offset = 0                       # 접은 바이트 수(완성된 줄 끝)
         self.sig = b""                        # 오프셋 직전 64바이트 — 앞부분 재작성 감지용
+        self.ep_cli = False                   # entrypoint 'cli'(대화형) 를 본 적 있나
+        self.ep_other = False                 # 그 밖의 entrypoint(sdk-cli 등 헤드리스)를 본 적 있나
 
     def feed(self, line: str) -> None:
         line = line.strip()
@@ -108,8 +114,18 @@ class _Fold:
             # claude 가 대화를 새 세션 파일로 이어간 표식(옛 파일 끝에 남는다). 이 세션은 '옛 줄' —
             # 목록에선 접고, 재개는 새 id 로 보내야 대화가 두 갈래로 갈라지지 않는다(0.9.9).
             self.continued_in = str(obj["continuedInSessionId"])
-        elif t in ("mode", "permission-mode", "system"):
+        elif t in ("mode", "permission-mode"):
             self.interactive_markers += 1
+        elif t == "system" and obj.get("subtype") != "stop_hook_summary":
+            # stop_hook_summary 는 Stop 훅이 있으면 헤드리스(-p) 에도 남는다(claude 2.1.29x 실측) —
+            # 대화형 마커로 세면 -p 산물이 일반 세션처럼 보인다(2026-10-12 번역 56개 사례).
+            self.interactive_markers += 1
+        ep = obj.get("entrypoint")
+        if ep:
+            if ep == "cli":
+                self.ep_cli = True
+            else:
+                self.ep_other = True
         # 마지막 실사용 모델: assistant 레코드의 message.model(계속 덮어써 마지막값).
         # <synthetic>(시스템 생성)는 실모델이 아니라 제외 → 재개 계승 모델과 일치.
         if t == "assistant":
@@ -162,6 +178,7 @@ class _Fold:
             picker_hidden=(self.interactive_markers == 0 and self.agent_name is None
                            and self.line_count > 0),
             continued_in=self.continued_in,
+            headless=(self.ep_other and not self.ep_cli),
         )
 
 
