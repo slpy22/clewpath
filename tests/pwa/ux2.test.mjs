@@ -69,7 +69,7 @@ test("⋯ 메뉴: 자주 쓰는 것만(재개/터미널·대화·이름·파일�
   const ctx = await load();
   seed(ctx, "globalThis.__c=[]; renameNative=(s)=>__c.push(['rename',s.session_id]); showResumeChooser=(s)=>__c.push(['resume',s.session_id]);"
     + "loadTerminal=(s)=>__c.push(['term',s.session_id]); loadViewer=(s)=>__c.push(['view',s.session_id]); loadDetail=(s)=>__c.push(['detail',s.session_id]);"
-    + "openFilesFor=(s)=>__c.push(['files',s.session_id]); showApprove=(s)=>__c.push(['approve',s.session_id]);");
+    + "openFilesFor=(s)=>__c.push(['files',s.session_id]); showApprove=(s)=>__c.push(['approve',s.session_id]); doDelete=(s)=>__c.push(['delete',s.session_id]);");
   const wrap = render(ctx);
   const [a, b] = rowsOf(wrap.children.filter((k) => cls(k) === "glist")[0]);
   const more = b.children.at(-1);
@@ -80,17 +80,24 @@ test("⋯ 메뉴: 자주 쓰는 것만(재개/터미널·대화·이름·파일�
   assert.ok(ev(ctx, "POP") !== null);
   const items = flat(box).filter((k) => cls(k).startsWith("popi"));
   const labels = items.map((k) => k.children[1].children[0].textContent);
-  same(labels, ["재개", "대화 보기", "이름 바꾸기", "파일 보기", "상세 보기"]);
-  for (const bad of ["삭제", "강제 종료", "되돌리기"]) assert.ok(!labels.some((l) => l.includes(bad)), "위험 동작 없음: " + bad);
+  same(labels, ["재개", "대화 보기", "이름 바꾸기", "파일 보기", "상세 보기", "삭제"]);
+  for (const bad of ["강제 종료", "되돌리기"]) assert.ok(!labels.some((l) => l.includes(bad)), "강제 종료·되돌리기는 상세 위험 구역에서만: " + bad);
+  const kids = flat(box);
+  assert.equal(cls(kids.at(-2)), "popsep", "삭제는 구분선 뒤로 떨어뜨린다");
+  assert.equal(cls(kids.at(-1)), "popi danger");
+  assert.ok(kids.at(-1).children[1].children[1].textContent.includes("30일"));
   assert.equal(box.children[0].textContent, "베타", "제목 = 세션 이름");
   items[2].onclick();
   assert.equal(ev(ctx, "POP"), null, "누르면 닫힌다");
   // 실행 중(우리 PTY) → 첫 항목이 터미널 열기 / 권한 대기면 맨 위 ✋
   ev(ctx, `SESSIONS[0].runtime={phase:'permission', permission_at:Date.now()/1000-5}`);
   const items2 = ev(ctx, "rowMenuItems(SESSIONS[0])");
-  same(items2.map((x) => x[1]), ["원격 승인", "터미널 열기", "대화 보기", "이름 바꾸기", "파일 보기", "상세 보기"]);
+  same(items2.map((x) => x[1]), ["원격 승인", "터미널 열기", "대화 보기", "이름 바꾸기", "파일 보기", "상세 보기", "삭제"]);
+  assert.ok(items2.at(-1)[2].startsWith("실행 중"), "실행 중이면 바로 지우지 않고 상세(위험 구역)로");
   for (const x of items2) x[3]();
-  same(ev(ctx, "__c"), [["rename", B], ["approve", A], ["term", A], ["view", A], ["rename", A], ["files", A], ["detail", A]]);
+  same(ev(ctx, "__c"), [["rename", B], ["approve", A], ["term", A], ["view", A], ["rename", A], ["files", A], ["detail", A], ["detail", A]]);
+  ev(ctx, "rowMenuItems(SESSIONS[1]).at(-1)[3]()");
+  same(ev(ctx, "__c").at(-1), ["delete", B], "실행 중 아니면 삭제(확인창·휴지통)");
   // 다른 곳에서 실행 중(피어) → '재개…' + 출처
   const p = ev(ctx, "rowMenuItems({session_id:'x', cwd:'E:/q', peer:{origin:{origin:'terminal'}}})");
   assert.equal(p[0][1], "재개…"); assert.ok(p[0][2].startsWith("터미널에서 실행 중"));
@@ -152,4 +159,30 @@ test("파일 탐색기 뿌리: 자동 실행 기록 폴더는 올리지 않는�
   const ctx = await load();
   seed(ctx);
   same(ev(ctx, "fbRoots().map(r=>r.cwd)"), ["E:/p"]);
+});
+
+test("🤖 자동 실행 기록 모두 휴지통: 펼치면 버튼, 확인창 뒤 서버에 headless id 만(실행 중 제외), 취소하면 아무것도 안 함", async () => {
+  const ctx = await load();
+  seed(ctx, "globalThis.__c=[]; T.api=async(m,p,o)=>{ __c.push([m,p,o&&o.body]); return {moved:o.body.ids.slice(0,1), skipped:[{session_id:'x',reason:'session_live'}]}; };"
+    + "globalThis.__t=[]; toast=(m)=>__t.push(m); loadList=()=>__c.push(['list']);");
+  ev(ctx, `SESSIONS.find(s=>s.session_id===${JSON.stringify(H3)}).live_terminal=true; AUTO_OPEN.add('E--p-cache')`);
+  const wrap = render(ctx);
+  const g2 = wrap.children.filter((k) => cls(k) === "glist")[1];
+  const bar = g2.children[1];
+  assert.equal(cls(bar), "sautobar");
+  const bt = bar.children[0];
+  assert.equal(bt.textContent, "🗑 2개 모두 휴지통으로");
+  let msg = ""; ctx.confirm = (m) => { msg = m; return false; };
+  await bt.onclick();
+  same(ev(ctx, "__c"), [], "취소하면 요청 없음");
+  ctx.confirm = (m) => { msg = m; return true; };
+  await bt.onclick();
+  assert.ok(msg.includes("자동 실행 기록 1개") && msg.includes("30일") && msg.includes("실행 중인 1개는 건너뜁니다"));
+  same(ev(ctx, "__c")[0], ["POST", "/api/sessions/trash-headless", { ids: [H2] }]);
+  assert.ok(ev(ctx, "__t").at(-1).startsWith("휴지통으로 1개 옮김 · 1개 건너뜀"));
+  same(ev(ctx, "__c").at(-1), ["list"]);
+  // 일반 세션은 버튼이 보내지 않는다(서버도 다시 확인)
+  ev(ctx, "__c.length=0");
+  await ev(ctx, `trashHeadless([{session_id:'n', headless:false}], 'x')`);
+  same(ev(ctx, "__c"), []);
 });

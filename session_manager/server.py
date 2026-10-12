@@ -934,6 +934,31 @@ def create_app() -> FastAPI:
             return JSONResponse(r, status_code=409)
         return r
 
+    @app.post("/api/sessions/trash-headless")
+    def trash_headless(ids: list[str] = Body(..., embed=True)):
+        """🤖 자동 실행 기록(claude -p 단발) 한꺼번에 휴지통(2026-10-12 사장님 요청).
+
+        화면이 보낸 id 를 믿지 않고 **서버가 다시 읽어 headless 인 것만** 옮긴다 — 일반 세션이 섞여
+        들어와도 건드리지 않는다. 하나씩 옮기는 삭제(휴지통·30일 복구)와 같은 규칙: 실행 중이면 건너뜀.
+        """
+        moved, skipped = [], []
+        for sid in list(dict.fromkeys(ids or []))[:500]:
+            if not isinstance(sid, str) or not sid:
+                continue
+            m = scanner.scan_one(sid)
+            if m is None:
+                skipped.append({"session_id": sid, "reason": "not_found"})
+                continue
+            if not m.headless:
+                skipped.append({"session_id": sid, "reason": "not_headless"})
+                continue
+            r = lifecycle.delete_session(sid, dry_run=False)
+            if r.get("error"):
+                skipped.append({"session_id": sid, "reason": r["error"]})
+            else:
+                moved.append(sid)
+        return {"moved": moved, "skipped": skipped}
+
     @app.post("/api/sessions/{session_id}/picker-expose")
     def picker_expose(session_id: str, expose: bool = Body(..., embed=True)):
         """피커 미표시 세션(에이전트/포크 산물)의 재개 전 알림 설정 토글.

@@ -311,6 +311,10 @@
   .pop .popi .pt>span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .pop .popi .pt small{color:var(--muted);font-size:.74rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .pop .popi.warn .pi{color:#e8a03c}
+  .pop .popi.danger>.pt>span{color:#e5534b}
+  .pop .popsep{height:1px;background:var(--line);margin:4px 6px}
+  .sautobar{display:flex;justify-content:flex-end;padding:8px 12px;border-left:2px solid var(--line2);border-bottom:1px solid var(--line)}
+  .sautobar .btn{padding:8px 12px;font-size:.82rem;color:#e5534b;border-color:#e5534b66}
   .pop .popempty{padding:12px;color:var(--muted);font-size:.85rem;line-height:1.55;white-space:pre-line}
   #btn-todo{position:relative}
   #btn-todo .tbadge{position:absolute;top:2px;right:0;min-width:17px;height:17px;padding:0 4px;border-radius:999px;background:#e8a03c;
@@ -2084,7 +2088,15 @@ function renderRows(wrap,q){
       tg.title='다른 세션·스크립트가 claude -p 로 일감 하나씩 맡기고 끝난 기록입니다. 실행 중인 프로세스는 없습니다';
       tg.onclick=()=>{ if(AUTO_OPEN.has(g.k)) AUTO_OPEN.delete(g.k); else AUTO_OPEN.add(g.k); renderRows(wrap,q); };
       glist.appendChild(tg);
-      if(open) for(const s of g.auto) glist.appendChild(mkRow(s));
+      if(open){
+        // 한꺼번에 휴지통(2026-10-12 사장님): 확인창 + 서버가 다시 읽어 자동 실행 기록인 것만 옮긴다
+        const bar=el('div','sautobar');
+        const bt=el('button','btn ghost','🗑 '+g.auto.length+'개 모두 휴지통으로');
+        bt.title='claude -p 단발 기록만 휴지통으로(30일 안에 PC 설정 → 휴지통에서 되살리기). 실행 중인 것은 건너뜀';
+        bt.onclick=()=>trashHeadless(g.auto,baseName(groupRepr(g.list)));
+        bar.appendChild(bt); glist.appendChild(bar);
+        for(const s of g.auto) glist.appendChild(mkRow(s));
+      }
     }
     wrap.appendChild(glist);
   }
@@ -3093,6 +3105,23 @@ async function doDelete(s){
   }catch(e){
     if(e.status===409) toast('실행 중인 세션은 삭제할 수 없습니다 — 터미널/프로세스를 먼저 종료하세요');
     else toast('삭제 실패: '+e.message); }
+}
+// 🤖 자동 실행 기록 한꺼번에 휴지통(2026-10-12 사장님). 하나씩 지우는 것과 같은 휴지통(30일 복구)이고,
+// 서버(/api/sessions/trash-headless)가 각 id 를 다시 읽어 claude -p 단발 기록인 것만 옮긴다 — 일반 세션은 못 지운다.
+async function trashHeadless(list,where){
+  const ids=list.filter(s=>s.headless&&!sessionIsLive(s)).map(s=>s.session_id);
+  const liveN=list.filter(s=>s.headless).length-ids.length;
+  if(!ids.length){ toast('휴지통으로 보낼 기록이 없습니다(실행 중인 것은 건너뜁니다)'); return; }
+  if(!confirm('「'+where+'」의 🤖 자동 실행 기록 '+ids.length+'개를 휴지통으로 보낼까요?\n\n'
+    +'claude -p 로 한 번 돌고 끝난 기록입니다. 영구 삭제가 아니라 30일 안에는 PC 의 설정 → 휴지통에서 되살릴 수 있습니다.'
+    +(liveN?'\n실행 중인 '+liveN+'개는 건너뜁니다.':''))) return;
+  try{
+    const r=await T.api('POST','/api/sessions/trash-headless',{body:{ids}});
+    const moved=(r&&r.moved)||[], sk=((r&&r.skipped)||[]).length;
+    toast('휴지통으로 '+moved.length+'개 옮김'+(sk?' · '+sk+'개 건너뜀':'')+' (30일 복구 가능)');
+    if(SELECTED_ID&&moved.includes(SELECTED_ID)){ SELECTED_ID=null; detailPlaceholder('삭제됨'); }
+    loadList();
+  }catch(e){ toast('휴지통 이동 실패: '+e.message); }
 }
 // ---- 휴지통: 복구 가능한 삭제 세션 ----
 async function showTrash(){
@@ -5044,8 +5073,8 @@ function openPop(anchor,content,title){
   try{ const f=box.querySelector('.popi'); if(f&&f.focus) f.focus(); }catch(e){}
   return box;
 }
-// 목록 줄 ⋯ 메뉴(2026-10-12 사장님: 재개·뷰어·이름 변경·상세 보기…). 삭제·강제 종료·되돌리기는 넣지 않는다 —
-// 상세 맨 아래 「위험 구역」에서만(무엇을 하는지·되돌릴 수 있는지·원격 2차 인증 안내와 함께).
+// 목록 줄 ⋯ 메뉴(2026-10-12 사장님: 재개·뷰어·이름 변경·상세 보기… + 삭제). 삭제는 휴지통(30일 복구)·확인창이라
+// 맨 아래 구분선 뒤 빨간 글씨로만 둔다. 강제 종료·되돌리기는 넣지 않는다 — 상세의 「위험 구역」에서만(원격 2차 인증).
 function rowMenuItems(s){
   const it=[]; const bd=sessionBadge(s);
   if(bd&&bd.text==='권한 대기') it.push(['✋','원격 승인','claude 가 도구 사용 허락을 기다립니다',()=>showApprove(s),'warn']);
@@ -5056,11 +5085,15 @@ function rowMenuItems(s){
   it.push(['✎','이름 바꾸기',null,()=>renameNative(s)]);
   if(s.cwd) it.push(['📂','파일 보기',baseName(s.cwd),()=>openFilesFor(s)]);
   it.push(['ℹ','상세 보기','정보 · 포크 · 내보내기 · 위험 구역',()=>loadDetail(s)]);
+  if(sessionIsLive(s)) it.push(['🗑','삭제','실행 중 — 먼저 끝내야 지울 수 있습니다(상세의 위험 구역)',()=>loadDetail(s),'danger']);
+  else it.push(['🗑','삭제','휴지통으로 · 30일 안에 되살릴 수 있음',()=>doDelete(s),'danger']);
   return it;
 }
 function rowMenu(s,anchor){
   const box=el('div');
-  for(const [i,l,sub,fn,cls] of rowMenuItems(s)) box.appendChild(popItem(i,l,sub,fn,cls));
+  for(const [i,l,sub,fn,cls] of rowMenuItems(s)){
+    if(cls==='danger') box.appendChild(el('div','popsep'));   // 위험한 것은 떨어뜨려 둔다
+    box.appendChild(popItem(i,l,sub,fn,cls)); }
   return openPop(anchor,box,sessLabel(s));
 }
 // ---- 🔔 할 일(ux-reorg §4-5): 사람이 손대야 풀리는 것만 모은다 — 승인 요청 · 권한 대기 · 입력 대기 (+ 최근 완료 참고) ----
