@@ -157,12 +157,16 @@
     try{ if(window.parent && window.parent !== window)
       window.parent.postMessage({type:"clewpath-term", event, id, fork}, location.origin); }catch(_){}
   }
+  let openedAt = 0;
   ws.onopen = () => {
+    openedAt = Date.now();
     dot.className = "dot on"; statusEl.textContent = "연결됨";
     sendResize(); term.focus(); tellParent("attached");
   };
+  let ended = false;   // claude 자체가 끝났다(서버 통지) — 이때는 자동 재연결하지 않는다(새로 띄우게 되므로)
   ws.onmessage = (e) => {
     term.write(e.data);
+    if(typeof e.data === "string" && e.data.indexOf("세션이 종료되었습니다") >= 0) ended = true;
     if(!taken && typeof e.data === "string" && e.data.indexOf(TAKEOVER_NOTE) >= 0){
       taken = true; statusEl.textContent = "다른 화면이 보는 중"; tellParent("taken");
     }
@@ -175,7 +179,25 @@
       return;
     }
     statusEl.textContent = "연결 종료";
-    term.write("\r\n\x1b[90m── 연결이 끊겼습니다. '재연결'을 누르세요(세션이 끝났다면 새로 시작됩니다). ──\x1b[0m\r\n");
+    // 붙자마자 끊긴 것(상한·거부 등)은 자동 재연결하지 않는다 — 새로고침 무한 반복 방지
+    if(ended || fork || !openedAt || Date.now() - openedAt < 5000){
+      term.write("\r\n\x1b[90m── 연결이 끊겼습니다. '재연결'을 누르세요(세션이 끝났다면 새로 시작됩니다). ──\x1b[0m\r\n");
+      return;
+    }
+    // Host 재기동(업데이트) 등으로 끊긴 것 — claude 는 터미널 관리 프로세스에서 계속 돈다.
+    // Host 가 다시 응답하면 스스로 다시 붙는다(2026-10-12: 사람이 '재연결'을 누를 때까지 끊겨 있었음).
+    term.write("\r\n\x1b[90m── 연결이 끊겼습니다. PC 프로그램이 다시 뜨면 자동으로 다시 연결합니다… ──\x1b[0m\r\n");
+    statusEl.textContent = "다시 연결 대기";
+    const t0 = Date.now();
+    const probe = async () => {
+      try{
+        const r = await fetch(`${BASE}/api/health`, {cache: "no-store"});
+        if(r.ok){ location.reload(); return; }
+      }catch(_){}
+      if(Date.now() - t0 < 180000) setTimeout(probe, 1500);
+      else { statusEl.textContent = "연결 종료"; term.write("\x1b[90m── 자동 재연결 포기. '재연결'을 누르세요 ──\x1b[0m\r\n"); }
+    };
+    setTimeout(probe, 1500);
   };
   ws.onerror = () => { dot.className = "dot off"; statusEl.textContent = "오류"; };
 

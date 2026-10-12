@@ -848,7 +848,9 @@ class Conn{
           if(!done){ if(this.devToken){ this._doAuth().then(a=>{ if(!done){done=true;res({...m, auth:a});} }); }
                      else { done=true; res({...m, auth:null}); } }
           return; }
-        if(m.type==='peer'){ if(m.event==='agent_online'){ this.peer=true; setTimeout(()=>{ try{ refreshVer(); }catch(e){} }, 3000); }   // PC 재기동(업데이트) 뒤 버전 확인
+        if(m.type==='peer'){ if(m.event==='agent_online'){ this.peer=true; setTimeout(()=>{ try{ refreshVer(); }catch(e){} }, 3000);   // PC 재기동(업데이트) 뒤 버전 확인
+            // 릴레이 연결은 살아 있고 PC 만 재기동된 경우: 끊긴 전경 터미널을 다시 붙인다(전엔 화면 복귀·재접속 때만 → 오래 끊김, 2026-10-12)
+            setTimeout(()=>{ try{ reattachForegroundTab(); }catch(e){} }, 1500); }
           if(m.event==='agent_offline')this.peer=false; this.onstatus(true,this.peer); return; }
         // 나머지: 봉투면 복호(수신 직렬화로 순서 보존) 후 디스패치
         this._rxq=this._rxq.then(async()=>{
@@ -2350,6 +2352,7 @@ function reattachForegroundTab(){
   // mounted() 를 요구하면 재연결 뒤 목록 화면에 갇힌 채 아무것도 복원되지 않았다.
   if(MODE!=='relay'||!termView.disconnected||!TABS.active) return;
   const t=findTab(TABS.active); if(!t||t.taken) return;   // 빼앗긴 탭은 자동으로 되찾지 않는다(핑퐁 차단)
+  const inst=termView.tabs&&termView.tabs[t.key]; if(inst&&inst.ended) return;   // claude 자체가 끝난 탭은 자동으로 새로 띄우지 않는다
   switchTab(t.key);
 }
 let _xtermP=null;
