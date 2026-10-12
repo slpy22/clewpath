@@ -56,7 +56,7 @@ test("그룹 보기로 들어오면(데스크톱) 마지막으로 본 그룹을 
 
 test("파일 보기로 들어오면(데스크톱) 열린 탭이 없어도 오른쪽은 파일 화면", async () => {
   const { ctx, pd } = await boot(1400);
-  ev(ctx, `SESSIONS = [{session_id:'s1', title:'A', cwd:'F:\\\\p', mtime:1}]; FB.sid='s1';
+  ev(ctx, `SESSIONS = [{session_id:'s1', title:'A', cwd:'F:\\\\p', mtime:1}];
     T.api = async () => ({root:'F:\\\\p', root_name:'p', path:'', entries:[], truncated:false});
     FB.autoShow = true; globalThis.__w = el('div');`);
   await ev(ctx, "renderFbExplorer(__w)");

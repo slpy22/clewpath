@@ -141,39 +141,52 @@
   .lview button.on{background:var(--accent2);color:#fff;font-weight:600}
   .lview+.search{padding-top:10px}
   /* ---- 📁 파일 보기(VS Code 탐색기·편집기) ---- */
-  .fbex{display:flex;align-items:center;gap:6px;padding:10px 10px 6px 20px;font-size:.68rem;font-weight:600;
-    letter-spacing:.06em;color:var(--muted);text-transform:uppercase}
-  .fbex .fbex-sess{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-transform:none;
-    letter-spacing:0;font-weight:500;color:var(--ink2)}
-  .fbex button{flex:none;text-transform:none;letter-spacing:0;font-weight:500;font-size:.72rem;color:var(--ink2);
-    padding:3px 8px;border-radius:6px;border:1px solid var(--line);background:var(--surface)}
-  .fbroot{display:flex;align-items:center;height:24px;padding:0 6px 0 2px;font-size:.7rem;font-weight:700;
-    letter-spacing:.03em;text-transform:uppercase;color:var(--ink);user-select:none;-webkit-user-select:none}
-  .fbroot .tw{flex:none;width:18px;height:16px;display:flex;align-items:center;justify-content:center}
-  .fbroot .tw.open svg{transform:rotate(90deg)}
-  .fbroot .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .fbroot .acts{display:flex;gap:1px;flex:none}
-  .fbroot .acts button{width:24px;height:22px;border-radius:5px;color:var(--ink2);font-size:.85rem;line-height:1;text-transform:none}
-  .fbroot .acts button:hover{background:var(--surface2)}
-  .fbtree{padding:0 0 14px;font-size:13px;outline:none}
-  .fbrow{position:relative;display:flex;align-items:center;height:22px;padding:0 8px 0 2px;cursor:pointer;white-space:nowrap;
-    user-select:none;-webkit-user-select:none;touch-action:manipulation;outline:1px solid transparent;outline-offset:-1px}
-  @media (pointer:coarse){ .fbrow{height:32px} .fbtree{font-size:14px} }
-  .fbrow .ig{flex:none;width:16px;align-self:stretch;position:relative}
-  .fbrow .ig::before{content:'';position:absolute;left:8px;top:0;bottom:0;border-left:1px solid var(--line2);opacity:.45}
-  .fbtree:hover .fbrow .ig::before{opacity:.9}
-  .fbrow .tw{flex:none;width:18px;height:16px;display:flex;align-items:center;justify-content:center;color:var(--ink2)}
-  .fbrow .tw svg{transition:transform .08s}
-  .fbrow .tw.open svg{transform:rotate(90deg)}
-  .fbrow .ic{flex:none;min-width:16px;margin-right:6px;text-align:center;font:700 9.5px/1 ui-monospace,Consolas,Menlo,monospace;letter-spacing:-.02em}
-  .fbrow.blocked .ic{font-size:11px}
-  .fbrow .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
-  .fbrow.dir .nm{margin-left:2px}
+  .fbex{display:flex;align-items:center;gap:8px;padding:12px 8px 6px 16px}
+  .fbex-t{font-size:.7rem;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--ink2)}
+  .fbex-n{font-size:.72rem;color:var(--muted)}
+  .fbex .acts{margin-left:auto;display:flex;gap:2px}
+  .fbex .acts button{width:28px;height:26px;border-radius:7px;color:var(--muted);display:flex;align-items:center;justify-content:center}
+  .fbex .acts button svg{width:16px;height:16px}
+  .fbex .acts button:hover{background:var(--surface2);color:var(--ink)}
+  .fbfilter{position:relative;display:block;margin:2px 10px 8px}
+  .fbfilter .si{position:absolute;left:9px;top:50%;transform:translateY(-50%);width:14px;height:14px;color:var(--muted);display:flex}
+  .fbfilter .si svg{width:14px;height:14px}
+  .fbfilter input{width:100%;height:32px;padding:0 10px 0 30px;border-radius:9px;border:1px solid var(--line);
+    background:var(--surface);color:var(--ink);font-size:.84rem;outline:none;-webkit-appearance:none;appearance:none}
+  .fbfilter input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-wash)}
+  .fbtree{padding:0 6px 18px;font-size:13px;outline:none}
+  .fbrow{position:relative;display:flex;align-items:center;height:24px;padding:0 8px 0 2px;margin:1px 0;border-radius:6px;
+    cursor:pointer;white-space:nowrap;color:var(--ink);user-select:none;-webkit-user-select:none;touch-action:manipulation;
+    -webkit-tap-highlight-color:transparent;transition:background .08s}
   .fbrow:hover{background:var(--surface)}
   .fbrow.sel{background:var(--accent-wash)}
-  .fbtree:focus-visible .fbrow.sel{outline-color:var(--accent)}   /* 키보드로 움직일 때만 테두리 */
-  .fbrow.heavy .nm{opacity:.55} .fbrow.blocked .nm{color:var(--muted)}
+  .fbrow.sel::before{content:'';position:absolute;left:0;top:5px;bottom:5px;width:2px;border-radius:2px;background:var(--accent)}
+  .fbtree:focus-visible .fbrow.sel{box-shadow:inset 0 0 0 1px var(--accent)}
+  .fbrow .ig,.fbnote-row .ig{flex:none;width:14px;align-self:stretch;position:relative}
+  .fbrow .ig::before,.fbnote-row .ig::before{content:'';position:absolute;left:8px;top:-1px;bottom:-1px;border-left:1px solid var(--line2);opacity:.5}
+  .fbtree:hover .ig::before{opacity:1}
+  .fbrow .tw,.fbnote-row .tw{flex:none;width:18px;height:18px;display:flex;align-items:center;justify-content:center;color:var(--muted)}
+  .fbrow .tw svg{width:13px;height:13px;transition:transform .12s ease}
+  .fbrow .tw.open svg{transform:rotate(90deg)}
+  .fbrow .fi{flex:none;width:18px;height:16px;margin-right:6px;display:flex;align-items:center;justify-content:center;color:#d6a243}
+  .fbrow .fi svg{width:16px;height:16px}
+  .fbrow .ic{flex:none;width:18px;margin-right:6px;text-align:center;font:700 9.5px/1 ui-monospace,Consolas,Menlo,monospace;letter-spacing:-.03em}
+  .fbrow.blocked .ic{font-size:11px}
+  .fbrow .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+  .fbrow.heavy .nm,.fbrow.heavy .fi{opacity:.5} .fbrow.blocked .nm{color:var(--muted)}
   .fbrow .meta{flex:none;color:var(--muted);font-size:.72rem;margin-left:6px}
+  .fbrow.root{height:32px;margin-top:3px;position:sticky;top:0;z-index:1;background:var(--bg)}   /* 긴 폴더를 내려도 어느 작업 폴더인지 보이게 */
+  .fbrow.root:hover{background:var(--surface)} .fbrow.root.sel{background:var(--accent-wash)}
+  .fbrow.root .fi{color:var(--accent)}
+  .fbrow.root .rn{font-weight:650}
+  .fbrow.root .rp{margin-left:8px;font-size:.76em;color:var(--muted)}
+  .fbrow .rcount{flex:none;margin-left:6px;min-width:20px;height:18px;padding:0 6px;border-radius:9px;background:var(--surface2);
+    border:1px solid var(--line);color:var(--ink2);font-size:.68rem;font-weight:600;display:flex;align-items:center;justify-content:center}
+  .fbrow .rlive{flex:none;width:7px;height:7px;border-radius:50%;background:var(--good);margin-left:6px;box-shadow:0 0 0 3px rgba(58,192,106,.18)}
+  .fbnote-row{display:flex;align-items:center;min-height:22px;padding:0 8px 0 2px;color:var(--muted);font-size:.78rem;font-style:italic}
+  .fbnote-row .nm{flex:1;min-width:0;white-space:normal}
+  .fbnote-row.err{color:var(--crit);font-style:normal}
+  @media (pointer:coarse){ .fbrow{height:34px} .fbrow.root{height:42px} .fbtree{font-size:14.5px} .fbnote-row{min-height:30px} }
   .fbnote{padding:6px 14px;color:var(--muted);font-size:.8rem}
   .fbpick{cursor:pointer} .fbpick-name{font-weight:600}
   #paneDetail.fb-mode{padding:0;overflow:hidden;display:flex;flex-direction:column;min-height:0}
@@ -182,6 +195,7 @@
   .fbtab{flex:none;display:flex;align-items:center;gap:4px;padding:7px 4px 7px 12px;font-size:.84rem;color:var(--ink2);
     border-right:1px solid var(--line);cursor:pointer;max-width:220px;touch-action:manipulation}
   .fbtab .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .fbtab .tdesc{color:var(--muted);font-size:.74rem;margin-left:2px;white-space:nowrap}
   .fbtab.on{background:var(--bg);color:var(--ink);box-shadow:inset 0 2px 0 var(--accent)}
   .fbtab.preview .nm{font-style:italic}
   .fbtab .x{width:24px;height:24px;border-radius:5px;color:var(--muted);font-size:1rem;line-height:1;flex:none}
@@ -1205,7 +1219,7 @@ async function loadList(q){
   const rerender=()=>{
     if(LIST_VIEW==='groups'){ renderGroupRows(listWrap); return; }
     // 파일 보기: 탐색기는 한 번만 그린다(20초 목록 갱신이 펼친 트리를 갈아엎지 않게)
-    if(LIST_VIEW==='files'){ if(FB.wrap!==listWrap) renderFbExplorer(listWrap); return; }
+    if(LIST_VIEW==='files'){ if(FB.wrap!==listWrap) renderFbExplorer(listWrap); else fbRenderTree(); return; }
     renderChips(chipsWrap,rerender); renderRows(listWrap,inp.value); };
   inp.oninput=()=>{ clearTimeout(inp._t); inp._t=setTimeout(rerender,200); };
   showListPane();
@@ -3120,8 +3134,9 @@ const MON_NOTIFY_DEFAULT={manager_stop:true, sub_stop:true, sub_start:false, err
 // ---- 📁 파일 보기 (VS Code 사용감, 읽기 전용) — docs/designs/file-browser.md ----
 // 목록 칸 = 탐색기(EXPLORER), 상세 칸 = 편집기(탭 · 이동 경로 · Monaco). 세션 작업 폴더(cwd) 안만, 쓰기 없음.
 // 탭 규칙(VS Code): 한 번 누름 = 미리보기 탭(기울임, 다음 파일이 그 자리를 씀), 두 번 누름 = 고정.
-const FB={sid:null, cwd:'', rootName:'', sort:'name', open:new Set(), kids:{}, ent:{}, sel:'', tabs:[], active:null,
-  wordWrap:false, ed:null, wrap:null, tree:null, tabsEl:null, crumbEl:null, edHost:null, alt:null, seq:0, autoShow:false};
+const FB={sort:'name', open:new Set(), kids:{}, errs:{}, ent:{}, sel:'', q:'', tabs:[], active:null, rootMap:null,
+  restored:false, reveal:null, treeGen:0, wordWrap:false, ed:null, wrap:null, tree:null, tabsEl:null, crumbEl:null,
+  edHost:null, alt:null, seq:0, autoShow:false};
 const FB_LANG={py:'python',pyw:'python',pyi:'python',js:'javascript',mjs:'javascript',cjs:'javascript',jsx:'javascript',
   ts:'typescript',tsx:'typescript',mts:'typescript',md:'markdown',markdown:'markdown',html:'html',htm:'html',
   css:'css',scss:'scss',less:'less',xml:'xml',svg:'xml',xaml:'xml',csproj:'xml',yaml:'yaml',yml:'yaml',
@@ -3134,14 +3149,6 @@ function fbLang(name){ const n=String(name||'').toLowerCase();
   if(n==='dockerfile'||n.startsWith('dockerfile.')) return 'dockerfile';
   const m=n.match(/\.([a-z0-9]+)$/); return (m&&FB_LANG[m[1]])||'plaintext'; }
 function fbIsMd(name){ return /\.(md|markdown)$/i.test(name||''); }
-function fbIcon(e){
-  if(e.type==='dir') return e.heavy?'📦':'📁';
-  if(e.blocked) return '🔒';
-  const n=e.name.toLowerCase();
-  if(/\.(png|jpe?g|gif|webp|bmp|ico|svg)$/.test(n)) return '🖼';
-  if(/\.(md|markdown|txt|rst|pdf|docx?|hwpx?|pptx?)$/.test(n)) return '📝';
-  if(/\.(json|jsonl|csv|tsv|ya?ml|toml|xml|ini|db|sqlite|xlsx?|parquet)$/.test(n)) return '🧾';
-  return fbLang(n)!=='plaintext'?'📄':'📃'; }
 function fbErrText(err){
   const e=err||{}, code=e.error||'';
   if(code==='too_large') return '파일이 커서 바로 볼 수 없습니다('+fmtBytes(e.size)+' · 상한 '+fmtBytes(e.limit)+'). 내려받아서 보세요.';
@@ -3159,101 +3166,127 @@ function fbApiErr(e){ const o=Object.assign({status:e&&e.status, message:e&&e.me
   if(!o.error&&/^2fa_/.test(o.message||'')) o.error=o.message;
   return o; }
 
-// ---- 상태: 폴더(cwd)별로 기기에 기억(펼친 폴더·정렬·열린 탭) ----
-function fbStateKey(){ return 'sm_fb_state:'+FB.cwd; }
-function fbSaveState(){ if(!FB.cwd) return; try{ LS.setItem(fbStateKey(), JSON.stringify({open:[...FB.open], sort:FB.sort,
-  tabs:FB.tabs.map(t=>({path:t.path,pinned:!!t.pinned})), active:FB.active})); }catch(e){} }
-function fbRestoreState(){ let st=null; try{ st=JSON.parse(LS.getItem(fbStateKey())||'null'); }catch(e){}
-  FB.open=new Set((st&&st.open)||[]); FB.sort=(st&&st.sort)==='mtime'?'mtime':'name';
-  FB.tabs=((st&&st.tabs)||[]).slice(0,20).map(t=>({path:t.path,name:baseName(t.path),pinned:!!t.pinned}));
-  FB.active=(st&&st.active&&FB.tabs.some(t=>t.path===st.active))?st.active:(FB.tabs[0]?FB.tabs[0].path:null); }
-function fbSessionObj(){ let id=FB.sid; if(!id){ try{ id=LS.getItem('sm_fb_sid'); }catch(e){} }
-  const all=SESSIONS||[];
-  return all.find(s=>s.session_id===id) || (SELECTED_ID&&all.find(s=>s.session_id===SELECTED_ID)) || null; }
-function fbUseSession(s){
-  if(!s||(FB.sid===s.session_id&&FB.cwd===(s.cwd||''))) return;
-  FB.sid=s.session_id; try{ LS.setItem('sm_fb_sid',s.session_id); }catch(e){}
-  if(FB.cwd&&FB.cwd===(s.cwd||'')) return;          // 같은 폴더를 쓰는 세션끼리는 같은 탐색기(§4)
-  fbSaveState(); FB.tabs.forEach(fbDisposeTab);
-  FB.cwd=s.cwd||''; FB.kids={}; FB.rootName=baseName(FB.cwd); FB.sel=''; fbRestoreState();
-  if(paneDetail().classList.contains('fb-mode')){ fbRenderTabs(); fbRenderActive(); }
-}
-// 같은 cwd 는 한 번만, 최근 순
-function fbSessionChoices(){ const seen=new Set(), out=[];
-  for(const s of (SESSIONS||[]).slice().sort((a,b)=>(b.mtime||0)-(a.mtime||0))){
-    const k=(s.cwd||'').toLowerCase(); if(!k||seen.has(k)) continue; seen.add(k); out.push(s); }
+// ---- 상태: 여러 작업 폴더(세션 cwd)를 한 트리에 — VS Code 의 다중 루트 작업 영역처럼(2026-10-12 사장님) ----
+// 트리 첫 층 = 작업 폴더(같은 폴더를 쓰는 세션은 하나로, 최근 순), 펼치면 그 안의 폴더·파일.
+// 노드 id = '<뿌리 키>|<뿌리 기준 상대 경로>'(뿌리 자신은 '<키>|'). 뿌리 키 = cwd 소문자. Windows 이름에 '|' 는 못 쓴다.
+const FB_SEP='|';
+function fbId(rk,rel){ return rk+FB_SEP+(rel||''); }
+function fbSplit(id){ id=String(id||''); const i=id.indexOf(FB_SEP); return i<0?[id,'']:[id.slice(0,i), id.slice(i+1)]; }
+function fbParentId(id){ const [rk,rel]=fbSplit(id); if(!rel) return null; const j=rel.lastIndexOf('/'); return fbId(rk, j<0?'':rel.slice(0,j)); }
+function fbRoots(){
+  const m=new Map();
+  for(const s of (SESSIONS||[])){ const cwd=s.cwd||''; if(!cwd) continue; const k=cwd.toLowerCase();
+    let r=m.get(k); if(!r){ r={key:k, cwd, name:baseName(cwd)||cwd, sessions:[], mtime:0, live:false}; m.set(k,r); }
+    r.sessions.push(s); r.mtime=Math.max(r.mtime, s.mtime||0); if(s.live_terminal||s.peer) r.live=true; }
+  const out=[...m.values()];
+  for(const r of out){ r.sessions.sort((a,b)=>(b.mtime||0)-(a.mtime||0)); r.sid=r.sessions[0].session_id; }   // 가장 최근 세션으로 읽는다
+  out.sort((a,b)=>b.mtime-a.mtime);
+  FB.rootMap=new Map(out.map(r=>[r.key,r]));
   return out; }
-function fbSessionList(onPick, limit){ const box=el('div');
-  for(const s of fbSessionChoices().slice(0,limit||40)){ const r=el('div','srow fbpick');
-    r.appendChild(el('div','fbpick-name','📁 '+baseName(s.cwd)+' — '+sessLabel(s)));
-    r.appendChild(el('div','cwd',s.cwd||'')); r.onclick=()=>onPick(s); box.appendChild(r); }
-  return box; }
-function fbPickSession(){ const body=fbSessionList((s)=>{ closeModal(); fbUseSession(s); if(FB.wrap) renderFbExplorer(FB.wrap); });
-  openModal('📁 어느 세션의 폴더를 볼까요?', body); }
-// 세션 상세의 📁 파일 버튼
+function fbRoot(rk){ if(!FB.rootMap) fbRoots(); return FB.rootMap.get(rk)||null; }
+function fbRootSid(rk){ const r=fbRoot(rk); return r?r.sid:null; }
+function fbRootMatches(r,q){ if(!q) return true; q=q.toLowerCase();
+  return r.cwd.toLowerCase().includes(q) || r.sessions.some(s=>sessLabel(s).toLowerCase().includes(q)); }
+function fbParentLabel(cwd){ const parts=String(cwd||'').split(/[\\/]/).filter(Boolean); parts.pop(); return parts.slice(-2).join('\\'); }
+const FB_STATE='sm_fb_state2';
+function fbNewTab(rk,path,pinned){ return {id:fbId(rk,path), root:rk, path, name:baseName(path), pinned:!!pinned}; }
+function fbSaveState(){ try{ LS.setItem(FB_STATE, JSON.stringify({open:[...FB.open], sort:FB.sort,
+  tabs:FB.tabs.map(t=>({root:t.root,path:t.path,pinned:!!t.pinned})), active:FB.active})); }catch(e){} }
+function fbRestoreState(){ if(FB.restored) return; FB.restored=true;
+  let st=null; try{ st=JSON.parse(LS.getItem(FB_STATE)||'null'); }catch(e){}
+  FB.open=new Set((st&&st.open)||[]); FB.sort=(st&&st.sort)==='mtime'?'mtime':'name';
+  FB.tabs=((st&&st.tabs)||[]).slice(0,20).filter(t=>t&&t.root&&t.path).map(t=>fbNewTab(t.root,t.path,t.pinned));
+  FB.active=(st&&st.active&&FB.tabs.some(t=>t.id===st.active))?st.active:(FB.tabs[0]?FB.tabs[0].id:null); }
+// 세션 상세의 📂 파일 보기 → 그 세션 폴더를 펼쳐서 보여 준다
+function fbUseSession(s){ if(!s||!s.cwd) return; fbRestoreState();
+  const id=fbId(s.cwd.toLowerCase(),''); FB.open.add(id); FB.sel=id; FB.reveal=id; FB.q=''; fbSaveState(); }
 function openFilesFor(s){ fbUseSession(s); FB.autoShow=true; setListView('files'); return loadList(); }
 
 // ---- 탐색기 ----
+const FB_SVG={
+  folder:'<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 4a1.5 1.5 0 0 1 1.5-1.5h3.1c.4 0 .78.16 1.06.44L8.3 4H13a1.5 1.5 0 0 1 1.5 1.5v6A1.5 1.5 0 0 1 13 13H3a1.5 1.5 0 0 1-1.5-1.5z" fill="currentColor"/></svg>',
+  folderOpen:'<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 4a1.5 1.5 0 0 1 1.5-1.5h3.1c.4 0 .78.16 1.06.44L8.3 4H12a1.5 1.5 0 0 1 1.5 1.5V6.5H4.6a1.5 1.5 0 0 0-1.42 1.02L1.5 12.5z" fill="currentColor" opacity=".6"/><path d="M3.9 7.5h10.2a.8.8 0 0 1 .76 1.05l-1.3 3.9A1.5 1.5 0 0 1 12.14 13.5H2.2z" fill="currentColor"/></svg>',
+  sortName:'<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 2.5v11M2.5 11.5l2 2 2-2" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M8.5 7 10 2.5h.5L12 7M8.9 5.6h2.7M8.6 9h3.3L8.6 13.5h3.4" fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  sortTime:'<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="5.6" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M8 4.8v3.4l2.2 1.4" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  refresh:'<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13.2 8A5.2 5.2 0 1 1 11.7 4.3M13 2v3h-3" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  collapse:'<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M5.5 8h5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
+  search:'<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.3" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="m10.2 10.2 3.3 3.3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>'};
 function renderFbExplorer(wrap){
-  FB.wrap=wrap; wrap.innerHTML='';
-  const s=fbSessionObj();
-  if(!s){
-    wrap.appendChild(el('div','empty','어느 세션의 폴더를 볼지 고르세요. (세션 상세의 📁 파일 버튼으로도 열 수 있습니다)'));
-    wrap.appendChild(fbSessionList((x)=>{ fbUseSession(x); renderFbExplorer(wrap); }, 12));
-    return;
-  }
-  fbUseSession(s);
-  // VS Code 탐색기: 「탐색기」 제목 줄 → 뿌리 폴더 줄(대문자, 정렬·새로고침·모두 접기) → 트리
+  FB.wrap=wrap; wrap.innerHTML=''; fbRestoreState();
+  const roots=fbRoots();
   const head=el('div','fbex');
-  head.appendChild(el('span',null,'탐색기'));
-  const who=el('span','fbex-sess',sessLabel(s)); who.title='이 세션의 작업 폴더'; head.appendChild(who);
-  const bSw=el('button',null,'세션 바꾸기'); bSw.onclick=fbPickSession; head.appendChild(bSw);
-  wrap.appendChild(head);
-  const root=el('div','fbroot');
-  const rtw=el('span','tw open'); rtw.innerHTML=FB_CHEV; root.appendChild(rtw);
-  root.appendChild(el('span','nm',FB.rootName||baseName(s.cwd))); root.title=s.cwd||'';
+  head.appendChild(el('span','fbex-t','탐색기'));
+  head.appendChild(el('span','fbex-n',roots.length+'개 폴더'));
   const acts=el('span','acts');
-  const act=(t,title,fn)=>{ const b=el('button',null,t); b.title=title; b.onclick=(ev)=>{ if(ev&&ev.stopPropagation) ev.stopPropagation(); fn(); }; acts.appendChild(b); };
-  act(FB.sort==='mtime'?'🕘':'⇅', FB.sort==='mtime'?'정렬: 최근 변경순 (누르면 이름순)':'정렬: 이름순 (누르면 최근 변경순)',
+  const act=(svg,title,fn)=>{ const b=el('button'); b.innerHTML=svg; b.title=title; b.setAttribute('aria-label',title);
+    b.onclick=(ev)=>{ if(ev&&ev.stopPropagation) ev.stopPropagation(); fn(); }; acts.appendChild(b); return b; };
+  act(FB.sort==='mtime'?FB_SVG.sortTime:FB_SVG.sortName, FB.sort==='mtime'?'정렬: 최근 변경순 (누르면 이름순)':'정렬: 이름순 (누르면 최근 변경순)',
       ()=>{ FB.sort=FB.sort==='mtime'?'name':'mtime'; FB.kids={}; fbSaveState(); renderFbExplorer(wrap); });
-  act('⟳','새로고침',()=>{ FB.kids={}; renderFbExplorer(wrap); });
-  act('⊟','폴더 모두 접기',()=>{ FB.open.clear(); fbSaveState(); fbRenderTree(); });
-  root.appendChild(acts); wrap.appendChild(root);
-  const tree=el('div','fbtree'); tree.tabIndex=0; tree.onkeydown=fbTreeKey; wrap.appendChild(tree); FB.tree=tree;
+  act(FB_SVG.refresh,'새로고침',()=>{ FB.kids={}; FB.errs={}; renderFbExplorer(wrap); });
+  act(FB_SVG.collapse,'모두 접기',()=>{ FB.open.clear(); fbSaveState(); fbRenderTree(); });
+  head.appendChild(acts); wrap.appendChild(head);
+  const fw=el('label','fbfilter'); const si=el('span','si'); si.innerHTML=FB_SVG.search; fw.appendChild(si);
+  const fi=el('input'); fi.type='search'; fi.placeholder='폴더·세션 이름으로 찾기'; fi.value=FB.q||'';
+  fi.oninput=()=>{ FB.q=fi.value.trim(); clearTimeout(fi._t); fi._t=setTimeout(fbRenderTree,120); };
+  fw.appendChild(fi); wrap.appendChild(fw);
+  const tree=el('div','fbtree'); tree.tabIndex=0; tree.onkeydown=fbTreeKey; tree.setAttribute('role','tree');
+  wrap.appendChild(tree); FB.tree=tree;
   const p=fbRenderTree();
   if(FB.autoShow){ FB.autoShow=false;
     if(innerWidth>=880&&!paneDetail().classList.contains('term-mode')) fbShowEditor(); }
   return p;
 }
-function fbAncestorsOpen(p){ const parts=p.split('/'); for(let i=1;i<parts.length;i++){ if(!FB.open.has(parts.slice(0,i).join('/'))) return false; } return true; }
-async function fbFetchDir(rel){
-  const r=await T.api('GET',`/api/sessions/${FB.sid}/files`,{query:{path:rel,sort:FB.sort}});
-  if(rel==='') FB.rootName=r.root_name||FB.rootName;
-  FB.kids[rel]=r; return r; }
+function fbAncestorsOpen(id){ let p=fbParentId(id); while(p!==null){ if(!FB.open.has(p)) return false; p=fbParentId(p); } return true; }
+async function fbFetchDir(id){
+  const [rk,rel]=fbSplit(id), sid=fbRootSid(rk);
+  if(!sid){ const e=new Error('no_session'); e.json={error:'no_session'}; throw e; }
+  const r=await T.api('GET',`/api/sessions/${sid}/files`,{query:{path:rel,sort:FB.sort}});
+  FB.kids[id]=r; return r; }
 async function fbRenderTree(){
   const tree=FB.tree; if(!tree) return;
-  const sid=FB.sid;
-  if(!FB.kids['']){ tree.innerHTML=''; tree.appendChild(el('div','spin')); }
-  // 뿌리 → 펼친 폴더(얕은 것부터) 중 아직 안 받은 것만 받는다(폴더 단위 지연 로딩)
-  const need=[''].concat([...FB.open].filter(fbAncestorsOpen).sort((a,b)=>a.split('/').length-b.split('/').length));
-  for(const p of need){
-    if(FB.kids[p]) continue;
-    try{ await fbFetchDir(p); }
-    catch(e){ if(sid!==FB.sid) return;
-      if(p===''){ tree.innerHTML=''; tree.appendChild(el('div','empty',fbErrText(fbApiErr(e)))); return; }
-      FB.open.delete(p); }
+  const gen=++FB.treeGen;
+  const roots=fbRoots().filter(r=>fbRootMatches(r,FB.q));
+  const shown=new Set(roots.map(r=>r.key));
+  const need=[...FB.open].filter(id=>shown.has(fbSplit(id)[0])&&fbAncestorsOpen(id)&&!FB.kids[id]&&!FB.errs[id])
+    .sort((a,b)=>a.split('/').length-b.split('/').length);
+  if(need.length) fbDraw(tree,roots);                    // 먼저 그리고('불러오는 중…') 폴더 단위로 받는다
+  for(const id of need){
+    if(!fbAncestorsOpen(id)) continue;
+    try{ await fbFetchDir(id); }
+    catch(e){ FB.errs[id]=fbErrText(fbApiErr(e)); if(fbSplit(id)[1]) FB.open.delete(id); }
+    if(gen!==FB.treeGen) return;
   }
-  if(sid!==FB.sid||FB.tree!==tree) return;
-  tree.innerHTML='';
-  const walk=(rel,depth)=>{ const d=FB.kids[rel]; if(!d) return;
-    for(const e of d.entries){ const p=rel?rel+'/'+e.name:e.name;
-      tree.appendChild(fbRow(e,p,depth));
-      if(e.type==='dir'&&FB.open.has(p)) walk(p,depth+1); }
-    if(d.truncated) tree.appendChild(el('div','fbnote','… 항목이 많아 앞의 '+d.entries.length+'개만 보입니다')); };
-  walk('',0);
-  if(FB.kids['']&&!FB.kids[''].entries.length) tree.appendChild(el('div','fbnote','빈 폴더'));
+  if(gen!==FB.treeGen||FB.tree!==tree) return;
+  fbDraw(tree,roots);
+  if(FB.reveal){ const id=FB.reveal; FB.reveal=null; fbSelect(id); }
 }
-const FB_CHEV='<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+function fbDraw(tree,roots){
+  tree.innerHTML=''; FB.ent={};
+  if(!roots.length){ tree.appendChild(el('div','fbnote',FB.q?'"'+FB.q+'" 와(과) 맞는 폴더가 없습니다':'세션이 없습니다')); return; }
+  for(const r of roots){
+    const rid=fbId(r.key,'');
+    tree.appendChild(fbRootRow(r,rid));
+    if(!FB.open.has(rid)) continue;
+    if(FB.errs[rid]) tree.appendChild(fbNoteRow(FB.errs[rid],1,'err'));
+    else if(!FB.kids[rid]) tree.appendChild(fbNoteRow('불러오는 중…',1));
+    else fbWalk(tree,r.key,'',1);
+  }
+}
+function fbWalk(tree,rk,rel,depth){
+  const d=FB.kids[fbId(rk,rel)]; if(!d) return;
+  if(!d.entries.length) tree.appendChild(fbNoteRow('빈 폴더',depth));
+  for(const e of d.entries){ const p=rel?rel+'/'+e.name:e.name, id=fbId(rk,p);
+    tree.appendChild(fbRow(e,id,depth));
+    if(e.type==='dir'&&FB.open.has(id)){
+      if(FB.kids[id]) fbWalk(tree,rk,p,depth+1);
+      else tree.appendChild(fbNoteRow(FB.errs[id]||'불러오는 중…',depth+1,FB.errs[id]?'err':'')); }
+  }
+  if(d.truncated) tree.appendChild(fbNoteRow('… 항목이 많아 앞의 '+d.entries.length+'개만 보입니다',depth));
+}
+function fbNoteRow(txt,depth,cls){ const r=el('div','fbnote-row'+(cls?' '+cls:''));
+  for(let i=0;i<depth;i++) r.appendChild(el('span','ig'));
+  r.appendChild(el('span','tw')); r.appendChild(el('span','nm',txt)); return r; }
+const FB_CHEV='<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 // 파일 종류 아이콘(VS Code 기본 Seti 테마 느낌: 색 + 짧은 글자). 보호 파일은 🔒
 const FB_ICONS=[[/\.(py|pyw|pyi)$/,'py','#3b8eea'],[/\.(js|mjs|cjs|jsx)$/,'JS','#cbcb41'],[/\.(ts|tsx|mts)$/,'TS','#519aba'],
   [/\.(json|jsonl|jsonc|ipynb|webmanifest)$/,'{}','#cbcb41'],[/\.(md|markdown)$/,'M↓','#519aba'],[/\.(html?|xml|svg|xaml)$/,'<>','#e37933'],
@@ -3267,73 +3300,89 @@ function fbFileIcon(e){
   const n=e.name.toLowerCase();
   for(const [re,t,c] of FB_ICONS) if(re.test(n)) return {t,c};
   return {t:'≡',c:'#8a94a1'}; }
-function fbRow(e,p,depth){
-  const dir=e.type==='dir';
-  const r=el('div','fbrow '+(dir?'dir':'file')+(e.heavy?' heavy':'')+(e.blocked?' blocked':'')+(p===FB.sel?' sel':'')+(p===FB.active?' act':''));
-  r.dataset.path=p; FB.ent[p]=e;
+function fbFocusTree(){ if(FB.tree&&FB.tree.focus) try{ FB.tree.focus({preventScroll:true}); }catch(_){} }
+function fbRootRow(r,id){
+  const open=FB.open.has(id);
+  const row=el('div','fbrow root'+(open?' open':'')+(id===FB.sel?' sel':''));
+  row.dataset.path=id; FB.ent[id]={type:'dir', root:true, name:r.name};
+  const tw=el('span','tw'+(open?' open':'')); tw.innerHTML=FB_CHEV; row.appendChild(tw);
+  const ic=el('span','fi root'); ic.innerHTML=open?FB_SVG.folderOpen:FB_SVG.folder; row.appendChild(ic);
+  const nm=el('span','nm'); nm.appendChild(el('span','rn',r.name));
+  const par=fbParentLabel(r.cwd); if(par) nm.appendChild(el('span','rp',par));
+  row.appendChild(nm);
+  if(r.live){ const d=el('span','rlive'); d.title='실행 중인 세션이 있습니다'; row.appendChild(d); }
+  if(r.sessions.length>1){ const b=el('span','rcount',String(r.sessions.length)); b.title='이 폴더를 쓰는 세션 '+r.sessions.length+'개'; row.appendChild(b); }
+  row.title=r.cwd+'\n'+r.sessions.slice(0,8).map(s=>'· '+sessLabel(s)).join('\n')+(r.sessions.length>8?'\n…':'');
+  row.onclick=()=>{ FB.sel=id; fbFocusTree(); return fbToggle(id); };
+  return row;
+}
+function fbRow(e,id,depth){
+  const dir=e.type==='dir', open=dir&&FB.open.has(id);
+  const r=el('div','fbrow '+(dir?'dir':'file')+(open?' open':'')+(e.heavy?' heavy':'')+(e.blocked?' blocked':'')
+    +(id===FB.sel?' sel':'')+(id===FB.active?' act':''));
+  r.dataset.path=id; FB.ent[id]=e;
   for(let i=0;i<depth;i++) r.appendChild(el('span','ig'));                 // 들여쓰기 안내선(단계마다 세로줄)
-  const tw=el('span','tw'+(dir&&FB.open.has(p)?' open':'')); if(dir) tw.innerHTML=FB_CHEV; r.appendChild(tw);
-  if(!dir){ const ic=fbFileIcon(e); const i=el('span','ic',ic.t); if(ic.c) i.style.color=ic.c; r.appendChild(i); }
+  const tw=el('span','tw'+(open?' open':'')); if(dir) tw.innerHTML=FB_CHEV; r.appendChild(tw);
+  if(dir){ const ic=el('span','fi'); ic.innerHTML=open?FB_SVG.folderOpen:FB_SVG.folder; r.appendChild(ic); }
+  else { const ic=fbFileIcon(e); const i=el('span','ic',ic.t); if(ic.c) i.style.color=ic.c; r.appendChild(i); }
   r.appendChild(el('span','nm',e.name));
   if(e.link) r.appendChild(el('span','meta','↪'));
-  r.title=e.type==='dir'?p:(p+(e.size!=null?' · '+fmtBytes(e.size):'')+(e.mtime?' · '+absTime(e.mtime):''));
-  r.onclick=()=>{ FB.sel=p; if(FB.tree&&FB.tree.focus) try{ FB.tree.focus({preventScroll:true}); }catch(_){}
-    return e.type==='dir'?fbToggle(p):fbOpen(p,{pin:false}); };
-  if(e.type!=='dir') r.ondblclick=()=>fbOpen(p,{pin:true});
+  const rel=fbSplit(id)[1];
+  r.title=dir?rel:(rel+(e.size!=null?' · '+fmtBytes(e.size):'')+(e.mtime?' · '+absTime(e.mtime):''));
+  r.onclick=()=>{ FB.sel=id; fbFocusTree(); return dir?fbToggle(id):fbOpen(id,{pin:false}); };
+  if(!dir) r.ondblclick=()=>fbOpen(id,{pin:true});
   return r;
 }
-// 키보드: ↑↓ 이동, → 펼치기/첫 자식, ← 접기/부모, Enter 열기(고정), Space 미리보기
+// 키보드: ↑↓ 이동, → 펼치기/첫 자식, ← 접기/부모, Enter 열기(고정), Space 미리보기, Home/End
 function fbVisiblePaths(){ return FB.tree?[...FB.tree.querySelectorAll('.fbrow')].map(r=>r.dataset.path):[]; }
-function fbSelect(p){ FB.sel=p; if(!FB.tree) return;
-  FB.tree.querySelectorAll('.fbrow').forEach(r=>{ const on=r.dataset.path===p; r.classList.toggle('sel',on);
+function fbSelect(id){ FB.sel=id; if(!FB.tree) return;
+  FB.tree.querySelectorAll('.fbrow').forEach(r=>{ const on=r.dataset.path===id; r.classList.toggle('sel',on);
     if(on&&r.scrollIntoView) r.scrollIntoView({block:'nearest'}); }); }
 function fbTreeKey(ev){
   const k=ev.key, list=fbVisiblePaths(); if(!list.length) return;
-  let i=list.indexOf(FB.sel); const p=FB.sel, e=FB.ent[p], dir=e&&e.type==='dir';
-  const parent=p&&p.includes('/')?p.slice(0,p.lastIndexOf('/')):'';
+  const i=list.indexOf(FB.sel), p=FB.sel, e=FB.ent[p], dir=e&&e.type==='dir', parent=p?fbParentId(p):null;
   let done=true;
   if(k==='ArrowDown') fbSelect(list[Math.min(list.length-1,i+1)]);
   else if(k==='ArrowUp') fbSelect(list[Math.max(0,i<0?0:i-1)]);
   else if(k==='Home') fbSelect(list[0]);
   else if(k==='End') fbSelect(list[list.length-1]);
-  else if(k==='ArrowRight'&&dir){ if(!FB.open.has(p)) fbToggle(p); else if(list[i+1]&&list[i+1].startsWith(p+'/')) fbSelect(list[i+1]); }
-  else if(k==='ArrowLeft'){ if(dir&&FB.open.has(p)) fbToggle(p); else if(parent) fbSelect(parent); }
+  else if(k==='ArrowRight'&&dir){ if(!FB.open.has(p)) fbToggle(p); else if(list[i+1]&&fbParentId(list[i+1])===p) fbSelect(list[i+1]); }
+  else if(k==='ArrowLeft'){ if(dir&&FB.open.has(p)) fbToggle(p); else if(parent!==null) fbSelect(parent); }
   else if(k==='Enter'&&e){ if(dir) fbToggle(p); else fbOpen(p,{pin:true}); }
   else if(k===' '&&e&&!dir) fbOpen(p,{pin:false});
   else done=false;
   if(done&&ev.preventDefault) ev.preventDefault();
 }
-function fbToggle(p){ if(FB.open.has(p)) FB.open.delete(p); else FB.open.add(p); fbSaveState(); return fbRenderTree(); }
-// 이동 경로를 누르면 탐색기에서 그 폴더를 펼쳐 보여준다(모바일은 탐색기 화면으로)
-function fbReveal(p){ const parts=p?p.split('/'):[];
-  for(let i=1;i<=parts.length;i++) FB.open.add(parts.slice(0,i).join('/'));
-  FB.sel=p; fbSaveState(); fbRenderTree();
+function fbToggle(id){ if(FB.open.has(id)) FB.open.delete(id); else { FB.open.add(id); delete FB.errs[id]; } fbSaveState(); return fbRenderTree(); }
+// 이동 경로를 누르면 탐색기에서 그 폴더까지 펼쳐 보여준다(모바일은 탐색기 화면으로)
+function fbReveal(id){ let p=id; while(p!==null){ FB.open.add(p); p=fbParentId(p); }
+  FB.sel=id; FB.reveal=id; FB.q=''; fbSaveState(); fbRenderTree();
   if(innerWidth<880) showListPane(); }
 
 // ---- 편집기: 탭 · 이동 경로 · 본문(Monaco / Markdown / 이미지 / 정보) ----
 function fbDisposeTab(t){ if(t&&t.model){ try{ t.model.dispose(); }catch(e){} t.model=null; } }
-function fbKeepView(){ const cur=FB.tabs.find(t=>t.path===FB.active);
+function fbKeepView(){ const cur=FB.tabs.find(t=>t.id===FB.active);
   if(cur&&FB.ed&&cur.model){ try{ cur.viewState=FB.ed.saveViewState(); }catch(e){} } }
-function fbOpen(p,{pin}={}){
+function fbOpen(id,{pin}={}){
   fbKeepView();
-  let t=FB.tabs.find(x=>x.path===p);
+  const [rk,path]=fbSplit(id);
+  let t=FB.tabs.find(x=>x.id===id);
   if(!t){
-    const prev=FB.tabs.find(x=>!x.pinned);
-    if(prev&&!pin){ fbDisposeTab(prev); for(const k of Object.keys(prev)) delete prev[k];
-      Object.assign(prev,{path:p,name:baseName(p),pinned:false}); t=prev; }
-    else { t={path:p,name:baseName(p),pinned:!!pin}; FB.tabs.push(t); }
+    const prev=FB.tabs.find(x=>!x.pinned), nt=fbNewTab(rk,path,!!pin);
+    if(prev&&!pin){ fbDisposeTab(prev); for(const k of Object.keys(prev)) delete prev[k]; Object.assign(prev,nt); t=prev; }
+    else { t=nt; FB.tabs.push(t); }
   }
   if(pin) t.pinned=true;
-  FB.active=p; FB.sel=p; fbSaveState();
+  FB.active=id; FB.sel=id; fbSaveState();
   fbShowEditor();
   fbRenderTree();
   return t;
 }
-function fbActivate(p){ fbKeepView(); FB.active=p; FB.sel=p; fbSaveState(); fbRenderTabs(); return fbRenderActive(); }
-function fbCloseTab(p){ const i=FB.tabs.findIndex(t=>t.path===p); if(i<0) return;
-  if(FB.active===p) fbKeepView();
+function fbActivate(id){ fbKeepView(); FB.active=id; FB.sel=id; fbSaveState(); fbRenderTabs(); return fbRenderActive(); }
+function fbCloseTab(id){ const i=FB.tabs.findIndex(t=>t.id===id); if(i<0) return;
+  if(FB.active===id) fbKeepView();
   fbDisposeTab(FB.tabs[i]); FB.tabs.splice(i,1);
-  if(FB.active===p){ const n=FB.tabs[i]||FB.tabs[i-1]; FB.active=n?n.path:null; }
+  if(FB.active===id){ const n=FB.tabs[i]||FB.tabs[i-1]; FB.active=n?n.id:null; }
   fbSaveState(); fbRenderTabs(); return fbRenderActive(); }
 function fbShowEditor(){
   const main=paneDetail();
@@ -3352,26 +3401,29 @@ function fbShowEditor(){
   showDetailPane();
   fbRenderTabs(); return fbRenderActive();
 }
+function fbRootName(rk){ const r=fbRoot(rk); return r?r.name:baseName(rk); }
 function fbRenderTabs(){ const bar=FB.tabsEl; if(!bar) return; bar.innerHTML='';
+  const dup=(n)=>FB.tabs.filter(x=>x.name===n).length>1;
   for(const t of FB.tabs){
-    const c=el('div','fbtab'+(t.path===FB.active?' on':'')+(t.pinned?'':' preview'));
-    c.title=t.path+(t.pinned?'':' (미리보기 — 두 번 눌러 고정)');
+    const c=el('div','fbtab'+(t.id===FB.active?' on':'')+(t.pinned?'':' preview'));
+    c.title=fbRootName(t.root)+'/'+t.path+(t.pinned?'':' (미리보기 — 두 번 눌러 고정)');
     c.appendChild(el('span','nm',t.name));
+    if(dup(t.name)) c.appendChild(el('span','tdesc',fbRootName(t.root)));   // 같은 이름 파일이면 어느 폴더인지
     const x=el('button','x','×'); x.title='닫기';
-    x.onclick=(ev)=>{ if(ev&&ev.stopPropagation) ev.stopPropagation(); fbCloseTab(t.path); };
+    x.onclick=(ev)=>{ if(ev&&ev.stopPropagation) ev.stopPropagation(); fbCloseTab(t.id); };
     c.appendChild(x);
-    c.onclick=()=>{ if(FB.active!==t.path) fbActivate(t.path); };
+    c.onclick=()=>{ if(FB.active!==t.id) fbActivate(t.id); };
     c.ondblclick=()=>{ t.pinned=true; fbSaveState(); fbRenderTabs(); };
     bar.appendChild(c);
   }
 }
 function fbRenderCrumb(t){ const c=FB.crumbEl; if(!c) return; c.innerHTML='';
   if(!t) return;
-  const rootB=el('button',null,FB.rootName||'/'); rootB.onclick=()=>fbReveal(''); c.appendChild(rootB);
+  const rootB=el('button','croot',fbRootName(t.root)); rootB.onclick=()=>fbReveal(fbId(t.root,'')); c.appendChild(rootB);
   const parts=t.path.split('/');
   parts.forEach((seg,i)=>{ c.appendChild(el('span','sep','›'));
-    const b=el('button',null,seg); const p=parts.slice(0,i+1).join('/');
-    b.onclick=()=>fbReveal(i===parts.length-1?parts.slice(0,i).join('/'):p); c.appendChild(b); });
+    const b=el('button',null,seg);
+    b.onclick=()=>fbReveal(fbId(t.root, parts.slice(0, i===parts.length-1?i:i+1).join('/'))); c.appendChild(b); });
   const tools=el('div','tools'); const d=t.data;
   if(d&&d.kind==='text'&&fbIsMd(t.name)){
     const bv=el('button',null,t.view==='preview'?'원문':'미리보기');
@@ -3395,15 +3447,16 @@ function fbShowInfo(t,msg){ const box=el('div','fbinfo'); box.appendChild(el('di
   fbShowAlt(box); }
 async function fbRenderActive(){
   if(!FB.alt) return;
-  const t=FB.tabs.find(x=>x.path===FB.active);
+  const t=FB.tabs.find(x=>x.id===FB.active);
   fbRenderCrumb(t);
   if(!t){ fbShowAlt(el('div','fb-empty','왼쪽 탐색기에서 파일을 고르세요')); return; }
   if(!t.data&&!t.err){
     fbShowAlt(el('div','spin'));
-    const seq=++FB.seq, sid=FB.sid;
-    try{ t.data=await T.api('GET',`/api/sessions/${sid}/file`,{query:{path:t.path}}); }
-    catch(e){ t.err=fbApiErr(e); }
-    if(seq!==FB.seq||FB.active!==t.path) return;            // 그사이 다른 탭으로 옮겼다
+    const seq=++FB.seq, sid=fbRootSid(t.root);
+    if(!sid) t.err={error:'no_session'};
+    else { try{ t.data=await T.api('GET',`/api/sessions/${sid}/file`,{query:{path:t.path}}); }
+           catch(e){ t.err=fbApiErr(e); } }
+    if(seq!==FB.seq||FB.active!==t.id) return;            // 그사이 다른 탭으로 옮겼다
     if(t.data&&t.data.kind==='text'&&fbIsMd(t.name)&&!t.view) t.view='preview';   // 보고서는 읽기 좋게
     fbRenderCrumb(t);
   }
@@ -3417,7 +3470,7 @@ async function fbRenderActive(){
 async function fbShowCode(t){
   let mon; try{ mon=await loadMonaco(); }
   catch(e){ return fbShowAlt(el('div','fbinfo','편집기를 불러오지 못했습니다: '+e.message)); }
-  if(FB.active!==t.path||!FB.edHost) return;
+  if(FB.active!==t.id||!FB.edHost) return;
   if(FB.alt) FB.alt.style.display='none';
   FB.edHost.style.display='';
   if(!t.model) t.model=mon.editor.createModel(t.data.text, fbLang(t.name));
@@ -3430,7 +3483,7 @@ async function fbShowCode(t){
 }
 async function fbShowMarkdown(t){
   try{ await loadMonaco(); }catch(e){}                       // marked·DOMPurify 는 같은 번들에 있다
-  if(FB.active!==t.path) return;
+  if(FB.active!==t.id) return;
   const box=el('div','fbmd'); box.innerHTML=fbMdHtml(t.data.text); fbShowAlt(box);
 }
 // Markdown → HTML. 파일 내용은 코드로 실행하지 않는다: DOMPurify 로 정화(스크립트·이벤트·style 제거), 링크는 새 창.
@@ -3443,20 +3496,21 @@ function fbMdHtml(src){
 async function fbShowImage(t){
   if(!t.img){
     fbShowAlt(el('div','spin'));
-    try{ const r=await T.api('GET',`/api/sessions/${FB.sid}/file`,{query:{path:t.path,mode:'image'}});
+    try{ const r=await T.api('GET',`/api/sessions/${fbRootSid(t.root)}/file`,{query:{path:t.path,mode:'image'}});
       t.img='data:'+(r.mime||'image/png')+';base64,'+r.b64; }
-    catch(e){ t.err=fbApiErr(e); if(FB.active===t.path) fbShowInfo(t,fbErrText(t.err)); return; }
-    if(FB.active!==t.path) return;
+    catch(e){ t.err=fbApiErr(e); if(FB.active===t.id) fbShowInfo(t,fbErrText(t.err)); return; }
+    if(FB.active!==t.id) return;
   }
   const box=el('div'); const im=el('img','fbimg'); im.src=t.img; im.alt=t.name; box.appendChild(im);   // SVG 도 <img> 로만(스크립트 무력)
   box.appendChild(el('div','fbnote',fmtBytes(t.data.size)+' · '+absTime(t.data.mtime)));
   fbShowAlt(box);
 }
 async function fbDownload(t){
+  const sid=fbRootSid(t.root); if(!sid){ toast(fbErrText({error:'no_session'})); return; }
   let cred={};
   if(MODE==='relay'){ cred=await ensurePriv(); if(cred===null){ toast('2차 인증이 필요합니다'); return; } }
   let r;
-  try{ r=await T.api('POST',`/api/sessions/${FB.sid}/file/download`,{body:{path:t.path},grace:cred.grace,otp:cred.otp}); }
+  try{ r=await T.api('POST',`/api/sessions/${sid}/file/download`,{body:{path:t.path},grace:cred.grace,otp:cred.otp}); }
   catch(e){ toast(fbErrText(fbApiErr(e))); return; }
   dlBlob(b64toBlob(r.b64, r.mime||'application/octet-stream'), r.name||t.name);
   toast('내려받기: '+(r.name||t.name)+' ('+fmtBytes(r.size)+')');
