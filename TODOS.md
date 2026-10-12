@@ -4,12 +4,13 @@
 설계 근거: `docs/2026-09-03-multi-session-monitoring-design.md`,
 `docs/2026-09-10-multi-terminal-tabs-design.md`
 
-## 기획중: 세션 파일 브라우저 (📁 파일 보기, VS Code 사용감) — 2026-10-12 요청, 설계 docs/designs/file-browser.md
+## 진행중: 세션 파일 브라우저 (📁 파일 보기, VS Code 사용감) — 2026-10-12 요청, 설계 docs/designs/file-browser.md
 
-### Phase 1-a (탐색 + 보기) — 결정 사항(§10) 확정 후 착수
-- [ ] Monaco 모바일 Safari 읽기 전용 스파이크
-- [ ] Host API: 폴더 목록·파일 내용(cwd 뿌리 고정, 탈출 차단, 상한) + 차단 목록·민감 파일 🔒 + 가드 테스트 + 원격 권한·감사
-- [ ] PWA: 목록 세 번째 칸 「📁 파일」, 탐색기 트리, 편집기 탭(미리보기 탭 규칙), breadcrumbs, Monaco 읽기 전용, Markdown·이미지 미리보기, 내려받기
+### Phase 1-a (탐색 + 보기) — 구현 완료(Host 0.17.0, 2026-10-12)
+- [x] Monaco 모바일 Safari 읽기 전용 스파이크 — 사장님 아이폰 확인(스크롤·선택·확대) + WebKit 자동 점검
+- [x] Host API: 폴더 목록·파일 내용(cwd 뿌리 고정, 탈출 차단, 상한) + 차단 목록·민감 파일 🔒 + 가드 테스트 + 원격 권한·감사 — `filebrowser.py`, `test_filebrowser.py` 17건
+- [x] PWA: 목록 세 번째 칸 「📁 파일」, 탐색기 트리, 편집기 탭(미리보기 탭 규칙), breadcrumbs, Monaco 읽기 전용, Markdown·이미지 미리보기, 내려받기 — `filebrowser.test.mjs` 9건 + 격리 Host 실화면(데스크톱·iPhone WebKit)
+- [ ] 실사용 확인: 릴레이(폰)에서 Monaco 번들 4.2MB 첫 로딩 시간, 내려받기 2FA 흐름
 ### Phase 1-b (VS Code 다움 완성)
 - [ ] Ctrl+P 빠른 열기(색인) · git 장식(M/U/D) · 열린 탭 자동 갱신
 ### Phase 2 (고도화) — 대기

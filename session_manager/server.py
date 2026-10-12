@@ -1462,6 +1462,39 @@ def create_app() -> FastAPI:
             return r
         return JSONResponse(r, status_code=404 if r.get("error") == "no_continuation" else 409)
 
+    # ---- 📁 파일 보기(읽기 전용, docs/designs/file-browser.md): 세션 cwd 안만. 보기는 페어링 기기 허용,
+    #      내려받기는 원격 2FA 특권(커넥터 _PRIV_API_SUFFIXES "/file/download"). 원격 열람·내려받기는 감사 기록.
+    def _fb_call(request: Request, event: str | None, fn, *a, **kw):
+        from session_manager import filebrowser as _fb
+        try:
+            r = fn(*a, **kw)
+        except _fb.FBError as e:
+            return JSONResponse(e.to_dict(), status_code=e.status)
+        if event and _via_relay(request):
+            from session_manager import connector as _c
+            policy.audit({"event": event, "session": a[0] if a else None, "path": r.get("path"),
+                          "size": r.get("size"), "device": request.headers.get(_c.DEVICE_HEADER) or None})
+        return r
+
+    @app.get("/api/sessions/{session_id}/files")
+    def fb_list(request: Request, session_id: str, path: str = "", sort: str = "name"):
+        from session_manager import filebrowser as _fb
+        return _fb_call(request, None, _fb.list_dir, session_id, path, sort)
+
+    @app.get("/api/sessions/{session_id}/file")
+    def fb_file(request: Request, session_id: str, path: str = "", mode: str = "text"):
+        from session_manager import filebrowser as _fb
+        if mode == "image":
+            return _fb_call(request, "file_view", _fb.read_raw, session_id, path,
+                            relay=_via_relay(request), image_only=True)
+        return _fb_call(request, "file_view", _fb.read_text, session_id, path)
+
+    @app.post("/api/sessions/{session_id}/file/download")
+    def fb_download(request: Request, session_id: str, body: dict = Body(default={})):
+        from session_manager import filebrowser as _fb
+        return _fb_call(request, "file_download", _fb.read_raw, session_id, (body or {}).get("path", ""),
+                        relay=_via_relay(request), image_only=False)
+
     @app.post("/api/sessions/{session_id}/terminal/stop")
     def terminal_stop(session_id: str):
         from session_manager import webterm

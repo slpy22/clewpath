@@ -236,7 +236,7 @@ test("loadDetail: 정보 카드 kv·⚙ 안내 카드 토글(picker-expose API)�
   assert.equal(st["모델"], "claude-opus-5"); assert.equal(st["입력토큰"], (12345).toLocaleString()); assert.equal(st["환산비용"], "$0.12");
   // 버튼
   const act = byClass(detail, "actions")[0];
-  same(act.children.map((b) => b.textContent), ["▶ 재개", "🔱 포크로 재개", "✎ 이름", "💬 뷰어", "🛡 API 정책", "📁 폴더 변경", "📤 내보내기", "🗑 삭제"]);
+  same(act.children.map((b) => b.textContent), ["▶ 재개", "🔱 포크로 재개", "✎ 이름", "💬 뷰어", "📂 파일 보기", "🛡 API 정책", "📁 폴더 변경", "📤 내보내기", "🗑 삭제"]);
   assert.equal(String(act.children.at(-1).className), "btn danger full");
   // 실행 중 세션 + 통계 실패 + picker_hidden 아님
   ev(ctx, "T.api = async () => { throw new Error('boom'); }");
