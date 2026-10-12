@@ -161,3 +161,42 @@ test("xterm 을 Monaco(AMD 로더) 뒤에 받아도 window.Terminal 로 붙게 d
   assert.ok(ev(ctx, "__seen").every((x) => x === "undefined"), "스크립트를 붙이는 동안 define 숨김");
   assert.equal(ev(ctx, "window.define === __amd"), true, "끝나면 되돌린다");
 });
+
+test("트리 모양(VS Code): 깊이만큼 들여쓰기 안내선, 폴더는 화살표(펼치면 open), 파일은 종류 아이콘", async () => {
+  const { ctx } = await boot();
+  ev(ctx, "FB.sid = 's1'; LS.setItem('sm_fb_sid','s1'); globalThis.__w = el('div');");
+  await ev(ctx, "renderFbExplorer(__w)");
+  await ev(ctx, "fbToggle('docs')");
+  const rows = flat(ev(ctx, "FB.tree")).filter((n) => String(n.className).includes("fbrow"));
+  const byPath = Object.fromEntries(rows.map((r) => [r.dataset.path, r]));
+  const kids = (r, cls) => r.children.filter((c) => String(c.className).split(" ").includes(cls));
+  assert.equal(kids(byPath["docs"], "ig").length, 0);
+  assert.equal(kids(byPath["docs/a.md"], "ig").length, 1, "한 단계 아래는 안내선 1개");
+  assert.ok(String(kids(byPath["docs"], "tw")[0].className).includes("open"));
+  assert.ok(!String(kids(byPath["node_modules"], "tw")[0].className).includes("open"));
+  assert.equal(kids(byPath["docs/a.md"], "ic")[0].textContent, "M↓");
+  assert.equal(kids(byPath["app.py"], "ic")[0].textContent, "py");
+  assert.equal(kids(byPath[".env"], "ic")[0].textContent, "🔒");
+  assert.equal(kids(byPath["docs"], "ic").length, 0, "폴더는 VS Code 처럼 화살표만");
+});
+
+test("키보드: ↓↑ 이동, → 펼치기, ← 부모로, Enter 고정으로 열기", async () => {
+  const { ctx } = await boot();
+  ev(ctx, "FB.sid = 's1'; LS.setItem('sm_fb_sid','s1'); globalThis.__w = el('div');");
+  await ev(ctx, "renderFbExplorer(__w)");
+  // 하네스 DOM 은 querySelectorAll 이 없으니 트리 줄을 직접 돌려준다
+  ev(ctx, "FB.tree.querySelectorAll = () => FB.tree.children.filter(c => String(c.className).includes('fbrow')); globalThis.__k = (key) => fbTreeKey({key, preventDefault(){}});");
+  ev(ctx, "FB.sel = ''; __k('ArrowDown')");
+  assert.equal(ev(ctx, "FB.sel"), "docs");
+  ev(ctx, "__k('ArrowRight')"); await tick(); await tick();
+  assert.equal(ev(ctx, "FB.open.has('docs')"), true);
+  ev(ctx, "FB.tree.querySelectorAll = () => FB.tree.children.filter(c => String(c.className).includes('fbrow'));");
+  ev(ctx, "__k('ArrowRight')");
+  assert.equal(ev(ctx, "FB.sel"), "docs/a.md", "펼친 폴더에서 → 는 첫 자식");
+  ev(ctx, "__k('ArrowLeft')");
+  assert.equal(ev(ctx, "FB.sel"), "docs", "파일에서 ← 는 부모 폴더");
+  ev(ctx, "__k('End')");
+  assert.equal(ev(ctx, "FB.sel"), "app.py");
+  ev(ctx, "__k('Enter')"); await tick();
+  assert.equal(ev(ctx, "JSON.stringify(FB.tabs.map(t => [t.path, !!t.pinned]))"), '[["app.py",true]]');
+});
