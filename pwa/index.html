@@ -4930,7 +4930,6 @@ function showSettings(){
   sec('알림');
   if(pushSupported()) row('🔔','알림 설정','권한 요청·작업 완료 푸시 · 받는 기기 관리',togglePush);
   else add(el('div','cwd','이 브라우저는 웹 푸시를 지원하지 않습니다'));
-  add(el('div','cwd','승인 요청 · 권한 요청은 머리줄 🔔 할 일에 모입니다.'));   // 2단계(ux-reorg §4-5): 설정 깊숙이 두지 않는다
 
   sec('보안');
   row('🔒','2차 인증(2FA)','원격 접속 보호 · 설정 변경',showSecurity,{local:true});

@@ -85,7 +85,7 @@ test("사장님 프로필: 제안·확정 표시, 확정/거절/삭제는 승인
   assert.equal(JSON.stringify(ev(ctx, "globalThis.__req[0]")), JSON.stringify(["profile_decide", { id: "pf_1", decision: "confirm" }]));
 });
 
-test("설정: 승인 요청은 🔔 할 일 안내(폰·PC), '비서 스킬 설치' 는 PC 로컬만 · installBundledSkill 은 스킬별 경로", async () => {
+test("설정: 승인 요청 안내 줄 없음(🔔 할 일이 대신, 2026-10-13), '비서 스킬 설치' 는 PC 로컬만 · installBundledSkill 은 스킬별 경로", async () => {
   const text = async (local) => {
     const ctx = await boot(local, {});
     ev(ctx, "openModal = (t, b) => { globalThis.__sb = b; }; pushSupported = () => true; curPcLabel = () => 'PC';");
@@ -93,8 +93,8 @@ test("설정: 승인 요청은 🔔 할 일 안내(폰·PC), '비서 스킬 설�
     return ev(ctx, "globalThis.__sb").text;
   };
   const r = await text(false), l = await text(true);
-  assert.ok(r.includes("🔔 할 일") && !r.includes("비서 스킬 설치"));
-  assert.ok(l.includes("🔔 할 일") && l.includes("비서 스킬 설치"));
+  assert.ok(!r.includes("할 일에 모입니다") && !r.includes("비서 스킬 설치"));
+  assert.ok(!l.includes("할 일에 모입니다") && l.includes("비서 스킬 설치"));
   const ctx = await boot(true, { "GET /api/owner/skills/assistant": { installed: false, path: "p" } });
   await ev(ctx, "installBundledSkill('assistant')");
   assert.equal(lastModal(ctx).title, "📦 비서 스킬 설치");
