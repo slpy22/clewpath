@@ -1258,6 +1258,22 @@ def create_app() -> FastAPI:
         return _team_call(request, _ap.profile_propose, body.get("statement", ""), topic=body.get("topic", ""),
                           evidence=body.get("evidence"), confidence=body.get("confidence", 0.5))
 
+    # ---- 모든 세션 작업 장부(비서용, 2026-10-13) — 이 PC 안에서만. 읽기 전용 ----
+    @app.get("/api/v1/worklog/brief")
+    def worklog_brief(request: Request, days: float = 2, per_session: int = 3, limit: int = 40):
+        from session_manager import worklog
+        return _team_call(request, worklog.brief, max(0.1, min(days, 60)), max(1, min(per_session, 10)), max(1, min(limit, 100)))
+
+    @app.get("/api/v1/worklog/search")
+    def worklog_search(request: Request, q: str = "", limit: int = 30):
+        from session_manager import worklog
+        return _team_call(request, worklog.search, q, limit)
+
+    @app.get("/api/v1/worklog/sessions/{session_id}")
+    def worklog_session(request: Request, session_id: str, offset: int = 0, limit: int = 50):
+        from session_manager import worklog
+        return _team_call(request, worklog.session_turns, session_id, offset, limit)
+
     @app.get("/api/v1/team/search")
     def team_search_all(request: Request, q: str = "", kind: str = "human_input", limit: int = 50):
         return _team_call(request, _ap.search_all, q, kind, limit)

@@ -35,6 +35,8 @@ JOBS = {
                       "desc": "오래 아무 일도 안 한 ClewPath 터미널을 끕니다(기록은 남아 다시 열면 이어짐)"},
     "models": {"name": "모델 목록 갱신", "interval": 24 * 3600, "default_on": True,
                "desc": "claude /model 화면(claude 가 업데이트됐을 때·7일마다 숨은 터미널로 읽음) + 운영측 목록 + 이 PC 실사용 모델로 재개 모델 목록을 새로 만듭니다"},
+    "worklog": {"name": "작업 장부 채우기", "interval": 5 * 60, "default_on": True,
+                "desc": "모든 세션의 요청·답 요약을 비서용 장부에 이어 적습니다(읽기만 · claude 가 기록을 지워도 장부는 남음)"},
     "cleanup_watch": {"name": "지워질 세션 예고", "interval": 24 * 3600, "default_on": True,
                       "desc": "claude 가 보관 기간(기본 30일)이 지난 대화 기록을 지우기 전에, 3일 안에 지워질 세션을 폰으로 한 번 알립니다"},
 }
@@ -388,7 +390,12 @@ def watch_cleanup(metas=None, now: float | None = None) -> dict:
     return {"soon": soon, "notified": [c["session_id"] for c in new], "days": days, "summary": summary}
 
 
-_RUNNERS = {"idle_sessions": reap_idle, "models": refresh_models, "cleanup_watch": watch_cleanup}
+def _run_worklog() -> dict:
+    from session_manager import worklog
+    return worklog.collect()
+
+
+_RUNNERS = {"idle_sessions": reap_idle, "models": refresh_models, "cleanup_watch": watch_cleanup, "worklog": _run_worklog}
 
 
 def run_job(jid: str) -> dict:

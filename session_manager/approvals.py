@@ -19,13 +19,15 @@ import hashlib
 import json
 import re
 import secrets
+import time
 import subprocess
 from pathlib import Path
 
 from session_manager import config, team
 
 TTL_S = 30 * 60
-KINDS = ("team_create", "team_import", "team_archive", "team_purge", "assistant_set", "delegate", "task_decide", "profile_decide")
+KINDS = ("team_create", "team_import", "team_archive", "team_purge", "assistant_set", "delegate", "task_decide", "profile_decide",
+         "session_send")
 _ALIAS_ASSISTANT = "비서"
 _PORTFOLIO_CODE = "ASSIST"
 
@@ -54,12 +56,15 @@ def _summary(kind: str, a: dict) -> str:
         return f"[{a.get('team')}] {a.get('task')} " + {"accept": "승인", "reject": "반려", "cancel": "취소"}.get(a.get("action"), "?")
     if kind == "profile_decide":
         return f"사장님 프로필 {a.get('decision')}: {str(a.get('statement') or a.get('id'))[:60]}"
+    if kind == "session_send":
+        return f"[{a.get('title') or str(a.get('session_id'))[:8]}] 세션에 전달: {str(a.get('message'))[:120]}"
     return kind
 
 
 def _validate(kind: str, a: dict) -> None:
     need = {"team_create": ("name",), "team_import": ("path",), "team_archive": ("team",), "team_purge": ("team",), "assistant_set": (),
-            "delegate": ("team", "goal"), "task_decide": ("team", "task", "action"), "profile_decide": ("id", "decision")}
+            "delegate": ("team", "goal"), "task_decide": ("team", "task", "action"), "profile_decide": ("id", "decision"),
+            "session_send": ("session_id", "message")}
     if kind not in KINDS:
         raise team.TeamError("bad_kind")
     for k in need[kind]:
@@ -229,9 +234,37 @@ def _x_profile_decide(a: dict, aid: str, by: str | None) -> dict:
     return profile_decide(a["id"], a["decision"], a.get("statement"))
 
 
+def _x_session_send(a: dict, aid: str, by: str | None) -> dict:
+    """일반 세션에 일 전달(2026-10-13 사장님 승인 — 비서 확장 B). 실제 전송은 비서가 돌려받은 주소로 SendMessage.
+    꺼져 있으면 화면 없는 터미널로 띄운다(권한 모드는 평소대로 — 도구 허락은 🔔 권한 대기로 온다).
+    다른 곳에서 백그라운드로 돌고 있는데 피어 주소가 없으면 띄우지 않는다(프로세스 2개 = 대화 분기)."""
+    from session_manager import agents, peers, scanner, webterm
+    sid = a["session_id"]
+    if not scanner.scan_one(sid):
+        raise team.TeamError("session_not_found", 404)
+    if by and sid == by:
+        raise team.TeamError("self_send", 409)
+    p = peers.peer_map().get(sid)
+    started = False
+    if not p:
+        if agents.occupancy_map().get(sid) and not webterm.has_terminal(sid):
+            raise team.TeamError("busy_elsewhere", 409)
+        r = webterm.start_terminal(sid, skip_permissions=bool(a.get("skip")))
+        started = r.get("status") == "started"
+        t0 = time.time()
+        while time.time() - t0 < float(a.get("wait_s", 30)):
+            p = peers.peer_map().get(sid)
+            if p and p.get("socket"):
+                break
+            time.sleep(1)
+    addr = ("uds:" + p["socket"]) if p and p.get("socket") else None
+    return {"session_id": sid, "started": started,
+            "send_to": {"address": addr, "live": bool(addr), "name": (p or {}).get("name")}}
+
+
 _EXEC = {"team_create": _x_team_create, "team_import": _x_team_import, "team_archive": _x_team_archive, "team_purge": _x_team_purge,
          "assistant_set": _x_assistant_set, "delegate": _x_delegate, "task_decide": _x_task_decide,
-         "profile_decide": _x_profile_decide}
+         "profile_decide": _x_profile_decide, "session_send": _x_session_send}
 
 
 # ---------------------------------------------------------------- 비서(A-7)

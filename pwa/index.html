@@ -5107,7 +5107,7 @@ async function showTeamInputs(code, q, before){
 }
 // ---- ✅ 승인 요청(개인 비서 단계 3, A-1~A-3) ----
 // 영향이 큰 실행은 '사람만 가진 것' 으로만 승인된다: 폰(페어링 기기) 탭, 또는 PC 에서는 2차 인증 코드.
-const APPROVAL_KIND={team_create:'팀 만들기', team_archive:'팀 보관', team_purge:'보존본 지우기', assistant_set:'비서 지정',
+const APPROVAL_KIND={team_create:'팀 만들기', team_archive:'팀 보관', team_purge:'보존본 지우기', assistant_set:'비서 지정', session_send:'세션에 일 전달',
   delegate:'일감 위임', task_decide:'결과 승인/반려/취소', profile_decide:'사장님 프로필 결정'};
 async function showApprovals(){
   let r; try{ r=await T.api('GET','/api/owner/approvals'); }catch(e){ toast('승인 목록 실패: '+e.message); return; }
@@ -5136,7 +5136,12 @@ function showApprovalSheet(a, opts){
   const body=el('div');
   body.appendChild(el('div','setsec', APPROVAL_KIND[a.kind]||a.kind));
   body.appendChild(el('div','cwd', a.summary));
-  const pre=el('pre','tl-full', JSON.stringify(a.args||{}, null, 2)); pre.style.whiteSpace='pre-wrap'; body.appendChild(pre);
+  if(a.kind==='session_send'){       // 비서 → 일반 세션 전달: 받는 세션과 보낼 글 그대로(승인하면 이 글이 그 세션에 들어간다)
+    const sx=(SESSIONS||[]).find(x=>x.session_id===(a.args||{}).session_id);
+    body.appendChild(el('div','cwd','받는 세션: '+(sx?sessLabel(sx)+' · '+baseName(sx.cwd||''):String((a.args||{}).session_id||'').slice(0,8))
+      +(sx&&sessionIsLive(sx)?' (실행 중)':' (꺼져 있으면 띄운 뒤 전달)')));
+    const q=el('pre','tl-full',String((a.args||{}).message||'')); q.style.whiteSpace='pre-wrap'; body.appendChild(q);
+  } else { const pre=el('pre','tl-full', JSON.stringify(a.args||{}, null, 2)); pre.style.whiteSpace='pre-wrap'; body.appendChild(pre); }
   body.appendChild(el('div','diag','요청 '+tsText(a.created)+(a.requested_by?' · 세션 '+String(a.requested_by).slice(0,8):'')
     +' · 만료 '+tsText(a.expires)+' · 상태 '+a.status));
   let otp=null;
