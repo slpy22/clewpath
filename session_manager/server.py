@@ -1242,6 +1242,93 @@ def create_app() -> FastAPI:
         except _team.TeamError as e:
             return JSONResponse({"error": e.code}, status_code=e.status)
 
+    # 화면에서 사장님이 직접 낸 승인 요청(팀 통합 U5) — 폰에서도. 결정은 위 decide(사람 증명), 실행은 승인된 것만.
+    @app.post("/api/owner/approvals")
+    def approval_create_owner(request: Request, body: dict = Body(...)):
+        try:
+            return _ap.create(body.get("kind", ""), body.get("args") or {}, body.get("summary", ""), "owner", notify=False)
+        except _team.TeamError as e:
+            return JSONResponse({"error": e.code}, status_code=e.status)
+
+    @app.post("/api/owner/approvals/{aid}/execute")
+    def approval_execute_owner(request: Request, aid: str):
+        try:
+            return _ap.execute(aid)
+        except _team.TeamError as e:
+            return JSONResponse({"error": e.code}, status_code=e.status)
+
+    # ---- 사장님 팀 화면(팀 통합 U4, docs/designs/team-unify.md) — 목록 칸 「팀」 보기. 폰에서도 된다.
+    # 에이전트 경로(/api/v1/team)는 로컬 전용 그대로. 팀 만들기·보관·보존본 지우기·일감 결정은 승인 요청으로만.
+    def _owner_team(fn, *a, **kw):
+        try:
+            return fn(*a, **kw)
+        except _team.TeamError as e:
+            return JSONResponse({"error": e.code}, status_code=e.status)
+
+    def _owner_sync(team_id: str, res):
+        if isinstance(res, JSONResponse):
+            return res
+        try:
+            return {**res, **_team.sync_group(team_id)} if isinstance(res, dict) else res
+        except _team.TeamError:
+            return res
+
+    @app.get("/api/owner/teams")
+    def owner_teams(archived: bool = False):
+        return _owner_team(lambda: {"teams": _team.owner_list(archived)})
+
+    @app.get("/api/owner/teams/{team_id}")
+    def owner_team(team_id: str):
+        return _owner_team(_team.owner_detail, team_id)
+
+    @app.get("/api/owner/teams/{team_id}/tasks/{task_id}/timeline")
+    def owner_team_timeline(team_id: str, task_id: str):
+        return _owner_team(_teamlog.timeline, team_id, task_id)
+
+    @app.get("/api/owner/teams/{team_id}/members/{agent}/history")
+    def owner_team_member(team_id: str, agent: str):
+        return _owner_team(_teamlog.member_history, team_id, agent)
+
+    @app.get("/api/owner/teams/{team_id}/inputs")
+    def owner_team_inputs(team_id: str, q: str = "", limit: int = 50, before: int | None = None):
+        return _owner_team(_teamlog.inputs, team_id, q, limit, before, "human_input")
+
+    @app.post("/api/owner/teams/{team_id}/members")
+    def owner_team_member_add(team_id: str, body: dict = Body(...)):
+        # 관리자는 팀 만들 때 정한다 — 화면 추가는 구성원(worker)만
+        return _owner_sync(team_id, _owner_team(_team.add_member, team_id, body.get("alias", ""),
+                                                role=body.get("role", ""), session_id=body.get("session_id")))
+
+    @app.post("/api/owner/teams/{team_id}/members/{agent}/leave")
+    def owner_team_member_leave(team_id: str, agent: str):
+        def run():
+            if _team.member(team_id, agent)["member_role"] == "manager":
+                raise _team.TeamError("manager_cannot_leave", 409)   # 관리가 빠지면 관제가 멈춘다
+            return _team.leave(team_id, agent)
+        return _owner_sync(team_id, _owner_team(run))
+
+    @app.post("/api/owner/teams/{team_id}/notify")
+    def owner_team_notify(team_id: str, body: dict = Body(...)):
+        def run():
+            t = _team.get_team(team_id)
+            gid = t.get("monitor_group_id")
+            if not gid:
+                raise _team.TeamError("no_monitor_group", 409)
+            from session_manager import mongroups
+            g = mongroups.update(gid, notify=body.get("notify"))
+            if not g:
+                raise _team.TeamError("no_monitor_group", 409)
+            return {"notify": mongroups.norm_notify(g.get("notify"))}
+        return _owner_team(run)
+
+    @app.post("/api/owner/teams/{team_id}/rename")
+    def owner_team_rename(team_id: str, body: dict = Body(...)):
+        return _owner_team(_team.rename, team_id, body.get("name", ""))
+
+    @app.get("/api/owner/profile")
+    def owner_profile(status: str | None = None):
+        return _owner_team(lambda: {"profile": _ap.profile_list(status)})
+
     @app.get("/api/owner/assistant")
     def assistant_info(request: Request):
         try:

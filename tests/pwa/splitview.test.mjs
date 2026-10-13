@@ -10,7 +10,10 @@ async function boot(width) {
   ev(ctx, `innerWidth = ${width}; globalThis.__closed = 0; globalThis.__bodyAdds = 0;
     T = Object.assign({}, T, { monitor: () => ({ close(){ __closed++; }, add(){}, remove(){} }), api: async () => ({}) });
     const _ba = document.body.appendChild; document.body.appendChild = (c) => { __bodyAdds++; return _ba(c); };
-    MON_GROUPS = [{id:'g1', name:'팀1', manager:'m1', subs:['w1']}, {id:'g2', name:'팀2', manager:'m2', subs:[]}];`);
+    MON_GROUPS = [{id:'g1', name:'팀1', manager:'m1', subs:['w1']}, {id:'g2', name:'팀2', manager:'m2', subs:[]}];
+    TEAMS = [{code:'A', name:'팀1', monitor_group_id:'g1', members:[{member_role:'manager', session_id:'m1', alias:'관리'}, {member_role:'worker', session_id:'w1', alias:'w'}]},
+             {code:'B', name:'팀2', monitor_group_id:'g2', members:[{member_role:'manager', session_id:'m2', alias:'관리'}]},
+             {code:'C', name:'옛팀', archived:true, monitor_group_id:null, members:[]}];`);
   return { ctx, pd };
 }
 
@@ -44,7 +47,7 @@ test("폰: 그룹 관제는 지금처럼 전체 화면 오버레이", async () =
   assert.equal(ev(ctx, "MON_INLINE"), null);
 });
 
-test("그룹 보기로 들어오면(데스크톱) 마지막으로 본 그룹을 오른쪽에 — 터미널 화면이면 건드리지 않음", async () => {
+test("팀 보기로 들어오면(데스크톱) 마지막으로 본 팀의 관제를 오른쪽에 — 터미널 화면이면 건드리지 않음", async () => {
   const { ctx, pd } = await boot(1400);
   ev(ctx, "LS.setItem('sm_mon_last','g2'); monAutoOpen();");
   assert.equal(ev(ctx, "MON_INLINE.gid"), "g2");

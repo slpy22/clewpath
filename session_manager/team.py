@@ -297,12 +297,110 @@ def list_teams(include_archived: bool = False) -> list[dict]:
 
 def archive(team_id: str, on: bool = True) -> dict:
     """팀 보관(끝난 프로젝트). 장부·이력은 그대로, 목록·감시(그룹 맞추기·기한 알림)에서 빠진다.
-    관제 그룹은 지우지 않는다 — 사용자가 관제 화면에서 지운다(감시가 다시 만들지 않음)."""
+    보관하면 관제 그룹도 지운다(알림 멈춤, 팀 통합 U3) — 풀면 감시·sync_group 이 새로 만든다."""
     with _Tx() as c:
         t = _team_row(c, team_id)
-        c.execute("UPDATE teams SET archived=? WHERE id=?", (_now() if on else None, t["id"]))
+        gid = t["monitor_group_id"]
+        c.execute("UPDATE teams SET archived=?, monitor_group_id=CASE WHEN ? THEN NULL ELSE monitor_group_id END,"
+                  " monitor_sync=CASE WHEN ? THEN NULL ELSE monitor_sync END WHERE id=?",
+                  (_now() if on else None, bool(on), bool(on), t["id"]))
         _event(c, t["id"], "team_archived" if on else "team_unarchived")
+    if on and gid:
+        _drop_group(gid)
+    if not on:
+        try:
+            sync_group(t["id"])
+        except Exception as e:  # noqa: BLE001  감시가 다시 맞춘다
+            print(f"[team] 보관 풀기 뒤 그룹 맞추기 실패: {e}", flush=True)
     return {"id": t["id"], "archived": bool(on)}
+
+
+def _drop_group(gid: str) -> None:
+    try:
+        from session_manager import mongroups
+        mongroups.delete(gid)
+    except Exception as e:  # noqa: BLE001
+        print(f"[team] 관제 그룹 삭제 실패 {gid}: {e}", flush=True)
+
+
+def rename(team_id: str, name: str) -> dict:
+    """팀 이름 바꾸기(사장님 화면). 관제 그룹 이름도 같이."""
+    name = _clean(name, 80)
+    if not name:
+        raise TeamError("name_required")
+    with _Tx() as c:
+        t = _team_row(c, team_id)
+        c.execute("UPDATE teams SET name=? WHERE id=?", (name, t["id"]))
+        _event(c, t["id"], "team_renamed", payload={"name": name, "before": t["name"]})
+        gid = t["monitor_group_id"]
+    if gid:
+        try:
+            from session_manager import mongroups
+            mongroups.update(gid, name=name)
+        except Exception:  # noqa: BLE001
+            pass
+    return {"id": t["id"], "code": t["code"], "name": name}
+
+
+def _label_alias(label: str | None, fallback: str) -> tuple[str, str]:
+    """그룹 라벨('별칭 · 역할' 또는 자유 글) → (별칭, 역할)."""
+    s = str(label or "").strip()
+    if not s:
+        return fallback, ""
+    a, _, r = s.partition(" · ")
+    return a.strip()[:40] or fallback, r.strip()
+
+
+def adopt_groups() -> dict:
+    """팀 통합(U2, 2026-10-13): 팀이 가리키지 않는 관제 그룹 → 팀으로 옮긴다(이름·구성원·라벨·알림 유지, 그룹 id 그대로 연결).
+    보관된 팀이 아직 가리키는 그룹은 지운다. 멱등 — 기동 때와 감시 주기마다 불러도 된다."""
+    from session_manager import mongroups
+    groups = mongroups.list_groups()
+    if not groups and not db_path().exists():
+        return {"adopted": [], "dropped": []}
+    c = _read()
+    try:
+        rows = c.execute("SELECT id, code, monitor_group_id, archived FROM teams").fetchall()
+    finally:
+        c.close()
+    linked = {r["monitor_group_id"]: r for r in rows if r["monitor_group_id"]}
+    adopted, dropped = [], []
+    for g in groups:
+        r = linked.get(g["id"])
+        if r is not None:
+            if r["archived"]:
+                _drop_group(g["id"])
+                with _Tx() as w:
+                    w.execute("UPDATE teams SET monitor_group_id=NULL, monitor_sync=NULL WHERE id=?", (r["id"],))
+                dropped.append(g["id"])
+            continue
+        labels = g.get("labels") or {}
+        mgr = g.get("manager")
+        try:
+            a, role = _label_alias(labels.get(mgr), "관리")
+            t = create_team(g.get("name") or "팀", manager_session=mgr, manager_alias=a)
+        except TeamError as e:
+            print(f"[team] 그룹 {g['id']} 옮기기 실패: {e.code}", flush=True)
+            continue
+        used = {m["alias"] for m in t["members"]}
+        for i, sid in enumerate(g.get("subs") or []):
+            a, role = _label_alias(labels.get(sid), f"구성원{i + 1}")
+            if a in used:
+                a = f"{a[:36]}{i + 1}"
+            try:
+                add_member(t["id"], a, role=role, session_id=sid)
+                used.add(a)
+            except TeamError as e:
+                print(f"[team] 그룹 {g['id']} 구성원 {sid[:8]} 건너뜀: {e.code}", flush=True)
+        with _Tx() as w:
+            w.execute("UPDATE teams SET monitor_group_id=? WHERE id=?", (g["id"], t["id"]))
+            _event(w, t["id"], "adopted_group", payload={"group": g["id"], "name": g.get("name")})
+        try:
+            sync_group(t["id"])                 # 이름·알림 설정은 그룹 값을 지킨다
+        except Exception:  # noqa: BLE001
+            pass
+        adopted.append({"group": g["id"], "team": t["code"]})
+    return {"adopted": adopted, "dropped": dropped}
 
 
 # ---------------------------------------------------------------- 에이전트·소속·세션
@@ -889,6 +987,10 @@ def _notify_overdue(item: dict) -> None:
 
 def watch_once() -> dict:
     """주기 작업 1회: 구성원 세션 교체 반영 + 관제 그룹 맞추기 + 기한 초과 알림. DB 가 없으면 아무것도 안 한다."""
+    try:
+        adopt_groups()                         # 팀 통합(U2): 팀 없는 관제 그룹 → 팀(그룹만 있고 DB 가 없어도)
+    except Exception as e:  # noqa: BLE001
+        print(f"[team] 그룹 옮기기 실패: {type(e).__name__}: {e}", flush=True)
     if not db_path().exists():
         return {"teams": 0, "overdue": 0}
     n = 0
@@ -937,3 +1039,59 @@ def start(interval: float = WATCH_INTERVAL_S) -> threading.Thread:
 def stop() -> None:
     if _stop is not None:
         _stop.set()
+
+
+# ---------------------------------------------------------------- 사장님 화면(팀 통합 U4, 2026-10-13)
+
+def _notify_of(gid: str | None) -> dict | None:
+    if not gid:
+        return None
+    try:
+        from session_manager import mongroups
+        g = mongroups.get(gid)
+        return mongroups.norm_notify(g.get("notify")) if g else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def owner_list(include_archived: bool = False) -> list[dict]:
+    """목록 칸 「팀」 보기: 팀마다 구성원(지금 세션·살아 있음)·일감 상태별 수·알림 설정. 읽기만."""
+    if not db_path().exists():
+        return []
+    out = []
+    c = _read()
+    try:
+        counts = {}
+        for r in c.execute("SELECT team_id, status, COUNT(*) n FROM tasks GROUP BY team_id, status"):
+            counts.setdefault(r["team_id"], {})[r["status"]] = r["n"]
+    finally:
+        c.close()
+    for t in list_teams(include_archived):
+        try:
+            full = get_team(t["id"])
+        except TeamError:
+            continue
+        out.append({**t, "manager_agent": full["manager_agent"], "members": full["members"],
+                    "tasks": counts.get(t["id"], {}), "notify": _notify_of(t["monitor_group_id"])})
+    return out
+
+
+def owner_detail(team_id: str) -> dict:
+    """펼친 팀 칸 한 번에: 팀·일감(최근 100)·토큰·규칙 위반·알림 설정."""
+    from session_manager import teamlog
+    t = get_team(team_id)
+    try:
+        usage = teamlog.usage_summary(t["id"])
+    except Exception:  # noqa: BLE001
+        usage = None
+    try:
+        vio = teamlog.violations(t["id"])
+    except Exception:  # noqa: BLE001
+        vio = []
+    c = _read()
+    try:
+        arch = c.execute("SELECT archived FROM teams WHERE id=?", (t["id"],)).fetchone()["archived"]
+    finally:
+        c.close()
+    return {**t, "archived": bool(arch), "tasks": list_tasks(t["id"], None, 100), "usage": usage,
+            "violations": vio, "notify": _notify_of(t["monitor_group_id"])}

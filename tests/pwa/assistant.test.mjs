@@ -21,7 +21,7 @@ const lastModal = (ctx) => ev(ctx, "globalThis.__modals.at(-1)");
 test("승인 시트(PC 로컬): 2FA 코드 칸, 승인 → decide{otp} → execute → onDone, 증명 없음은 안내", async () => {
   const ctx = await boot(true, {
     "POST /api/owner/approvals/ap_1/decide": { ...AP, status: "approved" },
-    "POST /api/v1/team/approvals/ap_1/execute": { ...AP, status: "executed", result: { purged_events: 3 } } });
+    "POST /api/owner/approvals/ap_1/execute": { ...AP, status: "executed", result: { purged_events: 3 } } });
   ev(ctx, "globalThis.__done = null; showApprovalSheet(" + JSON.stringify(AP) + ", {execute:true, onDone:(r)=>{ globalThis.__done = r; }})");
   const m = lastModal(ctx);
   assert.ok(m.body.text.includes("2차 인증") && m.body.text.includes('"team": "WEB"'), "정확한 인자를 보여 준다");
@@ -37,13 +37,17 @@ test("승인 시트(PC 로컬): 2FA 코드 칸, 승인 → decide{otp} → execu
   assert.ok(lastModal(ctx).body.text.includes("2차 인증 코드가 필요합니다"));
 });
 
-test("승인 시트(폰): 2FA 칸 없이 탭, 실행은 요청한 세션 몫(execute 안 부름)", async () => {
-  const ctx = await boot(false, { "POST /api/owner/approvals/ap_1/decide": { ...AP, status: "approved" } });
-  ev(ctx, "showApprovalSheet(" + JSON.stringify(AP) + ", {execute:true})");
+test("승인 시트(폰): 2FA 칸 없이 탭 · 세션이 낸 요청은 그 세션이 실행, 화면에서 낸 요청은 폰에서도 바로 실행(팀 통합 U5)", async () => {
+  const ctx = await boot(false, { "POST /api/owner/approvals/ap_1/decide": { ...AP, status: "approved" },
+    "POST /api/owner/approvals/ap_1/execute": { ...AP, status: "executed", result: { ok: 1 } } });
+  ev(ctx, "showApprovalSheet(" + JSON.stringify(AP) + ")");
   assert.ok(!lastModal(ctx).body.text.includes("2차 인증"));
   assert.equal(await ev(ctx, "globalThis.__approvalDecide(true)"), "approved");
   assert.ok(!ev(ctx, "globalThis.__calls.some(c => c[1].endsWith('/execute'))"));
   assert.ok(ev(ctx, "globalThis.__toasts").at(-1).includes("요청한 세션이 실행"));
+  ev(ctx, "showApprovalSheet(" + JSON.stringify({ ...AP, requested_by: "owner" }) + ", {execute:true})");
+  assert.ok(lastModal(ctx).body.text.includes("사장님 화면"));
+  assert.equal(await ev(ctx, "globalThis.__approvalDecide(true)"), "executed");
 });
 
 test("승인 대기 목록 → 항목을 누르면 승인 시트, 처리된 요청은 버튼 없이", async () => {
@@ -63,25 +67,30 @@ test("🧑‍💼 헤더: 비서 있으면 그 세션 터미널, 없으면 로�
   await ev(ctx, "openAssistant()");
   const t = lastModal(ctx).body.text;
   assert.ok(t.includes("새 비서 만들기") && t.includes("기존 세션을 비서로"));
-  ctx.__DATA["POST /api/v1/team/approvals"] = { ...AP, kind: "assistant_set", args: { create: true } };
+  ctx.__DATA["POST /api/owner/approvals"] = { ...AP, kind: "assistant_set", args: { create: true } };
   ev(ctx, "globalThis.__sheets = []; showApprovalSheet = (a, o) => globalThis.__sheets.push([a, o]);");
   await ev(ctx, "globalThis.__modals.at(-1).body.children.find(c => (c.text||'').includes('새 비서 만들기')).onclick()");
-  const post = ev(ctx, "globalThis.__calls.find(c => c[1] === '/api/v1/team/approvals')");
+  const post = ev(ctx, "globalThis.__calls.find(c => c[1] === '/api/owner/approvals')");
   assert.equal(JSON.stringify(post[2].body), JSON.stringify({ kind: "assistant_set", args: { create: true } }));
   const phone = await boot(false, { "GET /api/owner/assistant": { assistant: null } });
   await ev(phone, "openAssistant()");
   assert.ok(lastModal(phone).body.text.includes("PC 의 ClewPath 에서"));
 });
 
-test("사장님 프로필: 제안·확정 표시, 확정/거절/삭제는 승인 요청(profile_decide)으로", async () => {
-  const ctx = await boot(true, { "GET /api/v1/team/profile": { profile: [
+test("사장님 프로필(팀 보기의 🧑‍💼 개인비서 칸): 제안·확정 표시, 확정/거절/삭제는 승인 요청(profile_decide)으로 · 폰에서도", async () => {
+  const ctx = await boot(false, { "GET /api/owner/profile": { profile: [
     { id: "pf_1", statement: "결론 먼저", status: "proposed", topic: "말투", confidence: 0.8, evidence: [1, 2], source: "assistant" },
     { id: "pf_2", statement: "테스트 먼저", status: "confirmed", confidence: 1, evidence: [], source: "owner" }] } });
-  ev(ctx, "globalThis.__req = []; requestApproval = async (k, a) => { globalThis.__req.push([k, a]); };");
-  await ev(ctx, "showProfile()");
-  const m = lastModal(ctx);
-  for (const s of ["결론 먼저", "제안 · 말투 · 확신 80% · 근거 2", "확정 · 확신 100% · 근거 0 · 사장님 수정"]) assert.ok(m.body.text.includes(s), s);
-  await ev(ctx, "globalThis.__modals.at(-1).body.children.flatMap(c => c.children || []).find(b => b.textContent === '확정').onclick()");
+  ev(ctx, "globalThis.__req = []; requestApproval = async (k, a) => { globalThis.__req.push([k, a]); }; LIST_CTX = {rerender(){}};");
+  const t = "({code:'ASSIST', kind:'portfolio', members:[{alias:'비서', member_role:'manager', live:true}]})";
+  ev(ctx, `assistantBody(${t})`);                           // 처음엔 불러오는 중
+  await new Promise((r) => setTimeout(r, 0)); await new Promise((r) => setTimeout(r, 0));
+  ev(ctx, `globalThis.__b = assistantBody(${t})`);
+  const txt = ev(ctx, "__b.text");
+  for (const s of ["📌 테스트 먼저", "💡 결론 먼저", "제안 · 말투 · 확신 80%", "확정 · 확신 100%"]) assert.ok(txt.includes(s), s);
+  assert.ok(ev(ctx, `assistantLine(${t})`).startsWith("● 실행 중"));
+  const flat = "(n => { const f = x => [x, ...(x.children || []).flatMap(f)]; return f(n); })(__b)";
+  ev(ctx, `${flat}.find(b => b.textContent === '확정').onclick()`);
   assert.equal(JSON.stringify(ev(ctx, "globalThis.__req[0]")), JSON.stringify(["profile_decide", { id: "pf_1", decision: "confirm" }]));
 });
 

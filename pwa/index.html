@@ -231,6 +231,51 @@
   .ghead.grp .gopen{padding:7px 12px;border-radius:9px;background:var(--accent2);color:#fff;font-size:.8rem;flex:none}
   .ghead.grp .gset{width:34px;height:34px;border-radius:9px;color:var(--muted);flex:none}
   .gnew{display:block;margin:16px 14px 24px;width:calc(100% - 28px)}
+  /* 👥 팀 보기(팀 통합, 2026-10-13): 목록 칸에서 펼쳐 보고 관리 — 팝업 없이 */
+  .tcard{border-bottom:1px solid var(--line)}
+  .tcard.arch .ghead{border-left-color:var(--line2);opacity:.85}
+  .ghead .tcode{margin-left:8px;font-family:var(--mono);font-size:.7rem;font-weight:600;color:var(--muted)}
+  .ghead .gpath.warn{color:var(--warn);font-weight:650}
+  .tbody{background:var(--surface);padding:4px 0 10px}
+  .ttabs{display:flex;gap:4px;padding:8px 12px 6px;overflow-x:auto;scrollbar-width:none}
+  .ttabs button{flex:none;padding:6px 12px;border-radius:999px;font-size:.8rem;color:var(--ink2);
+    background:var(--surface2);border:1px solid var(--line)}
+  .ttabs button.on{background:var(--accent2);color:#fff;border-color:transparent;font-weight:650}
+  .tlist{padding:0 0 0 14px}
+  .tlist .srow{border-left:2px solid var(--line2)}
+  .srow.tk.warn{border-left-color:var(--warn)}
+  .tmini{flex:none;padding:0 12px;font-size:.76rem;color:var(--accent);background:transparent}
+  .tid{flex:none;font-family:var(--mono);font-size:.72rem;color:var(--muted)}
+  .tst{flex:none;font-size:.7rem;padding:1px 8px;border-radius:999px;border:1px solid var(--line2);color:var(--ink2)}
+  .tst.st-submitted{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 55%,transparent);font-weight:650}
+  .tst.st-accepted{color:var(--good);border-color:color-mix(in srgb,var(--good) 50%,transparent)}
+  .tst.st-rejected,.tst.st-blocked{color:var(--crit);border-color:color-mix(in srgb,var(--crit) 50%,transparent)}
+  .tinner{margin:0 12px 8px 16px;padding:10px 12px;border-radius:10px;background:var(--surface2);border:1px solid var(--line)}
+  .tinner .diag{margin:0 0 6px}
+  .tsec{font-size:.74rem;font-weight:700;color:var(--muted);letter-spacing:.02em;margin:12px 12px 4px 0}
+  .tinner .tsec{margin-left:0}
+  .tnote{font-size:.74rem;color:var(--muted);margin:2px 12px 6px 0;line-height:1.5}
+  .tline{display:block;width:100%;text-align:left;background:transparent;font-size:.8rem;color:var(--ink2);
+    padding:5px 12px 5px 0;line-height:1.45;word-break:break-word}
+  .tline.link{cursor:pointer;color:var(--ink)} .tline.link:hover{color:var(--accent)}
+  .tline small{color:var(--muted)}
+  .tacts{display:flex;gap:6px;flex-wrap:wrap;margin:6px 12px 8px 16px}
+  .tadd{display:block;margin:8px 12px 4px 0;padding:8px 12px;width:calc(100% - 12px);text-align:left;border-radius:9px;
+    border:1px dashed var(--line2);color:var(--accent);background:transparent;font-size:.84rem}
+  .tdanger{color:var(--crit)!important;margin-top:8px}
+  .tform{margin:8px 12px 8px 0;padding:10px 12px;border-radius:10px;background:var(--surface2);border:1px solid var(--line)}
+  .tform.tnew{margin:14px;border-color:color-mix(in srgb,var(--accent) 40%,transparent)}
+  .tform .field{margin-bottom:8px}
+  .tsel{width:100%;min-width:0;padding:7px 8px;border-radius:8px;border:1px solid var(--line2);background:var(--surface);color:var(--ink)}
+  .tmem{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1fr) minmax(0,1fr) auto;gap:6px;align-items:center;margin:6px 0}
+  .tmem input{min-width:0}
+  @media (max-width:520px){ .tmem{grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto} .tmem .tsel{grid-column:1/-1} }
+  .tsearch{display:flex;gap:6px;margin:4px 12px 8px 0} .tsearch input{flex:1;min-width:0}
+  .tcheck{display:flex;align-items:center;gap:8px;padding:6px 0;font-size:.86rem}
+  .tchips{display:flex;gap:6px;margin:4px 12px 6px 0;flex-wrap:wrap}
+  .tchips button{padding:4px 11px;border-radius:999px;font-size:.76rem;border:1px solid var(--line);color:var(--ink2);background:transparent}
+  .tchips button.on{background:var(--accent-wash);color:var(--accent);border-color:color-mix(in srgb,var(--accent) 35%,transparent);font-weight:650}
+  .tarch-h{display:block;width:100%;text-align:left;padding:12px 14px;font-size:.84rem;color:var(--muted);background:transparent;border-top:1px solid var(--line)}
   .ghead{width:100%;display:flex;align-items:center;gap:10px;padding:14px 14px;
     background:var(--surface2);border:none;border-top:1px solid var(--line);
     border-bottom:1px solid var(--line);border-left:4px solid var(--accent2);text-align:left}
@@ -817,7 +862,7 @@
   <main id="main"><div id="paneList"></div><div id="resizer" title="드래그로 폭 조절 · 더블클릭 초기화"></div><div id="paneDetail"></div></main>
   <nav id="tabbar" aria-label="보기 전환">
     <button data-v="sessions"><span class="ti">💬</span>세션</button>
-    <button data-v="groups"><span class="ti">🎬</span>그룹</button>
+    <button data-v="groups"><span class="ti">👥</span>팀</button>
     <button data-v="files"><span class="ti">📁</span>파일</button>
     <button data-v="assist"><span class="ti">🧑‍💼</span>비서</button>
   </nav>
@@ -1328,11 +1373,10 @@ function fmtBytes(b){ if(!b)return'0'; const u=['B','KB','MB','GB']; let i=0;
 
 // ---- 목록 ----
 let ACTIVE_LABEL='';  // 선택된 라벨 필터('' = 전체)
-// 목록 보기: 'sessions'(폴더별 세션) | 'groups'(저장된 관제 그룹). 기기별 기억
+// 목록 보기: 'sessions'(폴더별 세션) | 'groups'(👥 팀 — 키는 옛 이름 그대로, 기기에 기억된 값 호환) | 'files'
 const LIST_VIEWS=['sessions','groups','files'];
 let LIST_VIEW=(()=>{ try{ const v=LS.getItem('sm_list_view'); return LIST_VIEWS.includes(v)?v:'sessions'; }catch(e){ return 'sessions'; } })();
-let MON_GROUPS=null;
-let MON_AUTO=false;   // 사용자가 그룹 칸을 눌러 들어왔으면 오른쪽에 그룹 관제를 띄운다  // 그룹 보기용 캐시(null = 아직 못 받음)
+let MON_AUTO=false;   // 사용자가 팀 칸을 눌러 들어왔으면 오른쪽에 팀 관제를 띄운다
 function setListView(v){ LIST_VIEW=LIST_VIEWS.includes(v)?v:'sessions'; try{ LS.setItem('sm_list_view',LIST_VIEW); }catch(e){} }
 async function loadList(q){
   const main=paneList(); $('#head').textContent='세션';
@@ -1342,7 +1386,7 @@ async function loadList(q){
   const segBtn=(v,label)=>{ const b=el('button',LIST_VIEW===v?'on':'',label);
     b.onclick=()=>{ if(LIST_VIEW===v) return; if(v==='files') FB.autoShow=true; if(v==='groups') MON_AUTO=true;
       setListView(v); loadList(inp.value); }; return b; };
-  seg.appendChild(segBtn('sessions','세션')); seg.appendChild(segBtn('groups','🎬 그룹')); seg.appendChild(segBtn('files','📁 파일'));
+  seg.appendChild(segBtn('sessions','세션')); seg.appendChild(segBtn('groups','👥 팀')); seg.appendChild(segBtn('files','📁 파일'));
   { const b=el('button','assist','🧑‍💼 비서'); b.title='개인 비서 세션 열기'; b.onclick=()=>openAssistant(); seg.appendChild(b); }
   main.appendChild(seg);
   const sb=el('div','search'); const inp=el('input');
@@ -1353,10 +1397,10 @@ async function loadList(q){
   const listWrap=el('div'); main.appendChild(listWrap);
   const spin=el('div','spin'); listWrap.appendChild(spin);
   if(LIST_VIEW==='files') sb.style.display='none';
-  if(LIST_VIEW==='groups'){ sb.style.display='none'; fetchMonGroups().then(g=>{ MON_GROUPS=g; if(LIST_VIEW==='groups'&&SESSIONS) rerender();
+  if(LIST_VIEW==='groups'){ sb.style.display='none'; fetchTeams().then(ts=>{ TEAMS=ts; if(LIST_VIEW==='groups'&&SESSIONS) rerender();
     if(MON_AUTO&&LIST_VIEW==='groups'){ MON_AUTO=false; monAutoOpen(); } }); }
   const rerender=()=>{
-    if(LIST_VIEW==='groups'){ renderGroupRows(listWrap); return; }
+    if(LIST_VIEW==='groups'){ renderTeamRows(listWrap); return; }
     // 파일 보기: 탐색기는 한 번만 그린다(20초 목록 갱신이 펼친 트리를 갈아엎지 않게)
     if(LIST_VIEW==='files'){ if(FB.wrap!==listWrap) renderFbExplorer(listWrap); else fbRenderTree(); return; }
     renderChips(chipsWrap,rerender); renderRows(listWrap,inp.value); };
@@ -1390,9 +1434,14 @@ setInterval(async()=>{
     const d=await T.list({limit:0});
     SESSIONS=d.sessions||[];
     if(typeof d.now==='number') CLOCK_SKEW=d.now-Date.now()/1000;
-    if(LIST_VIEW==='groups') MON_GROUPS=await fetchMonGroups();
+    let skipList=false;
+    if(LIST_VIEW==='groups'){
+      TEAMS=await fetchTeams();
+      for(const code of TEAM_OPEN){ if(TEAM_DET[code]) await refreshTeamDetail(code); }   // 펼친 팀의 일감·기록도 새로
+      skipList=teamEditing();                                                         // 입력 중이면 폼을 갈아엎지 않는다
+    }
     const pl=$('#paneList'); const st=pl?pl.scrollTop:0;
-    LIST_CTX.rerender();
+    if(!skipList) LIST_CTX.rerender();
     if(pl) pl.scrollTop=st;
     if(Date.now()-TODO_AT>55000) refreshTodo(); else renderTodoBadge();
     // 터미널 탭 칩의 상태 밑줄도 같은 훅 상태를 쓴다 — 목록과 함께 갱신(term-mode 일 때만 의미)
@@ -3427,17 +3476,18 @@ function openMonitorGroup(g, o){
   openMonitor(ids, g.manager, Object.assign({}, g.labels||{}), {gid:g.id, name:g.name, inline});   // 저장 그룹 → 💾 는 갱신 모드
 }
 function highlightGroup(gid){ document.querySelectorAll('.ghead.grp').forEach(h=>h.classList.toggle('sel', !!gid&&h.dataset.gid===gid)); }
-// 그룹 보기로 들어오면(데스크톱) 오른쪽 칸에 마지막으로 본 그룹(없으면 첫 그룹)을 띄운다 — 터미널을 보고 있으면 건드리지 않는다
+// 팀 보기로 들어오면(데스크톱) 오른쪽 칸에 마지막으로 본 팀(없으면 첫 팀)의 관제를 띄운다 — 터미널을 보고 있으면 건드리지 않는다
 function monAutoOpen(){
-  if(!monInlineWanted()||!MON_GROUPS||!MON_GROUPS.length) return;
+  const gs=(TEAMS||[]).filter(t=>!t.archived).map(teamAsGroup).filter(Boolean);
+  if(!monInlineWanted()||!gs.length) return;
   const pd=paneDetail(); if(pd.classList.contains('term-mode')||pd.classList.contains('mon-mode')) return;
   let last=null; try{ last=LS.getItem('sm_mon_last'); }catch(e){}
-  openMonitorGroup(MON_GROUPS.find(g=>g.id===last)||MON_GROUPS[0], {inline:true});
+  openMonitorGroup(gs.find(g=>g.id===last)||gs[0], {inline:true});
 }
 async function openMonitorGroupById(gid){
   if(!gid) return;
   const g=(await fetchMonGroups()).find(x=>x.id===gid);
-  if(!g){ toast('저장된 관제 그룹을 찾을 수 없습니다'); return; }
+  if(!g){ toast('그 팀의 관제를 찾을 수 없습니다(보관됐거나 관리 세션이 없음)'); return; }
   if(document.getElementById('mon-ov')) return;   // 이미 관제 중이면 갈아엎지 않는다
   openMonitorGroup(g);
 }
@@ -3864,106 +3914,421 @@ function fbMonacoSetup(mon){
   try{ window.DOMPurify.addHook('afterSanitizeAttributes',(n)=>{ if(n.tagName==='A'){ n.setAttribute('target','_blank'); n.setAttribute('rel','noopener noreferrer'); } }); }catch(e){}
 }
 
-function renderGroupRows(wrap){
+// ---- 👥 팀 보기(목록 칸) — 팀 = 세션 묶음(관제·알림) + 일 장부. docs/designs/team-unify.md (2026-10-13 사장님) ----
+// 팝업 대신 목록 칸에서 펼쳐 보고 관리한다. 사람 증명이 필요한 순간(팀 만들기·보관·일감 결정)만 승인 시트.
+let TEAMS=null;                 // /api/owner/teams?archived=1 (null = 아직 못 받음)
+const TEAM_DET={};              // code → 펼친 팀 상세(일감·토큰·위반·알림)
+const TEAM_UI={};               // code → 화면 상태(경력·일감 펼침, 구성원 추가 폼, 검색)
+let TEAM_NEW=null;              // 새 팀 폼(null = 닫힘)
+let TEAM_ARCH_OPEN=false;
+const TEAM_TABS=[['members','구성원'],['tasks','일감'],['records','기록'],['settings','⚙ 설정']];
+const TASK_OPEN_ST=['assigned','blocked','submitted','rejected'];
+function lsJson(k,d){ try{ const v=JSON.parse(LS.getItem(k)||'null'); return v==null?d:v; }catch(e){ return d; } }
+function lsSet(k,v){ try{ LS.setItem(k,JSON.stringify(v)); }catch(e){} }
+let TEAM_OPEN=new Set(lsJson('sm_team_open',[]));   // 펼친 팀(기기에 기억)
+let TEAM_TAB=lsJson('sm_team_tab',{});               // 팀마다 마지막 탭
+function tui(code){ return TEAM_UI[code]||(TEAM_UI[code]={filter:'open', add:{}}); }
+async function fetchTeams(){ try{ const r=await T.api('GET','/api/owner/teams',{query:{archived:1}}); return (r&&r.teams)||[]; }catch(e){ return TEAMS||[]; } }
+async function refreshTeamDetail(code){
+  const u=tui(code); u.loading=true;
+  try{ TEAM_DET[code]=await T.api('GET','/api/owner/teams/'+encodeURIComponent(code)); }
+  catch(e){ TEAM_DET[code]={error:e.message}; }
+  finally{ u.loading=false; }
+}
+function teamRerender(){ if(LIST_CTX) LIST_CTX.rerender(); }
+async function reloadTeams(code){ TEAMS=await fetchTeams(); if(code) await refreshTeamDetail(code); teamRerender(); }
+// 입력 중이면 20초 자동 갱신이 폼을 갈아엎지 않게
+function teamEditing(){
+  if(TEAM_NEW||Object.values(TEAM_UI).some(u=>u.adding)) return true;
+  const a=document.activeElement; return !!(a&&/^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName||'')&&a.closest&&a.closest('#paneList'));
+}
+const TEAM_ERR={alias_taken:'같은 별칭이 이미 있습니다', already_member:'이미 이 팀 구성원입니다', manager_cannot_leave:'관리는 뺄 수 없습니다',
+  no_monitor_group:'관리 세션이 없어 관제·알림이 없습니다', name_required:'이름을 적으세요', alias_required:'별칭을 적으세요',
+  team_not_found:'팀을 찾을 수 없습니다'};
+function teamErrText(m){ m=String(m||''); return TEAM_ERR[m]||m; }
+// 팀 → 관제 그룹 모양(관리 + 구성원 + 라벨). 관제 화면·알림은 이 그룹 id 로 돈다(내부).
+function teamAsGroup(t){
+  const mgr=(t.members||[]).find(m=>m.member_role==='manager'&&m.session_id);
+  if(!t.monitor_group_id||!mgr) return null;
+  const labels={}, subs=[];
+  (t.members||[]).forEach(m=>{ if(!m.session_id) return; labels[m.session_id]=m.alias+(m.role?' · '+m.role:'');
+    if(m!==mgr) subs.push(m.session_id); });
+  return {id:t.monitor_group_id, name:t.name, manager:mgr.session_id, subs, labels};
+}
+function teamSummary(t){
+  const ms=t.members||[]; const live=ms.filter(m=>m.live).length; const k=t.tasks||{};
+  const parts=['구성원 '+ms.length+(live?' · 🟢 '+live:'')];
+  if(k.assigned) parts.push('진행 '+k.assigned);
+  if(k.submitted) parts.push('제출 '+k.submitted+' ⚠');
+  if(k.blocked) parts.push('막힘 '+k.blocked);
+  if(k.rejected) parts.push('반려 '+k.rejected);
+  if(t.archived) parts.push('보관됨');
+  return parts.join(' · ');
+}
+function memberSess(m){ return m.session_id?(SESSIONS||[]).find(s=>s.session_id===m.session_id)||null:null; }
+
+function renderTeamRows(wrap){
   wrap.innerHTML='';
-  if(MON_GROUPS===null){ wrap.appendChild(el('div','spin')); return; }
-  const byId=new Map((SESSIONS||[]).map(s=>[s.session_id,s]));
-  if(!MON_GROUPS.length) wrap.appendChild(el('div','empty','저장된 관제 그룹이 없습니다. 아래에서 새로 만드세요.'));
-  for(const g of MON_GROUPS){
-    const ids=[g.manager].concat((g.subs||[]).filter(x=>x!==g.manager));
-    const busy=ids.filter(id=>{ const b=byId.get(id)&&sessionBadge(byId.get(id)); return b&&b.pulse; }).length;
-    const gh=el('div','ghead grp'+(MON_INLINE&&MON_INLINE.gid===g.id?' sel':'')); gh.dataset.gid=g.id;
-    const gt=el('button','gtext');
-    gt.appendChild(el('div','gbase','🎬 '+g.name));
-    gt.appendChild(el('div','gpath',`${ids.length}개 세션`+(busy?` · 진행 ${busy}`:'')));
-    gt.onclick=()=>openMonitorGroup(g);
-    gh.appendChild(gt);
-    const op=el('button','gopen','관전'); op.onclick=()=>openMonitorGroup(g); gh.appendChild(op);
-    const st=el('button','gset','⚙'); st.title='알림 설정·삭제'; st.onclick=()=>showGroupSettings(g); gh.appendChild(st);
-    wrap.appendChild(gh);
-    const glist=el('div','glist');
-    for(const id of ids){
-      const s=byId.get(id);
-      const lbl=(g.labels&&g.labels[id])||(s?monSessName(s):id.slice(0,8));
-      const srow=el('div','srow'); srow.dataset.sid=id;
-      const info=el('button','sinfo'); const r1=el('div','sr1');
-      const bd=s&&sessionBadge(s);
-      if(bd){ const d=el('span','sdot'+(bd.pulse?' pulse':'')); d.style.setProperty('--c',bd.c); r1.appendChild(d); }
-      r1.appendChild(el('span','sname',lbl));
-      if(id===g.manager) r1.appendChild(el('span','schip','관리'));
-      if(bd){ const t=el('span','sstate',bd.text); t.style.setProperty('--c',bd.c); r1.appendChild(t); }
-      if(!s){ r1.appendChild(el('span','schip','목록에 없음')); srow.classList.add('dim'); }
-      info.appendChild(r1);
-      if(s) info.onclick=()=>loadDetail(s);
-      srow.appendChild(info); glist.appendChild(srow);
-    }
-    wrap.appendChild(glist);
+  if(TEAMS===null){ wrap.appendChild(el('div','spin')); return; }
+  const port=TEAMS.filter(t=>t.kind==='portfolio');
+  const act=TEAMS.filter(t=>t.kind!=='portfolio'&&!t.archived);
+  const arch=TEAMS.filter(t=>t.kind!=='portfolio'&&t.archived);
+  port.forEach(t=>wrap.appendChild(teamCard(t,{assistant:true})));
+  if(!act.length) wrap.appendChild(el('div','empty','아직 팀이 없습니다. 아래 ＋ 새 팀으로 만들거나, 관리 세션에서 clewpath-workers 스킬로 만드세요.'));
+  act.forEach(t=>wrap.appendChild(teamCard(t)));
+  if(TEAM_NEW) wrap.appendChild(newTeamForm());
+  else { const b=el('button','btn gnew','＋ 새 팀'); b.onclick=()=>{ TEAM_NEW={name:'', mgr:'', members:[]}; teamRerender(); }; wrap.appendChild(b); }
+  if(arch.length){
+    const h=el('button','tarch-h',(TEAM_ARCH_OPEN?'▾':'▸')+' 🗄 보관된 팀 '+arch.length);
+    h.onclick=()=>{ TEAM_ARCH_OPEN=!TEAM_ARCH_OPEN; teamRerender(); }; wrap.appendChild(h);
+    if(TEAM_ARCH_OPEN) arch.forEach(t=>wrap.appendChild(teamCard(t)));
   }
-  const add=el('button','btn gnew','＋ 새 관제 그룹'); add.onclick=()=>showMonitorPicker();
-  wrap.appendChild(add);
 }
-// 저장 그룹 하나의 알림 켜기/끄기·삭제(그룹 보기의 ⚙)
-function showGroupSettings(g){
-  const body=el('div');
-  body.appendChild(el('div','cwd','알림은 앱을 닫아도 옵니다(훅 기반). 삭제해도 세션은 그대로이고 알림만 멈춥니다.'));
-  Object.keys(MON_NOTIFY_LABELS).forEach(k=>{
-    const lab=el('label','mp-mgr'); lab.style.display='flex'; lab.style.padding='8px 0';
-    const cb=el('input'); cb.type='checkbox';
-    cb.checked=!!((g.notify&&(k in g.notify))?g.notify[k]:MON_NOTIFY_DEFAULT[k]);
-    cb.onchange=async()=>{ try{ await T.api('POST',`/api/owner/monitor/groups/${encodeURIComponent(g.id)}/notify`,{body:{notify:{[k]:cb.checked}}});
-        g.notify=Object.assign({},g.notify||{},{[k]:cb.checked}); toast('알림 설정 저장됨'); }
-      catch(e){ cb.checked=!cb.checked; toast('저장 실패: '+e.message); } };
-    lab.appendChild(cb); lab.appendChild(document.createTextNode(' 🔔 '+MON_NOTIFY_LABELS[k]));
-    body.appendChild(lab);
-  });
-  const del=el('button','btn ghost','그룹 삭제'); del.style.color='#e66';
-  del.onclick=async()=>{ if(!confirm(`'${g.name}' 그룹을 지울까요? (세션은 그대로, 알림만 멈춥니다)`)) return;
-    try{ await T.api('POST',`/api/owner/monitor/groups/${encodeURIComponent(g.id)}/delete`);
-      MON_GROUPS=(MON_GROUPS||[]).filter(x=>x.id!==g.id); closeModal(); toast('그룹 삭제됨'); if(LIST_CTX) LIST_CTX.rerender(); }
-    catch(e){ toast('삭제 실패: '+e.message); } };
-  openModal('⚙ '+g.name, body, [del]);
+function teamCard(t,o){
+  o=o||{};
+  const card=el('div','tcard'+(t.archived?' arch':'')); card.dataset.code=t.code;
+  const open=TEAM_OPEN.has(t.code);
+  const g=t.archived?null:teamAsGroup(t);
+  const gh=el('div','ghead grp'+(g&&MON_INLINE&&MON_INLINE.gid===g.id?' sel':'')); if(g) gh.dataset.gid=g.id;
+  const gt=el('button','gtext');
+  const nm=el('div','gbase',o.assistant?'🧑‍💼 개인비서':(t.archived?'🗄 ':'👥 ')+t.name);
+  if(!o.assistant) nm.appendChild(el('span','tcode',t.code));
+  gt.appendChild(nm);
+  const k=t.tasks||{};
+  gt.appendChild(el('div','gpath'+(k.submitted?' warn':''), o.assistant?assistantLine(t):teamSummary(t)));
+  gt.onclick=()=>toggleTeam(t);
+  gh.appendChild(gt);
+  if(g){ const op=el('button','gopen','🎬'); op.title='관제 열기'; op.onclick=()=>openMonitorGroup(g); gh.appendChild(op); }
+  const cv=el('button','gset',open?'▾':'▸'); cv.title=open?'접기':'펼치기'; cv.onclick=()=>toggleTeam(t); gh.appendChild(cv);
+  card.appendChild(gh);
+  if(open) card.appendChild(o.assistant?assistantBody(t):teamBody(t));
+  return card;
+}
+function toggleTeam(t){
+  const code=t.code;
+  if(TEAM_OPEN.has(code)) TEAM_OPEN.delete(code);
+  else {
+    TEAM_OPEN.add(code);
+    if(!TEAM_DET[code]&&t.kind!=='portfolio') refreshTeamDetail(code).then(teamRerender);
+    const g=t.archived?null:teamAsGroup(t);
+    if(g&&monInlineWanted()) openMonitorGroup(g,{inline:true});   // PC: 펼치면 오른쪽에 그 팀 관제
+  }
+  lsSet('sm_team_open',[...TEAM_OPEN]); teamRerender();
 }
 
-// 새 관제 그룹 고르기(그룹 보기의 '＋ 새 관제 그룹'). 저장된 그룹은 목록의 그룹 보기에서 연다.
-function showMonitorPicker(){
-  const body=el('div');
-  // ── 새 그룹 고르기 ──
-  body.appendChild(el('div','cwd','관리 에이전트 1개 + 하위 세션들을 골라 실시간 관전합니다. 관리는 하위를 claude -p 로 호출하는 세션입니다. 읽기전용이라 세션에 영향을 주지 않습니다.'));
-  const list=el('div'); list.style.margin='10px 0'; body.appendChild(list);
-  const rows=[];
-  (SESSIONS||[]).forEach(s=>{
-    const row=el('div','mpick');
-    const cb=el('input'); cb.type='checkbox';
-    const nm=el('div','mp-name',monSessName(s));
-    const ml=el('label','mp-mgr'); const mr=el('input'); mr.type='radio'; mr.name='mon-mgr';
-    mr.onclick=()=>{ cb.checked=true; };   // 관리로 지정하면 자동 포함
-    ml.appendChild(mr); ml.appendChild(document.createTextNode('관리'));
-    row.appendChild(cb); row.appendChild(nm); row.appendChild(ml);
-    list.appendChild(row); rows.push({cb,mr,s});
+// ── 🧑‍💼 개인비서 칸(포트폴리오 팀) ──
+function assistantLine(t){
+  const m=(t.members||[]).find(x=>x.member_role==='manager')||(t.members||[])[0];
+  return (m&&m.live?'● 실행 중':'꺼져 있음')+' · 사장님 프로필';
+}
+const PROFILE_STATUS_T={proposed:'제안',confirmed:'확정',rejected:'거절',deleted:'삭제'};
+function assistantBody(t){
+  const b=el('div','tbody'); const u=tui(t.code);
+  const row=el('div','tacts');
+  const op=el('button','btn sm','🧑‍💼 비서 열기'); op.onclick=()=>openAssistant(); row.appendChild(op);
+  b.appendChild(row);
+  b.appendChild(el('div','tsec','사장님 프로필'));
+  b.appendChild(el('div','tnote','비서가 장부에서 배운 작업 습관·선호입니다. 확정해야 비서가 기준으로 씁니다.'));
+  if(!u.profile){
+    b.appendChild(el('div','spin'));
+    if(!u.profLoading){ u.profLoading=true;
+      T.api('GET','/api/owner/profile').then(r=>{ u.profile=(r&&r.profile)||[]; })
+        .catch(e=>{ u.profile=[]; toast('프로필 조회 실패: '+e.message); }).finally(()=>{ u.profLoading=false; teamRerender(); }); }
+    return b;
+  }
+  if(!u.profile.length) b.appendChild(el('div','cwd','아직 항목이 없습니다.'));
+  u.profile.forEach(p=>{
+    const r=el('div','tline'); r.textContent=(p.status==='confirmed'?'📌 ':'💡 ')+p.statement;
+    b.appendChild(r);
+    b.appendChild(el('div','tnote',(PROFILE_STATUS_T[p.status]||p.status)+(p.topic?' · '+p.topic:'')+' · 확신 '+Math.round((p.confidence||0)*100)+'%'));
+    const acts=el('div','tacts');
+    const mk=(label, decision, extra)=>{ const x=el('button','btn ghost sm',label);
+      x.onclick=()=>{ const args=Object.assign({id:p.id, decision}, extra?extra():{});
+        if('statement' in args && !args.statement) return;
+        requestApproval('profile_decide', args, ()=>{ u.profile=null; teamRerender(); }); };
+      acts.appendChild(x); };
+    if(p.status==='proposed') mk('확정','confirm');
+    mk('수정','edit', ()=>({statement: prompt('수정할 문장', p.statement)}));
+    if(p.status==='proposed') mk('거절','reject');
+    mk('삭제','delete');
+    b.appendChild(acts);
   });
-  if(!rows.length) list.appendChild(el('div','empty','세션이 없습니다.'));
-  const nameIn=inputEl(''); nameIn.placeholder='그룹 이름(저장할 때만, 비우면 관리 세션 이름)';
-  body.appendChild(field('저장 이름', nameIn));
-  const pick=()=>{
-    const picked=rows.filter(r=>r.cb.checked);
-    if(picked.length<1){ toast('세션을 1개 이상 선택하세요'); return null; }
-    const mgrRow=rows.find(r=>r.mr.checked);
-    const mgr=mgrRow?mgrRow.s.session_id:picked[0].s.session_id;
-    if(!picked.some(r=>r.s.session_id===mgr)) picked.unshift(rows.find(r=>r.s.session_id===mgr));
-    const labels={}; picked.forEach(r=>{ labels[r.s.session_id]=monSessName(r.s); });
-    return {ids:picked.map(r=>r.s.session_id), mgr, labels};
+  return b;
+}
+
+// ── 팀 칸 본문(탭) ──
+function teamBody(t){
+  const b=el('div','tbody'); const code=t.code; const u=tui(code);
+  const tab=TEAM_TAB[code]||'members';
+  const tabs=el('div','ttabs');
+  const k=t.tasks||{}; const nOpen=TASK_OPEN_ST.reduce((n,s)=>n+(k[s]||0),0);
+  TEAM_TABS.forEach(([v,l])=>{
+    const lab=v==='members'?l+' '+(t.members||[]).length:(v==='tasks'&&nOpen?l+' '+nOpen:l);
+    const x=el('button',tab===v?'on':'',lab); x.dataset.tab=v;
+    x.onclick=()=>{ TEAM_TAB[code]=v; lsSet('sm_team_tab',TEAM_TAB); teamRerender(); }; tabs.appendChild(x); });
+  b.appendChild(tabs);
+  if(tab==='members'){ b.appendChild(teamMembers(t)); return b; }   // 구성원은 목록 값만으로(상세 안 기다림)
+  const d=TEAM_DET[code];
+  if(!d){ b.appendChild(el('div','spin')); if(!u.loading) refreshTeamDetail(code).then(teamRerender); return b; }
+  if(d.error){ b.appendChild(el('div','cwd','불러오기 실패: '+d.error)); return b; }
+  if(tab==='tasks') b.appendChild(teamTasks(t,d));
+  else if(tab==='records') b.appendChild(teamRecords(t,d));
+  else b.appendChild(teamSettings(t,d));
+  return b;
+}
+
+// 구성원: 상태 점·별칭·관리·역할·지금 세션 → 누르면 세션, 경력은 그 줄 아래 펼침
+function teamMembers(t){
+  const w=el('div','tlist'); const u=tui(t.code);
+  (t.members||[]).forEach(m=>{
+    const s=memberSess(m);
+    const row=el('div','srow tm'+(s?'':' dim')); row.dataset.agent=m.agent_id;
+    const info=el('button','sinfo'); const r1=el('div','sr1');
+    const bd=s&&sessionBadge(s);
+    if(bd){ const dd=el('span','sdot'+(bd.pulse?' pulse':'')); dd.style.setProperty('--c',bd.c); r1.appendChild(dd); }
+    r1.appendChild(el('span','sname',m.alias));
+    if(m.member_role==='manager') r1.appendChild(el('span','schip','관리'));
+    if(bd){ const st=el('span','sstate',bd.text); st.style.setProperty('--c',bd.c); r1.appendChild(st); }
+    info.appendChild(r1);
+    const where=s?sessLabel(s):(m.session_id?'세션 '+m.session_id.slice(0,8)+' · 목록에 없음':'세션 없음');
+    info.appendChild(el('div','smeta2',[m.role,where].filter(Boolean).join(' · ')));
+    if(s) info.onclick=()=>loadDetail(s);
+    row.appendChild(info);
+    const cb=el('button','tmini',u.career===m.agent_id?'경력 ▾':'경력 ›'); cb.onclick=()=>toggleCareer(t,m); row.appendChild(cb);
+    w.appendChild(row);
+    if(u.career===m.agent_id) w.appendChild(careerBlock(t,m));
+  });
+  if(t.archived) return w;
+  if(u.adding) w.appendChild(addMemberForm(t));
+  else { const a=el('button','tadd','＋ 구성원 추가'); a.onclick=()=>{ u.adding=true; u.add={sid:'', alias:'', role:''}; teamRerender(); }; w.appendChild(a); }
+  return w;
+}
+function toggleCareer(t,m){
+  const u=tui(t.code);
+  if(u.career===m.agent_id){ u.career=null; teamRerender(); return; }
+  u.career=m.agent_id; u.careerData=null; teamRerender();
+  T.api('GET','/api/owner/teams/'+encodeURIComponent(t.code)+'/members/'+encodeURIComponent(m.agent_id)+'/history')
+    .then(h=>{ if(u.career===m.agent_id){ u.careerData=h; teamRerender(); } })
+    .catch(e=>{ if(u.career===m.agent_id){ u.careerData={error:e.message}; teamRerender(); } });
+}
+function careerBlock(t,m){
+  const u=tui(t.code); const h=u.careerData; const b=el('div','tinner');
+  if(!h){ b.appendChild(el('div','spin')); return b; }
+  if(h.error){ b.appendChild(el('div','cwd','불러오기 실패: '+h.error)); return b; }
+  const k=h.counts||{};
+  b.appendChild(el('div','diag','토큰 '+fmtTok(h.tokens&&h.tokens.total)+' · 메시지 '+(k.messages_sent|0)+' · 제출 '+(k.submitted|0)
+    +' · 승인 '+(k.accepted|0)+' · 반려 '+(k.rejected|0)+' · 사장님 입력 '+(k.human_inputs|0)));
+  const ss=h.sessions||[];
+  if(ss.length){ b.appendChild(el('div','tsec','세션 이력'));
+    ss.forEach(s=>b.appendChild(el('div','tline',(s.ended?'· ':'● ')+s.session_id.slice(0,8)+' · '+s.reason+' · '+tsText(s.started)+(s.ended?' ~ '+tsText(s.ended):'')))); }
+  const owned=h.tasks_owned||[];
+  b.appendChild(el('div','tsec','맡은 일감 '+owned.length));
+  owned.slice(0,20).forEach(x=>{ const r=el('button','tline link',x.id+' · '+(TEAM_STATUS[x.status]||x.status)+' · '+x.goal);
+    r.onclick=()=>{ TEAM_TAB[t.code]='tasks'; lsSet('sm_team_tab',TEAM_TAB); u.filter='all'; openTask(t,x.id); }; b.appendChild(r); });
+  if(!t.archived && m.member_role!=='manager'){
+    const lv=el('button','btn ghost sm tdanger','이 팀에서 빼기');
+    lv.onclick=async()=>{ if(!confirm(`'${m.alias}' 을(를) ${t.name} 에서 뺄까요? (세션·경력은 그대로)`)) return;
+      try{ const r=await T.api('POST','/api/owner/teams/'+encodeURIComponent(t.code)+'/members/'+encodeURIComponent(m.agent_id)+'/leave');
+        if(r&&r.error) throw new Error(r.error); u.career=null; toast('뺐습니다'); reloadTeams(t.code); }
+      catch(e){ toast('빼기 실패: '+teamErrText(e.message)); } };
+    b.appendChild(lv);
+  }
+  return b;
+}
+function sessionSelect(val, exclude, onChange){
+  const sel=el('select','tsel');
+  const o0=el('option',null,'세션 고르기…'); o0.value=''; sel.appendChild(o0);
+  [...(SESSIONS||[])].filter(s=>!s.headless&&!s.continued_in&&!(exclude&&exclude.has(s.session_id)))
+    .sort((a,b)=>(b.mtime||0)-(a.mtime||0)).slice(0,300)
+    .forEach(s=>{ const o=el('option',null,sessLabel(s)+' · '+baseName(s.cwd||'')); o.value=s.session_id; sel.appendChild(o); });
+  sel.value=val||''; sel.onchange=()=>onChange(sel.value); return sel;
+}
+function sessTitleOf(sid){ const s=(SESSIONS||[]).find(x=>x.session_id===sid); return s?String(sessLabel(s)).slice(0,40):''; }
+function addMemberForm(t){
+  const u=tui(t.code); const f=el('div','tform');
+  const inTeam=new Set((t.members||[]).map(m=>m.session_id).filter(Boolean));
+  const al=inputEl(u.add.alias||''); al.placeholder='팀 안에서 부를 이름'; al.oninput=()=>{ u.add.alias=al.value; };
+  f.appendChild(field('세션', sessionSelect(u.add.sid, inTeam, v=>{ u.add.sid=v; if(!u.add.alias){ u.add.alias=sessTitleOf(v); al.value=u.add.alias; } })));
+  f.appendChild(field('별칭', al));
+  const rl=inputEl(u.add.role||''); rl.placeholder='맡은 일(선택)'; rl.oninput=()=>{ u.add.role=rl.value; }; f.appendChild(field('역할', rl));
+  const acts=el('div','tacts');
+  const no=el('button','btn ghost sm','취소'); no.onclick=()=>{ u.adding=false; teamRerender(); };
+  const ok=el('button','btn sm','추가');
+  ok.onclick=async()=>{
+    const alias=String(u.add.alias||'').trim();
+    if(!u.add.sid||!alias){ toast('세션과 별칭을 정하세요'); return; }
+    ok.disabled=true;
+    try{ const r=await T.api('POST','/api/owner/teams/'+encodeURIComponent(t.code)+'/members',
+        {body:{session_id:u.add.sid, alias, role:String(u.add.role||'').trim()}});
+      if(r&&r.error) throw new Error(r.error);
+      u.adding=false; toast('구성원을 추가했습니다'); reloadTeams(t.code); }
+    catch(e){ ok.disabled=false; toast('추가 실패: '+teamErrText(e.message)); } };
+  acts.appendChild(no); acts.appendChild(ok); f.appendChild(acts);
+  return f;
+}
+
+// 일감: 진행 중 / 제출됨 / 전체 · 줄을 누르면 그 아래 타임라인 · 제출된 일감은 승인/반려(승인 요청)
+function teamTasks(t,d){
+  const u=tui(t.code); const w=el('div','tlist');
+  const chips=el('div','tchips');
+  [['open','진행 중'],['submitted','제출됨'],['all','전체']].forEach(([v,l])=>{
+    const c=el('button',u.filter===v?'on':'',l); c.onclick=()=>{ u.filter=v; teamRerender(); }; chips.appendChild(c); });
+  w.appendChild(chips);
+  const alias={}; (d.members||t.members||[]).forEach(m=>{ alias[m.agent_id]=m.alias; });
+  const tasks=(d.tasks||[]).filter(x=>u.filter==='all'||(u.filter==='open'?TASK_OPEN_ST.includes(x.status):x.status===u.filter));
+  if(!tasks.length) w.appendChild(el('div','cwd',u.filter==='all'?'일감이 없습니다.':'해당하는 일감이 없습니다.'));
+  tasks.forEach(x=>{
+    const row=el('div','srow tk'+(x.status==='submitted'?' warn':'')); row.dataset.task=x.id;
+    const info=el('button','sinfo'); const r1=el('div','sr1');
+    r1.appendChild(el('span','tid',x.id));
+    r1.appendChild(el('span','sname',x.goal));
+    r1.appendChild(el('span','tst st-'+x.status,TEAM_STATUS[x.status]||x.status));
+    info.appendChild(r1);
+    info.appendChild(el('div','smeta2',(alias[x.owner]||x.owner||'')+' · '+tsText(x.created)+(x.closed?' ~ '+tsText(x.closed):'')));
+    info.onclick=()=>openTask(t,x.id);
+    row.appendChild(info); w.appendChild(row);
+    if(x.status==='submitted'&&!t.archived){
+      const acts=el('div','tacts');
+      const mk=(label,action)=>{ const b=el('button','btn sm'+(action==='reject'?' ghost':''),label);
+        b.onclick=()=>{ const args={team:t.code, task:x.id, action, assignment_ver:x.assignment_ver};
+          if(action==='reject'){ const note=prompt('반려 사유(작업자에게 전달됩니다)',''); if(note===null) return; args.note=note; }
+          requestApproval('task_decide', args, ()=>{ toast(action==='accept'?'승인했습니다':'반려했습니다'); reloadTeams(t.code); }); };
+        acts.appendChild(b); };
+      mk('✔ 승인','accept'); mk('✖ 반려','reject'); w.appendChild(acts);
+    }
+    if(u.task===x.id) w.appendChild(timelineBlock(t));
+  });
+  return w;
+}
+function openTask(t,id){
+  const u=tui(t.code);
+  if(u.task===id){ u.task=null; teamRerender(); return; }
+  u.task=id; u.tl=null; teamRerender();
+  T.api('GET','/api/owner/teams/'+encodeURIComponent(t.code)+'/tasks/'+encodeURIComponent(id)+'/timeline')
+    .then(r=>{ if(u.task===id){ u.tl=r; teamRerender(); } })
+    .catch(e=>{ if(u.task===id){ u.tl={error:e.message}; teamRerender(); } });
+}
+function timelineBlock(t){
+  const u=tui(t.code); const r=u.tl; const b=el('div','tinner');
+  if(!r){ b.appendChild(el('div','spin')); return b; }
+  if(r.error){ b.appendChild(el('div','cwd','불러오기 실패: '+r.error)); return b; }
+  b.appendChild(el('div','diag',(TEAM_STATUS[r.status]||r.status)+' · 배정 v'+r.assignment_ver+' · 토큰(추정) '+fmtTok(r.tokens_estimate&&r.tokens_estimate.total)));
+  (r.events||[]).forEach(e=>{
+    const who=(e.agent||'')+(e.to?' → '+e.to:'');
+    const row=el('div','tline tl-'+e.kind);
+    row.appendChild(el('b',null,(TEAM_KIND[e.kind]||e.kind)+(who?' · '+who:'')));
+    row.appendChild(el('small',null,' '+tsText(e.t)+' · '+teamEventText(e)));
+    const full=(e.payload&&(e.payload.body||e.payload.text))||'';
+    if(full){ row.classList.add('link'); row.onclick=()=>{
+      if(row.nextSibling&&row.nextSibling.classList&&row.nextSibling.classList.contains('tl-full')) row.nextSibling.remove();
+      else { const pre=el('pre','tl-full',full); pre.style.whiteSpace='pre-wrap'; row.after(pre); } }; }
+    b.appendChild(row);
+  });
+  return b;
+}
+
+// 기록: 토큰 · 규칙 위반 · 사장님 입력 검색(그 자리에서)
+function teamRecords(t,d){
+  const w=el('div','tlist'); const u=tui(t.code);
+  const us=d.usage||{};
+  w.appendChild(el('div','tsec','🧮 토큰 '+fmtTok(us.total&&us.total.total)));
+  (us.by_agent||[]).forEach(a=>w.appendChild(el('div','tline',(a.alias||a.agent_id)+' · '+fmtTok(a.total))));
+  w.appendChild(el('div','tnote','일감별 토큰은 추정입니다.'));
+  const vs=d.violations||[];
+  w.appendChild(el('div','tsec','⚠ 규칙 위반 '+vs.length));
+  vs.slice(0,20).forEach(x=>w.appendChild(el('div','tline',x.text+(x.task?' · '+x.task:'')+' · '+(x.who||[]).join(' → ')+' · '+tsText(x.t)+(x.notified?' · 알림됨':''))));
+  w.appendChild(el('div','tsec','🙋 사장님 입력 검색'));
+  const sb=el('div','tsearch'); const q=inputEl(u.q||''); q.placeholder='이 팀 세션에서 친 말(3자 이상은 전문 검색)';
+  q.oninput=()=>{ u.q=q.value; };
+  const run=async(before)=>{
+    try{ const r=await T.api('GET','/api/owner/teams/'+encodeURIComponent(t.code)+'/inputs',
+        {query:Object.assign({limit:30}, u.q?{q:u.q.trim()}:{}, before?{before}:{})});
+      const items=(r&&r.items)||[];
+      u.inputs=before?(u.inputs||[]).concat(items):items; u.inputsNext=r&&r.next_before; teamRerender(); }
+    catch(e){ toast('검색 실패: '+e.message); } };
+  q.onkeydown=(ev)=>{ if(ev.key==='Enter') run(); };
+  const go=el('button','btn sm','검색'); go.onclick=()=>run();
+  sb.appendChild(q); sb.appendChild(go); w.appendChild(sb);
+  if(u.inputs){
+    if(!u.inputs.length) w.appendChild(el('div','cwd','결과가 없습니다.'));
+    u.inputs.forEach(x=>{ w.appendChild(el('div','tnote','🙋 '+(x.agent||'')+(x.task?' · '+x.task:'')+' · '+tsText(x.t)));
+      const pre=el('pre','tl-full',x.text); pre.style.whiteSpace='pre-wrap'; w.appendChild(pre); });
+    if(u.inputsNext){ const more=el('button','btn ghost sm','더 보기'); more.onclick=()=>run(u.inputsNext); w.appendChild(more); }
+  }
+  return w;
+}
+
+// 설정: 알림 · 이름 · 보관 · 보존본 지우기
+function teamSettings(t,d){
+  const w=el('div','tlist'); const code=t.code;
+  if(!t.archived){
+    w.appendChild(el('div','tsec','🔔 알림 (앱을 닫아도 폰으로)'));
+    const nf=d.notify||t.notify;
+    if(!nf) w.appendChild(el('div','cwd','관리 세션이 없어 관제·알림이 아직 없습니다.'));
+    else Object.keys(MON_NOTIFY_LABELS).forEach(k=>{
+      const lab=el('label','tcheck'); const cb=el('input'); cb.type='checkbox';
+      cb.checked=!!((k in nf)?nf[k]:MON_NOTIFY_DEFAULT[k]);
+      cb.onchange=async()=>{ try{ const r=await T.api('POST','/api/owner/teams/'+encodeURIComponent(code)+'/notify',{body:{notify:{[k]:cb.checked}}});
+          if(r&&r.error) throw new Error(r.error); d.notify=r.notify; t.notify=r.notify; toast('알림 설정 저장됨'); }
+        catch(e){ cb.checked=!cb.checked; toast('저장 실패: '+teamErrText(e.message)); } };
+      lab.appendChild(cb); lab.appendChild(document.createTextNode(' '+MON_NOTIFY_LABELS[k])); w.appendChild(lab);
+    });
+    w.appendChild(el('div','tsec','이름'));
+    const sb=el('div','tsearch'); const nm=inputEl(t.name); const sv=el('button','btn sm','저장');
+    sv.onclick=async()=>{ const v=nm.value.trim(); if(!v||v===t.name) return;
+      try{ const r=await T.api('POST','/api/owner/teams/'+encodeURIComponent(code)+'/rename',{body:{name:v}});
+        if(r&&r.error) throw new Error(r.error); toast('이름을 바꿨습니다'); reloadTeams(code); }
+      catch(e){ toast('저장 실패: '+teamErrText(e.message)); } };
+    sb.appendChild(nm); sb.appendChild(sv); w.appendChild(sb);
+  }
+  w.appendChild(el('div','tsec',t.archived?'보관된 팀':'팀 끝내기'));
+  if(t.archived){
+    w.appendChild(el('div','tnote','장부·이력은 그대로 남아 있습니다. 풀면 관제·알림이 다시 켜집니다.'));
+    w.appendChild(teamRow('↩','보관 풀기','다시 목록·알림에 넣기 — 승인 필요',
+      ()=>requestApproval('team_archive', {team:code, on:false}, ()=>{ toast('보관을 풀었습니다'); reloadTeams(code); })));
+  } else {
+    w.appendChild(teamRow('🗄','이 팀 보관','목록·알림에서 빼기(장부·이력은 그대로) — 승인 필요',
+      ()=>requestApproval('team_archive', {team:code, on:true}, ()=>{ toast('보관했습니다'); TEAM_OPEN.delete(code); lsSet('sm_team_open',[...TEAM_OPEN]); reloadTeams(); })));
+  }
+  w.appendChild(teamRow('🧽','보존본 지우기','보존 원본·사람 입력·메시지 전문 삭제(일감·토큰 수는 남음) — 승인 필요',
+    ()=>requestApproval('team_purge', {team:code}, ()=>{ toast('보존본을 지웠습니다'); reloadTeams(code); })));
+  return w;
+}
+
+// ＋ 새 팀: 이름 · 관리 세션 · 구성원(세션·별칭·역할) → 승인 요청(team_create)
+function newTeamForm(){
+  const s=TEAM_NEW; const f=el('div','tform tnew');
+  f.appendChild(el('div','tsec','＋ 새 팀'));
+  const nm=inputEl(s.name); nm.placeholder='팀 이름(예: 포털 개발)'; nm.oninput=()=>{ s.name=nm.value; }; f.appendChild(field('이름', nm));
+  f.appendChild(field('관리 세션', sessionSelect(s.mgr, new Set(s.members.map(m=>m.sid).filter(Boolean)), v=>{ s.mgr=v; teamRerender(); })));
+  f.appendChild(el('div','tnote','관리 세션이 구성원에게 일을 나누고 결과를 받습니다(clewpath-workers 스킬).'));
+  s.members.forEach((m,i)=>{
+    const r=el('div','tmem');
+    const others=new Set([s.mgr].concat(s.members.filter((_,j)=>j!==i).map(x=>x.sid)).filter(Boolean));
+    r.appendChild(sessionSelect(m.sid, others, v=>{ m.sid=v; if(!m.alias) m.alias=sessTitleOf(v); teamRerender(); }));
+    const a=inputEl(m.alias); a.placeholder='별칭'; a.oninput=()=>{ m.alias=a.value; }; r.appendChild(a);
+    const rl=inputEl(m.role); rl.placeholder='역할'; rl.oninput=()=>{ m.role=rl.value; }; r.appendChild(rl);
+    const x=el('button','tmini','✕'); x.title='빼기'; x.onclick=()=>{ s.members.splice(i,1); teamRerender(); }; r.appendChild(x);
+    f.appendChild(r);
+  });
+  const add=el('button','tadd','＋ 구성원'); add.onclick=()=>{ s.members.push({sid:'', alias:'', role:''}); teamRerender(); }; f.appendChild(add);
+  const acts=el('div','tacts');
+  const no=el('button','btn ghost sm','취소'); no.onclick=()=>{ TEAM_NEW=null; teamRerender(); };
+  const ok=el('button','btn sm','만들기(승인 요청)');
+  ok.onclick=()=>{
+    const name=String(s.name||'').trim();
+    if(!name){ toast('팀 이름을 적으세요'); return; }
+    if(!s.mgr){ toast('관리 세션을 고르세요'); return; }
+    const members=s.members.filter(m=>m.sid&&String(m.alias||'').trim())
+      .map(m=>({session_id:m.sid, alias:String(m.alias).trim(), role:String(m.role||'').trim()}));
+    requestApproval('team_create', {name, manager_session:s.mgr, manager_alias:'관리', members},
+      (r)=>{ TEAM_NEW=null; toast('팀을 만들었습니다'); if(r&&r.code){ TEAM_OPEN.add(r.code); lsSet('sm_team_open',[...TEAM_OPEN]); } reloadTeams(r&&r.code); });
   };
-  const go=el('button','btn','관전 시작');
-  go.onclick=()=>{ const p=pick(); if(!p) return; closeModal(); openMonitor(p.ids, p.mgr, p.labels); };
-  const save=el('button','btn','💾 저장하고 관전'); save.title='Host 에 그룹을 저장해 앱을 닫아도 관제 알림을 받습니다';
-  save.onclick=async()=>{ const p=pick(); if(!p) return; let r;
-    try{ r=await T.api('POST','/api/owner/monitor/groups',{body:{name:nameIn.value.trim(), manager:p.mgr, subs:p.ids.filter(s=>s!==p.mgr), labels:p.labels}}); toast('관제 그룹 저장됨 — 알림이 켜졌습니다'); }
-    catch(e){ toast('저장 실패: '+e.message); return; }
-    fetchMonGroups().then(g=>{ MON_GROUPS=g; if(LIST_CTX) LIST_CTX.rerender(); }); closeModal(); openMonitor(p.ids, p.mgr, p.labels, {gid:r&&r.id, name:r&&r.name}); };
-  openModal('🎬 새 관제 그룹 — 세션 선택', body, [go, save]);
+  acts.appendChild(no); acts.appendChild(ok); f.appendChild(acts);
+  return f;
 }
 
-// opts.gid/name: 저장 그룹으로 열었을 때 — 💾 가 '갱신' 모드로 동작(세션 추가/제거 시 💾* 표시).
+// opts.gid/name: 팀의 관제로 열었을 때 — 서버가 팀 구성원 변경을 밀어 준다(gid).
 // 데스크톱 그룹 보기: 왼쪽 = 그룹 목록, 오른쪽(상세 칸) = 그 그룹 관제(2026-10-12 사장님). 폰은 전체 화면 오버레이 그대로.
 let MON_INLINE=null;   // {gid, close}
 function closeInlineMonitor(){ const m=MON_INLINE; MON_INLINE=null; if(m){ try{ m.close(); }catch(e){} } }
@@ -3976,7 +4341,6 @@ function openMonitor(ids, manager, labels, opts){
   head.appendChild(el('h3',null,opts.name?'🎬 '+opts.name:'🎬 오케스트레이션 관제'));
   const live=el('div','mon-live off'); live.appendChild(el('span','dot2'));
   const lt=el('span',null,'연결 중…'); live.appendChild(lt); head.appendChild(live);
-  const saveBtn=el('button','mon-vtoggle mon-save','💾'); head.appendChild(saveBtn);   // 그룹 저장/갱신(v0.8.5)
   const vtoggle=el('button','mon-vtoggle','◨'); vtoggle.title='뷰어 패널 접기/펼치기'; head.appendChild(vtoggle);
   const x=el('button','x','✕'); head.appendChild(x);
   const legend=el('div','mon-legend');
@@ -4144,40 +4508,7 @@ function openMonitor(ids, manager, labels, opts){
     renderFilterBar();   // 세션 집합·색·라벨 변동을 필터 토글에도 반영
   }
   renderLegend();
-  // ---- 💾 그룹 저장/갱신(v0.8.5): 관전 중인 구성(관리 + 하위, 라벨)을 Host 저장 그룹으로 ----
-  // 저장 그룹은 앱이 닫혀 있어도 오는 관제 알림의 근거(Phase 2-1). 피커로 돌아가지 않고 여기서 만든다.
-  let savedGid=opts.gid||null, savedName=opts.name||'', groupDirty=false;
-  function renderSaveBtn(){
-    saveBtn.classList.toggle('saved',!!savedGid);
-    saveBtn.classList.toggle('dirty',!!(savedGid&&groupDirty));   // 구성 변경 표시는 CSS 점(글자 '*' 는 34px 버튼에서 줄바꿈)
-    saveBtn.title=savedGid
-      ? (groupDirty?`'${savedName}' 저장 그룹과 구성이 달라졌습니다 — 클릭하면 갱신`:`저장된 그룹 '${savedName}' (관제 알림 켜짐)`)
-      : '이 그룹을 Host 에 저장 — 앱을 닫아도 관제 알림을 받습니다';
-  }
-  function groupPayload(name){
-    const sids=Object.keys(group); const mgr=group[manager]?manager:sids[0];   // 관리가 제거됐으면 첫 세션
-    const lbl={}; sids.forEach(s=>{ lbl[s]=group[s].label||s.slice(0,8); });
-    return {name, manager:mgr, subs:sids.filter(s=>s!==mgr), labels:lbl};
-  }
-  async function saveGroup(name, gid){
-    const p=groupPayload(name); if(gid) p.id=gid;    // id 있으면 같은 그룹 교체(mongroups.save gid)
-    const r=await T.api('POST','/api/owner/monitor/groups',{body:p});
-    savedGid=r.id; savedName=r.name; groupDirty=false; renderSaveBtn();
-    return r;
-  }
-  saveBtn.onclick=()=>{
-    if(!Object.keys(group).length){ toast('저장할 세션이 없습니다'); return; }
-    if(savedGid){ saveGroup(savedName, savedGid).then(()=>toast('관제 그룹 갱신됨')).catch(e=>toast('갱신 실패: '+e.message)); return; }
-    const body=el('div');
-    body.appendChild(el('div','cwd','Host 에 저장하면 앱을 닫아도 이 그룹의 관제 알림(관리 턴 종료·하위 응답 완료·호출 실패)이 옵니다.'));
-    const mgrLabel=(group[manager]&&group[manager].label)||'';
-    const nameIn=inputEl(mgrLabel); nameIn.placeholder='그룹 이름'; body.appendChild(field('그룹 이름', nameIn));
-    const ok=el('button','btn','💾 저장');
-    ok.onclick=async()=>{ try{ await saveGroup(nameIn.value.trim()||mgrLabel); closeModal(); toast('관제 그룹 저장됨 — 알림이 켜졌습니다'); }
-      catch(e){ toast('저장 실패: '+e.message); } };
-    openModal('💾 관제 그룹 저장', body, [ok]);
-  };
-  renderSaveBtn();
+  // 구성원의 정본은 팀(팀 통합 U7, 2026-10-13) — 관제 중 ＋ 세션 추가는 이번 관전에만, 저장은 팀 칸의 ＋ 구성원 추가로
   const fmtT=(ts)=>{ try{ return ts?new Date(ts).toLocaleTimeString():''; }catch(e){ return ''; } };
   const nearBottom=()=> bodyW.scrollHeight-bodyW.scrollTop-bodyW.clientHeight < 90;
   const setLive=(on,txt)=>{ live.className='mon-live '+(on?'on':'off'); lt.textContent=txt; };
@@ -4232,11 +4563,9 @@ function openMonitor(ids, manager, labels, opts){
         const nm=(SESSIONS.find(s=>s.session_id===m.session_id)||{});
         group[m.session_id]={label:(nm.title||nm.label_name||nm.slug||m.session_id.slice(0,8)),
                              color:null, role:'sub'};
-        if(savedGid && m.origin!=='sync'){ groupDirty=true; renderSaveBtn(); }   // 저장 그룹과 구성이 달라짐(서버 동기화는 제외)
-        renderLegend(); toast(m.origin==='sync'?'그룹 구성원 추가됨':'세션 추가됨');
+        renderLegend(); toast(m.origin==='sync'?'팀 구성원 추가됨':'세션 추가됨');
       } else if(m.action==='remove' && m.session_id){
         delete group[m.session_id]; delete activity[m.session_id];
-        if(savedGid && m.origin!=='sync'){ groupDirty=true; renderSaveBtn(); }
         if(selectedSid===m.session_id){ selectedSid=null; renderVHead();
           vwrap.innerHTML=''; vwrap.appendChild(el('div','empty','세션이 제거되었습니다. 다른 세션을 선택하세요.')); }
         renderLegend(); toast('세션 제거됨');
@@ -4251,13 +4580,13 @@ function openMonitor(ids, manager, labels, opts){
     }
   }
 
-  try{ handle=T.monitor(ids.join(','), manager, onMsg, savedGid); }
+  try{ handle=T.monitor(ids.join(','), manager, onMsg, opts.gid||null); }
   catch(e){ setLive(false,'연결 실패'); toast('관제 연결 실패: '+e.message); }
   const shut=()=>{ try{ handle&&handle.close(); }catch(e){} };
   if(inline){
     MON_INLINE={gid:opts.gid||null, close:shut};
     x.title='관제 닫기';
-    x.onclick=()=>{ closeInlineMonitor(); paneDetail().classList.remove('mon-mode'); detailPlaceholder('왼쪽에서 그룹을 고르세요');
+    x.onclick=()=>{ closeInlineMonitor(); paneDetail().classList.remove('mon-mode'); detailPlaceholder('왼쪽에서 팀을 고르세요');
       highlightGroup(null); };
     highlightGroup(opts.gid||null);
   } else x.onclick=()=>{ shut(); ov.remove(); };
@@ -4966,7 +5295,7 @@ function showSettings(){
   const advRow=(icon,title,desc,fn,opt)=>{ const before=body.children.length; row(icon,title,desc,fn,opt);
     if(body.children.length>before){ const n=body.children[body.children.length-1]; body.removeChild(n); if(n.remove) n.remove(); adv.appendChild(n); } };
   if(!VERSTATE.latest) advRow('⬆','업데이트','현재 버전 확인 · 재설치',()=>checkUpdateNow(VERSTATE.cur));
-  advRow('👥','팀 · 경력','에이전트 이력 · 일감 타임라인 · 토큰 · 위반 · 사람 입력',showTeams,{local:true});
+  advRow('👥','팀','목록의 👥 팀 보기로 — 구성원 · 일감 · 기록 · 알림',()=>{ closeModal(); MON_AUTO=true; setListView('groups'); loadList(); });
   advRow('📦','워커 스킬 설치','하위 세션 분배 스킬(clewpath-workers)을 ~/.claude/skills 에 설치',installWorkersSkill,{local:true});
   advRow('📦','비서 스킬 설치','개인 비서 스킬(clewpath-assistant)을 ~/.claude/skills 에 설치',()=>installBundledSkill('assistant'),{local:true});
   advRow('🖥','터미널 관리 프로세스','Host 업데이트에도 터미널을 살려 두는 프로세스 · 상태 · 업데이트',showPtyd);
@@ -4989,53 +5318,6 @@ function teamRow(icon,title,sub,fn){
   b.appendChild(st); if(fn) b.onclick=fn; else b.style.cursor='default';
   return b;
 }
-async function showTeams(){
-  let r; try{ r=await T.api('GET','/api/v1/team',{query:{archived:1}}); }catch(e){ toast('팀 목록 실패: '+e.message); return; }
-  const body=el('div'); const teams=(r&&r.teams)||[];
-  if(!teams.length) body.appendChild(el('div','cwd','아직 팀이 없습니다 — 관리 세션에서 clewpath-workers 스킬로 팀을 만들면 여기에 이력이 쌓입니다.'));
-  body.appendChild(teamRow('🧑‍💼','사장님 프로필','비서가 배운 작업 습관·선호(제안 → 사장님 확정)', ()=>{ closeModal(); showProfile(); }));
-  teams.forEach(t=>body.appendChild(teamRow(t.kind==='portfolio'?'🧑‍💼':(t.archived?'🗄':'👥'), t.name+' ('+t.code+')',
-    '구성원 '+t.members+' · 열린 일감 '+t.open_tasks+(t.archived?' · 보관됨':''), ()=>{ closeModal(); showTeam(t.code); })));
-  openModal('👥 팀 · 경력', body, []);
-}
-async function showTeam(code){
-  let t,u,v,tk;
-  try{ [t,u,v,tk]=await Promise.all([T.api('GET','/api/v1/team/'+encodeURIComponent(code)),
-         T.api('GET','/api/v1/team/'+encodeURIComponent(code)+'/usage'),
-         T.api('GET','/api/v1/team/'+encodeURIComponent(code)+'/violations'),
-         T.api('GET','/api/v1/team/'+encodeURIComponent(code)+'/tasks',{query:{limit:100}})]); }
-  catch(e){ toast('팀 조회 실패: '+e.message); return; }
-  const body=el('div');
-  const tokBy={}; ((u&&u.by_agent)||[]).forEach(x=>{ tokBy[x.agent_id]=x.total; });
-  body.appendChild(el('div','diag','🧮 토큰 합 '+fmtTok(u&&u.total&&u.total.total)+' · 일감별은 추정'));
-  body.appendChild(el('div','setsec','구성원'));
-  (t.members||[]).forEach(m=>body.appendChild(teamRow(m.live?'🟢':'⚪',
-    m.alias+(m.member_role==='manager'?' (관리)':'')+(m.role?' · '+m.role:''),
-    '토큰 '+fmtTok(tokBy[m.agent_id])+(m.session_id?' · 세션 '+m.session_id.slice(0,8):''),
-    ()=>{ closeModal(); showAgentCareer(code, m.agent_id); })));
-  body.appendChild(el('div','setsec','일감'));
-  const tasks=(tk&&tk.tasks)||[];
-  if(!tasks.length) body.appendChild(el('div','cwd','일감이 없습니다.'));
-  tasks.forEach(x=>body.appendChild(teamRow('📋', x.id+' · '+(TEAM_STATUS[x.status]||x.status), x.goal,
-    ()=>{ closeModal(); showTaskTimeline(code, x.id); })));
-  const vs=(v&&v.violations)||[];
-  if(vs.length){
-    body.appendChild(el('div','setsec','규칙 위반 '+vs.length));
-    vs.slice(0,10).forEach(x=>body.appendChild(teamRow('⚠', x.text+(x.task?' · '+x.task:''),
-      (x.who||[]).join(' → ')+(x.thread?' · '+x.thread:'')+' · '+tsText(x.t)+(x.notified?' · 알림됨':''))));
-  }
-  body.appendChild(el('div','setsec','기록'));
-  body.appendChild(teamRow('🙋','사람 입력 검색','이 팀 세션에서 사장님이 친 내용', ()=>{ closeModal(); showTeamInputs(code); }));
-  const purge=teamRow('🧽','이 팀 보존본 지우기','보존 원본·사람 입력·메시지 전문 삭제(일감·토큰 수는 남음) — 승인 필요', ()=>purgeTeamArchive(code, t.name));
-  body.appendChild(purge);
-  body.appendChild(teamRow('🗄','이 팀 보관','목록·알림에서 빼기(이력은 그대로) — 승인 필요',
-    ()=>requestApproval('team_archive', {team:code, on:true}, ()=>{ toast('보관했습니다'); closeModal(); showTeams(); })));
-  openModal('👥 '+t.name+' ('+t.code+')', body, []);
-}
-function purgeTeamArchive(code, name){
-  // 화면 확인창은 에이전트도 흉내 낼 수 있어 승인 요청(사람 증명)으로만 지운다(단계 3 A-3)
-  return requestApproval('team_purge', {team:code}, ()=>{ toast('보존본을 지웠습니다'); closeModal(); showTeam(code); });
-}
 function teamEventText(e){
   const p=e.payload||{};
   if(e.kind==='msg'||e.kind==='msg_in'){ const cw=p.cw||{}; const first=String(p.body||'').split('\n')[0];
@@ -5046,67 +5328,6 @@ function teamEventText(e){
   if(e.kind==='msg_failed') return String(p.error||'').slice(0,120);
   return p.note||p.goal||'';
 }
-async function showTaskTimeline(code, taskId){
-  let r; try{ r=await T.api('GET','/api/v1/team/'+encodeURIComponent(code)+'/tasks/'+encodeURIComponent(taskId)+'/timeline'); }
-  catch(e){ toast('타임라인 실패: '+e.message); return; }
-  const body=el('div');
-  body.appendChild(el('div','cwd',r.goal));
-  body.appendChild(el('div','diag',(TEAM_STATUS[r.status]||r.status)+' · 배정 v'+r.assignment_ver+' · 토큰(추정) '+fmtTok(r.tokens_estimate&&r.tokens_estimate.total)));
-  (r.events||[]).forEach(e=>{
-    const who=(e.agent||'')+(e.to?' → '+e.to:'');
-    const row=teamRow('', (TEAM_KIND[e.kind]||e.kind)+(who?' · '+who:''), tsText(e.t)+' · '+teamEventText(e));
-    row.classList.add('tl-'+e.kind);
-    const full=(e.payload&&(e.payload.body||e.payload.text))||'';
-    if(full){ row.onclick=()=>{ const pre=el('pre','tl-full',full); pre.style.whiteSpace='pre-wrap';
-      if(row.nextSibling&&row.nextSibling.classList&&row.nextSibling.classList.contains('tl-full')) row.nextSibling.remove();
-      else row.after(pre); }; }
-    body.appendChild(row);
-  });
-  openModal('📋 '+r.id, body, []);
-}
-async function showAgentCareer(code, agentId){
-  let h,c;
-  try{ [h,c]=await Promise.all([T.api('GET','/api/v1/team/'+encodeURIComponent(code)+'/members/'+encodeURIComponent(agentId)+'/history'),
-                                T.api('GET','/api/v1/team/agent/'+encodeURIComponent(agentId))]); }
-  catch(e){ toast('경력 조회 실패: '+e.message); return; }
-  const body=el('div'); const k=h.counts||{};
-  body.appendChild(el('div','diag','토큰 '+fmtTok(h.tokens&&h.tokens.total)+' · 메시지 '+(k.messages_sent|0)+' · 제출 '+(k.submitted|0)
-    +' · 승인 '+(k.accepted|0)+' · 반려 '+(k.rejected|0)+' · 사장님 입력 '+(k.human_inputs|0)));
-  if(h.role) body.appendChild(el('div','cwd',h.role+((h.tags||[]).length?' · '+h.tags.join(', '):'')));
-  body.appendChild(el('div','setsec','소속 이력(전체 팀)'));
-  ((c&&c.memberships)||[]).forEach(m=>body.appendChild(teamRow(m.left_at?'↪':'👥', m.name+' ('+m.code+') · '+m.alias,
-    tsText(m.joined)+(m.left_at?' ~ '+tsText(m.left_at):' ~ 현재'))));
-  body.appendChild(el('div','setsec','세션 이력'));
-  (h.sessions||[]).forEach(s=>body.appendChild(teamRow(s.ended?'·':'●', s.session_id.slice(0,8)+' · '+s.reason,
-    tsText(s.started)+(s.ended?' ~ '+tsText(s.ended):''))));
-  body.appendChild(el('div','setsec','맡은 일감'));
-  const owned=h.tasks_owned||[];
-  if(!owned.length) body.appendChild(el('div','cwd','없음'));
-  owned.forEach(x=>body.appendChild(teamRow('📋', x.id+' · '+(TEAM_STATUS[x.status]||x.status), x.goal,
-    ()=>{ closeModal(); showTaskTimeline(code, x.id); })));
-  if((h.tasks_collab||[]).length){
-    body.appendChild(el('div','setsec','협업한 일감'));
-    h.tasks_collab.forEach(x=>body.appendChild(teamRow('🤝', x.id+' · '+(TEAM_STATUS[x.status]||x.status), x.goal,
-      ()=>{ closeModal(); showTaskTimeline(code, x.id); })));
-  }
-  openModal('🧑‍💼 '+h.alias, body, []);
-}
-async function showTeamInputs(code, q, before){
-  let r; try{ r=await T.api('GET','/api/v1/team/'+encodeURIComponent(code)+'/inputs',{query:Object.assign({limit:50}, q?{q}:{}, before?{before}:{})}); }
-  catch(e){ toast('검색 실패: '+e.message); return; }
-  const body=el('div');
-  const inp=el('input','inp'); inp.placeholder='검색어(3자 이상은 전문 검색)'; inp.value=q||'';
-  inp.onkeydown=(ev)=>{ if(ev.key==='Enter'){ closeModal(); showTeamInputs(code, inp.value.trim()); } };
-  body.appendChild(inp);
-  const items=(r&&r.items)||[];
-  if(!items.length) body.appendChild(el('div','cwd','결과가 없습니다.'));
-  items.forEach(x=>{ const row=teamRow('🙋', (x.agent||'')+(x.task?' · '+x.task:''), tsText(x.t));
-    const pre=el('pre','tl-full',x.text); pre.style.whiteSpace='pre-wrap'; body.appendChild(row); body.appendChild(pre); });
-  if(r&&r.next_before){ const more=el('button','btn ghost','더 보기'); more.onclick=()=>{ closeModal(); showTeamInputs(code, q, r.next_before); }; body.appendChild(more); }
-  openModal('🙋 사람 입력', body, []);
-}
-// ---- ✅ 승인 요청(개인 비서 단계 3, A-1~A-3) ----
-// 영향이 큰 실행은 '사람만 가진 것' 으로만 승인된다: 폰(페어링 기기) 탭, 또는 PC 에서는 2차 인증 코드.
 const APPROVAL_KIND={team_create:'팀 만들기', team_archive:'팀 보관', team_purge:'보존본 지우기', assistant_set:'비서 지정', session_send:'세션에 일 전달',
   delegate:'일감 위임', task_decide:'결과 승인/반려/취소', profile_decide:'사장님 프로필 결정'};
 async function showApprovals(){
@@ -5142,7 +5363,7 @@ function showApprovalSheet(a, opts){
       +(sx&&sessionIsLive(sx)?' (실행 중)':' (꺼져 있으면 자동 허용 모드로 띄운 뒤 전달)')));
     const q=el('pre','tl-full',String((a.args||{}).message||'')); q.style.whiteSpace='pre-wrap'; body.appendChild(q);
   } else { const pre=el('pre','tl-full', JSON.stringify(a.args||{}, null, 2)); pre.style.whiteSpace='pre-wrap'; body.appendChild(pre); }
-  body.appendChild(el('div','diag','요청 '+tsText(a.created)+(a.requested_by?' · 세션 '+String(a.requested_by).slice(0,8):'')
+  body.appendChild(el('div','diag','요청 '+tsText(a.created)+(a.requested_by==='owner'?' · 사장님 화면':a.requested_by?' · 세션 '+String(a.requested_by).slice(0,8):'')
     +' · 만료 '+tsText(a.expires)+' · 상태 '+a.status));
   let otp=null;
   if(MODE==='local' && a.status==='pending'){
@@ -5157,8 +5378,8 @@ function showApprovalSheet(a, opts){
         {body:Object.assign({approve}, otp&&otp.value?{otp:otp.value.trim()}:{})});
       if(d && d.error) throw new Error(d.error);
       if(!approve){ toast('거절했습니다'); closeModal(); return 'rejected'; }
-      if(opts.execute && MODE==='local'){
-        const x=await T.api('POST','/api/v1/team/approvals/'+encodeURIComponent(a.id)+'/execute');
+      if(opts.execute){                    // 화면에서 낸 요청 — 승인 즉시 실행(폰에서도, 팀 통합 U5)
+        const x=await T.api('POST','/api/owner/approvals/'+encodeURIComponent(a.id)+'/execute');
         if(x && x.error) throw new Error(x.error);
         closeModal(); toast('승인·실행했습니다'); if(opts.onDone) opts.onDone(x&&x.result); return 'executed';
       }
@@ -5173,7 +5394,7 @@ function showApprovalSheet(a, opts){
 }
 // PC 로컬 화면에서 영향 큰 동작을 할 때: 승인 요청을 만들고 바로 그 승인 화면(2FA 또는 폰)을 띄운다.
 async function requestApproval(kind, args, onDone){
-  let a; try{ a=await T.api('POST','/api/v1/team/approvals',{body:{kind, args}}); }catch(e){ toast('요청 실패: '+e.message); return null; }
+  let a; try{ a=await T.api('POST','/api/owner/approvals',{body:{kind, args}}); }catch(e){ toast('요청 실패: '+e.message); return null; }
   if(!a || a.error){ toast('요청 실패: '+((a&&a.error)||'')); return null; }
   closeModal(); showApprovalSheet(a, {execute:true, onDone});
   return a;
@@ -5343,29 +5564,6 @@ function pickAssistantSession(){
 
 // ---- 🧑‍💼 사장님 프로필(A-8) — 비서가 제안, 사장님이 승인으로 확정·거절·수정·삭제 ----
 const PROFILE_STATUS={proposed:'제안', confirmed:'확정'};
-async function showProfile(){
-  let r; try{ r=await T.api('GET','/api/v1/team/profile'); }catch(e){ toast('프로필 조회 실패: '+e.message); return; }
-  const body=el('div'); const items=(r&&r.profile)||[];
-  body.appendChild(el('div','cwd','비서가 장부(사장님 입력·결정·반려 사유)에서 배운 것입니다. 제안은 확정해야 비서가 기준으로 씁니다. 거절·삭제한 문장은 다시 제안되지 않습니다.'));
-  if(!items.length) body.appendChild(el('div','cwd','아직 항목이 없습니다.'));
-  items.forEach(p=>{
-    body.appendChild(teamRow(p.status==='confirmed'?'📌':'💡', p.statement,
-      (PROFILE_STATUS[p.status]||p.status)+(p.topic?' · '+p.topic:'')+' · 확신 '+Math.round((p.confidence||0)*100)+'% · 근거 '
-      +((p.evidence||[]).length)+(p.source==='owner'?' · 사장님 수정':'')));
-    const acts=el('div'); acts.style.cssText='display:flex;gap:6px;flex-wrap:wrap;margin:0 0 8px 34px';
-    const mk=(label, decision, extra)=>{ const b=el('button','btn ghost sm',label);
-      b.onclick=()=>{ const args=Object.assign({id:p.id, decision}, extra?extra():{});
-        if('statement' in args && !args.statement) return;
-        requestApproval('profile_decide', args, ()=>{ closeModal(); showProfile(); }); };
-      acts.appendChild(b); };
-    if(p.status==='proposed') mk('확정','confirm');
-    mk('수정','edit', ()=>({statement: prompt('수정할 문장', p.statement)}));
-    if(p.status==='proposed') mk('거절','reject');
-    mk('삭제','delete');
-    body.appendChild(acts);
-  });
-  openModal('🧑‍💼 사장님 프로필', body, []);
-}
 // 동봉 스킬 설치(v0.9.0) — claude 가 읽는 ~/.claude/skills 에 새 파일을 만드는 행위라 반드시
 // 확인창을 거친다(불가침 원칙 예외, 2026-09-23). 이미 있으면 덮어쓰기를 다시 묻는다.
 const BUNDLED_SKILLS={

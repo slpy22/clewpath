@@ -259,14 +259,14 @@ test("showSettings(릴레이): 2FA·외부 접속 기기·휴지통·워커 스�
   for (const s of ["2차 인증", "외부 접속 기기", "휴지통", "워커 스킬", "설치 상태", "🔒", "팀 · 경력"]) assert.ok(!t.includes(s), "외부에서 숨김: " + s);
   assert.ok(t.includes("재설치") || t.includes("새 버전"), "업데이트는 원격에서도(2FA) — 0.10.5");
   assert.ok(!t.includes("승인 대기") && !t.includes("할 일에 모입니다"), "승인 대기는 머리줄 🔔 할 일로(설정엔 안내 줄도 없음)");
-  for (const s of ["보안", "이 기기 초기화", "알림 설정", "세션 가져오기", "API 사용량", "데이터 · 사용량", "고급"]) assert.ok(t.includes(s), "외부에서 표시: " + s);
+  for (const s of ["보안", "이 기기 초기화", "알림 설정", "세션 가져오기", "API 사용량", "데이터 · 사용량", "고급", "팀 보기로"]) assert.ok(t.includes(s), "외부에서 표시: " + s);
   assert.ok(!t.includes("내 PC"), "'내 PC' 는 헤더 🖧 로 옮겨 설정에서 제거(2026-09-30)");
 });
 test("showSettings(로컬): 로컬 전용 항목이 전부 보인다", async () => {
   const ctx = await load({ location: LOCAL_LOC });
   assert.equal(ev(ctx, "MODE"), "local");
   const t = settingsText(ctx);
-  for (const s of ["2차 인증", "외부 접속 기기", "휴지통", "워커 스킬", "설치 상태", "재설치", "보안", "팀 · 경력"]) assert.ok(t.includes(s), "로컬 표시: " + s);
+  for (const s of ["2차 인증", "외부 접속 기기", "휴지통", "워커 스킬", "설치 상태", "재설치", "보안", "팀 보기로"]) assert.ok(t.includes(s), "로컬 표시: " + s);
   assert.ok(!t.includes("이 기기 초기화") && !t.includes("내 PC"), "로컬엔 폰 전용 항목 없음");
 });
 

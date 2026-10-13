@@ -87,7 +87,8 @@ def _view(r) -> dict:
             "executed_at": r["executed_at"], "result": team._uj(r["result_json"], None)}
 
 
-def create(kind: str, args: dict, summary: str = "", requested_by: str | None = None) -> dict:
+def create(kind: str, args: dict, summary: str = "", requested_by: str | None = None, notify: bool = True) -> dict:
+    """notify=False: 사장님이 화면에서 직접 낸 요청 — 승인 시트가 바로 열리므로 폰 알림을 보내지 않는다."""
     args = dict(args or {})
     _validate(kind, args)
     aid = "ap_" + secrets.token_hex(6)
@@ -95,11 +96,12 @@ def create(kind: str, args: dict, summary: str = "", requested_by: str | None = 
     with team._Tx() as c:
         c.execute("INSERT INTO approvals(id,kind,args_json,summary,requested_by,created,expires,status)"
                   " VALUES(?,?,?,?,?,?,?,?)", (aid, kind, team._j(args), s, requested_by, _now(), _now() + TTL_S, "pending"))
-    try:                                      # 사장님 폰으로 — 알림을 누르면 #approval=<id> 승인 화면
-        from session_manager import push
-        push.send(f"approval:{aid}", requested_by or "", "승인 요청", s, {"approval": aid})
-    except Exception:  # noqa: BLE001
-        pass
+    if notify:
+        try:                                  # 사장님 폰으로 — 알림을 누르면 #approval=<id> 승인 화면
+            from session_manager import push
+            push.send(f"approval:{aid}", requested_by or "", "승인 요청", s, {"approval": aid})
+        except Exception:  # noqa: BLE001
+            pass
     return get(aid)
 
 
