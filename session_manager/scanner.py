@@ -52,6 +52,9 @@ class SessionMeta:
     # 아직 끝났다는 표시가 없는 백그라운드 작업(쉘·모니터): [[task_id, "shell"|"monitor", 시작 epoch 초], ...]
     # claude 가 다시 뜨면 이전 작업은 함께 죽으므로, '지금 몇 개' 는 프로세스 시작 이후 것만 센다(bg_counts).
     bg_open: list = field(default_factory=list)
+    # 마지막 '대화' 시각(user·assistant·작업 알림 줄). 쉬는 세션 판정용 — 파일 mtime 은 claude 가 쉬는 동안에도
+    # 끝에 시각 없는 메타 줄(last-prompt·mode·atis-latch 등)을 다시 써서 갱신되므로 못 쓴다(2026-10-13 실측).
+    last_activity_at: str | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -67,7 +70,7 @@ class _Fold:
     """
     __slots__ = ("meta", "started_at", "last_ts", "line_count", "message_count", "custom_title",
                  "interactive_markers", "ai_title", "agent_name", "last_model", "continued_in", "offset", "sig",
-                 "ep_cli", "ep_other", "bg")
+                 "ep_cli", "ep_other", "bg", "last_act")
 
     def __init__(self):
         # 메타 필드는 첫 줄에 없을 수 있다(사이드체인 메시지 등) → '처음 등장하는 값'
@@ -90,6 +93,7 @@ class _Fold:
         self.ep_cli = False                   # entrypoint 'cli'(대화형) 를 본 적 있나
         self.ep_other = False                 # 그 밖의 entrypoint(sdk-cli 등 헤드리스)를 본 적 있나
         self.bg: dict[str, tuple[str, float]] = {}   # 열린 백그라운드 작업 id → (종류, 시작 시각)
+        self.last_act: str | None = None      # 마지막 대화 줄 timestamp(쉬는 동안 claude 가 스스로 쓰는 줄 제외)
 
     def feed(self, line: str) -> None:
         line = line.strip()
@@ -128,6 +132,8 @@ class _Fold:
             self.interactive_markers += 1
         if t in ("user", "attachment"):
             self._bg_feed(obj, ts)
+        if ts and t in ("user", "assistant", "queue-operation") and not obj.get("isCompactSummary")                 and not obj.get("isMeta"):
+            self.last_act = ts
         ep = obj.get("entrypoint")
         if ep:
             if ep == "cli":
@@ -194,6 +200,7 @@ class _Fold:
             started_at=self.started_at,
             # 마지막 줄이 custom-title/snapshot(타임스탬프 없음)일 수 있으므로 last_ts 사용
             ended_at=self.last_ts,
+            last_activity_at=self.last_act,
             message_count=self.message_count,
             line_count=self.line_count,
             size_bytes=stat.st_size,

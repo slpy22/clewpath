@@ -53,7 +53,8 @@ def test_idle_rules(terms, monkeypatch):
     now = time.time()
     terms("idle1")                                     # 6시간 무활동 → 대상
     terms("recent", last_input=now - 600)              # 10분 전 입력
-    terms("viewing", client=("ws", None))              # 화면이 붙어 있음
+    terms("viewing", client=("ws", None))              # 화면만 붙어 있고 입력·대화 없음 → 대상(밤새 열어 둔 탭)
+    terms("watching", client=("ws", None), last_attach=now - 900)   # 15분 전에 연 화면 → 최근
     terms("perm")
     _RT["perm"] = {"phase": "permission", "permission_at": now - 5 * 3600}
     terms("kept")
@@ -62,7 +63,7 @@ def test_idle_rules(terms, monkeypatch):
     terms("hookrecent")
     _RT["hookrecent"] = {"phase": "ready", "ready_at": now - 1800}
     terms("justadopted", started=now - 60)             # 이 Host 가 방금 다시 붙임(업데이트 직후)
-    assert [c["session_id"] for c in hk.idle_candidates(now)] == ["idle1"]
+    assert sorted(c["session_id"] for c in hk.idle_candidates(now)) == ["idle1", "viewing"]
     assert hk.idle_candidates(now)[0]["idle_s"] >= 6 * 3600 - 5
     monkeypatch.setattr(bgtasks, "busy", lambda c: True)   # 백그라운드 쉘·모니터가 남아 있으면 제외
     assert hk.idle_candidates(now) == []
@@ -214,3 +215,29 @@ def test_maybe_probe_runs_on_version_change_only(fake_claude_home, monkeypatch):
     assert "실패" in note and pr["ok_models"][0]["label"] == "Opus 5.5", "실패하면 이전 목록 유지"
     hk._save(d)
     assert hk.hidden_session_ids() == {"sid1", "sid2", "sid9"}
+
+
+def test_idle_uses_conversation_time_not_file_mtime(terms, fake_claude_home):
+    """claude 는 쉬는 동안에도 jsonl 끝에 시각 없는 메타 줄을 다시 써서 mtime 을 새로 만든다(2026-10-13 실측) —
+    판정은 마지막 대화 줄(user·assistant·작업 알림) 시각으로. 자동 압축 요약·system 줄은 활동이 아니다."""
+    import json, os
+    from datetime import datetime, timezone
+    from session_manager import scanner
+    now = time.time()
+    iso = lambda t: datetime.fromtimestamp(t, timezone.utc).isoformat().replace("+00:00", "Z")
+    sid = "11111111-2222-3333-4444-555555555555"
+    d = fake_claude_home / "projects" / "E--x"
+    d.mkdir(parents=True, exist_ok=True)
+    rows = [{"type": "user", "timestamp": iso(now - 6 * 3600), "cwd": "E:/x", "message": {"role": "user", "content": "hi"}},
+            {"type": "assistant", "timestamp": iso(now - 6 * 3600 + 5), "message": {"role": "assistant", "model": "m", "content": []}},
+            {"type": "user", "timestamp": iso(now - 3600), "isCompactSummary": True, "message": {"role": "user", "content": "요약"}},
+            {"type": "system", "subtype": "informational", "timestamp": iso(now - 3600), "content": "Compacted while idle"},
+            {"type": "last-prompt"}, {"type": "mode"}, {"type": "atis-latch"}]
+    f = d / f"{sid}.jsonl"
+    f.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    os.utime(f, (now - 60, now - 60))                  # 파일은 1분 전에 수정됨
+    scanner.invalidate(str(f))
+    assert scanner._epoch(scanner.scan_one(sid).last_activity_at) == pytest.approx(now - 6 * 3600 + 5, abs=1)
+    terms(sid)
+    got = [c for c in hk.idle_candidates(now) if c["session_id"] == sid]
+    assert got and got[0]["idle_s"] >= 6 * 3600 - 10

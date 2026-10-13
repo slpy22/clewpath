@@ -9,8 +9,9 @@
 
 쉬는 세션 정리(idle_sessions) — 대상은 **ClewPath 가 띄운 터미널(PTY)만**(터미널에서 직접 띄운 claude 는 손대지
 않는다). 아래가 모두 맞을 때만 끈다:
-  · 마지막 활동(jsonl 기록·훅 이벤트·키 입력·화면 열고 닫기·이 Host 가 붙인 시각) 이후 기준 시간(기본 4시간) 경과
-  · 지금 화면이 붙어 있지 않음 · 권한 승인 대기 아님 · 백그라운드 쉘·모니터 0개 · 「항상 켜 두기」 아님
+  · 마지막 활동(jsonl 대화 줄 시각·훅 이벤트·키 입력·화면 연 시각·이 Host 가 붙인 시각) 이후 기준 시간(기본 4시간) 경과
+    — jsonl 파일 수정 시각은 안 쓴다(쉬는 동안에도 claude 가 메타 줄을 다시 씀). 화면이 열려 있기만 한 것은 활동 아님
+  · 권한 승인 대기 아님 · 백그라운드 쉘·모니터 0개 · 「항상 켜 두기」 아님
 끈 세션은 대화 기록이 그대로라 다시 열면 이어진다(재개).
 """
 from __future__ import annotations
@@ -164,15 +165,17 @@ def idle_candidates(now: float | None = None, hours: int | None = None) -> list[
 def _last_activity(sid, a, meta, hooks) -> float:
     rt = hooks.status_of(sid) or {}
     rt_ts = [v for k, v in rt.items() if k.endswith("_at")]
-    return _ts_max(a.get("started_at"), a.get("last_input"), a.get("last_attach"),
-                   getattr(meta, "mtime", 0), *rt_ts)
+    # 파일 mtime 은 쓰지 않는다: claude 가 쉬는 동안에도 끝에 메타 줄을 다시 써서 늘 '방금' 이 된다(2026-10-13 실측).
+    from session_manager.scanner import _epoch
+    talk = _epoch(getattr(meta, "last_activity_at", None)) or 0
+    return _ts_max(a.get("started_at"), a.get("last_input"), a.get("last_attach"), talk, *rt_ts)
 
 
 def _skip_reason(sid, a, now, limit, recs, pmap, scanner, hooks, bgtasks) -> str | None:
     if (recs.get(sid) or {}).get("keep"):
         return "keep"
-    if a.get("attached"):
-        return "attached"
+    # 화면이 붙어 있는 것만으로는 지키지 않는다 — 밤새 열어 둔 탭도 입력·대화가 없으면 정리(2026-10-13 사장님).
+    # 보는 중에 claude 가 일하면 대화 줄이, 사람이 치면 입력 시각이 새로워져 'recent' 로 빠진다.
     rt = hooks.status_of(sid) or {}
     if rt.get("phase") == "permission":
         return "permission"
