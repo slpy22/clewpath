@@ -5139,7 +5139,7 @@ function showApprovalSheet(a, opts){
   if(a.kind==='session_send'){       // 비서 → 일반 세션 전달: 받는 세션과 보낼 글 그대로(승인하면 이 글이 그 세션에 들어간다)
     const sx=(SESSIONS||[]).find(x=>x.session_id===(a.args||{}).session_id);
     body.appendChild(el('div','cwd','받는 세션: '+(sx?sessLabel(sx)+' · '+baseName(sx.cwd||''):String((a.args||{}).session_id||'').slice(0,8))
-      +(sx&&sessionIsLive(sx)?' (실행 중)':' (꺼져 있으면 띄운 뒤 전달)')));
+      +(sx&&sessionIsLive(sx)?' (실행 중)':' (꺼져 있으면 자동 허용 모드로 띄운 뒤 전달)')));
     const q=el('pre','tl-full',String((a.args||{}).message||'')); q.style.whiteSpace='pre-wrap'; body.appendChild(q);
   } else { const pre=el('pre','tl-full', JSON.stringify(a.args||{}, null, 2)); pre.style.whiteSpace='pre-wrap'; body.appendChild(pre); }
   body.appendChild(el('div','diag','요청 '+tsText(a.created)+(a.requested_by?' · 세션 '+String(a.requested_by).slice(0,8):'')

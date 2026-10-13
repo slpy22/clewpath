@@ -124,7 +124,7 @@ def test_session_send_approval(fake_claude_home, monkeypatch):
     approvals.decide(a["id"], True, "otp")
     x = approvals.execute(a["id"])["result"]
     assert x["started"] and x["send_to"] == {"address": "uds:PIPE", "live": True, "name": "tgt-1"}
-    assert started == [("tgt", False)], "평소 권한 모드로 띄운다(자동 허용 아님)"
+    assert started == [("tgt", True)], "꺼진 세션은 자동 허용(yolo) 모드로 띄운다(사장님 지시)"
     # 다른 곳에서 백그라운드로 점유 중이면 띄우지 않는다
     peers.clear()
     monkeypatch.setattr("session_manager.agents.occupancy_map", lambda: {"tgt": {"kind": "bg"}})

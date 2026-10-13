@@ -47,7 +47,7 @@ ClewPath 는 claude 를 **관찰·중계·실행**하는 도구이지, claude �
 - 비서 확장(2026-10-13 사장님 승인 — "일반 세션에 요청한 일도 다 파악해야 개인 비서") → ① 모든 일반 세션 jsonl 을
   **읽기만** 해서 요청·답 요약을 ClewPath 장부(`data_dir/worklog.db`)에 남긴다(worklog.py, 원본 무접촉·비밀값 가림).
   ② 비서가 일반 세션에 글을 보내는 것은 **전달마다 승인 요청(`session_send`)** → 사장님 승인(폰/2FA) 뒤에만, 꺼져 있으면
-  평소 권한 모드로 띄운다(백그라운드 점유 중이면 거절 — 대화 분기 방지). 가드: test_worklog.py
+  자동 허용(yolo) 모드로 띄운다(2026-10-13 사장님 지시로 평소 권한 → yolo)(백그라운드 점유 중이면 거절 — 대화 분기 방지). 가드: test_worklog.py
 - claude 보관 기간 예고 → `~/.claude/settings.json` 의 `cleanupPeriodDays` **읽기만**(retention.py). 값은 바꾸지 않는다.
 
 이 목록에 없는 claude 파일 접근을 추가할 때는 위 1·2 를 적용할 것.
