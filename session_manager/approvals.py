@@ -30,6 +30,7 @@ KINDS = ("team_create", "team_import", "team_archive", "team_purge", "assistant_
          "session_send")
 _ALIAS_ASSISTANT = "비서"
 _PORTFOLIO_CODE = "ASSIST"
+ASSISTANT_TITLE = "개인비서"      # 비서 세션 이름 고정(2026-10-13 사장님)
 
 
 def _now() -> int:
@@ -310,6 +311,7 @@ def set_assistant(session_id: str) -> dict:
         if own and own["agent_id"] != row["agent_id"]:
             raise team.TeamError("session_owned_by_other_agent", 409)
         team.bind_session(row["team_id"], row["agent_id"], session_id, reason="replaced")
+        _name_assistant(session_id)
         return assistant_info()
     if own:
         raise team.TeamError("session_owned_by_other_agent", 409)
@@ -319,7 +321,37 @@ def set_assistant(session_id: str) -> dict:
         w.execute("INSERT INTO assistant(id,agent_id,team_id,set_at) VALUES(1,?,?,?)", (m["agent_id"], t["id"], _now()))
         w.execute("UPDATE agents SET role='assistant' WHERE id=?", (m["agent_id"],))
         w.execute("UPDATE teams SET parent=? WHERE parent IS NULL AND kind='team'", (m["agent_id"],))   # 기존 팀도 포트폴리오로
+    _name_assistant(session_id)
     return assistant_info()
+
+
+def _name_assistant(session_id: str) -> dict | None:
+    """비서 세션 이름을 「개인비서」로(2026-10-13 사장님 — 승인된 이름 변경 예외: custom-title 한 줄 append).
+    비서 지정(승인 요청 → 사장님 승인) 때만 부른다. 이미 그 이름이면 쓰지 않고, 생성 중(busy)이면 건너뛴다
+    (ClewPath 화면은 assistant_session_id() 로 어차피 「개인비서」로 보인다)."""
+    from session_manager import native_title, scanner
+    m = scanner.scan_one(session_id)
+    if m is None or m.custom_title == ASSISTANT_TITLE:
+        return None
+    r = native_title.set_native_title(session_id, ASSISTANT_TITLE)
+    if r.get("ok"):
+        scanner.invalidate(str(m.jsonl_path))
+    return r
+
+
+def assistant_session_id() -> str | None:
+    """지금 비서 세션 id(continued-in 끝까지). 쓰기·피어 조회 없는 가벼운 읽기 — 목록 표시 이름 고정용."""
+    if not team.db_path().exists():
+        return None
+    c = team._read()
+    try:
+        s = c.execute("SELECT s.session_id FROM assistant a JOIN agent_sessions s ON s.agent_id=a.agent_id WHERE a.id=1 "
+                      "ORDER BY s.started DESC, s.rowid DESC LIMIT 1").fetchone()
+    except Exception:  # noqa: BLE001
+        return None
+    finally:
+        c.close()
+    return team._latest_session(s["session_id"]) if s else None
 
 
 def _code_taken(code: str) -> bool:

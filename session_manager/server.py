@@ -1642,6 +1642,8 @@ def create_app() -> FastAPI:
         now_ts = time.time()
         from session_manager import retention
         keep_days = retention.period_days()           # claude 보관 기간(읽기만) — 지워질 즈음 예고
+        from session_manager import approvals as _ap
+        assistant_sid = _ap.assistant_session_id()   # 비서 세션은 이름 「개인비서」 고정(2026-10-13 사장님)
         for s in sessions:
             folder = Path(s.jsonl_path).parent.name
             if q:
@@ -1674,7 +1676,7 @@ def create_app() -> FastAPI:
                 "continued_in": s.continued_in,
                 "picker_hidden": s.picker_hidden,   # ⚙ 배지 - v1(폰·릴레이) 누락 버그 수정
                 "headless": s.headless,             # claude -p 단발 기록(평소엔 목록에서 빠짐)
-                "title": _display_title(md, rec),
+                "title": _ap.ASSISTANT_TITLE if s.session_id == assistant_sid else _display_title(md, rec),
                 "git_branch": s.git_branch,
                 "message_count": s.message_count,
                 "size_bytes": s.size_bytes,

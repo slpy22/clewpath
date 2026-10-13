@@ -259,3 +259,20 @@ def test_task_cancel_via_approval_and_rules(env):
     team.transition("WEB", k2["id"], "submit", assignment_ver=1)
     with pytest.raises(team.TeamError):
         team.transition("WEB", k2["id"], "cancel")                                       # 제출된 건 승인/반려로 결정
+
+
+def test_assistant_title_fixed(env, fake_claude_home):
+    """비서 세션 이름은 「개인비서」 고정(2026-10-13 사장님): 지정 때 custom-title 한 줄(이미 그 이름이면 안 씀) + 목록 표시."""
+    from session_manager import scanner
+    from tests.conftest import write_session
+    p = write_session(fake_claude_home, "E--a", "s-as1", [{"type": "user", "cwd": "E:/a", "timestamp": "2026-10-13T01:00:00.000Z",
+                                                          "message": {"role": "user", "content": "hi"}}])
+    _ok("assistant_set", {"session_id": "s-as1"})
+    lines = [json.loads(x) for x in p.read_text(encoding="utf-8").splitlines()]
+    assert lines[-1] == {"type": "custom-title", "customTitle": "개인비서", "sessionId": "s-as1"}
+    n = len(lines)
+    _ok("assistant_set", {"session_id": "s-as1"})
+    assert len(p.read_text(encoding="utf-8").splitlines()) == n, "이미 「개인비서」면 다시 쓰지 않는다"
+    assert scanner.scan_one("s-as1").custom_title == "개인비서"
+    env["chain"]["s-as1"] = "s-as1b"
+    assert A.assistant_session_id() == "s-as1b", "이어진 세션 끝까지 따라간다"
