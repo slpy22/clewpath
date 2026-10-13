@@ -1624,6 +1624,8 @@ def create_app() -> FastAPI:
         hidden = _hk.hidden_session_ids()            # 모델 목록 읽기용으로 잠깐 띄운 claude 의 빈 기록(숨김)
         out = []
         now_ts = time.time()
+        from session_manager import retention
+        keep_days = retention.period_days()           # claude 보관 기간(읽기만) — 지워질 즈음 예고
         for s in sessions:
             folder = Path(s.jsonl_path).parent.name
             if q:
@@ -1663,6 +1665,8 @@ def create_app() -> FastAPI:
                 "started_at": s.started_at,
                 "ended_at": s.ended_at,
                 "mtime": s.mtime,
+                # claude 가 이 기록을 지울 즈음(epoch 초, 마지막 수정 + cleanupPeriodDays). 알 수 없으면 None
+                "cleanup_at": retention.delete_at(s.mtime, keep_days),
                 "labels": rec.get("labels", []),
                 "label_name": rec.get("name"),
                 "keep": bool(rec.get("keep")),      # 항상 켜 두기(쉬는 세션 정리 제외)

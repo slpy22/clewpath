@@ -132,8 +132,11 @@ def test_v1_list_hides_finished_headless(fake_claude_home, monkeypatch):
                         lambda: {"aaaa2222": {"name": "p", "status": "busy", "pid": 1}})
     from session_manager.server import create_app
     with TestClient(create_app()) as c:
-        ids = {s["session_id"] for s in c.get("/api/v1/sessions", headers=H).json()["sessions"]}
+        rows = c.get("/api/v1/sessions", headers=H).json()["sessions"]
+        ids = {s["session_id"] for s in rows}
         assert ids == {"aaaa2222", "bbbb1111"}, "끝난 -p 기록은 빠지고, 지금 도는 것·일반 세션은 보인다"
+        b = next(s for s in rows if s["session_id"] == "bbbb1111")
+        assert b["cleanup_at"] == int(b["mtime"] + 30 * 86400), "claude 가 지울 즈음 = 마지막 수정 + 기본 30일"
         ids2 = {s["session_id"] for s in c.get("/api/v1/sessions?include_headless=true", headers=H).json()["sessions"]}
         assert "aaaa1111" in ids2
         local = [s["session_id"] for p in c.get("/api/sessions", headers=H).json()["projects"] for s in p["sessions"]]

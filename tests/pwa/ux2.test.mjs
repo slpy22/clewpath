@@ -237,3 +237,27 @@ test("🧹 정기 작업 화면: 작업별 켜짐·마지막 결과·지금 실�
   assert.equal(JSON.stringify(ev(ctx, "__c").at(-1).slice(0, 3)), JSON.stringify(["POST", "/api/sessions/s1/keep", { keep: true }]));
   assert.equal(ev(ctx, "SESSIONS[0].keep"), true); assert.equal(drawn, 1);
 });
+
+test("곧 지워질 세션(claude 보관 기간): 7일 안 = 목록 ⏳ 칩·🔔 묶음, 3일 안만 숫자·빨강", async () => {
+  const ctx = await load();
+  seed(ctx, `globalThis.__c=[]; const n=Date.now()/1000;
+    SESSIONS[0].cleanup_at=n+2.5*86400; SESSIONS[1].cleanup_at=n+5.5*86400; SESSIONS[2].cleanup_at=n+3600;
+    SESSIONS.push({session_id:'far', title:'먼일', cwd:'E:/f', cleanup_at:n+20*86400});
+    T.api = async () => ({approvals:[]}); loadDetail=(s)=>__c.push(['detail',s.session_id]);`);
+  same(ev(ctx, "todoSessions().gone.map(s=>s.session_id)"), [A, B], "자동 실행 기록(헤드리스)·먼 것은 빼고 가까운 순");
+  assert.equal(ev(ctx, "todoCount()"), 1, "3일 안만 🔔 숫자");
+  assert.equal(ev(ctx, "cleanupText(SESSIONS[0])"), "2일 뒤 지워짐");
+  await ev(ctx, "showTodo()");
+  const all = deep(ev(ctx, "POP.box"));
+  assert.ok(all.some((k) => cls(k) === "todo-sec k-gone" && k.textContent === "곧 지워질 세션"));
+  const items = all.filter((k) => cls(k).includes("k-gone") && cls(k).startsWith("popi"));
+  assert.equal(items.length, 2);
+  assert.ok(cls(items[0].children.at(-1)).includes("soon"), "3일 안은 강조");
+  items[1].onclick();
+  same(ev(ctx, "__c").at(-1), ["detail", B], "누르면 상세(경고·내보내기)");
+  const rows = render(ctx).children.filter((k) => cls(k) === "glist").flatMap(rowsOf);
+  const chips = deep({ children: rows }).filter((k) => cls(k).startsWith("schip gone")).map((k) => [cls(k), k.textContent]);
+  assert.ok(chips.some(([c, t]) => c === "schip gone hot" && t === "⏳ 2일 뒤 지워짐"));
+  assert.ok(chips.some(([c, t]) => c === "schip gone" && t === "⏳ 5일 뒤 지워짐"));
+  assert.ok(!chips.some(([, t]) => t.includes("20일")), "7일 넘게 남으면 칩 없음");
+});

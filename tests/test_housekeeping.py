@@ -95,7 +95,7 @@ def test_hours_option_and_job_state(terms):
     with pytest.raises(ValueError):
         hk.set_options(hours=3)
     hk.set_options(job="idle_sessions", on=False)
-    assert hk._due(time.time()) == ["models"], "꺼진 작업은 때가 돼도 줄에 안 선다"
+    assert hk._due(time.time()) == ["models", "cleanup_watch"], "꺼진 작업은 때가 돼도 줄에 안 선다"
     res = hk.run_job("idle_sessions")
     st = {j["id"]: j for j in hk.status()["jobs"]}
     assert st["idle_sessions"]["last_ok"] is True and st["idle_sessions"]["last_summary"] == res["summary"]
@@ -154,7 +154,7 @@ def test_api_and_remote_privilege(fake_claude_home, monkeypatch):
     from session_manager import labels
     with TestClient(create_app()) as c:
         st = c.get("/api/owner/housekeeping").json()
-        assert {j["id"] for j in st["jobs"]} == {"idle_sessions", "models"} and st["idle_hours"] == 4
+        assert {j["id"] for j in st["jobs"]} == {"idle_sessions", "models", "cleanup_watch"} and st["idle_hours"] == 4
         assert st["builtin"] and st["idle_candidates"] == []
         assert c.post("/api/owner/housekeeping", json={"hours": 8}).json()["idle_hours"] == 8
         assert c.post("/api/owner/housekeeping", json={"hours": 5}).status_code == 400
@@ -241,3 +241,35 @@ def test_idle_uses_conversation_time_not_file_mtime(terms, fake_claude_home):
     terms(sid)
     got = [c for c in hk.idle_candidates(now) if c["session_id"] == sid]
     assert got and got[0]["idle_s"] >= 6 * 3600 - 10
+
+
+def test_cleanup_watch_warns_once_before_claude_deletes(fake_claude_home, monkeypatch):
+    """claude 는 마지막 수정 뒤 cleanupPeriodDays(기본 30일)가 지난 기록을 지운다(2026-10-13 E:\001_KIS 3개 실종).
+    3일 안에 지워질 세션을 세션마다 한 번만 폰으로 알린다. 설정 파일은 읽기만."""
+    import json
+    from session_manager import retention
+    sent = []
+    monkeypatch.setattr("session_manager.push.send", lambda *a, **k: sent.append(a))
+    now = time.time()
+    day = 86400
+    m = lambda sid, age, **kw: NS(session_id=sid, mtime=now - age * day, cwd="E:/k", custom_title=sid, ai_title=None,
+                                  slug=None, headless=kw.get("headless", False))
+    metas = [m("old28", 28), m("old20", 20), m("fresh", 1), m("auto", 29, headless=True)]
+    assert retention.period_days() == 30, "설정이 없으면 기본 30일"
+    r = hk.watch_cleanup(metas, now)
+    assert [c["session_id"] for c in r["soon"]] == ["old28"] and r["notified"] == ["old28"]
+    assert len(sent) == 1 and "1개" in sent[0][2] and "old28" in sent[0][3]
+    r = hk.watch_cleanup(metas, now)
+    assert r["notified"] == [] and len(sent) == 1, "같은 세션은 한 번만 알린다"
+    settings = fake_claude_home / "settings.json"
+    before = None
+    settings.write_text(json.dumps({"cleanupPeriodDays": 22}), encoding="utf-8")
+    before = settings.read_text(encoding="utf-8")
+    r = hk.watch_cleanup(metas, now)
+    assert [c["session_id"] for c in r["soon"]] == ["old28", "old20"] and r["notified"] == ["old20"]
+    assert "보관 22일" in r["summary"]
+    settings.write_text(json.dumps({"cleanupPeriodDays": 0}), encoding="utf-8")
+    assert retention.period_days() is None and hk.watch_cleanup(metas, now)["soon"] == []
+    settings.write_text(before, encoding="utf-8")
+    assert settings.read_text(encoding="utf-8") == before, "claude 설정은 읽기만"
+    assert retention.delete_at(1000.0, 22) == 1000 + 22 * day

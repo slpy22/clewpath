@@ -35,6 +35,8 @@ JOBS = {
                       "desc": "오래 아무 일도 안 한 ClewPath 터미널을 끕니다(기록은 남아 다시 열면 이어짐)"},
     "models": {"name": "모델 목록 갱신", "interval": 24 * 3600, "default_on": True,
                "desc": "claude /model 화면(claude 가 업데이트됐을 때·7일마다 숨은 터미널로 읽음) + 운영측 목록 + 이 PC 실사용 모델로 재개 모델 목록을 새로 만듭니다"},
+    "cleanup_watch": {"name": "지워질 세션 예고", "interval": 24 * 3600, "default_on": True,
+                      "desc": "claude 가 보관 기간(기본 30일)이 지난 대화 기록을 지우기 전에, 3일 안에 지워질 세션을 폰으로 한 번 알립니다"},
 }
 # 화면에 '자동(항상)' 으로만 보여 주는 기존 주기 작업(켜고 끄는 대상 아님)
 BUILTIN_INFO = [
@@ -351,7 +353,42 @@ def saved_models() -> dict | None:
 
 
 # ---------------------------------------------------------------- 작업 줄
-_RUNNERS = {"idle_sessions": reap_idle, "models": refresh_models}
+# ---------------------------------------------------------------- 지워질 세션 예고(2026-10-13)
+def watch_cleanup(metas=None, now: float | None = None) -> dict:
+    """claude 가 곧(ALERT_DAYS 안) 지울 세션을 세션마다 한 번만 폰으로 알린다. claude 파일은 읽기만."""
+    from session_manager import retention, scanner
+    now = now or time.time()
+    days = retention.period_days()
+    if not days:
+        return {"soon": [], "summary": "claude 자동 삭제 꺼짐(보관 기간 설정 없음/0) — 예고 안 함"}
+    hidden = hidden_session_ids()
+    metas = [m for m in (metas if metas is not None else scanner.scan_all())
+             if not getattr(m, "headless", False) and m.session_id not in hidden]
+    soon = retention.soon(metas, retention.ALERT_DAYS, now)
+    with _lock:
+        # 세션 → 알린 시각. 7일 지나면 잊는다(그 사이 열어서 기한이 늘었다가 다시 다가오면 또 알린다)
+        told = {k: v for k, v in (_load().get("cleanup_told") or {}).items() if v > now - 7 * 86400}
+    new = [c for c in soon if c["session_id"] not in told]
+    if new:
+        try:
+            from session_manager import push
+            names = ", ".join(c["title"] for c in new[:3]) + (" 외" if len(new) > 3 else "")
+            push.send("housekeeping", new[0]["session_id"], f"claude 가 곧 지울 세션 {len(new)}개",
+                      f"{retention.ALERT_DAYS}일 안에 대화 기록이 지워집니다 — {names}. 열어서 한 번 주고받으면 기한이 늘어납니다")
+        except Exception:  # noqa: BLE001
+            pass
+        for c in new:
+            told[c["session_id"]] = int(now)
+    with _lock:
+        d = _load()
+        d["cleanup_told"] = told
+        _save(d)
+    summary = (f"{retention.ALERT_DAYS}일 안에 지워질 세션 {len(soon)}개" + (f" · {len(new)}개 새로 알림" if new else "")
+               if soon else f"{retention.ALERT_DAYS}일 안에 지워질 세션 없음") + f" (보관 {days}일)"
+    return {"soon": soon, "notified": [c["session_id"] for c in new], "days": days, "summary": summary}
+
+
+_RUNNERS = {"idle_sessions": reap_idle, "models": refresh_models, "cleanup_watch": watch_cleanup}
 
 
 def run_job(jid: str) -> dict:
