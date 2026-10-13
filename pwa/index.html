@@ -328,6 +328,34 @@
   .pop .popi.warn .pi{color:#e8a03c}
   .pop .popi.danger>.pt>span{color:#e5534b}
   .pop .popsep{height:1px;background:var(--line);margin:4px 6px}
+  /* 🔔 할 일 시트(2026-10-13 다듬기): 요약 머리 · 묶음별 색 점·건수 · 색 아이콘 칩 · 오른쪽 상대 시각 · 빈 상태 안내 */
+  .pop.todo-pop{min-width:300px;max-width:min(92vw,400px);padding:0 6px 8px}
+  .todo-head{position:sticky;top:0;z-index:1;display:flex;align-items:baseline;gap:8px;padding:12px 10px 8px;background:var(--surface);
+    border-bottom:1px solid var(--line);margin:0 -6px 2px;padding-left:16px;padding-right:16px}
+  .todo-head b{font-size:1rem;font-weight:750;color:var(--ink)}
+  .todo-head span{font-size:.78rem;color:var(--muted)}
+  .todo-head span.hot{color:#e8a03c;font-weight:650}
+  .todo-sec{display:flex;align-items:center;gap:7px;padding:12px 10px 4px;font-size:.72rem;font-weight:700;letter-spacing:.02em;color:var(--muted)}
+  .todo-sec::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--k,#8b949e)}
+  .todo-sec .n{margin-left:auto;min-width:20px;padding:1px 7px;border-radius:999px;background:var(--surface2);color:var(--ink2);font-size:.7rem;text-align:center}
+  .k-approve{--k:#e8a03c}.k-perm{--k:#f0883e}.k-wait{--k:#58a6ff}.k-done{--k:#3fb950}
+  .pop .popi.todo-it{gap:12px;padding:9px 10px;align-items:center}
+  .pop .popi.todo-it .pi{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;font-size:1.05rem;
+    background:color-mix(in srgb,var(--k) 18%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--k) 35%,transparent)}
+  .pop .popi.todo-it .pt>span{font-weight:600}
+  .pop .popi.todo-it .tm{flex:none;display:flex;align-items:center;gap:6px;color:var(--muted);font-size:.72rem;white-space:nowrap}
+  .pop .popi.todo-it .tm.soon{color:#e8a03c;font-weight:650}
+  .pop .popi.todo-it .tm::after{content:"›";font-size:1.05rem;line-height:1;color:var(--line2)}
+  .pop .popi.todo-it.done{padding:6px 10px}
+  .pop .popi.todo-it.done .pi{width:34px;height:18px;background:none;box-shadow:none}
+  .pop .popi.todo-it.done .pi::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--k)}
+  .pop .popi.todo-it.done .pt>span{font-weight:500;color:var(--ink2);font-size:.86rem}
+  .popempty{display:flex;flex-direction:column;align-items:center;text-align:center;gap:6px;padding:26px 18px 22px}
+  .popempty .ei{width:52px;height:52px;border-radius:50%;display:grid;place-items:center;font-size:1.5rem;color:#3fb950;
+    background:color-mix(in srgb,#3fb950 14%,transparent);margin-bottom:4px}
+  .popempty b{font-size:.95rem;color:var(--ink)}
+  .popempty small{font-size:.78rem;color:var(--muted);line-height:1.5;word-break:keep-all;max-width:260px}
+  @media (max-width:879px){ .pop.todo-pop{max-width:none;padding-bottom:calc(8px + var(--safe-b))} .pop .popi.todo-it{padding:11px 10px} }
   #btn-todo{position:relative}
   #btn-todo .tbadge{position:absolute;top:2px;right:0;min-width:17px;height:17px;padding:0 4px;border-radius:999px;background:#e8a03c;
     color:#14110a;font-size:.66rem;font-weight:800;line-height:17px;text-align:center}
@@ -5207,23 +5235,40 @@ async function refreshTodo(){
     TODO_APPROVALS=((r&&r.approvals)||[]).filter(a=>!a.status||a.status==='pending'); }catch(e){}
   renderTodoBadge();
 }
+// 상대 시각(한국어): 지난 시각 → 'N분 전', 남은 시각 → 'N분 남음'
+function todoAgo(t){ if(!t) return ''; const d=Math.max(0,Date.now()/1000+CLOCK_SKEW-t);
+  return d<60?'방금':d<3600?Math.floor(d/60)+'분 전':d<86400?Math.floor(d/3600)+'시간 전':Math.floor(d/86400)+'일 전'; }
+function todoLeft(t){ if(!t) return ''; const d=t-(Date.now()/1000+CLOCK_SKEW);
+  return d<=0?'만료됨':d<3600?Math.ceil(d/60)+'분 남음':Math.floor(d/3600)+'시간 남음'; }
+function todoItem(k,icon,title,sub,meta,fn,soon){
+  const b=popItem(icon,title,sub,fn,'todo-it k-'+k);
+  if(meta) b.appendChild(el('span','tm'+(soon?' soon':''),meta));
+  return b;
+}
 async function showTodo(){
   await refreshTodo();
-  const box=el('div'), t=todoSessions();
-  const sec=(x)=>box.appendChild(el('div','poph',x));
-  const sub=(s)=>[baseName(s.cwd||''),relFrom(s)].filter(Boolean).join(' · ');
-  if(TODO_APPROVALS.length){ sec('✅ 승인 요청 '+TODO_APPROVALS.length);
-    for(const a of TODO_APPROVALS) box.appendChild(popItem('✅',a.summary||APPROVAL_KIND[a.kind]||a.kind,
-      (APPROVAL_KIND[a.kind]||a.kind)+' · 만료 '+tsText(a.expires),()=>showApprovalSheet(a),'warn')); }
-  if(t.perm.length){ sec('✋ 권한 대기 '+t.perm.length);
-    for(const s of t.perm) box.appendChild(popItem('✋',sessLabel(s),sub(s),()=>showApprove(s),'warn')); }
-  if(t.wait.length){ sec('⌨ 입력 대기 '+t.wait.length);
-    for(const s of t.wait) box.appendChild(popItem('⌨',sessLabel(s),sub(s),()=>jumpToSession(s),'warn')); }
-  if(!TODO_APPROVALS.length&&!t.perm.length&&!t.wait.length)
-    box.appendChild(el('div','popempty','지금 기다리는 일이 없습니다.\n승인 요청 · 권한 대기 · 입력 대기 세션이 생기면 🔔 에 숫자로 표시됩니다.'));
-  if(t.ready.length){ sec('✔ 최근 끝난 작업');
-    for(const s of t.ready) box.appendChild(popItem('✔',sessLabel(s),sub(s),()=>jumpToSession(s))); }
-  openPop($('#btn-todo'),box,'🔔 할 일');   // (async 라 상자를 돌려주지 않는다 — 열린 팝은 POP.box)
+  const box=el('div'), t=todoSessions(), n=todoCount();
+  const head=el('div','todo-head'); head.appendChild(el('b',null,'할 일'));
+  head.appendChild(el('span',n?'hot':null, n?('기다리는 일 '+n+'건'):'모두 처리됨')); box.appendChild(head);
+  const sec=(k,label,cnt)=>{ const h=el('div','todo-sec k-'+k,label); if(cnt!=null) h.appendChild(el('span','n',String(cnt))); box.appendChild(h); };
+  const fold=(s)=>baseName(s.cwd||'')||'';
+  const rt=(s,f)=>(s.runtime&&s.runtime[f])||0;
+  if(TODO_APPROVALS.length){ sec('approve','승인 요청',TODO_APPROVALS.length);
+    for(const a of TODO_APPROVALS){ const left=a.expires?(a.expires-(Date.now()/1000+CLOCK_SKEW)):1e9;
+      box.appendChild(todoItem('approve','📝',a.summary||APPROVAL_KIND[a.kind]||a.kind,APPROVAL_KIND[a.kind]||a.kind,
+        todoLeft(a.expires),()=>showApprovalSheet(a),left<600)); } }
+  if(t.perm.length){ sec('perm','권한 대기',t.perm.length);
+    for(const s of t.perm) box.appendChild(todoItem('perm','✋',sessLabel(s),fold(s)+' · 도구 사용 허락 필요',todoAgo(rt(s,'permission_at')),()=>showApprove(s))); }
+  if(t.wait.length){ sec('wait','입력 대기',t.wait.length);
+    for(const s of t.wait) box.appendChild(todoItem('wait','💬',sessLabel(s),fold(s)+' · 답을 기다림',todoAgo(rt(s,'waiting_at')),()=>jumpToSession(s))); }
+  if(!n){ const e=el('div','popempty'); e.appendChild(el('div','ei','✓')); e.appendChild(el('b',null,'기다리는 일이 없습니다'));
+    e.appendChild(el('small',null,'승인 요청 · 권한 대기 · 입력 대기가 생기면 🔔 에 숫자가 뜹니다'));
+    box.appendChild(e); }
+  if(t.ready.length){ sec('done','최근 끝난 작업');
+    for(const s of t.ready){ const b=todoItem('done','',sessLabel(s),fold(s),todoAgo(rt(s,'ready_at')),()=>jumpToSession(s));
+      b.classList.add('done'); box.appendChild(b); } }
+  openPop($('#btn-todo'),box,null);   // (async 라 상자를 돌려주지 않는다 — 열린 팝은 POP.box)
+  try{ POP.box.classList.add('todo-pop'); POP.box.setAttribute('aria-label','할 일'); }catch(e){}
 }
 // ---- 폰 아래 탭 막대(ux-reorg §4-2) — PC 는 목록 위 분할 버튼(.lview)이 같은 일을 한다 ----
 function syncTabbar(){

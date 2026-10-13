@@ -22,6 +22,7 @@ function seed(ctx, extra = "") {
   ]; SELECTED_ID=null; ACTIVE_LABEL=''; COLLAPSED.clear(); ${extra}`);
 }
 const flat = (pop) => [pop.children[0], ...pop.children[1].children];   // 팝 = [제목, 내용]
+const deep = (n) => [n, ...((n && n.children) || []).flatMap(deep)];      // 제목 없는 팝(🔔 할 일)은 통째로 훑는다
 const render = (ctx, q = "") => { const wrap = stubEl("div"); ctx.__wrap = wrap; ev(ctx, `renderRows(globalThis.__wrap, ${JSON.stringify(q)})`); return wrap; };
 const rowsOf = (glist) => glist.children.filter((k) => cls(k).startsWith("srow"));
 
@@ -105,10 +106,17 @@ test("🔔 할 일: 배지 = 승인 요청 + 권한 대기 + 입력 대기, 시�
   assert.equal(badge.textContent, "3"); assert.ok(!badge.classList.contains("hidden"));
   assert.ok(btn.title.startsWith("할 일 3건"));
   await ev(ctx, "showTodo()");
-  const box = { children: flat(ev(ctx, "POP.box")) };
-  const heads = box.children.filter((k) => cls(k) === "poph").map((k) => k.textContent);
-  same(heads, ["🔔 할 일", "✅ 승인 요청 1", "✋ 권한 대기 1", "⌨ 입력 대기 1", "✔ 최근 끝난 작업"]);
+  const box = { children: deep(ev(ctx, "POP.box")) };
+  const head = box.children.find((k) => cls(k) === "todo-head");
+  same(head.children.map((k) => k.textContent), ["할 일", "기다리는 일 3건"]);
+  const heads = box.children.filter((k) => cls(k).startsWith("todo-sec")).map((k) => k.textContent);
+  same(heads, ["승인 요청", "권한 대기", "입력 대기", "최근 끝난 작업"]);
+  const counts = box.children.filter((k) => cls(k) === "n").map((k) => k.textContent);
+  same(counts, ["1", "1", "1"], "기다리는 묶음만 건수 표시(최근 완료는 참고)");
   const items = box.children.filter((k) => cls(k).startsWith("popi"));
+  const metas = box.children.filter((k) => cls(k).startsWith("tm")).map((k) => k.textContent);
+  same(metas, ["10분 남음", "방금", "방금", "방금"], "오른쪽 = 한국어 상대 시각(만료까지 / 상태가 된 뒤)");
+  assert.ok(cls(items.at(-1)).includes("done"), "최근 끝난 작업은 작게");
   items.forEach((k) => k.onclick());
   same(ev(ctx, "__c").filter((x) => x[0] !== "GET"), [["sheet", "ap1"], ["approve", A], ["jump", B], ["jump", "r1"]]);
   assert.ok(ev(ctx, "__c").some((x) => x[1] === "/api/owner/approvals"));
@@ -116,7 +124,8 @@ test("🔔 할 일: 배지 = 승인 요청 + 권한 대기 + 입력 대기, 시�
   ev(ctx, "SESSIONS=[]; T.api = async () => ({approvals:[]})");
   await ev(ctx, "showTodo()");
   assert.ok(badge.classList.contains("hidden"));
-  assert.ok(flat(ev(ctx, "POP.box")).some((k) => cls(k) === "popempty"));
+  assert.ok(deep(ev(ctx, "POP.box")).some((k) => cls(k) === "popempty"));
+  assert.equal(deep(ev(ctx, "POP.box")).find((k) => cls(k) === "todo-head").children[1].textContent, "모두 처리됨");
   // 승인 목록 조회 실패해도 배지는 세션 기준으로 계속
   ev(ctx, "T.api = async () => { throw new Error('403'); }; TODO_APPROVALS=[]");
   await ev(ctx, "refreshTodo()");
