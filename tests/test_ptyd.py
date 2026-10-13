@@ -205,14 +205,20 @@ def test_webterm_start_restart_adopt_stop(broker, fake_claude_home, monkeypatch)
     assert _wait(lambda: "y" in FakePty.made[0].written)
     assert _wait(lambda: "hello from" in webterm._ACTIVE[SID].tail())
 
+    born = webterm._ACTIVE[SID].started_at
     webterm.shutdown_all()                       # Host 업데이트 재기동
     assert SID not in webterm._ACTIVE
     assert [s["key"] for s in ptyclient.sessions()] == [SID], "Host 가 내려가도 터미널은 산다"
     assert FakePty.made[0].alive and gone == [], "종료로 처리하지 않는다"
 
     monkeypatch.setattr(webterm, "_SHUTTING_DOWN", False)   # 새 Host
+    real_sessions = ptyclient.sessions
+    assert abs(real_sessions()[0]["started"] - born) < 5, "브로커가 띄운 시각을 알려준다"
+    monkeypatch.setattr(ptyclient, "sessions", lambda: [dict(x, started=born - 5 * 3600) for x in real_sessions()])
     assert webterm.adopt_broker_sessions() == 1
+    monkeypatch.setattr(ptyclient, "sessions", real_sessions)
     assert webterm.has_terminal(SID)
+    assert webterm._ACTIVE[SID].started_at == born - 5 * 3600, "쉬는 세션 시계는 브로커가 띄운 시각부터(업데이트마다 0 부터 X)"
     assert _wait(lambda: "hello from" in webterm._ACTIVE[SID].tail()), "다시 붙으면 꼬리가 버퍼에"
     assert webterm.start_terminal(SID)["status"] == "already_live", "다시 띄우지 않는다"
 

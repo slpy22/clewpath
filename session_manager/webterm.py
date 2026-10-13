@@ -689,6 +689,13 @@ def adopt_broker_sessions() -> int:
         except ptyclient.BrokerDown:
             continue
         sess = _TermSession(key, proc, persist=bool(it.get("persist", True)))
+        # 쉬는 세션 시계는 브로커가 띄운 시각부터(Host 업데이트마다 0 부터 다시 세면 하루 몇 번 업데이트에 정리가
+        # 끝없이 밀린다, 2026-10-13). 이전 Host 의 키 입력 시각은 잃지만 보낸 입력은 jsonl 대화 줄에 남는다.
+        try:
+            if it.get("started"):
+                sess.started_at = min(sess.started_at, float(it["started"]))
+        except (TypeError, ValueError):
+            pass
         _ACTIVE[key] = sess
         _start_reader(sess)
         n += 1
