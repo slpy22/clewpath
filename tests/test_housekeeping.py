@@ -127,21 +127,18 @@ def test_start_and_reaper_share_session_lock(terms):
 
 
 def test_models_merge(fake_claude_home, monkeypatch):
-    monkeypatch.setattr("session_manager.cp_client.fetch_models",
-                        lambda ttl=3600: [{"id": "claude-opus-5", "label": "Opus 5"}])
-    metas = [NS(last_model="claude-opus-5-5", mtime=200), NS(last_model="claude-opus-5", mtime=300),
-             NS(last_model="claude-haiku-4-5-20251001", mtime=100), NS(last_model="<synthetic>", mtime=400),
-             NS(last_model=None, mtime=1)]
+    """화면을 못 읽었으면 내장 기본 + 실사용(실사용이 앞). 운영측(CP) 목록은 부르지 않는다(0.22.1)."""
+    import httpx
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: (_ for _ in ()).throw(AssertionError("CP 호출 금지")))
+    metas = [NS(last_model="claude-zeta-9", mtime=200), NS(last_model="claude-opus-5", mtime=300),
+             NS(last_model="<synthetic>", mtime=400), NS(last_model=None, mtime=1)]
     r = hk.refresh_models(metas, probe=False)
-    assert r["added"] == ["claude-opus-5-5", "claude-haiku-4-5-20251001"]
+    assert r["added"] == ["claude-zeta-9"] and r["source"] == "builtin"
     ids = [m["id"] for m in hk.saved_models()["models"]]
-    assert ids == ["claude-opus-5-5", "claude-haiku-4-5-20251001", "claude-opus-5"]
+    assert ids == ["claude-zeta-9"] + [m["id"] for m in hk.BUILTIN_MODELS]
     assert hk.model_label("claude-opus-5-5") == "Opus 5.5"
     assert hk.model_label("claude-haiku-4-5-20251001") == "Haiku 4.5"
     assert hk.model_label("claude-fable-5-1") == "Fable 5.1" and hk.model_label("claude-opus-5") == "Opus 5"
-    monkeypatch.setattr("session_manager.cp_client.fetch_models", lambda ttl=3600: None)   # CP 불통 → 내장 + 실사용
-    r2 = hk.refresh_models([NS(last_model="claude-zeta-9", mtime=1)], probe=False)
-    assert r2["source"] == "builtin" and hk.saved_models()["models"][0]["id"] == "claude-zeta-9"
 
 
 def test_api_and_remote_privilege(fake_claude_home, monkeypatch):
@@ -174,18 +171,16 @@ def test_api_and_remote_privilege(fake_claude_home, monkeypatch):
 
 
 def test_models_merge_with_picker(fake_claude_home, monkeypatch):
-    """claude /model 화면 목록이 맨 앞(화면 순서), 이름이 같으면 알려진 id(Haiku 4.5 → 날짜 붙은 id), 그다음 실사용 · 운영측."""
-    monkeypatch.setattr("session_manager.cp_client.fetch_models",
-                        lambda ttl=3600: [{"id": "claude-haiku-4-5-20251001", "label": "Haiku 4.5"},
-                                          {"id": "claude-opus-4-8", "label": "Opus 4.8"}])
+    """claude /model 화면 목록이 맨 앞(화면 순서), 이름이 같으면 알려진 id(Haiku 4.5 → 날짜 붙은 id), 그다음 실사용.
+    화면에 없는 내장 기본 모델은 붙이지 않는다(고를 수 없는 모델이 끼지 않게)."""
     pick = [{"label": "Opus 5.5", "family": "Opus", "ver": "5.5", "one_m": False},
             {"label": "Haiku 4.5", "family": "Haiku", "ver": "4.5", "one_m": False},
             {"label": "Fable 5.1 (1M)", "family": "Fable", "ver": "5.1", "one_m": True}]
     monkeypatch.setattr(hk, "_maybe_probe", lambda d, force=False: ({"ok_models": pick}, "화면 목록 3개"))
     r = hk.refresh_models([NS(last_model="claude-zeta-9", mtime=1)])
     ids = [m["id"] for m in hk.saved_models()["models"]]
-    assert ids == ["claude-opus-5-5", "claude-haiku-4-5-20251001", "claude-fable-5-1[1m]", "claude-zeta-9", "claude-opus-4-8"]
-    assert "화면 목록 3개" in r["summary"]
+    assert ids == ["claude-opus-5-5", "claude-haiku-4-5-20251001", "claude-fable-5-1[1m]", "claude-zeta-9"]
+    assert "화면 목록 3개" in r["summary"] and r["source"] == "picker"
 
 
 def test_maybe_probe_runs_on_version_change_only(fake_claude_home, monkeypatch):

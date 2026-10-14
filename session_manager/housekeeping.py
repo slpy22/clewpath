@@ -34,7 +34,7 @@ JOBS = {
     "idle_sessions": {"name": "쉬는 세션 정리", "interval": 15 * 60, "default_on": True,
                       "desc": "오래 아무 일도 안 한 ClewPath 터미널을 끕니다(기록은 남아 다시 열면 이어짐)"},
     "models": {"name": "모델 목록 갱신", "interval": 24 * 3600, "default_on": True,
-               "desc": "claude /model 화면(claude 가 업데이트됐을 때·7일마다 숨은 터미널로 읽음) + 운영측 목록 + 이 PC 실사용 모델로 재개 모델 목록을 새로 만듭니다"},
+               "desc": "claude /model 화면(claude 가 업데이트됐을 때·7일마다 숨은 터미널로 읽음) + 이 PC 실사용 모델로 재개 모델 목록을 새로 만듭니다(화면을 못 읽었으면 내장 기본)"},
     "worklog": {"name": "작업 장부 채우기", "interval": 5 * 60, "default_on": True,
                 "desc": "모든 세션의 요청·답 요약을 비서용 장부에 이어 적습니다(읽기만 · claude 가 기록을 지워도 장부는 남음)"},
     "cleanup_watch": {"name": "지워질 세션 예고", "interval": 24 * 3600, "default_on": True,
@@ -49,8 +49,9 @@ BUILTIN_INFO = [
     {"name": "Host 자기 회복", "every": "5분(예약 작업)", "desc": "꺼져 있으면 다시 띄움"},
 ]
 
-# 내장 기본 재개 모델 목록(CP 불통·미설정 때). 운영측 목록·이 PC 실사용 모델과 합쳐진다(refresh_models).
-BUILTIN_MODELS = [      # claude /model 화면 순서(2026-10-12, Claude Code 2.1.296) — CP 내장 목록과 같게
+# 내장 기본 재개 모델 목록 — claude /model 화면을 아직 못 읽었을 때(또는 읽기 실패) 쓴다. 이 PC 실사용 모델과 합쳐진다(refresh_models).
+# 0.22.1: 모델 목록은 각 PC 가 관리한다(운영측 CP 목록은 쓰지 않음 — 고를 수 있는 모델은 계정마다 다르고, 그 정답은 그 PC 의 화면).
+BUILTIN_MODELS = [      # claude /model 화면 순서(2026-10-12, Claude Code 2.1.296)
     {"id": "claude-opus-5-5", "label": "Opus 5.5"},
     {"id": "claude-fable-5-1", "label": "Fable 5.1"},
     {"id": "claude-sonnet-5-5", "label": "Sonnet 5.5"},
@@ -294,15 +295,10 @@ def hidden_session_ids() -> set[str]:
 
 
 def refresh_models(metas=None, probe: bool = True) -> dict:
-    """재개 모델 목록 합본: ① claude /model 화면(이 계정이 고를 수 있는 것, 화면 순서) ② 운영측(CP) ③ 이 PC 실사용."""
-    from session_manager import cp_client
+    """재개 모델 목록 합본: ① claude /model 화면(이 계정이 고를 수 있는 것, 화면 순서) ② 이 PC 실사용.
+    화면을 아직 못 읽었으면 ① 대신 내장 기본(BUILTIN_MODELS)."""
     from session_manager import modelprobe
-    cp = None
-    try:
-        cp = cp_client.fetch_models(ttl=0)
-    except Exception:  # noqa: BLE001
-        cp = None
-    base = [dict(x) for x in (cp or BUILTIN_MODELS) if isinstance(x, dict) and x.get("id")]
+    base = [dict(x) for x in BUILTIN_MODELS]
     observed = observed_models(metas)
     known = {}
     for x in base:
@@ -324,7 +320,7 @@ def refresh_models(metas=None, probe: bool = True) -> dict:
         for it in (pr or {}).get("ok_models") or []:
             shown.append({"id": modelprobe.to_id(it, known), "label": it["label"], "picker": True})
     models, have = [], set()
-    for x in shown + base:
+    for x in (shown or base):
         if x["id"] not in have:
             models.append(x)
             have.add(x["id"])
@@ -333,8 +329,8 @@ def refresh_models(metas=None, probe: bool = True) -> dict:
         if mid not in have:
             added.append({"id": mid, "label": model_label(mid), "seen": True})
             have.add(mid)
-    models = (models[:len(shown)] + added + models[len(shown):]) if shown else (added + models)
-    doc = {"models": models, "updated_at": int(time.time()), "source": "cp" if cp else "builtin",
+    models = (models + added) if shown else (added + models)
+    doc = {"models": models, "updated_at": int(time.time()), "source": "picker" if shown else "builtin",
            "picker_count": len(shown), "observed_added": [x["id"] for x in added]}
     f = _models_file()
     f.parent.mkdir(parents=True, exist_ok=True)

@@ -25,7 +25,8 @@
    안전: Enter 는 입력칸에 `/model` 이 보일 때 1번뿐 · 고르기 화면에선 ↓·Esc 만(기본 모델 불변 실측) · 신뢰 질문 등 낯선 화면이면
    아무것도 입력 않고 끝 · 신뢰 폴더 중 .mcp.json·프로젝트 훅 없는 곳 · 남는 빈 세션 기록은 id 를 적어 목록에서 숨김.
    실패하면 이전 목록 + ⚠.
-2. 운영측(CP) 목록 · 3. 이 PC 실사용 모델(assistant message.model). 화면 이름 → id 는 같은 이름의 알려진 id 우선(Haiku 4.5 → 날짜 붙은 id).
+2. 이 PC 실사용 모델(assistant message.model). 화면을 아직 못 읽었으면 1 대신 내장 기본(BUILTIN_MODELS). 화면 이름 → id 는 같은 이름의 알려진 id 우선(Haiku 4.5 → 날짜 붙은 id).
+   0.22.1(2026-10-14 사장님): 운영측(CP) 목록은 쓰지 않는다 — 모델 목록은 각 PC 가 관리. CP `/config/models` 는 옛 Host 호환으로만 남김.
 합본은 `data_dir/models.json`, `/api/models` 가 우선 쓴다. 구독(OAuth) 계정이라 Models API·자격 파일은 쓰지 않는다.
 
 ## 그 밖의 주기 작업(설정 없음, 화면에 안내만)

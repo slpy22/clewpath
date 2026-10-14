@@ -512,20 +512,13 @@ def create_app() -> FastAPI:
     # --model 로 붙인다(실측: 그 재개가 응답을 내면 세션 마지막 모델이 되어 이후에도 계승).
     @app.get("/api/models")
     def list_models():
-        # 운영측(CP) 중앙 관리 목록 우선, CP 미설정·불통이면 내장 기본으로 폴백.
-        # 정기 작업(모델 목록 갱신)이 만든 합본(운영측 + 이 PC 실사용) 우선 → 없으면 운영측 → 내장 기본.
+        # 정기 작업(모델 목록 갱신)이 만든 합본(이 PC claude /model 화면 + 실사용) 우선 → 없으면 내장 기본.
+        # 0.22.1: 운영측(CP) 목록은 쓰지 않는다 — 모델 목록은 각 PC 가 관리.
         from session_manager import housekeeping
         saved = housekeeping.saved_models()
         if saved:
             return {"models": saved["models"], "source": "merged", "updated_at": saved.get("updated_at")}
-        m = None
-        try:
-            from session_manager import cp_client
-            m = cp_client.fetch_models()
-        except Exception:  # noqa: BLE001
-            m = None
-        return {"models": m or SELECTABLE_MODELS,
-                "source": "cp" if m else "builtin"}
+        return {"models": SELECTABLE_MODELS, "source": "builtin"}
 
     @app.post("/api/sessions/{session_id}/model")
     async def set_session_model(session_id: str, request: Request):

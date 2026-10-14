@@ -103,53 +103,15 @@ def _client(fake_claude_home, monkeypatch):
 
 
 def test_api_models_list_builtin_fallback(fake_claude_home, monkeypatch):
-    # CP 미설정 → 내장 기본 목록 폴백
-    monkeypatch.delenv("SM_CP_URL", raising=False)
-    from session_manager import cp_client
-    cp_client._models_cache.update(models=None, at=0)
+    # 합본(정기 작업) 없음 → 내장 기본. CP 를 설정해 둬도 운영측 목록은 부르지 않는다(0.22.1: 모델 목록은 각 PC 가 관리)
+    import httpx
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: (_ for _ in ()).throw(AssertionError("CP 호출 금지")))
     with _client(fake_claude_home, monkeypatch) as c:
+        monkeypatch.setenv("SM_CP_URL", "http://cp.test")
         r = c.get("/api/models")
         assert r.status_code == 200 and r.json()["source"] == "builtin"
         ids = [m["id"] for m in r.json()["models"]]
         assert "claude-opus-5" in ids and "claude-fable-5-1" in ids
-
-
-def test_api_models_from_cp(fake_claude_home, monkeypatch):
-    # CP 목록이 있으면 그걸 우선 사용
-    from session_manager import cp_client
-    monkeypatch.setattr(cp_client, "fetch_models",
-                        lambda: [{"id": "claude-opus-5", "label": "Opus 5 (CP)"}])
-    with _client(fake_claude_home, monkeypatch) as c:
-        r = c.get("/api/models")
-        assert r.json()["source"] == "cp"
-        assert r.json()["models"][0]["label"] == "Opus 5 (CP)"
-
-
-def test_fetch_models_cache_and_no_cp(monkeypatch):
-    from session_manager import cp_client
-    # CP 미설정 → None
-    cp_client._models_cache.update(models=None, at=0)
-    monkeypatch.delenv("SM_CP_URL", raising=False)
-    assert cp_client.fetch_models() is None
-    # CP 설정 + 응답 → 목록, 2회차는 캐시(호출 1회만)
-    monkeypatch.setenv("SM_CP_URL", "http://cp.test")
-    cp_client._models_cache.update(models=None, at=0)
-    calls = {"n": 0}
-
-    class _R:
-        status_code = 200
-        def json(self):  # noqa: E301
-            return {"models": [{"id": "claude-fable-5-1", "label": "Fable"}]}
-
-    def fake_get(url, **kw):
-        calls["n"] += 1
-        assert url.endswith("/config/models")
-        return _R()
-    monkeypatch.setattr(cp_client.httpx, "get", fake_get)
-    m1 = cp_client.fetch_models()
-    m2 = cp_client.fetch_models()   # 캐시
-    assert m1 == m2 and m1[0]["id"] == "claude-fable-5-1"
-    assert calls["n"] == 1
 
 
 def test_api_set_and_clear_model(fake_claude_home, monkeypatch):
