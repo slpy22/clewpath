@@ -138,7 +138,7 @@ test("폰 아래 탭 막대: 보기 전환 · 같은 탭은 맨 위로 · 비서
   const pl = stubEl("div"); pl.scrollTop = 500; ctx.document._register("paneList", pl);
   const app = stubEl("div"); app.setAttribute("data-view", "detail"); ctx.document._register("app", app);
   ev(ctx, "tabbarGo('groups')");
-  assert.equal(ev(ctx, "LIST_VIEW"), "groups"); assert.equal(ev(ctx, "MON_AUTO"), true);
+  assert.equal(ev(ctx, "LIST_VIEW"), "groups");
   assert.equal(app.getAttribute("data-view"), "list", "상세에서 눌러도 목록으로");
   ev(ctx, "tabbarGo('groups')");
   assert.equal(pl.scrollTop, 0, "보던 탭을 또 누르면 맨 위로");

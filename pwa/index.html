@@ -800,6 +800,7 @@
     #resizer:hover::before,#resizer.dragging::before{background:var(--accent);height:40px}
     body.col-resizing{cursor:col-resize;user-select:none}
     .backbar.tolist{display:none}              /* '목록' 뒤로가기 숨김(목록 항상 보임) */
+    .backbar.toonly>.toback{display:none}      /* 터미널·뷰어 줄: '목록' 버튼만 숨기고 나머지 버튼은 둔다 */
     .detail-empty{display:flex;height:100%;align-items:center;justify-content:center;
       color:var(--muted);padding:40px;text-align:center}
     .sbtn{width:56px;font-size:1.3rem}
@@ -1378,7 +1379,6 @@ let ACTIVE_LABEL='';  // 선택된 라벨 필터('' = 전체)
 // 목록 보기: 'sessions'(폴더별 세션) | 'groups'(👥 팀 — 키는 옛 이름 그대로, 기기에 기억된 값 호환) | 'files'
 const LIST_VIEWS=['sessions','groups','files'];
 let LIST_VIEW=(()=>{ try{ const v=LS.getItem('sm_list_view'); return LIST_VIEWS.includes(v)?v:'sessions'; }catch(e){ return 'sessions'; } })();
-let MON_AUTO=false;   // 사용자가 팀 칸을 눌러 들어왔으면 오른쪽에 팀 관제를 띄운다
 function setListView(v){ LIST_VIEW=LIST_VIEWS.includes(v)?v:'sessions'; try{ LS.setItem('sm_list_view',LIST_VIEW); }catch(e){} }
 async function loadList(q){
   const main=paneList(); $('#head').textContent='세션';
@@ -1386,8 +1386,7 @@ async function loadList(q){
   // 세션 목록 ↔ 관제 그룹 목록 전환(2026-10-11 사장님: 그룹을 팝업에서 고르지 말고 목록으로)
   const seg=el('div','lview');
   const segBtn=(v,label)=>{ const b=el('button',LIST_VIEW===v?'on':'',label);
-    b.onclick=()=>{ if(LIST_VIEW===v) return; if(v==='files') FB.autoShow=true; if(v==='groups') MON_AUTO=true;
-      setListView(v); loadList(inp.value); }; return b; };
+    b.onclick=()=>{ if(LIST_VIEW===v) return; setListView(v); loadList(inp.value); }; return b; };
   seg.appendChild(segBtn('sessions','세션')); seg.appendChild(segBtn('groups','👥 팀')); seg.appendChild(segBtn('files','📁 파일'));
   { const b=el('button','assist','🧑‍💼 비서'); b.title='개인 비서 세션 열기'; b.onclick=()=>openAssistant(); seg.appendChild(b); }
   const lhead=el('div','lhead'); lhead.appendChild(seg); main.appendChild(lhead);
@@ -1399,8 +1398,7 @@ async function loadList(q){
   const listWrap=el('div'); main.appendChild(listWrap);
   const spin=el('div','spin'); listWrap.appendChild(spin);
   if(LIST_VIEW==='files') sb.style.display='none';
-  if(LIST_VIEW==='groups'){ sb.style.display='none'; fetchTeams().then(ts=>{ TEAMS=ts; if(LIST_VIEW==='groups'&&SESSIONS) rerender();
-    if(MON_AUTO&&LIST_VIEW==='groups'){ MON_AUTO=false; monAutoOpen(); } }); }
+  if(LIST_VIEW==='groups'){ sb.style.display='none'; fetchTeams().then(ts=>{ TEAMS=ts; if(LIST_VIEW==='groups'&&SESSIONS) rerender(); }); }
   const rerender=()=>{
     if(LIST_VIEW==='groups'){ renderTeamRows(listWrap); return; }
     // 파일 보기: 탐색기는 한 번만 그린다(20초 목록 갱신이 펼친 트리를 갈아엎지 않게)
@@ -1411,7 +1409,8 @@ async function loadList(q){
   // 데스크톱: 우측 안내. 단 살아있는 터미널 뷰(term-mode)는 비우지 않는다 — 재연결
   // 흐름(_scheduleReconnect→loadList)과 새로고침 버튼이 이 경로라, 여기서 pane 을
   // 갈아엎으면 전경 터미널이 발밑에서 사라진다(relay e2e 실측 2026-09-10).
-  if(!SELECTED_ID && !paneDetail().classList.contains('term-mode')) detailPlaceholder();
+  // 탭 막대 전환(2026-10-14 사장님): 오른쪽 칸은 그대로 — 비어 있을 때만 안내를 그린다(보던 상세·관제·파일·뷰어 유지)
+  if(!paneDetail().children.length) detailPlaceholder();
   try{
     const data=await T.list({limit:0});
     SESSIONS=data.sessions||[];
@@ -2294,7 +2293,9 @@ function renderHousekeeping(body,st){
 
 // ---- 상세 ----
 function backbar(label,onback,cls){ const b=el('div','backbar'+(cls?' '+cls:''));
-  const btn=el('button',null,'‹ '+label); btn.onclick=onback; b.appendChild(btn); return b; }
+  const btn=el('button','toback','‹ '+label); btn.onclick=onback; b.appendChild(btn); return b; }
+// 터미널·뷰어·재개는 상세와 같은 층(2026-10-14 사장님: 목록 줄 메뉴에서 바로 들어간다) — 되돌아가기는 '목록'(폰)뿐
+const listBack=(onleave)=>backbar('목록',()=>{ if(onleave) onleave(); showListPane(); },'toonly');
 
 async function loadDetail(s){
   closeLiveViewer();                       // 뷰어 실시간 스트림 정리(있으면)
@@ -3041,7 +3042,7 @@ async function loadTerminal(s, safe){
   // 바의 버튼들은 '지금 전경인 탭'에 작동해야 한다 — 구축 시점의 s 를 붙들면 탭 전환 뒤
   // 엉뚱한(첫) 세션에 작동한다. 활성 탭을 그때그때 읽는다.
   const cur=()=>{ const t=findTab(TABS.active); return t?t.s:s; };
-  const bar=backbar('상세',()=>{ const c=cur(); leaveTerminalView(); loadDetail(c); });
+  const bar=listBack();
   const hist=el('button',null,'📖 이력'); hist.title='과거 대화를 뷰어로 보기';
   hist.style.cssText='margin-left:auto;color:var(--accent);padding:10px 14px;font-weight:650';
   hist.onclick=()=>{ const c=cur(); leaveTerminalView(); loadViewer(c); };
@@ -3079,7 +3080,7 @@ function closeLiveViewer(){ if(_liveViewer){ try{_liveViewer.close();}catch(e){}
 async function loadViewer(s){
   closeLiveViewer();
   const main=paneDetail(); closeInlineMonitor(); main.classList.remove('term-mode','fb-mode','mon-mode'); main.innerHTML=''; $('#head').textContent='뷰어';
-  const bar=backbar('상세',()=>loadDetail(s));
+  const bar=listBack();
   const badge=el('div','vlive off'); badge.appendChild(el('span','vdot'));
   const bt=el('span',null,'실시간 연결 중…'); badge.appendChild(bt); bar.appendChild(badge);
   main.appendChild(bar);
@@ -3183,7 +3184,7 @@ async function loadResume(s, inplace, safe){
   if(safe) cred={...cred, safe:true};   // 일반 모드: 도구 자동허용 없이(웹은 물을 수 없어 거부됨)
   const main=paneDetail(); closeInlineMonitor(); main.classList.remove('term-mode','fb-mode','mon-mode'); main.innerHTML='';
   $('#head').textContent='재개'+(safe?' (일반)':'');
-  main.appendChild(backbar('상세',()=>{sess&&sess.close();loadDetail(s);}));
+  main.appendChild(listBack(()=>{ sess&&sess.close(); }));
   showDetailPane();
   const stream=el('div','stream'); main.appendChild(stream);
   stream.appendChild(el('div','result', isIn
@@ -3478,14 +3479,6 @@ function openMonitorGroup(g, o){
   openMonitor(ids, g.manager, Object.assign({}, g.labels||{}), {gid:g.id, name:g.name, inline});   // 저장 그룹 → 💾 는 갱신 모드
 }
 function highlightGroup(gid){ document.querySelectorAll('.ghead.grp').forEach(h=>h.classList.toggle('sel', !!gid&&h.dataset.gid===gid)); }
-// 팀 보기로 들어오면(데스크톱) 오른쪽 칸에 마지막으로 본 팀(없으면 첫 팀)의 관제를 띄운다 — 터미널을 보고 있으면 건드리지 않는다
-function monAutoOpen(){
-  const gs=(TEAMS||[]).filter(t=>!t.archived).map(teamAsGroup).filter(Boolean);
-  if(!monInlineWanted()||!gs.length) return;
-  const pd=paneDetail(); if(pd.classList.contains('term-mode')||pd.classList.contains('mon-mode')) return;
-  let last=null; try{ last=LS.getItem('sm_mon_last'); }catch(e){}
-  openMonitorGroup(gs.find(g=>g.id===last)||gs[0], {inline:true});
-}
 async function openMonitorGroupById(gid){
   if(!gid) return;
   const g=(await fetchMonGroups()).find(x=>x.id===gid);
@@ -5297,7 +5290,7 @@ function showSettings(){
   const advRow=(icon,title,desc,fn,opt)=>{ const before=body.children.length; row(icon,title,desc,fn,opt);
     if(body.children.length>before){ const n=body.children[body.children.length-1]; body.removeChild(n); if(n.remove) n.remove(); adv.appendChild(n); } };
   if(!VERSTATE.latest) advRow('⬆','업데이트','현재 버전 확인 · 재설치',()=>checkUpdateNow(VERSTATE.cur));
-  advRow('👥','팀','목록의 👥 팀 보기로 — 구성원 · 일감 · 기록 · 알림',()=>{ closeModal(); MON_AUTO=true; setListView('groups'); loadList(); });
+  advRow('👥','팀','목록의 👥 팀 보기로 — 구성원 · 일감 · 기록 · 알림',()=>{ closeModal(); setListView('groups'); loadList(); });
   advRow('📦','워커 스킬 설치','하위 세션 분배 스킬(clewpath-workers)을 ~/.claude/skills 에 설치',installWorkersSkill,{local:true});
   advRow('📦','비서 스킬 설치','개인 비서 스킬(clewpath-assistant)을 ~/.claude/skills 에 설치',()=>installBundledSkill('assistant'),{local:true});
   advRow('🖥','터미널 관리 프로세스','Host 업데이트에도 터미널을 살려 두는 프로세스 · 상태 · 업데이트',showPtyd);
@@ -5520,14 +5513,14 @@ async function showTodo(){
   openPop($('#btn-todo'),box,null);   // (async 라 상자를 돌려주지 않는다 — 열린 팝은 POP.box)
   try{ POP.box.classList.add('todo-pop'); POP.box.setAttribute('aria-label','할 일'); }catch(e){}
 }
-// ---- 폰 아래 탭 막대(ux-reorg §4-2) — PC 는 목록 위 분할 버튼(.lview)이 같은 일을 한다 ----
+// ---- 폰 아래 탭 막대(ux-reorg §4-2) — PC 는 목록 칸 위 탭 막대(.lview)가 같은 일을 한다. 둘 다 오른쪽(상세 칸)은 안 바꾼다 ----
 function syncTabbar(){
   for(const b of document.querySelectorAll('#tabbar button')) b.classList.toggle('on',b.dataset.v===LIST_VIEW);
 }
 function tabbarGo(v){
   if(v==='assist') return openAssistant();
   const changed=LIST_VIEW!==v;
-  if(changed){ if(v==='files') FB.autoShow=true; if(v==='groups') MON_AUTO=true; setListView(v); }
+  if(changed) setListView(v);
   const onList=$('#app').getAttribute('data-view')==='list';
   showListPane();
   if(changed||!LIST_CTX) return loadList();

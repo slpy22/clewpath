@@ -47,14 +47,23 @@ test("폰: 그룹 관제는 지금처럼 전체 화면 오버레이", async () =
   assert.equal(ev(ctx, "MON_INLINE"), null);
 });
 
-test("팀 보기로 들어오면(데스크톱) 마지막으로 본 팀의 관제를 오른쪽에 — 터미널 화면이면 건드리지 않음", async () => {
+test("탭 막대로 보기를 바꿔도 오른쪽 칸은 그대로 — 비어 있을 때만 안내", async () => {
   const { ctx, pd } = await boot(1400);
-  ev(ctx, "LS.setItem('sm_mon_last','g2'); monAutoOpen();");
-  assert.equal(ev(ctx, "MON_INLINE.gid"), "g2");
-  const r = await boot(1400);
-  r.pd.classList.add("term-mode");
-  ev(r.ctx, "monAutoOpen()");
-  assert.equal(ev(r.ctx, "MON_INLINE"), null);
+  const pl = stubEl("div");
+  const q = ctx.document.querySelector;
+  ctx.document.querySelector = (s) => (s === "#paneList" ? pl : q(s));
+  ev(ctx, "T = Object.assign({}, T, { list: async () => ({sessions: []}), api: async () => ({teams: []}) }); setListView('sessions')");
+  await ev(ctx, "loadList()");
+  assert.equal(String(pd.children[0].className), "detail-empty", "처음(빈 칸)엔 안내");
+  pd.innerHTML = ""; pd.classList.add("fb-mode"); pd.appendChild(stubEl("div"));
+  const keep = pd.children[0];
+  for (const v of ["groups", "files", "sessions"]) {
+    const btn = pl.children[0].children[0].children.find((b) => String(b.textContent).includes(v === "groups" ? "팀" : v === "files" ? "파일" : "세션"));
+    btn.onclick();
+    await new Promise((r) => setTimeout(r, 0));
+    assert.equal(pd.children[0], keep, v + " 로 바꿔도 오른쪽 그대로");
+    assert.ok(pd.classList.contains("fb-mode"));
+  }
 });
 
 test("파일 보기로 들어오면(데스크톱) 열린 탭이 없어도 오른쪽은 파일 화면", async () => {
@@ -65,4 +74,14 @@ test("파일 보기로 들어오면(데스크톱) 열린 탭이 없어도 오른
   await ev(ctx, "renderFbExplorer(__w)");
   assert.ok(pd.classList.contains("fb-mode"));
   assert.ok(ev(ctx, "FB.alt.children[0].textContent").includes("파일을 고르세요"));
+});
+
+test("뷰어는 상세와 같은 층 — '‹ 상세' 없이 '‹ 목록'(폰에서만 보임)", async () => {
+  const { ctx, pd } = await boot(1400);
+  ev(ctx, "fetchRecentMessages = async () => { throw new Error('x'); }");
+  await ev(ctx, "loadViewer({session_id:'s1', title:'A'})");
+  const bar = pd.children[0];
+  assert.equal(String(bar.className), "backbar toonly");
+  assert.equal(bar.children[0].textContent, "‹ 목록");
+  assert.ok(!JSON.stringify(pd.text || "").includes("‹ 상세"));
 });
