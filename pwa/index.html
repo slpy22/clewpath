@@ -144,6 +144,8 @@
   /* 폴더 그룹 헤더 — 강한 대비 */
   /* 목록 보기 전환(세션 | 그룹) */
   .lview{display:flex;gap:4px;margin:12px 14px 0;padding:3px;border-radius:11px;background:var(--surface);border:1px solid var(--line)}
+  /* 보기 전환 + 검색 — 스크롤해도 위에 남는다(2026-10-14 사장님). 안의 .search 는 이 머리에 실려 함께 고정 */
+  .lhead{position:sticky;top:0;z-index:5;background:var(--bg)}
   .lview button{flex:1;padding:8px 0;border-radius:8px;color:var(--ink2);font-size:.88rem;background:transparent}
   .lview button.on{background:var(--accent2);color:#fff;font-weight:600}
   .lview+.search{padding-top:10px}
@@ -1388,11 +1390,11 @@ async function loadList(q){
       setListView(v); loadList(inp.value); }; return b; };
   seg.appendChild(segBtn('sessions','세션')); seg.appendChild(segBtn('groups','👥 팀')); seg.appendChild(segBtn('files','📁 파일'));
   { const b=el('button','assist','🧑‍💼 비서'); b.title='개인 비서 세션 열기'; b.onclick=()=>openAssistant(); seg.appendChild(b); }
-  main.appendChild(seg);
+  const lhead=el('div','lhead'); lhead.appendChild(seg); main.appendChild(lhead);
   const sb=el('div','search'); const inp=el('input');
   inp.placeholder='검색 (경로·이름)'; inp.value=q||''; sb.appendChild(inp);
   { const rb=el('button','sref','⟳'); rb.title='목록 새로고침(20초마다 자동)'; rb.setAttribute('aria-label','목록 새로고침'); rb.onclick=()=>loadList(inp.value); sb.appendChild(rb); }
-  main.appendChild(sb);
+  lhead.appendChild(sb);
   const chipsWrap=el('div','chips hidden'); main.appendChild(chipsWrap);
   const listWrap=el('div'); main.appendChild(listWrap);
   const spin=el('div','spin'); listWrap.appendChild(spin);
