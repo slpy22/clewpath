@@ -38,7 +38,7 @@ test("renderRows: (Host 가 빼고 남은) 지금 돌고 있는 claude -p 는 �
   same(h.children[0].children[0].children.filter((k) => cls(k).startsWith("schip")).map((k) => k.textContent), ["🤖 자동 실행"]);
 });
 
-test("목록 줄 클릭: 실행 중인 클루패스 터미널이면 바로 터미널, 열린 탭이면 그 탭, 아니면 상세", async () => {
+test("목록 줄 클릭: 실행 중인 클루패스 터미널이면 바로 터미널, 아니면 상세 — 열린 탭이어도 프로세스가 꺼졌으면 탭을 닫고 상세", async () => {
   const ctx = await load();
   seed(ctx, "globalThis.__c=[]; loadTerminal=(s)=>__c.push(['term',s.session_id]); loadDetail=(s)=>__c.push(['detail',s.session_id]); switchTab=(k)=>__c.push(['tab',k]);");
   const wrap = render(ctx);
@@ -46,7 +46,8 @@ test("목록 줄 클릭: 실행 중인 클루패스 터미널이면 바로 터�
   a.children[0].onclick(); b.children[0].onclick();
   ev(ctx, `TABS.list=[{key:'k-b', s:{session_id:${JSON.stringify(B)}}}]`);
   b.children[0].onclick();
-  same(ev(ctx, "__c"), [["term", A], ["detail", B], ["tab", "k-b"]]);
+  same(ev(ctx, "__c"), [["term", A], ["detail", B], ["detail", B]]);
+  same(ev(ctx, "TABS.list.length"), 0);
 });
 
 test("⋯ 메뉴: 자주 쓰는 것만(재개/터미널·대화·이름·파일·상세), 위험 동작은 없다 · 항목을 누르면 닫히고 실행", async () => {

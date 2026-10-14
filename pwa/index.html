@@ -1471,9 +1471,22 @@ let CURRENT_TERM_SID=null;   // 지금 터미널 화면으로 보고 있는 세�
 // 바로 그 터미널(=탭 추가), 아니면 상세 화면 — 재개 방식·동시 재개 경고는 거기 있으므로 알림으로
 // 새 claude 를 띄우지 않는다. 설계 §9 의 "복원 시 터미널 자동 열기 금지"는 *자동* 복원 얘기고,
 // 알림 클릭은 사용자의 명시 동작이라 '🖥 터미널로 돌아가기' 버튼과 같은 등급으로 본다.
+// 2026-10-15 사장님: 정리 작업(4시간 무활동) 등으로 프로세스가 꺼진 세션은 탭을 눌러도 다시 띄우지 않는다 —
+// 그 탭을 닫고 상세로. 화면에 붙어 있는 탭은 목록이 아직 옛값이어도 산 것으로 본다(방금 띄운 직후).
+function tabGone(t, s){
+  if(s.live_terminal) return false;
+  const inst=termView.tabs&&termView.tabs[t.key];
+  return !(termView.sid===s.session_id&&!termView.disconnected&&!(inst&&inst.ended));
+}
+function dropGoneTab(t){
+  const onView=termView.active===t.key;
+  removeTab(t.key); saveTabs();
+  if(onView) leaveTerminalView();
+}
 function jumpToSession(s){
   const t=TABS.list.find(x=>x.s.session_id===s.session_id);
-  if(t){ switchTab(t.key); return; }
+  if(t&&!tabGone(t,s)){ switchTab(t.key); return; }
+  if(t) dropGoneTab(t);
   if(s.live_terminal){ loadTerminal(s); return; }
   loadDetail(s);
 }
@@ -5432,7 +5445,7 @@ function openPop(anchor,content,title){
 function rowMenuItems(s){
   const it=[]; const bd=sessionBadge(s);
   if(bd&&bd.text==='권한 대기') it.push(['✋','원격 승인','claude 가 도구 사용 허락을 기다립니다',()=>showApprove(s),'warn']);
-  if(s.live_terminal||TABS.list.some(x=>x.s.session_id===s.session_id)) it.push(['🖥','터미널 열기','실행 중인 화면으로 바로',()=>jumpToSession(s)]);
+  if(s.live_terminal||TABS.list.some(x=>x.s.session_id===s.session_id&&!tabGone(x,s))) it.push(['🖥','터미널 열기','실행 중인 화면으로 바로',()=>jumpToSession(s)]);
   else if(s.peer) it.push([rowResumeIcon(s),'재개…',peerOriginLabel(s.peer).text+'에서 실행 중 — 방식 선택',()=>showResumeChooser(s)]);
   else it.push(['▶','재개','웹 / 터미널 선택',()=>showResumeChooser(s)]);
   it.push(['💬','대화 보기',null,()=>loadViewer(s)]);

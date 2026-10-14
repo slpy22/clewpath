@@ -53,10 +53,26 @@ test("jumpToSession: 탭 → 전환, live_terminal → 터미널, 그 외 → �
   ctx.loadTerminal = (s) => calls.push(["term", s.session_id]);
   ctx.loadDetail = (s) => calls.push(["detail", s.session_id]);
   ev(ctx, "TABS.list = [{key:'k1', s:{session_id:'A'}, safe:false, dead:false, act:false}]; TABS.active = 'k1'");
-  ctx.jumpToSession({ session_id: "A" });
+  ctx.jumpToSession({ session_id: "A", live_terminal: true });
   ctx.jumpToSession({ session_id: "B", live_terminal: true });
   ctx.jumpToSession({ session_id: "C", live_terminal: false });
   assert.deepEqual(calls, [["switch", "k1"], ["term", "B"], ["detail", "C"]]);
+});
+
+test("jumpToSession: 프로세스가 꺼진(정리 등) 세션의 탭은 닫고 상세로 — 다시 띄우지 않는다", () => {
+  const calls = [];
+  ctx.switchTab = (k) => calls.push(["switch", k]);
+  ctx.loadTerminal = (s) => calls.push(["term", s.session_id]);
+  ctx.loadDetail = (s) => calls.push(["detail", s.session_id]);
+  ev(ctx, "TABS.list = [{key:'k1', s:{session_id:'A'}, safe:false, dead:false, act:false}, {key:'k2', s:{session_id:'Z'}, safe:false, dead:true, act:false}]; TABS.active = 'k1'; termView.sid = null");
+  ctx.jumpToSession({ session_id: "A", live_terminal: false });
+  assert.deepEqual(calls, [["detail", "A"]]);
+  assert.deepEqual(JSON.parse(ev(ctx, "JSON.stringify(TABS.list.map(t=>t.key))")), ["k2"]);   // 그 탭만 내림
+  // 방금 띄워 화면에 붙어 있는 탭은 목록이 아직 옛값(live_terminal:false)이어도 그대로 전환
+  ev(ctx, "TABS.list = [{key:'k3', s:{session_id:'N'}, safe:false, dead:false, act:false}]; TABS.active = 'k3'; termView.sid = 'N'; termView.disconnected = false; termView.active = 'k3'");
+  ctx.jumpToSession({ session_id: "N", live_terminal: false });
+  assert.deepEqual(calls.at(-1), ["switch", "k3"]);
+  ev(ctx, "termView.sid = null; termView.active = null; TABS.list = []; TABS.active = null");
 });
 
 test("openSessionById: 판단 전 목록 재조회, 이미 보는 중이면 무동작, 미지 세션은 보류", async () => {
