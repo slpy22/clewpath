@@ -812,6 +812,7 @@
     #app[data-view] #paneDetail:not(.term-mode):not(.fb-mode):not(.mon-mode){display:block!important}
     #app[data-view] #paneDetail.mon-mode{display:flex!important}
     #app[data-view] #paneDetail.fb-mode{display:flex!important}   /* 파일 편집기는 목록(탐색기)과 나란히 항상 보임 */
+    #app[data-view] #paneDetail.term-mode{display:grid!important}  /* 터미널도 — 탭 막대로 목록 보기를 바꿔도 사라지지 않게(2026-10-15) */
     #paneDetail{font-size:15px}
     /* 드래그 구분선 */
     #resizer{display:block;position:relative;cursor:col-resize;background:var(--surface);

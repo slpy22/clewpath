@@ -85,3 +85,12 @@ test("뷰어는 상세와 같은 층 — '‹ 상세' 없이 '‹ 목록'(폰에
   assert.equal(bar.children[0].textContent, "‹ 목록");
   assert.ok(!JSON.stringify(pd.text || "").includes("‹ 상세"));
 });
+
+test("데스크톱 CSS: 탭 막대로 목록 보기(data-view=list)가 돼도 터미널(term-mode) 칸은 숨지 않는다", async () => {
+  const { readFileSync } = await import("node:fs");
+  const { INDEX } = await import("./harness.mjs");
+  const css = readFileSync(INDEX, "utf8");
+  const desk = css.slice(css.indexOf("데스크톱 2단: 두 pane 을 항상 표시"));
+  // 모바일 규칙 [data-view=list] #paneDetail{display:none} 을 데스크톱에서 term-mode 도 이겨야 한다(2026-10-15 사고)
+  assert.match(desk.replace(/\r/g, ""), /#app\[data-view\] #paneDetail\.term-mode\{display:grid!important\}/);
+});
