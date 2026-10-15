@@ -58,7 +58,7 @@ def test_provision_then_jwt(monkeypatch, tmp_path):
                 "claim_secret": "clm_c"})
         if request.url.path == "/connector/token":
             body = json.loads(request.content)
-            assert body == {"public_id": "pub_1", "secret": "cxs_s"}
+            assert body == {"public_id": "pub_1", "secret": "cxs_s", "host_version": cp_client._host_version()}   # 서빙 버전 신고(2026-10-15)
             return httpx.Response(200, json={"token": "jwt.aaa.bbb",
                                              "expires_at": 9999999999,
                                              "room_key": "rm_xyz"})
@@ -225,6 +225,7 @@ def test_revoked_credential_reprovisions(monkeypatch):
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/connector/token":
             body = json.loads(request.content)
+            seen["tok"] = body
             if body["public_id"] == "pub_old":
                 return httpx.Response(401, json={"error": "invalid_credential"})
             return httpx.Response(200, json={"token": "jwt.new", "expires_at": 1,
@@ -244,6 +245,7 @@ def test_revoked_credential_reprovisions(monkeypatch):
     assert cp_client.load_creds()["connector_id"] == "c_new"
     # 옛 커넥터를 '대체됨'으로 은퇴시키도록 함께 보낸다(2026-10-15)
     assert seen["body"]["replaces"] == {"connector_id": "c_old", "claim_secret": "clm_old"}
+    assert seen["tok"].get("host_version") == cp_client._host_version()
 
 
 # ---- ★회귀★ 로그가 콘솔 인코딩 때문에 기능을 깨뜨리지 않아야 한다 ----

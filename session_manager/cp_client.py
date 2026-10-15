@@ -233,6 +233,14 @@ def client_status(public_ids: list[str]) -> dict | None:
         return None
 
 
+def _host_version() -> str:
+    try:
+        from importlib.metadata import version
+        return version("clewpath-host")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def fetch_jwt(display_name: str = "") -> dict | None:
     """agent JWT 를 조달한다. 실패하면 None(=fail-open, 호출자는 공유토큰으로 계속).
 
@@ -249,10 +257,11 @@ def fetch_jwt(display_name: str = "") -> dict | None:
             creds = provision(client, display_name)
             if not creds:
                 return None   # 상태는 provision 에서 기록됨
+        # host_version: CP 관리 화면의 '서빙 버전'(2026-10-15). 모르는 CP 는 무시한다.
         try:
             r = client.post(f"{base}/connector/token",
                             json={"public_id": creds["credential_public_id"],
-                                  "secret": creds["secret"]},
+                                  "secret": creds["secret"], "host_version": _host_version()},
                             timeout=10)
         except Exception as e:  # noqa: BLE001
             _set_state("fallback", f"token_error:{type(e).__name__}",
@@ -269,7 +278,7 @@ def fetch_jwt(display_name: str = "") -> dict | None:
             try:
                 r = client.post(f"{base}/connector/token",
                                 json={"public_id": creds["credential_public_id"],
-                                      "secret": creds["secret"]}, timeout=10)
+                                      "secret": creds["secret"], "host_version": _host_version()}, timeout=10)
             except Exception as e:  # noqa: BLE001
                 _set_state("fallback", f"token_error:{type(e).__name__}")
                 return None
