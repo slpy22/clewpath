@@ -260,17 +260,17 @@
   .tst2.live i{background:var(--good)} .tst2.off{color:var(--muted)} .tst2.off i{background:var(--line2)}
   .tst2.busy{color:#5aa2ff} .tst2.busy i{background:#2f81f7;animation:sdp 1.4s ease-in-out infinite}
   .tst2.wait{color:var(--warn)} .tst2.wait i{background:var(--warn)}
-  .tchev{flex:none;color:var(--muted);font-size:.7rem;width:14px;text-align:center}
+  .tchev{flex:none;color:var(--muted);font-size:.8rem;width:16px;text-align:center}
   .tmore{flex:none;width:40px;align-self:stretch;color:var(--muted);font-size:1.15rem}
   .tmore:hover{color:var(--ink);background:var(--surface2)}
   .tcard .tbody{border-top:1px solid var(--line);padding:2px 0 6px;background:transparent}
-  .tlist.tmem{padding:0}
-  .tlist.tmem .srow{border-left:none;background:transparent;border-bottom:1px solid var(--line)}
-  .tlist.tmem .srow:last-of-type{border-bottom:none}
-  .tlist.tmem .sinfo{padding:10px 6px 10px 16px}
-  .tlist.tmem .sbtn.more{width:40px;font-size:1.05rem;color:var(--muted)}
+  .tlist.tmembers{padding:0}
+  .tlist.tmembers .srow{border-left:none;background:transparent;border-bottom:1px solid var(--line)}
+  .tlist.tmembers .srow:last-of-type{border-bottom:none}
+  .tlist.tmembers .sinfo{padding:10px 6px 10px 16px}
+  .tlist.tmembers .sbtn.more{width:40px;font-size:1.05rem;color:var(--muted)}
   .schip.mgr{color:hsl(var(--th,186) 70% 70%);border-color:hsl(var(--th,186) 50% 55% / .45)}
-  .tlist.tmem .tadd{margin:8px 12px 4px;width:calc(100% - 24px)}
+  .tlist.tmembers .tadd{margin:8px 12px 4px;width:calc(100% - 24px)}
   /* 작업 장부 페이지 */
   .ledger{padding:14px 16px 40px;overflow:auto;height:100%}
   .lghead{display:flex;align-items:center;gap:12px;margin-bottom:6px}
@@ -4330,7 +4330,7 @@ function teamBody(t){
 
 // 구성원 = 세션. 줄은 세션 목록 줄과 똑같이 동작한다 — 누르면 터미널(실행 중)·상세, ⋯ 는 세션 메뉴 + 이 팀에서 빼기
 function teamMembers(t){
-  const w=el('div','tlist tmem'); const u=tui(t.code);
+  const w=el('div','tlist tmembers'); const u=tui(t.code);
   const ms=[...(t.members||[])].sort((a,b)=>(b.member_role==='manager')-(a.member_role==='manager'));
   ms.forEach(m=>{
     const s=memberSess(m);
