@@ -3473,6 +3473,9 @@ function openModal(title, bodyEl, footChildren){
 // 오른쪽 = 지금 겹(하위 화면). 겹 쌓기 규칙은 폰과 같고 보이는 모양만 다르다 — 오른쪽 안에서 더 깊이 들어가면(확인창 등) ‹.
 function setSplitWanted(){ return !!(SETNAV&&SETNAV.stack.length&&SETNAV.stack[0].refresh&&innerWidth>=880); }
 function _showSplit(){
+  // 창을 새로 그려도 왼쪽 메뉴의 스크롤 자리는 그대로(2026-10-15 사장님: 고르면 맨 위로 튀었다)
+  const oldNav=document.querySelector('#overlay .setnav');
+  const navY=(oldNav&&oldNav.scrollTop)||SETNAV.rootY||0;
   _rawCloseModal();
   const st=SETNAV.stack, root=st[0], top=st.length>1?st[st.length-1]:null;
   const ov=el('div','overlay'); ov.id='overlay';
@@ -3497,6 +3500,7 @@ function _showSplit(){
   ov.appendChild(m);
   ov.onclick=(e)=>{ if(e.target===ov)closeAllModals(); };
   document.body.appendChild(ov);
+  nav.scrollTop=navY; SETNAV.rootY=navY;
   try{ const first=(top&&top.foot&&top.foot[0])||x; setTimeout(()=>{ try{ first.focus(); }catch(e){} },0); }catch(e){}
 }
 function _showModal(pg){
@@ -5361,7 +5365,7 @@ function showSettings(){
     b.appendChild(el('span','chev','›'));
     // 하위 화면은 이 창 안에서 열린다. 화면 없이 끝나는 동작(알림 켜기 등)은 끝난 뒤 첫 화면 상태를 다시 읽는다.
     // 넓은 화면에선 다른 메뉴를 고르면 오른쪽에 쌓인 겹을 걷고 새로 연다(폰은 늘 첫 화면에서 누르므로 차이 없음)
-    b.onclick=async()=>{ if(SETNAV){ SETNAV.stack.length=1; SETNAV.sel=title; } try{ await fn(); }catch(e){ toast('실패: '+e.message); } if(isRoot()) showSettings(); };
+    b.onclick=async()=>{ if(SETNAV){ SETNAV.rootY=(body.parentNode&&body.parentNode.scrollTop)||0; SETNAV.stack.length=1; SETNAV.sel=title; } try{ await fn(); }catch(e){ toast('실패: '+e.message); } if(isRoot()) showSettings(); };
     if(opt.status) Promise.resolve().then(opt.status).then(r=>{ if(!r) return;
       sm.textContent=r.t; b.classList.toggle('warn',!!r.warn); }).catch(()=>{});
     add(b);
@@ -5408,12 +5412,13 @@ function showSettings(){
   }
 
   // 첫 화면은 SETNAV 의 바닥 겹 — 하위 화면에서 돌아오면 showSettings 로 다시 그린다(상태 새로 읽기)
-  const keep=SETNAV?_modalOpener:null;
+  const keep=SETNAV?_modalOpener:null, prevY=SETNAV?(SETNAV.rootY||0):0;   // 돌아올 때 첫 화면 스크롤 자리 유지
   SETNAV=null;
   openModal('⚙ 설정', body, []);
   if(keep) _modalOpener=keep;
-  SETNAV={stack:[{title:'⚙ 설정', body, foot:[], refresh:showSettings}]};
+  SETNAV={stack:[{title:'⚙ 설정', body, foot:[], refresh:showSettings}], rootY:prevY};
   if(setSplitWanted()) _showSplit();
+  else if(prevY){ const sc=body.parentNode; if(sc) sc.scrollTop=prevY; }
 }
 // ---- 👥 팀 · 경력(워커 P2P 단계 2) — PC 로컬 전용(팀 API 는 로컬에서만, eng E-2 / S2-4) ----
 // 모든 내용은 textContent 로만 그린다(세션 원문이 섞이므로 HTML 해석 금지).

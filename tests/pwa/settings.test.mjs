@@ -108,3 +108,15 @@ test("좁은 화면(폰): 분할 없이 한 화면씩, 하위 화면 머리에 �
   await ev(ctx, `${rowOf(ctx, "휴지통")}.onclick()`);
   assert.equal(ev(ctx, `${lastOverlay}.children[0].children[0].children[0].className`), "x back");
 });
+
+test("넓은 화면: 왼쪽 메뉴를 골라도 메뉴 스크롤 자리는 그대로(맨 위로 안 튐) · 첫 화면으로 돌아와도 유지", async () => {
+  const ctx = await boot();
+  ev(ctx, "innerWidth = 1280; showSettings()");
+  // 지금 창의 왼쪽 메뉴를 250 만큼 내린 상태로 흉내
+  ev(ctx, "globalThis.__qs = document.querySelector; document.querySelector = (s) => s === '#overlay .setnav' ? { scrollTop: 250 } : globalThis.__qs(s)");
+  await ev(ctx, `${rowOf(ctx, "휴지통")}.onclick()`);
+  const nav = `${lastOverlay}.children[0].children[1].children[0]`;
+  assert.equal(ev(ctx, `${nav}.scrollTop`), 250);
+  ev(ctx, "closeModal()");                                   // 첫 화면 다시 그리기(오른쪽 안내)
+  assert.equal(ev(ctx, `${nav}.scrollTop`), 250);
+});
