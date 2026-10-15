@@ -642,7 +642,9 @@ if ($DryRun) {
 
     # 지금 기동
     try {
-        Start-Process -FilePath $pwsh `
+        # -WindowStyle Hidden 은 Start-Process 자신의 인자로도 준다 — pwsh 인자로만 주면 창이 먼저 뜬 뒤 숨겨져
+        # 업데이트 때마다 콘솔이 번쩍였다(2026-10-15 사장님).
+        Start-Process -FilePath $pwsh -WindowStyle Hidden `
             -ArgumentList "-NoProfile","-ExecutionPolicy","Bypass","-WindowStyle","Hidden","-File","`"$startPs`"" | Out-Null
         # 느린 PC 대비 폴링(최대 20초). 고정 6초 단일 확인은 콜드 스타트에서 오판한다.
         # 매 회 runtime.json 을 다시 본다 — 포트 폴백이 일어났으면 그쪽이 실제 주소.

@@ -132,8 +132,15 @@ function Start-Host2 {
     if ($pwshCmd) { $pwsh = $pwshCmd.Source }
     else { $pwsh = (Get-Command powershell).Source }
     # Bypass 필수 — 기본 정책 Restricted 인 PC 에서 업데이트 후 재기동이 조용히 실패한다
-    Start-Process -FilePath $pwsh `
-        -ArgumentList "-NoProfile","-ExecutionPolicy","Bypass","-WindowStyle","Hidden","-File","`"$RestartScript`"" | Out-Null
+    # 창을 아예 만들지 않고 띄운다(CreateNoWindow, 2026-10-15 사장님: 업데이트 때마다 콘솔이 번쩍였다).
+    # Start-Process 는 새 콘솔 창을 먼저 만들고 pwsh 가 뜬 뒤에야 -WindowStyle Hidden 으로 숨겨서 잠깐 보였고,
+    # 기본 터미널이 Windows Terminal 인 PC 에선 숨김 지시가 무시되기도 한다. (PS 5.1 호환 문법)
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $pwsh
+    $psi.Arguments = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $RestartScript + '"'
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    [System.Diagnostics.Process]::Start($psi) | Out-Null
 }
 
 Log "=== 업데이트 적용 시작 -> $Version ==="
