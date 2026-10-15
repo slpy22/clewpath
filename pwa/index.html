@@ -450,6 +450,19 @@
   .setrow .st{flex:1;min-width:0}
   .setrow .st small{display:block;color:var(--muted);font-size:.74rem;margin-top:2px}
   .setrow .lock{flex:none;opacity:.6}
+  .modal.setsplit{width:min(1080px,100%);height:min(760px,88vh)}
+  .setsplit-body{display:flex;flex:1;min-height:0}
+  .setnav{width:310px;flex:none;border-right:1px solid var(--line);overflow-y:auto;padding:6px 12px 12px}
+  .setnav .setrow{border-color:transparent;padding:9px 10px;margin:2px 0}
+  .setnav .setrow:hover{background:var(--surface2)}
+  .setnav .setrow.sel{background:var(--surface2);border-color:var(--line2)}
+  .setnav .setrow .chev{display:none}
+  .setpane{flex:1;min-width:0;display:flex;flex-direction:column}
+  .setpane-head{padding:12px 18px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px}
+  .setpane-head h4{margin:0;font-size:.98rem;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .setpane-head .x{width:30px;height:30px;border-radius:8px;color:var(--muted);flex:none;font-size:1.4rem;line-height:1}
+  .setpane .modal-body{flex:1;min-height:0}
+  .setpane-empty{margin:auto;color:var(--muted);font-size:.9rem}
   .setrow .chev{flex:none;color:var(--muted);font-size:1.1rem}
   .setrow.warn .si{position:relative}
   .setrow.warn .si::after{content:'';position:absolute;right:-3px;top:-2px;width:8px;height:8px;border-radius:50%;background:#e8a03c}
@@ -3456,7 +3469,38 @@ function openModal(title, bodyEl, footChildren){
   if(SETNAV) SETNAV.stack.push(pg);
   _showModal(pg);
 }
+// 넓은 화면(≥880px, 목록·상세 분할과 같은 기준)의 설정은 좌우 분할(2026-10-15 사장님): 왼쪽 = 설정 첫 화면(메뉴),
+// 오른쪽 = 지금 겹(하위 화면). 겹 쌓기 규칙은 폰과 같고 보이는 모양만 다르다 — 오른쪽 안에서 더 깊이 들어가면(확인창 등) ‹.
+function setSplitWanted(){ return !!(SETNAV&&SETNAV.stack.length&&SETNAV.stack[0].refresh&&innerWidth>=880); }
+function _showSplit(){
+  _rawCloseModal();
+  const st=SETNAV.stack, root=st[0], top=st.length>1?st[st.length-1]:null;
+  const ov=el('div','overlay'); ov.id='overlay';
+  const m=el('div','modal setsplit');
+  try{ m.setAttribute('role','dialog'); m.setAttribute('aria-modal','true'); m.setAttribute('aria-labelledby','modal-title'); }catch(e){}
+  const h=el('div','modal-head'); const ht=el('h3',null,root.title); ht.id='modal-title'; h.appendChild(ht);
+  const x=el('button','x','✕'); x.title='닫기'; x.onclick=closeAllModals; h.appendChild(x);
+  m.appendChild(h);
+  const sb=el('div','setsplit-body');
+  const nav=el('div','setnav'); nav.appendChild(root.body); sb.appendChild(nav);
+  for(const r of (root.body.children||[])) if(r.dataset&&r.dataset.k) r.classList.toggle('sel', !!top&&r.dataset.k===SETNAV.sel);
+  const pane=el('div','setpane');
+  if(top){
+    const ph=el('div','setpane-head');
+    if(st.length>2){ const bk=el('button','x back','‹'); bk.title='뒤로'; bk.onclick=closeModal; ph.appendChild(bk); }
+    ph.appendChild(el('h4',null,top.title)); pane.appendChild(ph);
+    const b=el('div','modal-body'); if(top.body) b.appendChild(top.body); pane.appendChild(b);
+    if(top.foot&&top.foot.length){ const f=el('div','modal-foot'); top.foot.forEach(c=>f.appendChild(c)); pane.appendChild(f); }
+  } else pane.appendChild(el('div','setpane-empty','왼쪽에서 항목을 고르세요'));
+  sb.appendChild(pane); m.appendChild(sb);
+  try{ document.addEventListener('keydown', _modalKey); }catch(e){}
+  ov.appendChild(m);
+  ov.onclick=(e)=>{ if(e.target===ov)closeAllModals(); };
+  document.body.appendChild(ov);
+  try{ const first=(top&&top.foot&&top.foot[0])||x; setTimeout(()=>{ try{ first.focus(); }catch(e){} },0); }catch(e){}
+}
 function _showModal(pg){
+  if(setSplitWanted()){ _showSplit(); return; }
   _rawCloseModal();
   const title=pg.title, bodyEl=pg.body, footChildren=pg.foot;
   const ov=el('div','overlay'); ov.id='overlay';
@@ -5309,13 +5353,15 @@ function showSettings(){
     opt=opt||{};
     if(opt.local && MODE!=='local') return;
     const b=el('button','setrow'+(opt.warn?' warn':'')+(opt.danger?' danger':''));
+    b.dataset.k=title;
     b.appendChild(el('span','si',icon));
     const st=el('span','st'); st.appendChild(el('span',null,title));
     const sm=document.createElement('small'); sm.textContent=desc||''; st.appendChild(sm);
     b.appendChild(st);
     b.appendChild(el('span','chev','›'));
     // 하위 화면은 이 창 안에서 열린다. 화면 없이 끝나는 동작(알림 켜기 등)은 끝난 뒤 첫 화면 상태를 다시 읽는다.
-    b.onclick=async()=>{ try{ await fn(); }catch(e){ toast('실패: '+e.message); } if(isRoot()) showSettings(); };
+    // 넓은 화면에선 다른 메뉴를 고르면 오른쪽에 쌓인 겹을 걷고 새로 연다(폰은 늘 첫 화면에서 누르므로 차이 없음)
+    b.onclick=async()=>{ if(SETNAV){ SETNAV.stack.length=1; SETNAV.sel=title; } try{ await fn(); }catch(e){ toast('실패: '+e.message); } if(isRoot()) showSettings(); };
     if(opt.status) Promise.resolve().then(opt.status).then(r=>{ if(!r) return;
       sm.textContent=r.t; b.classList.toggle('warn',!!r.warn); }).catch(()=>{});
     add(b);
@@ -5367,6 +5413,7 @@ function showSettings(){
   openModal('⚙ 설정', body, []);
   if(keep) _modalOpener=keep;
   SETNAV={stack:[{title:'⚙ 설정', body, foot:[], refresh:showSettings}]};
+  if(setSplitWanted()) _showSplit();
 }
 // ---- 👥 팀 · 경력(워커 P2P 단계 2) — PC 로컬 전용(팀 API 는 로컬에서만, eng E-2 / S2-4) ----
 // 모든 내용은 textContent 로만 그린다(세션 원문이 섞이므로 HTML 해석 금지).

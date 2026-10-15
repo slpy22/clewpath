@@ -78,3 +78,33 @@ test("설정 밖의 창은 예전 그대로 — 닫으면 끝, 쌓지 않는다"
   ev(ctx, "closeModal()");
   assert.equal(titles(ctx), "null");
 });
+
+const lastOverlay = "document.body.children.at(-1)";
+test("넓은 화면: 좌우 분할 — 왼쪽 메뉴(고른 줄 sel) · 오른쪽 하위 화면, 다른 메뉴를 고르면 오른쪽만 바뀐다", async () => {
+  const ctx = await boot();
+  ev(ctx, "innerWidth = 1280; showSettings()");
+  const modal = `${lastOverlay}.children[0]`;
+  assert.ok(ev(ctx, `${modal}.className`).includes("setsplit"));
+  const pane = `${modal}.children[1].children[1]`;
+  assert.ok(ev(ctx, `${pane}.text`).includes("왼쪽에서 항목을 고르세요"));
+  await ev(ctx, `${rowOf(ctx, "2차 인증")}.onclick()`);
+  await ev(ctx, `${rowOf(ctx, "휴지통")}.onclick()`);       // 다른 메뉴 → 쌓지 않고 갈아 끼움
+  assert.equal(titles(ctx), JSON.stringify(["⚙ 설정", "🗑 휴지통"]));
+  assert.equal(ev(ctx, `${modal}.children[1].children[0].children[0]`), ev(ctx, "SETNAV.stack[0].body"), "왼쪽은 첫 화면 그대로");
+  assert.ok(ev(ctx, `${pane}.text`).includes("🗑 휴지통"));
+  assert.ok(ev(ctx, `${rowOf(ctx, "휴지통")}.classList.contains('sel')`) && !ev(ctx, `${rowOf(ctx, "2차 인증")}.classList.contains('sel')`));
+  // 오른쪽 안에서 한 겹 더(확인창) → 오른쪽 머리에 ‹
+  ev(ctx, "confirmSheet({title:'확인 테스트', main:'x'})");
+  assert.equal(ev(ctx, `${pane}.children[0].children[0].className`), "x back");
+  ev(ctx, "closeModal()"); ev(ctx, "closeModal()");          // 확인창 → 휴지통 → 첫 화면(오른쪽 안내)
+  assert.equal(titles(ctx), JSON.stringify(["⚙ 설정"]));
+  assert.ok(ev(ctx, `${pane}.text`).includes("왼쪽에서 항목을 고르세요"));
+});
+
+test("좁은 화면(폰): 분할 없이 한 화면씩, 하위 화면 머리에 ‹", async () => {
+  const ctx = await boot();
+  ev(ctx, "innerWidth = 400; showSettings()");
+  assert.ok(!ev(ctx, `${lastOverlay}.children[0].className`).includes("setsplit"));
+  await ev(ctx, `${rowOf(ctx, "휴지통")}.onclick()`);
+  assert.equal(ev(ctx, `${lastOverlay}.children[0].children[0].children[0].className`), "x back");
+});
