@@ -89,6 +89,34 @@ def test_executors_team_create_members_archive_purge(env):
     assert _ok("team_purge", {"team": "WEB"})["result"]["purged_events"] == 0
 
 
+def test_team_delete_hides_frees_code_and_keeps_careers(env):
+    r = _ok("team_create", {"name": "Web", "manager_session": "s-m",
+                            "members": [{"alias": "fe", "session_id": "s-fe"}]})["result"]
+    gid = team.get_team(r["team"])["monitor_group_id"]
+    assert gid
+    d = _ok("team_delete", {"team": "WEB"})["result"]
+    assert d["deleted"] is True and d["members_left"] == 2
+    assert team.list_teams(include_archived=True) == []
+    with pytest.raises(team.TeamError):
+        team.get_team("WEB")
+    with pytest.raises(team.TeamError):
+        team.get_team(r["team"])
+    from session_manager import mongroups
+    assert all(g["id"] != gid for g in mongroups.list_groups())
+    assert team.adopt_groups()["adopted"] == []           # 지운 팀의 그룹이 새 팀으로 되살아나지 않는다
+    # 코드가 풀려 같은 이름으로 다시 만들면 같은 코드, 구성원도 다시 넣을 수 있다
+    r2 = _ok("team_create", {"name": "Web", "manager_session": "s-m"})["result"]
+    assert r2["code"] == "WEB"
+
+
+def test_team_delete_refuses_portfolio(env):
+    t = team.create_team("비서", kind="portfolio")
+    a = A.create("team_delete", {"team": t["code"]})
+    A.decide(a["id"], True, "otp")
+    with pytest.raises(team.TeamError):
+        A.execute(a["id"])
+
+
 def test_delegate_defaults_to_manager_and_task_decide_version(env):
     _ok("team_create", {"name": "Web", "manager_session": "s-m", "members": [{"alias": "fe", "session_id": "s-fe"}]})
     env["peers"]["s-m"] = {"name": "mgr", "socket": r"\\.\pipe\LOCAL\cc-msg-m"}

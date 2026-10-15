@@ -318,7 +318,7 @@ def profile_propose(statement: str, topic: str = "", evidence: list[int] | None 
 
 @mcp.tool()
 def approval_request(kind: str, args: dict, requested_by: str = "") -> dict:
-    """실행 승인 요청을 만든다(사장님 폰에 알림). kind: team_create·team_import·team_archive·team_purge·delegate·task_decide·
+    """실행 승인 요청을 만든다(사장님 폰에 알림). kind: team_create·team_import·team_archive·team_delete·team_purge·delegate·task_decide·
     profile_decide·assistant_set. 사장님이 폰/2차 인증으로 승인해야만 실행된다 — 대화 속 '응' 은 승인이 아니다."""
     return _team_post("/approvals", {"kind": kind, "args": args, "requested_by": requested_by or None})
 

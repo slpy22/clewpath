@@ -26,7 +26,7 @@ from pathlib import Path
 from session_manager import config, team
 
 TTL_S = 30 * 60
-KINDS = ("team_create", "team_import", "team_archive", "team_purge", "assistant_set", "delegate", "task_decide", "profile_decide",
+KINDS = ("team_create", "team_import", "team_archive", "team_delete", "team_purge", "assistant_set", "delegate", "task_decide", "profile_decide",
          "session_send")
 _ALIAS_ASSISTANT = "비서"
 _PORTFOLIO_CODE = "ASSIST"
@@ -47,6 +47,8 @@ def _summary(kind: str, a: dict) -> str:
         return f"v1 등록부로 팀 만들기: {a.get('path')}"
     if kind == "team_archive":
         return f"팀 {'보관' if a.get('on', True) else '보관 해제'}: {a.get('team')}"
+    if kind == "team_delete":
+        return f"팀 삭제: {a.get('team')}"
     if kind == "team_purge":
         return f"팀 보존본 지우기: {a.get('team')}"
     if kind == "assistant_set":
@@ -63,7 +65,7 @@ def _summary(kind: str, a: dict) -> str:
 
 
 def _validate(kind: str, a: dict) -> None:
-    need = {"team_create": ("name",), "team_import": ("path",), "team_archive": ("team",), "team_purge": ("team",), "assistant_set": (),
+    need = {"team_create": ("name",), "team_import": ("path",), "team_archive": ("team",), "team_delete": ("team",), "team_purge": ("team",), "assistant_set": (),
             "delegate": ("team", "goal"), "task_decide": ("team", "task", "action"), "profile_decide": ("id", "decision"),
             "session_send": ("session_id", "message")}
     if kind not in KINDS:
@@ -201,6 +203,10 @@ def _x_team_archive(a: dict, aid: str, by: str | None) -> dict:
     return team.archive(a["team"], bool(a.get("on", True)))
 
 
+def _x_team_delete(a: dict, aid: str, by: str | None) -> dict:
+    return team.delete_team(a["team"])
+
+
 def _x_team_purge(a: dict, aid: str, by: str | None) -> dict:
     from session_manager import teamlog
     return teamlog.purge_team(a["team"])
@@ -266,7 +272,7 @@ def _x_session_send(a: dict, aid: str, by: str | None) -> dict:
             "send_to": {"address": addr, "live": bool(addr), "name": (p or {}).get("name")}}
 
 
-_EXEC = {"team_create": _x_team_create, "team_import": _x_team_import, "team_archive": _x_team_archive, "team_purge": _x_team_purge,
+_EXEC = {"team_create": _x_team_create, "team_import": _x_team_import, "team_archive": _x_team_archive, "team_delete": _x_team_delete, "team_purge": _x_team_purge,
          "assistant_set": _x_assistant_set, "delegate": _x_delegate, "task_decide": _x_task_decide,
          "profile_decide": _x_profile_decide, "session_send": _x_session_send}
 

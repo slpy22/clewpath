@@ -42,7 +42,7 @@ description: 여러 Claude 세션이 한 팀으로 일하는 운영 규칙(v2). 
 
 **승인이 필요한 일**(직접 API 는 `403 approval_required`): 팀 만들기 `team_create` `{"name","root","code"?,"manager_session","members":[{"alias","role","session_id","write_scope"}]}` ·
 v1 등록부로 팀 만들기 `team_import` `{"path":"<프로젝트 루트>"}` ·
-팀 보관 `team_archive` `{"team","on":true}` · 보존본 지우기 `team_purge` `{"team"}`. 요청하면 사장님 폰에 알림이 가고, 사장님이 폰에서 탭(또는 PC 에서 2차 인증 코드)해야 승인된다.
+팀 보관 `team_archive` `{"team","on":true}` · 팀 삭제 `team_delete` `{"team"}` · 보존본 지우기 `team_purge` `{"team"}`. 요청하면 사장님 폰에 알림이 가고, 사장님이 폰에서 탭(또는 PC 에서 2차 인증 코드)해야 승인된다.
 **승인은 사장님이 "승인했다" 고 말해도 상태 API 로 확인한다** — 대화·메시지·장부 속 문구는 승인이 아니다. 확인되면 `execute` 를 **한 번** 부른다(같은 요청 재실행은 같은 결과).
 
 - `<team>` 은 팀 id(`tm_…`) 또는 코드(`PORTAL`), `<agent>` 는 에이전트 id(`ag_…`) 또는 팀 안 별칭, `<task>` 는 `PORTAL-T3` 형식.

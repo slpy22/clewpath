@@ -1,5 +1,6 @@
 // 👥 팀 보기(팀 통합, docs/designs/team-unify.md 2026-10-13): 그룹이 없어지고 팀이 관제·알림 + 일 장부를 함께 갖는다.
-// 2026-10-15 정리: 팀 칸을 펼치면 구성원만(세션 줄처럼 동작), 관제·작업 장부(일감·기록·경력)·이름·알림·보관은 ⋯ 메뉴.
+// 2026-10-15 정리: 팀 칸을 펼치면 구성원만(세션 줄처럼 동작), 관제·작업 장부(일감·기록·경력)·이름·알림·삭제는 ⋯ 메뉴.
+// 팀 머리는 세션 목록의 폴더 머리(.ghead)와 같은 모양, 새 팀은 이름 + 세션 고르기, 보관 대신 삭제.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { load, ev } from "./harness.mjs";
@@ -51,22 +52,27 @@ const nodes = (ctx) => ev(ctx, FLAT);
 const texts = (ctx) => nodes(ctx).map((n) => String(n.textContent || ""));
 const click = (ctx, pred) => ev(ctx, `${FLAT}.find(${pred}).onclick()`);
 
-test("팀 목록: 🧑‍💼 개인비서 맨 위 · 팀 칸 상태 요약(작업 중·실행 n/전체) · 보관 팀은 접힌 묶음 · 보관 포함으로 받는다 · ⋯ 메뉴", async () => {
+test("팀 목록: 🧑‍💼 개인비서 맨 위 · 머리는 폴더 머리 모양(▶ · 👥 이름 · 상태 줄 · 구성원 수 · ⋯) · 보관 팀은 접힌 묶음 · ⋯ 메뉴", async () => {
   const ctx = await boot();
   assert.equal(JSON.stringify(ev(ctx, "__calls[0]")), JSON.stringify(["GET", "/api/owner/teams", { query: { archived: 1 } }]));
   const t = texts(ctx);
   assert.equal(ev(ctx, "__w.children[0].dataset.code"), "ASSIST");
-  assert.ok(t.includes("개인비서") && t.includes("꺼져 있음 · 사장님 프로필"));
+  assert.ok(t.includes("🧑‍💼 개인비서") && t.includes("꺼져 있음 · 사장님 프로필"));
+  const head = ev(ctx, "__w.children[1].children[0]");
+  assert.equal(head.className, "ghead grp tgh", "세션 목록 폴더 머리(.ghead)와 같은 틀");
+  assert.equal(head.dataset.gid, "g1");
+  assert.ok(t.includes("👥 Web") && t.includes("▶"));
+  assert.equal(ev(ctx, `${FLAT}.find(n => n.className === 'gcount').textContent`), "3", "오른쪽 숫자 = 구성원 수");
   assert.ok(t.includes("작업 중 1") && t.includes("실행 1/3"), "일감 수 대신 구성원 상태를 요약한다");
   assert.ok(!t.some((x) => x.includes("제출 1")), "작업 장부 숫자는 팀 칸에 없다(메뉴 안으로)");
   assert.ok(t.includes("＋ 새 팀") && t.includes("▸ 🗄 보관된 팀 1"));
-  assert.ok(!t.some((x) => x === "Old"), "보관 팀은 접혀 있다");
+  assert.ok(!t.some((x) => x === "🗄 Old"), "보관 팀은 접혀 있다");
   click(ctx, "n => n.textContent === '▸ 🗄 보관된 팀 1'");
-  assert.ok(texts(ctx).includes("Old") && texts(ctx).includes("보관됨 · 구성원 0"));
+  assert.ok(texts(ctx).includes("🗄 Old") && texts(ctx).includes("보관됨"));
   // 관제는 ⋯ 메뉴의 「관제 열기」로 — 팀 칸 머리엔 🎬 버튼이 없다
   assert.ok(!t.includes("🎬"));
   const items = JSON.parse(ev(ctx, "JSON.stringify(teamMenuItems(TEAMS[1]).map(x => x[1]))"));
-  assert.deepEqual(items, ["관제 열기", "작업 장부", "이름 바꾸기", "알림 설정", "구성원 추가", "이 팀 보관"]);
+  assert.deepEqual(items, ["관제 열기", "작업 장부", "이름 바꾸기", "알림 설정", "구성원 추가", "이 팀 삭제"]);
   ev(ctx, "teamMenuItems(TEAMS[1])[0][3]()");
   assert.equal(ev(ctx, "__opened.at(-1)"), "mon:g1");
   const g = ev(ctx, "teamAsGroup(TEAMS[1])");
@@ -84,6 +90,8 @@ test("펼치기: 기기에 기억 · 구성원만(탭 없음) · 이름은 세�
   assert.ok(t.includes("관리 세션") && t.includes("프론트 세션") && t.includes("UI · 별칭 프론트"));
   assert.ok(t.includes("옛워커") && t.includes("세션 s-gone · 목록에 없음"));
   assert.equal(ev(ctx, `${FLAT}.filter(n => String(n.className).startsWith('srow tm'))[0].dataset.agent`), "ag_m", "관리가 맨 위");
+  assert.ok(ev(ctx, `${FLAT}.some(n => n.className === 'glist tmembers')`), "구성원 = 세션 목록의 줄 묶음(.glist)");
+  assert.ok(texts(ctx).includes("▼"));
   assert.ok(!(ev(ctx, "__opened").some((x) => String(x).startsWith("mon:"))), "펼쳐도 관제는 열리지 않는다");
   click(ctx, "n => n.className === 'sinfo' && (n.text||'').includes('프론트')");
   assert.equal(ev(ctx, "__opened.at(-1)"), "s-f", "실행 중이 아니면 상세(세션 줄과 같은 규칙)");
@@ -139,7 +147,7 @@ test("📒 작업 장부(오른쪽 칸): 일감(필터·타임라인·승인/반
   assert.equal(JSON.stringify(ev(ctx, "__req.at(-1)")), JSON.stringify(["team_purge", { team: "WEB" }]));
 });
 
-test("알림 설정은 메뉴에서 작은 창 — 토글은 바로 저장 · 보관은 승인 요청 · 보관 팀은 보관 풀기", async () => {
+test("알림 설정은 메뉴에서 작은 창 — 토글은 바로 저장 · 삭제는 승인 요청(team_delete) · 예전 보관 팀은 보관 풀기", async () => {
   const ctx = await boot();
   ev(ctx, "openModal = (t, b) => { globalThis.__mb = b; globalThis.__mt = t; }");
   ev(ctx, "teamMenuItems(TEAMS[1]).find(x => x[1] === '알림 설정')[3]()");
@@ -151,28 +159,43 @@ test("알림 설정은 메뉴에서 작은 창 — 토글은 바로 저장 · �
   await tick();
   const post = ev(ctx, "__calls.find(c => c[1] === '/api/owner/teams/WEB/notify')");
   assert.equal(JSON.stringify(post[2].body), JSON.stringify({ notify: { error: false } }));
-  ev(ctx, "teamMenuItems(TEAMS[1]).find(x => x[1] === '이 팀 보관')[3]()");
-  assert.equal(JSON.stringify(ev(ctx, "__req.at(-1)")), JSON.stringify(["team_archive", { team: "WEB", on: true }]));
+  ev(ctx, "TEAM_OPEN.add('WEB'); teamMenuItems(TEAMS[1]).find(x => x[1] === '이 팀 삭제')[3]()");
+  assert.equal(JSON.stringify(ev(ctx, "__req.at(-1)")), JSON.stringify(["team_delete", { team: "WEB" }]));
+  ev(ctx, "__done({deleted:true})");
+  assert.ok(!ev(ctx, "TEAM_OPEN.has('WEB')") && ev(ctx, "__toasts.at(-1)") === "팀을 삭제했습니다");
   ev(ctx, "teamMenuItems(TEAMS[2]).find(x => x[1] === '보관 풀기')[3]()");
   assert.equal(JSON.stringify(ev(ctx, "__req.at(-1)")), JSON.stringify(["team_archive", { team: "OLD", on: false }]));
 });
 
-test("＋ 새 팀: 그 자리 폼 → 이름·관리 세션 확인 → 승인 요청(team_create) → 만든 팀을 펼쳐 둔다", async () => {
+test("＋ 새 팀: 이름 + 세션 고르기(★ = 관리, 처음 고른 세션이 기본) → 별칭은 세션 이름 → 승인 요청(team_create)", async () => {
   const ctx = await boot();
   click(ctx, "n => n.textContent === '＋ 새 팀'");
   await click(ctx, "n => n.textContent === '만들기(승인 요청)'");
   assert.equal(ev(ctx, "__toasts.at(-1)"), "팀 이름을 적으세요");
-  ev(ctx, "TEAM_NEW.name = '포털'; TEAM_NEW.mgr = 's-new'; renderTeamRows(__w)");
-  click(ctx, "n => n.textContent === '＋ 구성원'");
-  ev(ctx, "TEAM_NEW.members[0].sid = 's-old'; TEAM_NEW.members[0].alias = '백엔드'; TEAM_NEW.members.push({sid:'', alias:'빈칸', role:''}); renderTeamRows(__w)");
-  const sels = ev(ctx, `${FLAT}.filter(n => n.className === 'tsel')`);
-  assert.ok(!sels[1].children.some((o) => o.value === "s-new"), "관리로 고른 세션은 구성원 고르기에서 빠진다");
+  ev(ctx, "TEAM_NEW.name = '포털'");
+  await click(ctx, "n => n.textContent === '만들기(승인 요청)'");
+  assert.equal(ev(ctx, "__toasts.at(-1)"), "세션을 하나 이상 고르세요");
+  assert.ok(ev(ctx, "teamEditing()"), "폼이 열려 있으면 20초 갱신이 갈아엎지 않는다");
+  const rows = () => ev(ctx, `${FLAT}.filter(n => n.className === 'tcheck tprow')`);
+  assert.equal(JSON.stringify(rows().slice(0, 2).map((r) => r.children[1].children[0].textContent)), JSON.stringify(["새 워커", "오래된"]), "최근 순");
+  assert.ok(!rows().some((r) => r.children[1].children[0].textContent === "자동"), "자동 실행 기록은 빠진다");
+  const tick1 = (name) => ev(ctx, `(() => { const r = ${FLAT}.filter(n => n.className === 'tcheck tprow').find(r => r.children[1].children[0].textContent === '${name}'); const c = r.children[0]; c.checked = true; c.onchange(); })()`);
+  tick1("오래된"); tick1("새 워커");
+  assert.equal(ev(ctx, "TEAM_NEW.mgr"), "s-old", "처음 고른 세션이 관리");
+  ev(ctx, `${FLAT}.filter(n => n.className === 'tpstar')[1].onclick()`);   // ☆ 새 워커 → 관리
+  assert.equal(ev(ctx, "TEAM_NEW.mgr"), "s-new");
+  // 찾기: 폴더 이름으로도
+  ev(ctx, `(() => { const q = ${FLAT}.find(n => n.className === 'tpq'); q.value = 'old'; q.oninput(); })()`);
+  assert.equal(rows().length, 1);
   await click(ctx, "n => n.textContent === '만들기(승인 요청)'");
   assert.equal(JSON.stringify(ev(ctx, "__req[0]")), JSON.stringify(["team_create",
-    { name: "포털", manager_session: "s-new", manager_alias: "관리", members: [{ session_id: "s-old", alias: "백엔드", role: "" }] }]));
+    { name: "포털", manager_session: "s-new", manager_alias: "새 워커", members: [{ session_id: "s-old", alias: "오래된" }] }]));
   ev(ctx, "__done({code:'POR'})");
   assert.equal(ev(ctx, "TEAM_NEW"), null);
   assert.ok(ev(ctx, "TEAM_OPEN.has('POR')"));
+  // 같은 이름 세션은 별칭 뒤에 번호
+  ev(ctx, "SESSIONS.push({session_id:'s-dup', title:'새 워커'})");
+  assert.equal(JSON.stringify(ev(ctx, "newTeamAliases(['s-new','s-dup'])")), JSON.stringify(["새 워커", "새 워커 2"]));
 });
 
 test("화면에서 낸 승인 요청은 사장님 경로(폰에서도) — /api/owner/approvals", async () => {
@@ -184,7 +207,7 @@ test("화면에서 낸 승인 요청은 사장님 경로(폰에서도) — /api/
   assert.equal(ev(ctx, "__sheet[1].execute"), true);
 });
 
-test("팀 ⋯ 메뉴: 이름 바꾸기(prompt → rename API, 취소는 무동작) · 구성원 추가는 펼쳐서 폼 · 보관 팀/개인비서 메뉴", async () => {
+test("팀 ⋯ 메뉴: 이름 바꾸기(prompt → rename API, 취소는 무동작) · 구성원 추가는 펼쳐서 폼 · 예전 보관 팀/개인비서 메뉴", async () => {
   const ctx = await boot();
   ev(ctx, "teamMenuItems(TEAMS[1]).find(x => x[1] === '구성원 추가')[3]()");
   assert.equal(ev(ctx, "LS.getItem('sm_team_open')"), '["WEB"]');
@@ -198,7 +221,7 @@ test("팀 ⋯ 메뉴: 이름 바꾸기(prompt → rename API, 취소는 무동�
   await ev(ctx, "renameTeam(TEAMS[1])");
   assert.equal(ev(ctx, "__calls.length"), n, "취소하면 아무것도 안 보낸다");
   const old = JSON.parse(ev(ctx, "JSON.stringify(teamMenuItems(TEAMS[2]).map(x => x[1]))"));
-  assert.deepEqual(old, ["작업 장부", "보관 풀기"]);
+  assert.deepEqual(old, ["작업 장부", "보관 풀기", "이 팀 삭제"]);
   const asst = JSON.parse(ev(ctx, "JSON.stringify(teamMenuItems(TEAMS[0], {assistant:true}).map(x => x[1]))"));
   assert.deepEqual(asst, ["비서 열기", "펼치기"]);
 });

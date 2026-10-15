@@ -237,40 +237,40 @@
     border:1px dashed var(--line2);border-radius:14px;padding:12px}
   .gnew:hover{color:var(--ink);border-color:var(--accent)}
   /* 👥 팀 보기(팀 통합, 2026-10-13): 목록 칸에서 펼쳐 보고 관리 — 팝업 없이 */
-  /* 팀 카드(2026-10-15 재디자인): 둥근 카드 · 팀 색 이니셜(--th 색상각) · 상태 요약 칩 · 관제 열린 팀은 테두리 강조 */
-  .tcard{margin:8px 10px;border:1px solid var(--line);border-radius:14px;background:var(--surface);overflow:hidden;
-    transition:border-color .15s, box-shadow .15s}
-  .tcard:hover{border-color:var(--line2)}
-  .tcard.open{box-shadow:0 1px 0 var(--line)}
-  .tcard.sel{border-color:hsl(var(--th) 60% 50%);box-shadow:0 0 0 1px hsl(var(--th) 60% 50% / .45)}
-  .tcard.arch{opacity:.72}
-  .thead{display:flex;align-items:center}
-  .thead .gtext{flex:1;min-width:0;display:flex;align-items:center;gap:12px;padding:12px 6px 12px 12px;text-align:left;background:transparent;color:inherit}
-  .thead .gtext:active{background:var(--surface2)}
+  /* 팀 묶음(2026-10-15 사장님: 세션 목록의 폴더 머리와 같은 모양) — 머리 = .ghead(▼ · 👥 이름 · 상태 줄 · 구성원 수 · ⋯),
+     왼쪽 띠만 팀 색(--th). 펼치면 구성원 = 세션 줄(.glist .srow) 그대로. 관제가 열린 팀은 .sel */
+  .ghead.tgh{border-left-color:hsl(var(--th,186) 55% 52%);padding:10px 6px 10px 14px}
+  .ghead.tgh .gtext{display:flex;align-items:center;gap:10px;padding:2px 0}
+  .ghead.tgh .gtx{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
+  .ghead.tgh .gpath{font-family:var(--sans);display:flex;gap:6px;flex-wrap:wrap;align-items:center;white-space:normal}
+  .tgrp.arch .ghead{opacity:.72}
   .tav{flex:none;width:36px;height:36px;border-radius:11px;display:grid;place-items:center;font-weight:750;font-size:1rem;
     color:hsl(var(--th,186) 70% 72%);background:hsl(var(--th,186) 45% 50% / .16);border:1px solid hsl(var(--th,186) 50% 55% / .35)}
   @media (prefers-color-scheme:light){ .tav{color:hsl(var(--th,186) 60% 36%);background:hsl(var(--th,186) 60% 50% / .12)} }
-  .ttx{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px}
   .tname{font-weight:720;font-size:.98rem;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .tname .tcode{margin-left:7px;font-family:var(--mono);font-size:.68rem;font-weight:600;color:var(--muted);letter-spacing:.02em}
-  .tline2{display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:.74rem}
   .tmuted{color:var(--muted);font-size:.76rem}
-  .tst2{display:inline-flex;align-items:center;gap:5px;padding:1px 8px 1px 7px;border-radius:999px;background:var(--surface2);color:var(--ink2);font-weight:600}
+  .tst2{display:inline-flex;align-items:center;gap:5px;padding:0 7px 0 6px;border-radius:999px;background:var(--surface);color:var(--ink2);font-weight:600;font-size:.72rem}
   .tst2 i{width:6px;height:6px;border-radius:50%;background:var(--muted)}
   .tst2.live i{background:var(--good)} .tst2.off{color:var(--muted)} .tst2.off i{background:var(--line2)}
   .tst2.busy{color:#5aa2ff} .tst2.busy i{background:#2f81f7;animation:sdp 1.4s ease-in-out infinite}
   .tst2.wait{color:var(--warn)} .tst2.wait i{background:var(--warn)}
-  .tchev{flex:none;color:var(--muted);font-size:.8rem;width:16px;text-align:center}
-  .tmore{flex:none;width:40px;align-self:stretch;color:var(--muted);font-size:1.15rem}
-  .tmore:hover{color:var(--ink);background:var(--surface2)}
-  .tcard .tbody{border-top:1px solid var(--line);padding:2px 0 6px;background:transparent}
-  .tlist.tmembers{padding:0}
-  .tlist.tmembers .srow{border-left:none;background:transparent;border-bottom:1px solid var(--line)}
-  .tlist.tmembers .srow:last-of-type{border-bottom:none}
-  .tlist.tmembers .sinfo{padding:10px 6px 10px 16px}
-  .tlist.tmembers .sbtn.more{width:40px;font-size:1.05rem;color:var(--muted)}
   .schip.mgr{color:hsl(var(--th,186) 70% 70%);border-color:hsl(var(--th,186) 50% 55% / .45)}
-  .tlist.tmembers .tadd{margin:8px 12px 4px;width:calc(100% - 24px)}
+  .glist.tmembers .tadd{margin:8px 12px 8px 0;width:calc(100% - 12px)}
+  .glist .tbody{padding:4px 0 10px}
+  /* 새 팀 — 세션 고르기 */
+  .tpicked{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 8px}
+  .tpchip{display:inline-flex;align-items:center;gap:2px;padding:2px 2px 2px 4px;border-radius:999px;border:1px solid var(--line2);background:var(--surface);font-size:.8rem;max-width:100%}
+  .tpchip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tpchip.mgr{border-color:color-mix(in srgb,var(--accent) 55%,transparent);background:var(--accent-wash)}
+  .tpstar,.tpx{flex:none;background:transparent;color:var(--muted);padding:0 5px;font-size:.85rem}
+  .tpchip.mgr .tpstar{color:var(--warn)}
+  .tpq{width:100%}
+  .tpick{max-height:280px;overflow:auto;margin-top:6px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+  .tpick .tprow{padding:7px 10px;border-bottom:1px solid var(--line);cursor:pointer}
+  .tpick .tprow:last-child{border-bottom:none}
+  .tptx{display:flex;flex-direction:column;min-width:0}
+  .tpname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tpcwd{font-size:.72rem;color:var(--muted);font-family:var(--mono)}
   /* 작업 장부 페이지 */
   .ledger{padding:14px 16px 40px;overflow:auto;height:100%}
   .lghead{display:flex;align-items:center;gap:12px;margin-bottom:6px}
@@ -4114,15 +4114,15 @@ function renderTeamRows(wrap){
   if(!act.length) wrap.appendChild(el('div','empty','아직 팀이 없습니다. 아래 ＋ 새 팀으로 만들거나, 관리 세션에서 clewpath-workers 스킬로 만드세요.'));
   act.forEach(t=>wrap.appendChild(teamCard(t)));
   if(TEAM_NEW) wrap.appendChild(newTeamForm());
-  else { const b=el('button','btn gnew','＋ 새 팀'); b.onclick=()=>{ TEAM_NEW={name:'', mgr:'', members:[]}; teamRerender(); }; wrap.appendChild(b); }
+  else { const b=el('button','btn gnew','＋ 새 팀'); b.onclick=()=>{ TEAM_NEW={name:'', sids:[], mgr:'', q:''}; teamRerender(); }; wrap.appendChild(b); }
   if(arch.length){
     const h=el('button','tarch-h',(TEAM_ARCH_OPEN?'▾':'▸')+' 🗄 보관된 팀 '+arch.length);
     h.onclick=()=>{ TEAM_ARCH_OPEN=!TEAM_ARCH_OPEN; teamRerender(); }; wrap.appendChild(h);
     if(TEAM_ARCH_OPEN) arch.forEach(t=>wrap.appendChild(teamCard(t)));
   }
 }
-// 팀 칸(2026-10-15 재디자인): 팀 색 이니셜 · 이름 · 구성원 상태 요약(실행 중·작업 중·입력 대기) · 구성원 수 · ⋯ 메뉴.
-// 머리를 누르면 펼쳐서 구성원만 보인다(일감·기록은 ⋯ → 작업 장부, 관제는 ⋯ → 관제 열기).
+// 팀 묶음(2026-10-15 사장님: 세션 목록의 폴더 머리와 같은 모양): ▼ · 👥 이름 · 아래 줄 구성원 상태(작업 중·대기·실행 n/전체)
+// · 오른쪽 구성원 수 · ⋯ 메뉴. 머리를 누르면 펼쳐서 구성원만 — 세션 줄 그대로(일감·기록은 ⋯ → 작업 장부, 관제는 ⋯ → 관제 열기).
 const TEAM_HUES=[186,212,262,32,140,330,48,6];
 function teamHue(code){ let h=0; for(const c of String(code||'')) h=(h*31+c.charCodeAt(0))>>>0; return TEAM_HUES[h%TEAM_HUES.length]; }
 function teamPulse(t){
@@ -4138,39 +4138,39 @@ function teamCard(t,o){
   const asst=!!o.assistant;
   const g=t.archived?null:teamAsGroup(t);
   const open=TEAM_OPEN.has(t.code);
-  const card=el('div','tcard'+(t.archived?' arch':'')+(open?' open':'')+(g&&MON_INLINE&&MON_INLINE.gid===g.id?' sel':''));
-  card.dataset.code=t.code; card.style.setProperty('--th',asst?'262':String(teamHue(t.code)));
-  const gh=el('div','thead'); if(g) gh.dataset.gid=g.id;
+  const wrap=el('div','tgrp'+(t.archived?' arch':'')); wrap.dataset.code=t.code;
+  wrap.style.setProperty('--th',asst?'262':String(teamHue(t.code)));
+  const gh=el('div','ghead grp tgh'+(g&&MON_INLINE&&MON_INLINE.gid===g.id?' sel':'')); if(g) gh.dataset.gid=g.id;
   const gt=el('button','gtext'); gt.setAttribute('aria-expanded',open?'true':'false');
-  gt.appendChild(el('span','tav',asst?'🧑‍💼':(t.archived?'🗄':String(t.name||t.code||'?').trim().charAt(0).toUpperCase())));
-  const tx=el('span','ttx');
-  const nm=el('span','tname',asst?'개인비서':t.name); tx.appendChild(nm);
-  if(!asst) nm.appendChild(el('span','tcode',t.code));
-  const line=el('span','tline2');
+  gt.appendChild(el('span','chev',open?'▼':'▶'));
+  const tx=el('span','gtx');
+  tx.appendChild(el('span','gbase',asst?'🧑‍💼 개인비서':((t.archived?'🗄 ':'👥 ')+t.name)));
+  const line=el('span','gpath');
   if(asst) line.textContent=assistantLine(t);
   else {
     const p=teamPulse(t);
     const chip=(cls,txt)=>{ const c=el('span','tst2 '+cls); c.appendChild(el('i')); c.appendChild(document.createTextNode(txt)); line.appendChild(c); };
-    if(t.archived) line.appendChild(el('span','tmuted','보관됨 · 구성원 '+p.n));
+    if(t.archived) line.appendChild(el('span','tmuted','보관됨'));
     else if(!p.n) line.appendChild(el('span','tmuted','구성원 없음'));
     else {
       if(p.busy) chip('busy','작업 중 '+p.busy);
       if(p.wait) chip('wait','대기 '+p.wait);
-      chip(p.live?'live':'off', p.live?('실행 '+p.live+'/'+p.n):('꺼짐 · '+p.n+'명'));
+      chip(p.live?'live':'off', p.live?('실행 '+p.live+'/'+p.n):'모두 꺼짐');
     }
   }
   tx.appendChild(line); gt.appendChild(tx);
-  gt.appendChild(el('span','tchev',open?'▾':'▸'));
   gt.onclick=()=>toggleTeam(t);
   gh.appendChild(gt);
-  const mb=el('button','tmore','⋯'); mb.title='메뉴 — 관제 · 작업 장부 · 이름 · 알림 · 구성원 추가 · 보관';
+  if(!asst) gh.appendChild(el('span','gcount',String((t.members||[]).length)));
+  const mb=el('button','gopen more','⋯'); mb.title='메뉴 — 관제 · 작업 장부 · 이름 · 알림 · 구성원 추가 · 삭제';
   mb.setAttribute('aria-label','팀 메뉴'); mb.setAttribute('aria-haspopup','menu');
   mb.onclick=(e)=>{ if(e&&e.stopPropagation) e.stopPropagation(); return teamMenu(t,mb,o); }; gh.appendChild(mb);
-  card.appendChild(gh);
-  if(open) card.appendChild(asst?assistantBody(t):teamBody(t));
-  return card;
+  wrap.appendChild(gh);
+  if(open) wrap.appendChild(asst?assistantBody(t):teamBody(t));
+  return wrap;
 }
-// 팀 ⋯ 메뉴 항목(2026-10-15 정리): 관제 · 작업 장부 · 이름 · 알림 · 구성원 추가 · (구분선) 보관. 보존본 지우기는 장부 페이지 맨 아래.
+// 팀 ⋯ 메뉴 항목(2026-10-15 정리): 관제 · 작업 장부 · 이름 · 알림 · 구성원 추가 · (구분선) 삭제. 보존본 지우기는 장부 페이지 맨 아래.
+// 보관은 화면에서 뺐다(2026-10-15 사장님) — 예전에 보관한 팀만 「보관 풀기」가 남는다.
 function teamMenuItems(t,o){
   o=o||{}; const it=[]; const code=t.code; const open=TEAM_OPEN.has(code);
   const g=t.archived?null:teamAsGroup(t);
@@ -4187,13 +4187,20 @@ function teamMenuItems(t,o){
     it.push(['🔔','알림 설정','응답 완료 · 호출 실패 등',()=>teamNotifySheet(t)]);
     it.push(['＋','구성원 추가',null,()=>{ const u=tui(code); u.adding=true; u.add={sid:'', alias:'', role:''};
       if(!TEAM_OPEN.has(code)){ TEAM_OPEN.add(code); lsSet('sm_team_open',[...TEAM_OPEN]); } teamRerender(); }]);
-    it.push(['🗄','이 팀 보관','목록·알림에서 빼기(장부·이력은 그대로) — 승인 필요',
-      ()=>requestApproval('team_archive', {team:code, on:true}, ()=>{ toast('보관했습니다'); TEAM_OPEN.delete(code); lsSet('sm_team_open',[...TEAM_OPEN]); reloadTeams(); }),'danger']);
   } else {
     it.push(['↩','보관 풀기','다시 목록·알림에 넣기 — 승인 필요',
       ()=>requestApproval('team_archive', {team:code, on:false}, ()=>{ toast('보관을 풀었습니다'); reloadTeams(code); })]);
   }
+  it.push(['🗑','이 팀 삭제','묶음만 지움 · 세션은 그대로 — 승인 필요',()=>deleteTeam(t),'danger']);
   return it;
+}
+function deleteTeam(t){
+  const code=t.code;
+  return requestApproval('team_delete', {team:code}, ()=>{
+    toast('팀을 삭제했습니다'); TEAM_OPEN.delete(code); lsSet('sm_team_open',[...TEAM_OPEN]);
+    // 오른쪽 칸에 그 팀의 장부나 관제가 열려 있으면 닫는다
+    if((LEDGER&&LEDGER.code===code)||(MON_INLINE&&t.monitor_group_id&&MON_INLINE.gid===t.monitor_group_id)){ LEDGER=null; detailPlaceholder('삭제됨'); }
+    reloadTeams(); });
 }
 function teamMenu(t,anchor,o){
   const box=el('div'); let sep=false;
@@ -4322,15 +4329,11 @@ function assistantBody(t){
 }
 
 // ── 팀 칸 본문: 구성원만(2026-10-15 — 일감·기록·설정 탭은 ⋯ 메뉴의 작업 장부·알림 설정으로) ──
-function teamBody(t){
-  const b=el('div','tbody');
-  b.appendChild(teamMembers(t));
-  return b;
-}
+function teamBody(t){ return teamMembers(t); }
 
 // 구성원 = 세션. 줄은 세션 목록 줄과 똑같이 동작한다 — 누르면 터미널(실행 중)·상세, ⋯ 는 세션 메뉴 + 이 팀에서 빼기
 function teamMembers(t){
-  const w=el('div','tlist tmembers'); const u=tui(t.code);
+  const w=el('div','glist tmembers'); const u=tui(t.code);
   const ms=[...(t.members||[])].sort((a,b)=>(b.member_role==='manager')-(a.member_role==='manager'));
   ms.forEach(m=>{
     const s=memberSess(m);
@@ -4525,33 +4528,54 @@ function teamRecords(t,d){
   return w;
 }
 
-// ＋ 새 팀: 이름 · 관리 세션 · 구성원(세션·별칭·역할) → 승인 요청(team_create)
+// ＋ 새 팀(2026-10-15 사장님: 이름 + 세션 고르기만): 고른 세션 중 ★ 하나가 관리 세션(처음 고른 세션이 기본, 누르면 바꿈)
+// → 승인 요청(team_create). 팀 안 별칭은 세션 이름(겹치면 뒤에 번호), 역할은 비워 둔다 — 필요하면 관리 세션이 워커 스킬로 채운다.
+function newTeamAliases(sids){
+  const used=new Set();
+  return sids.map(sid=>{ const a=String(sessTitleOf(sid)||'').trim()||sid.slice(0,8); let b=a, n=2;
+    while(used.has(b)) b=a.slice(0,36)+' '+(n++); used.add(b); return b; });
+}
 function newTeamForm(){
   const s=TEAM_NEW; const f=el('div','tform tnew');
   f.appendChild(el('div','tsec','＋ 새 팀'));
   const nm=inputEl(s.name); nm.placeholder='팀 이름(예: 포털 개발)'; nm.oninput=()=>{ s.name=nm.value; }; f.appendChild(field('이름', nm));
-  f.appendChild(field('관리 세션', sessionSelect(s.mgr, new Set(s.members.map(m=>m.sid).filter(Boolean)), v=>{ s.mgr=v; teamRerender(); })));
-  f.appendChild(el('div','tnote','관리 세션이 구성원에게 일을 나누고 결과를 받습니다(clewpath-workers 스킬).'));
-  s.members.forEach((m,i)=>{
-    const r=el('div','tmem');
-    const others=new Set([s.mgr].concat(s.members.filter((_,j)=>j!==i).map(x=>x.sid)).filter(Boolean));
-    r.appendChild(sessionSelect(m.sid, others, v=>{ m.sid=v; if(!m.alias) m.alias=sessTitleOf(v); teamRerender(); }));
-    const a=inputEl(m.alias); a.placeholder='별칭'; a.oninput=()=>{ m.alias=a.value; }; r.appendChild(a);
-    const rl=inputEl(m.role); rl.placeholder='역할'; rl.oninput=()=>{ m.role=rl.value; }; r.appendChild(rl);
-    const x=el('button','tmini','✕'); x.title='빼기'; x.onclick=()=>{ s.members.splice(i,1); teamRerender(); }; r.appendChild(x);
-    f.appendChild(r);
-  });
-  const add=el('button','tadd','＋ 구성원'); add.onclick=()=>{ s.members.push({sid:'', alias:'', role:''}); teamRerender(); }; f.appendChild(add);
+  const picked=el('div','tpicked');
+  const q=inputEl(s.q||''); q.className='tpq'; q.placeholder='세션 찾기(이름·폴더)';
+  const list=el('div','tpick');
+  const pf=el('div','field'); pf.appendChild(el('label',null,'세션')); pf.appendChild(picked); pf.appendChild(q); pf.appendChild(list); f.appendChild(pf);
+  const drawPicked=()=>{ picked.innerHTML='';
+    if(!s.sids.length){ picked.appendChild(el('div','tnote','아래에서 고르세요. ★ = 관리 세션(구성원에게 일을 나누는 세션)')); return; }
+    s.sids.forEach(sid=>{ const c=el('span','tpchip'+(sid===s.mgr?' mgr':''));
+      const st=el('button','tpstar',sid===s.mgr?'★':'☆'); st.title=sid===s.mgr?'관리 세션':'관리 세션으로'; st.onclick=()=>{ s.mgr=sid; drawPicked(); };
+      c.appendChild(st); c.appendChild(el('span',null,sessTitleOf(sid)||sid.slice(0,8)));
+      const x=el('button','tpx','✕'); x.title='빼기'; x.onclick=()=>pick(sid,false); c.appendChild(x);
+      picked.appendChild(c); }); };
+  const drawList=()=>{ list.innerHTML=''; const k=String(s.q||'').toLowerCase().trim();
+    const rows=[...(SESSIONS||[])].filter(x=>!x.headless&&!x.continued_in)
+      .filter(x=>!k||(String(sessLabel(x))+' '+(x.cwd||'')).toLowerCase().includes(k))
+      .sort((a,b)=>(b.mtime||0)-(a.mtime||0)).slice(0,80);
+    if(!rows.length) list.appendChild(el('div','cwd','해당 세션 없음'));
+    rows.forEach(x=>{ const lab=el('label','tcheck tprow'); const cb=el('input'); cb.type='checkbox'; cb.checked=s.sids.includes(x.session_id);
+      cb.onchange=()=>pick(x.session_id,cb.checked); lab.appendChild(cb);
+      const tx=el('span','tptx'); tx.appendChild(el('span','tpname',sessLabel(x))); tx.appendChild(el('span','tpcwd',baseName(x.cwd||'')));
+      lab.appendChild(tx); list.appendChild(lab); }); };
+  const pick=(sid,on)=>{
+    if(on){ if(!s.sids.includes(sid)) s.sids.push(sid); if(!s.mgr) s.mgr=sid; }
+    else { s.sids=s.sids.filter(x=>x!==sid); if(s.mgr===sid) s.mgr=s.sids[0]||''; }
+    drawPicked(); drawList(); };
+  q.oninput=()=>{ s.q=q.value; drawList(); };
+  drawPicked(); drawList();
   const acts=el('div','tacts');
   const no=el('button','btn ghost sm','취소'); no.onclick=()=>{ TEAM_NEW=null; teamRerender(); };
   const ok=el('button','btn sm','만들기(승인 요청)');
   ok.onclick=()=>{
     const name=String(s.name||'').trim();
     if(!name){ toast('팀 이름을 적으세요'); return; }
-    if(!s.mgr){ toast('관리 세션을 고르세요'); return; }
-    const members=s.members.filter(m=>m.sid&&String(m.alias||'').trim())
-      .map(m=>({session_id:m.sid, alias:String(m.alias).trim(), role:String(m.role||'').trim()}));
-    requestApproval('team_create', {name, manager_session:s.mgr, manager_alias:'관리', members},
+    if(!s.sids.length){ toast('세션을 하나 이상 고르세요'); return; }
+    const mgr=s.mgr&&s.sids.includes(s.mgr)?s.mgr:s.sids[0];
+    const order=[mgr].concat(s.sids.filter(x=>x!==mgr)); const al=newTeamAliases(order);
+    const members=order.slice(1).map((sid,i)=>({session_id:sid, alias:al[i+1]}));
+    requestApproval('team_create', {name, manager_session:mgr, manager_alias:al[0], members},
       (r)=>{ TEAM_NEW=null; toast('팀을 만들었습니다'); if(r&&r.code){ TEAM_OPEN.add(r.code); lsSet('sm_team_open',[...TEAM_OPEN]); } reloadTeams(r&&r.code); });
   };
   acts.appendChild(no); acts.appendChild(ok); f.appendChild(acts);
@@ -5580,7 +5604,7 @@ function teamEventText(e){
   if(e.kind==='msg_failed') return String(p.error||'').slice(0,120);
   return p.note||p.goal||'';
 }
-const APPROVAL_KIND={team_create:'팀 만들기', team_archive:'팀 보관', team_purge:'보존본 지우기', assistant_set:'비서 지정', session_send:'세션에 일 전달',
+const APPROVAL_KIND={team_create:'팀 만들기', team_archive:'팀 보관', team_delete:'팀 삭제', team_purge:'보존본 지우기', assistant_set:'비서 지정', session_send:'세션에 일 전달',
   delegate:'일감 위임', task_decide:'결과 승인/반려/취소', profile_decide:'사장님 프로필 결정'};
 async function showApprovals(){
   let r; try{ r=await T.api('GET','/api/owner/approvals'); }catch(e){ toast('승인 목록 실패: '+e.message); return; }

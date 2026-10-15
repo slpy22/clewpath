@@ -34,7 +34,7 @@ from pathlib import Path
 
 from session_manager import config
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 _lock = threading.RLock()
 
 _SCHEMA = """
@@ -107,6 +107,11 @@ CREATE TABLE IF NOT EXISTS web_prompts(text_hash TEXT NOT NULL, session_id TEXT,
 CREATE INDEX IF NOT EXISTS ix_web_prompts ON web_prompts(text_hash, ts);
 """
 
+# v5: 팀 삭제(2026-10-15) — 지운 팀은 어디에도 안 보인다(구조 기록·경력은 남음).
+_SCHEMA_V5 = """
+ALTER TABLE teams ADD COLUMN deleted INTEGER;
+"""
+
 
 def _fts_sql() -> str:
     """사람 입력·메시지 전문 검색(한글 부분 일치 = trigram, 없는 SQLite 면 unicode61)."""
@@ -168,6 +173,10 @@ def _connect() -> sqlite3.Connection:
                 if v < 4:
                     c.executescript(_SCHEMA_V4)
                     c.execute("PRAGMA user_version=4")
+                    v = 4
+                if v < 5:
+                    c.executescript(_SCHEMA_V5)
+                    c.execute("PRAGMA user_version=5")
         return c
     except sqlite3.DatabaseError as e:            # 손상·잠김 → 호출자는 503, Host 는 계속 산다
         raise TeamError("team_db_unavailable", 503) from e
@@ -271,7 +280,8 @@ def create_team(name: str, root: str | None = None, code: str | None = None,
 
 
 def _team_row(c, team_id: str):
-    r = c.execute("SELECT * FROM teams WHERE id=? OR code=?", (team_id, str(team_id or "").upper())).fetchone()
+    r = c.execute("SELECT * FROM teams WHERE (id=? OR code=?) AND deleted IS NULL",
+                  (team_id, str(team_id or "").upper())).fetchone()
     if not r:
         raise TeamError("team_not_found", 404)
     return r
@@ -280,7 +290,7 @@ def _team_row(c, team_id: str):
 def list_teams(include_archived: bool = False) -> list[dict]:
     c = _read()
     try:
-        q = "SELECT * FROM teams" + ("" if include_archived else " WHERE archived IS NULL") + " ORDER BY created"
+        q = "SELECT * FROM teams WHERE deleted IS NULL" + ("" if include_archived else " AND archived IS NULL") + " ORDER BY created"
         out = []
         for t in c.execute(q).fetchall():
             n = c.execute("SELECT COUNT(*) FROM memberships WHERE team_id=? AND left_at IS NULL", (t["id"],)).fetchone()[0]
@@ -313,6 +323,34 @@ def archive(team_id: str, on: bool = True) -> dict:
         except Exception as e:  # noqa: BLE001  감시가 다시 맞춘다
             print(f"[team] 보관 풀기 뒤 그룹 맞추기 실패: {e}", flush=True)
     return {"id": t["id"], "archived": bool(on)}
+
+
+def delete_team(team_id: str) -> dict:
+    """팀 삭제(2026-10-15 사장님 — 화면에서 보관 대신 삭제만). 보존본(원본 사본·전문)을 지우고, 구성원을 모두 빼고,
+    관제 그룹을 지우고, 팀을 어디에도 안 보이게 한다. 일감·토큰 수 같은 구조 기록과 구성원 경력은 장부에 남는다.
+    코드는 풀어 준다(같은 이름으로 다시 만들면 같은 코드). 세션 jsonl 은 건드리지 않는다."""
+    c = _read()
+    try:
+        t = _team_row(c, team_id)
+    finally:
+        c.close()
+    if t["kind"] == "portfolio":
+        raise TeamError("portfolio_locked", 409)
+    from session_manager import teamlog
+    purged = teamlog.purge_team(t["id"])
+    now = _now()
+    with _Tx() as c:
+        # 관제 그룹 id 는 그룹을 지운 뒤에 비운다 — 먼저 비우면 지우기 실패 시 adopt_groups 가 그룹을 새 팀으로 되살린다
+        c.execute("UPDATE teams SET archived=COALESCE(archived, ?), deleted=?, code=? WHERE id=?",
+                  (now, now, "_" + t["id"], t["id"]))
+        n = c.execute("UPDATE memberships SET left_at=? WHERE team_id=? AND left_at IS NULL", (now, t["id"])).rowcount
+        _event(c, t["id"], "team_deleted", payload={"code": t["code"], "name": t["name"], "members": n})
+    gid = t["monitor_group_id"]
+    if gid:
+        _drop_group(gid)
+        with _Tx() as c:
+            c.execute("UPDATE teams SET monitor_group_id=NULL, monitor_sync=NULL WHERE id=?", (t["id"],))
+    return {"id": t["id"], "code": t["code"], "deleted": True, "members_left": n, **purged}
 
 
 def _drop_group(gid: str) -> None:
