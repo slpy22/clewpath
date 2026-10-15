@@ -252,7 +252,7 @@
   .tst2{display:inline-flex;align-items:center;gap:5px;padding:0 7px 0 6px;border-radius:999px;background:var(--surface);color:var(--ink2);font-weight:600;font-size:.72rem}
   .tst2 i{width:6px;height:6px;border-radius:50%;background:var(--muted)}
   .tst2.live i{background:var(--good)} .tst2.off{color:var(--muted)} .tst2.off i{background:var(--line2)}
-  .tst2.busy{color:#5aa2ff} .tst2.busy i{background:#2f81f7;animation:sdp 1.4s ease-in-out infinite}
+  .tst2.work{color:#5aa2ff} .tst2.work i{background:#2f81f7;animation:sdp 1.4s ease-in-out infinite}
   .tst2.wait{color:var(--warn)} .tst2.wait i{background:var(--warn)}
   .schip.mgr{color:hsl(var(--th,186) 70% 70%);border-color:hsl(var(--th,186) 50% 55% / .45)}
   .glist.tmembers .tadd{margin:8px 12px 8px 0;width:calc(100% - 12px)}
@@ -4153,7 +4153,7 @@ function teamCard(t,o){
     if(t.archived) line.appendChild(el('span','tmuted','보관됨'));
     else if(!p.n) line.appendChild(el('span','tmuted','구성원 없음'));
     else {
-      if(p.busy) chip('busy','작업 중 '+p.busy);
+      if(p.busy) chip('work','작업 중 '+p.busy);   // .busy 는 다른 곳 클래스
       if(p.wait) chip('wait','대기 '+p.wait);
       chip(p.live?'live':'off', p.live?('실행 '+p.live+'/'+p.n):'모두 꺼짐');
     }
@@ -4542,7 +4542,8 @@ function newTeamForm(){
   const picked=el('div','tpicked');
   const q=inputEl(s.q||''); q.className='tpq'; q.placeholder='세션 찾기(이름·폴더)';
   const list=el('div','tpick');
-  const pf=el('div','field'); pf.appendChild(el('label',null,'세션')); pf.appendChild(picked); pf.appendChild(q); pf.appendChild(list); f.appendChild(pf);
+  // 체크 줄은 .field 밖에 둔다 — .field label·input 꾸밈이 체크 줄을 깨뜨린다
+  const pf=field('세션', q); pf.insertBefore(picked, q); pf.style.marginBottom='0'; f.appendChild(pf); f.appendChild(list);
   const drawPicked=()=>{ picked.innerHTML='';
     if(!s.sids.length){ picked.appendChild(el('div','tnote','아래에서 고르세요. ★ = 관리 세션(구성원에게 일을 나누는 세션)')); return; }
     s.sids.forEach(sid=>{ const c=el('span','tpchip'+(sid===s.mgr?' mgr':''));
