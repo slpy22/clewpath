@@ -4347,7 +4347,8 @@ function teamMembers(t){
     const where=s?null:(m.session_id?'세션 '+m.session_id.slice(0,8)+' · 목록에 없음':'세션 없음');
     const al=(s&&m.alias&&m.alias!==nm)?'별칭 '+m.alias:null;
     const rt=s?relFrom(s):null;
-    info.appendChild(el('div','smeta2',[m.role,al,where,rt].filter(Boolean).join(' · ')));
+    const role=(m.role&&m.role.replace(/[\s_]/g,'')!==String(nm).replace(/[\s_]/g,''))?m.role:null;   // 세션 이름과 같은 역할은 되풀이하지 않는다
+    info.appendChild(el('div','smeta2',[role,al,where,rt].filter(Boolean).join(' · ')));
     if(s) info.onclick=()=>jumpToSession(continuedTarget(s));
     row.appendChild(info);
     const mb=el('button','sbtn more','⋯'); mb.setAttribute('aria-label','구성원 메뉴'); mb.setAttribute('aria-haspopup','menu');
