@@ -231,6 +231,7 @@
   .ghead.grp{display:flex;align-items:center;gap:6px}
   .ghead.grp .gtext{flex:1;min-width:0;text-align:left;background:transparent;color:inherit}
   .ghead.grp .gopen{padding:7px 12px;border-radius:9px;background:var(--accent2);color:#fff;font-size:.8rem;flex:none}
+  .ghead.grp .gopen.more{background:transparent;color:var(--muted);font-size:1.15rem;padding:4px 10px;line-height:1}
   .ghead.grp .gset{width:34px;height:34px;border-radius:9px;color:var(--muted);flex:none}
   .gnew{display:block;margin:16px 14px 24px;width:calc(100% - 28px)}
   /* 👥 팀 보기(팀 통합, 2026-10-13): 목록 칸에서 펼쳐 보고 관리 — 팝업 없이 */
@@ -4097,11 +4098,64 @@ function teamCard(t,o){
   gt.appendChild(el('div','gpath'+(k.submitted?' warn':''), o.assistant?assistantLine(t):teamSummary(t)));
   gt.onclick=()=>toggleTeam(t);
   gh.appendChild(gt);
-  if(g){ const op=el('button','gopen','🎬'); op.title='관제 열기'; op.onclick=()=>openMonitorGroup(g); gh.appendChild(op); }
+  // ⋯ 메뉴(2026-10-15 사장님: 세션 줄처럼 팀도 팝업에서 골라 들어간다 — 관제·구성원·일감·기록·이름·알림·보관)
+  const mb=el('button','gopen more','⋯'); mb.title='메뉴 — 관제 · 구성원 · 일감 · 기록 · 이름 바꾸기 · 알림 · 보관';
+  mb.setAttribute('aria-label','팀 메뉴'); mb.setAttribute('aria-haspopup','menu');
+  mb.onclick=(e)=>{ if(e&&e.stopPropagation) e.stopPropagation(); return teamMenu(t,mb,o); }; gh.appendChild(mb);
   const cv=el('button','gset',open?'▾':'▸'); cv.title=open?'접기':'펼치기'; cv.onclick=()=>toggleTeam(t); gh.appendChild(cv);
   card.appendChild(gh);
   if(open) card.appendChild(o.assistant?assistantBody(t):teamBody(t));
   return card;
+}
+// 팀 ⋯ 메뉴 항목. 위험한 것(보관·보존본 지우기)은 구분선 아래 빨간 글씨 — 둘 다 사장님 승인 요청을 거친다.
+function teamMenuItems(t,o){
+  o=o||{}; const it=[]; const code=t.code; const open=TEAM_OPEN.has(code);
+  const g=t.archived?null:teamAsGroup(t);
+  if(o.assistant||t.kind==='portfolio'){
+    it.push(['🧑‍💼','비서 열기','개인 비서 세션 터미널',()=>openAssistant()]);
+    it.push([open?'▾':'▸',open?'접기':'펼치기','사장님 프로필',()=>toggleTeam(t)]);
+    return it;
+  }
+  if(g) it.push(['🎬','관제 열기','관리 · 구성원 대화 흐름'+(monInlineWanted()?' (오른쪽 칸)':''),()=>openMonitorGroup(g)]);
+  const k=t.tasks||{}; const nOpen=TASK_OPEN_ST.reduce((n,x)=>n+(k[x]||0),0);
+  it.push(['👥','구성원',(t.members||[]).length+'명 · 경력',()=>openTeamTab(t,'members')]);
+  if(!t.archived) it.push(['📋','일감',nOpen?('진행 '+nOpen+(k.submitted?' · 제출 '+k.submitted+' ⚠':'')):'진행 중 없음',()=>openTeamTab(t,'tasks')]);
+  it.push(['🗂','기록','토큰 · 위반 · 사장님 입력',()=>openTeamTab(t,'records')]);
+  if(!t.archived){
+    it.push(['✎','이름 바꾸기',t.name,()=>renameTeam(t)]);
+    it.push(['🔔','알림 설정','응답 완료 · 호출 실패 등',()=>openTeamTab(t,'settings')]);
+    it.push(['＋','구성원 추가',null,()=>{ const u=tui(code); u.adding=true; u.add={sid:'', alias:'', role:''}; openTeamTab(t,'members'); }]);
+    it.push(['🗄','이 팀 보관','목록·알림에서 빼기(장부·이력은 그대로) — 승인 필요',
+      ()=>requestApproval('team_archive', {team:code, on:true}, ()=>{ toast('보관했습니다'); TEAM_OPEN.delete(code); lsSet('sm_team_open',[...TEAM_OPEN]); reloadTeams(); }),'danger']);
+  } else {
+    it.push(['↩','보관 풀기','다시 목록·알림에 넣기 — 승인 필요',
+      ()=>requestApproval('team_archive', {team:code, on:false}, ()=>{ toast('보관을 풀었습니다'); reloadTeams(code); })]);
+  }
+  it.push(['🧽','보존본 지우기','보존 원본·사람 입력·메시지 전문 삭제 — 승인 필요',
+    ()=>requestApproval('team_purge', {team:code}, ()=>{ toast('보존본을 지웠습니다'); reloadTeams(code); }),'danger']);
+  return it;
+}
+function teamMenu(t,anchor,o){
+  const box=el('div'); let sep=false;
+  for(const [i,l,sub,fn,cls] of teamMenuItems(t,o)){
+    if(cls==='danger'&&!sep){ box.appendChild(el('div','popsep')); sep=true; }
+    box.appendChild(popItem(i,l,sub,fn,cls)); }
+  return openPop(anchor,box,(o&&o.assistant)?'🧑‍💼 개인비서':t.name);
+}
+// 메뉴에서 고른 탭으로 펼친다(이미 펼쳐져 있으면 탭만 바꾼다)
+function openTeamTab(t,tab){
+  const code=t.code;
+  TEAM_TAB[code]=tab; lsSet('sm_team_tab',TEAM_TAB);
+  if(!TEAM_OPEN.has(code)){ TEAM_OPEN.add(code); lsSet('sm_team_open',[...TEAM_OPEN]);
+    if(!TEAM_DET[code]&&t.kind!=='portfolio') refreshTeamDetail(code).then(teamRerender); }
+  teamRerender();
+}
+async function renameTeam(t){
+  const v=prompt('팀 이름:', t.name); if(v==null) return;
+  const name=v.trim(); if(!name||name===t.name) return;
+  try{ const r=await T.api('POST','/api/owner/teams/'+encodeURIComponent(t.code)+'/rename',{body:{name}});
+    if(r&&r.error) throw new Error(r.error); toast('이름을 바꿨습니다'); reloadTeams(t.code); }
+  catch(e){ toast('저장 실패: '+teamErrText(e.message)); }
 }
 function toggleTeam(t){
   const code=t.code;
@@ -4109,8 +4163,7 @@ function toggleTeam(t){
   else {
     TEAM_OPEN.add(code);
     if(!TEAM_DET[code]&&t.kind!=='portfolio') refreshTeamDetail(code).then(teamRerender);
-    const g=t.archived?null:teamAsGroup(t);
-    if(g&&monInlineWanted()) openMonitorGroup(g,{inline:true});   // PC: 펼치면 오른쪽에 그 팀 관제
+    // 펼쳐도 관제는 열지 않는다(2026-10-15 사장님) — 관제는 ⋯ 메뉴의 「관제 열기」로
   }
   lsSet('sm_team_open',[...TEAM_OPEN]); teamRerender();
 }
@@ -4185,12 +4238,15 @@ function teamMembers(t){
     const info=el('button','sinfo'); const r1=el('div','sr1');
     const bd=s&&sessionBadge(s);
     if(bd){ const dd=el('span','sdot'+(bd.pulse?' pulse':'')); dd.style.setProperty('--c',bd.c); r1.appendChild(dd); }
-    r1.appendChild(el('span','sname',m.alias));
+    // 이름은 그 세션의 이름 그대로(2026-10-15 사장님) — 팀 안 별칭은 아래 줄에 보조로
+    const nm=s?sessLabel(s):m.alias;
+    r1.appendChild(el('span','sname',nm));
     if(m.member_role==='manager') r1.appendChild(el('span','schip','관리'));
     if(bd){ const st=el('span','sstate',bd.text); st.style.setProperty('--c',bd.c); r1.appendChild(st); }
     info.appendChild(r1);
-    const where=s?sessLabel(s):(m.session_id?'세션 '+m.session_id.slice(0,8)+' · 목록에 없음':'세션 없음');
-    info.appendChild(el('div','smeta2',[m.role,where].filter(Boolean).join(' · ')));
+    const where=s?null:(m.session_id?'세션 '+m.session_id.slice(0,8)+' · 목록에 없음':'세션 없음');
+    const al=(s&&m.alias&&m.alias!==nm)?'별칭 '+m.alias:null;
+    info.appendChild(el('div','smeta2',[m.role,al,where].filter(Boolean).join(' · ')));
     if(s) info.onclick=()=>loadDetail(s);
     row.appendChild(info);
     const cb=el('button','tmini',u.career===m.agent_id?'경력 ▾':'경력 ›'); cb.onclick=()=>toggleCareer(t,m); row.appendChild(cb);
