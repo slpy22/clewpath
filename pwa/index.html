@@ -3318,14 +3318,17 @@ async function renameNative(s){
   if(name==null) return;
   const t=name.trim(); if(!t){ toast('이름이 비어있음'); return; }
   try{
-    await T.api('POST',`/api/sessions/${s.session_id}/title`,{body:{title:t}});
-    s.custom_title=t; s.title=t;
+    const r=await T.api('POST',`/api/sessions/${s.session_id}/title`,{body:{title:t}});
+    s.custom_title=t; s.title=t; if(r&&r.agent_name) s.agent_name=r.agent_name;
     const it=SESSIONS.find(x=>x.session_id===s.session_id);
     if(it){ it.custom_title=t; it.title=t; }
     // 좌측 목록의 해당 행 이름도 즉시 갱신(데스크톱 2-pane)
     const nm=document.querySelector(`.srow[data-sid="${s.session_id}"] .sname`);
     if(nm) nm.textContent=t;
-    toast('이름 변경됨 (네이티브 반영)');
+    // 에이전트 이름(다른 세션이 SendMessage 로 부르는 이름)도 같이 바뀐 경우의 안내(2026-10-15)
+    toast(r&&r.peer_name_conflict ? '이름 변경됨 — ⚠ 같은 이름으로 불리는 세션이 이미 있어 이름으로 부르면 헷갈립니다'
+        : (r&&r.peer_name_after_restart) ? '이름 변경됨 — 다른 세션이 부르는 이름은 이 세션을 다시 열 때 바뀝니다'
+        : '이름 변경됨 (네이티브 반영)');
     loadDetail(s);
   }catch(e){
     if(e.status===409) toast('실행 중 세션이라 변경 불가');

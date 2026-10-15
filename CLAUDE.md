@@ -21,6 +21,9 @@ ClewPath 는 claude 를 **관찰·중계·실행**하는 도구이지, claude �
 승인된 예외(2026-08-13 사장님 승인 — 모두 사용자의 명시 동작 경유, 삭제는 확인창 필수):
 - 세션 삭제 → 확인창 → 휴지통 이동(원위치 복구 가능, 30일 보관)
 - 이름 변경 → jsonl 에 custom-title 레코드 append (claude 네이티브 형식 준수)
+  · **2026-10-15 사장님 승인**: 그 세션에 이미 `agent-name` 레코드가 있으면 같은 이름으로 `agent-name` 한 줄도 함께 append
+    (claude /rename 과 같은 짝 — 피어 이름(SendMessage·ListAgents)이 목록 이름과 갈리지 않게). agent-name 이 없는 세션엔
+    새로 만들지 않는다(생기면 claude 재개 피커 표시가 바뀜). native_title.py, 가드: test_native_title.py
 - 세션 이사(move_session) → jsonl 을 새 cwd 인코딩 폴더로 물리 이동 + cwd 치환
   (+ 옵션: 실제 작업 폴더 내용도 이동). 로컬 전용·실행중 차단·확인창.
   claude 미지원 폴더 이동을 대신 지원(2026-08-31 사장님 승인)
