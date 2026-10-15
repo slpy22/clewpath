@@ -328,7 +328,7 @@ def set_assistant(session_id: str) -> dict:
 
 
 def _name_assistant(session_id: str) -> dict | None:
-    """비서 세션 이름을 「개인비서」로(2026-10-13 사장님 — 승인된 이름 변경 예외: custom-title 한 줄 append).
+    """비서 세션 이름을 「개인비서」로(2026-10-13 사장님 — 승인된 이름 변경 예외: custom-title(+agent-name) append).
     비서 지정(승인 요청 → 사장님 승인) 때만 부른다. 이미 그 이름이면 쓰지 않고, 생성 중(busy)이면 건너뛴다
     (ClewPath 화면은 assistant_session_id() 로 어차피 「개인비서」로 보인다)."""
     from session_manager import native_title, scanner

@@ -8,8 +8,9 @@ Claude Code 는 rename 시 세션 JSONL 에 다음 레코드를 append 한다(�
     {"type":"agent-name","agentName":"이름","sessionId":"<uuid>"}
 를 남기고, 이 값이 피어 레지스트리의 name(= 다른 세션이 SendMessage·ListAgents 로 부르는 이름)이 된다.
 제목만 바꾸면 목록 이름과 다른 세션이 부르는 이름이 갈린다(북한백과PM ↔ 개발관리에이전트 사례).
-그래서 **이미 agent-name 이 있는 세션만** 같은 이름으로 agent-name 한 줄을 함께 남긴다. 없는 세션에 새로 만들지 않는다 —
-agent-name 이 생기면 헤드리스 세션이 claude 재개 피커에 나타나는 등 claude 동작이 바뀌기 때문(scanner.picker_hidden).
+그래서 이름을 바꿀 때 **claude 의 /rename 과 똑같이** custom-title + agent-name 두 줄을 함께 남긴다.
+처음엔 agent-name 이 이미 있는 세션만 했으나, 이름 없는 세션에 이름 붙이기가 이 기능의 목적이라 같은 날 모든 세션으로 넓혔다
+(사장님 결정). 결과는 claude 안에서 /rename 한 것과 같다 — 헤드리스(-p) 세션에 이름을 붙이면 claude 재개 피커에도 나타난다.
 살아 있는 프로세스의 피어 이름은 claude 를 다시 띄울 때 바뀐다(claude 는 재개할 때 마지막 기록을 읽어 다시 적는다).
 
 안전 원칙:
@@ -64,7 +65,7 @@ def set_native_title(session_id: str, title: str,
                 "hint": "실행 중(busy) 세션입니다. force=true 로만 강제 가능."}
 
     recs = [{"type": "custom-title", "customTitle": title, "sessionId": session_id}]
-    agent = meta.agent_name is not None and meta.agent_name != title
+    agent = meta.agent_name != title
     if agent:
         recs.append({"type": "agent-name", "agentName": title, "sessionId": session_id})
     try:

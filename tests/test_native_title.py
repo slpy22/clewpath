@@ -28,8 +28,8 @@ def test_set_and_read_native_title(home):
     assert r.get("ok") is True
     assert r["title"] == "북한법 파이프라인"
 
-    # JSONL 마지막 줄이 정확한 custom-title 레코드여야
-    last = jf.read_text(encoding="utf-8").strip().splitlines()[-1]
+    # JSONL 끝 두 줄 중 앞 줄이 정확한 custom-title 레코드여야(뒤 줄은 agent-name)
+    last = jf.read_text(encoding="utf-8").strip().splitlines()[-2]
     obj = json.loads(last)
     assert obj == {"type": "custom-title", "customTitle": "북한법 파이프라인",
                    "sessionId": sid}
@@ -98,13 +98,14 @@ def test_agent_name_follows_title_when_present(home):
     assert len(jf.read_text(encoding="utf-8").splitlines()) == n + 1
 
 
-def test_no_agent_name_created_for_sessions_without_one(home):
-    """agent-name 이 없던 세션엔 만들지 않는다 — 생기면 claude 재개 피커 표시 등 claude 동작이 바뀐다(불가침 원칙)."""
+def test_agent_name_set_even_without_one(home):
+    """이름 없는 세션에도 claude /rename 과 같은 짝으로 agent-name 을 남긴다(2026-10-15 사장님 결정 — 이름 붙이기가 목적)."""
     _, sid, jf = home
     r = native_title.set_native_title(sid, "새 이름")
-    assert r["ok"] and r["agent_name"] is None
-    assert '"agent-name"' not in jf.read_text(encoding="utf-8")
-    assert scanner.scan_one(sid).agent_name is None
+    assert r["ok"] and r["agent_name"] == "새 이름"
+    tail = [json.loads(x) for x in jf.read_text(encoding="utf-8").strip().splitlines()[-2:]]
+    assert [t["type"] for t in tail] == ["custom-title", "agent-name"]
+    assert scanner.scan_one(sid).agent_name == "새 이름"
 
 
 def test_peer_name_conflict_and_restart_note(home):

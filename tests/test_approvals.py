@@ -269,7 +269,8 @@ def test_assistant_title_fixed(env, fake_claude_home):
                                                           "message": {"role": "user", "content": "hi"}}])
     _ok("assistant_set", {"session_id": "s-as1"})
     lines = [json.loads(x) for x in p.read_text(encoding="utf-8").splitlines()]
-    assert lines[-1] == {"type": "custom-title", "customTitle": "개인비서", "sessionId": "s-as1"}
+    assert lines[-2] == {"type": "custom-title", "customTitle": "개인비서", "sessionId": "s-as1"}
+    assert lines[-1] == {"type": "agent-name", "agentName": "개인비서", "sessionId": "s-as1"}   # 이름 바꾸기와 같은 짝(2026-10-15)
     n = len(lines)
     _ok("assistant_set", {"session_id": "s-as1"})
     assert len(p.read_text(encoding="utf-8").splitlines()) == n, "이미 「개인비서」면 다시 쓰지 않는다"

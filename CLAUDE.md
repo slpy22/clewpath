@@ -21,9 +21,9 @@ ClewPath 는 claude 를 **관찰·중계·실행**하는 도구이지, claude �
 승인된 예외(2026-08-13 사장님 승인 — 모두 사용자의 명시 동작 경유, 삭제는 확인창 필수):
 - 세션 삭제 → 확인창 → 휴지통 이동(원위치 복구 가능, 30일 보관)
 - 이름 변경 → jsonl 에 custom-title 레코드 append (claude 네이티브 형식 준수)
-  · **2026-10-15 사장님 승인**: 그 세션에 이미 `agent-name` 레코드가 있으면 같은 이름으로 `agent-name` 한 줄도 함께 append
-    (claude /rename 과 같은 짝 — 피어 이름(SendMessage·ListAgents)이 목록 이름과 갈리지 않게). agent-name 이 없는 세션엔
-    새로 만들지 않는다(생기면 claude 재개 피커 표시가 바뀜). native_title.py, 가드: test_native_title.py
+  · **2026-10-15 사장님 승인·결정**: 이름을 바꿀 때 `agent-name` 한 줄도 함께 append — claude /rename 과 같은 짝
+    (피어 이름(SendMessage·ListAgents)이 목록 이름과 갈리지 않게, 이름 없는 세션에 이름 붙이기 포함). 결과는 claude 의 /rename 과
+    같아서 헤드리스(-p) 세션에 이름을 붙이면 claude 재개 피커에도 나타난다(사장님 감수). native_title.py, 가드: test_native_title.py
 - 세션 이사(move_session) → jsonl 을 새 cwd 인코딩 폴더로 물리 이동 + cwd 치환
   (+ 옵션: 실제 작업 폴더 내용도 이동). 로컬 전용·실행중 차단·확인창.
   claude 미지원 폴더 이동을 대신 지원(2026-08-31 사장님 승인)
@@ -51,7 +51,7 @@ ClewPath 는 claude 를 **관찰·중계·실행**하는 도구이지, claude �
   **읽기만** 해서 요청·답 요약을 ClewPath 장부(`data_dir/worklog.db`)에 남긴다(worklog.py, 원본 무접촉·비밀값 가림).
   ② 비서가 일반 세션에 글을 보내는 것은 **전달마다 승인 요청(`session_send`)** → 사장님 승인(폰/2FA) 뒤에만, 꺼져 있으면
   자동 허용(yolo) 모드로 띄운다(2026-10-13 사장님 지시로 평소 권한 → yolo)(백그라운드 점유 중이면 거절 — 대화 분기 방지). 가드: test_worklog.py
-- 비서 세션 이름 「개인비서」 고정(2026-10-13 사장님) → 비서 지정(승인) 때 위 이름 변경과 같은 custom-title 한 줄 append
+- 비서 세션 이름 「개인비서」 고정(2026-10-13 사장님) → 비서 지정(승인) 때 위 이름 변경과 같은 custom-title(+agent-name, 2026-10-15) append
   (이미 그 이름이면 안 씀, 생성 중이면 건너뜀). ClewPath 목록은 지금 비서 세션을 항상 「개인비서」로 표시. 가드: test_approvals.py
 - claude 보관 기간 예고 → `~/.claude/settings.json` 의 `cleanupPeriodDays` **읽기만**(retention.py). 값은 바꾸지 않는다.
 
