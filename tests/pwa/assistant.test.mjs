@@ -102,8 +102,8 @@ test("설정: 승인 요청 안내 줄 없음(🔔 할 일이 대신, 2026-10-13
     return ev(ctx, "globalThis.__sb").text;
   };
   const r = await text(false), l = await text(true);
-  assert.ok(!r.includes("할 일에 모입니다") && !r.includes("비서 스킬 설치"));
-  assert.ok(!l.includes("할 일에 모입니다") && l.includes("비서 스킬 설치"));
+  assert.ok(!r.includes("할 일에 모입니다") && !r.includes("비서 스킬"));
+  assert.ok(!l.includes("할 일에 모입니다") && l.includes("비서 스킬"));
   const ctx = await boot(true, { "GET /api/owner/skills/assistant": { installed: false, path: "p" } });
   await ev(ctx, "installBundledSkill('assistant')");
   assert.equal(lastModal(ctx).title, "📦 비서 스킬 설치");

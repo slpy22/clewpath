@@ -450,6 +450,14 @@
   .setrow .st{flex:1;min-width:0}
   .setrow .st small{display:block;color:var(--muted);font-size:.74rem;margin-top:2px}
   .setrow .lock{flex:none;opacity:.6}
+  .setrow .chev{flex:none;color:var(--muted);font-size:1.1rem}
+  .setrow.warn .si{position:relative}
+  .setrow.warn .si::after{content:'';position:absolute;right:-3px;top:-2px;width:8px;height:8px;border-radius:50%;background:#e8a03c}
+  .setrow.warn .st small{color:#e8a03c}
+  .setrow.danger .st>span{color:#e66}
+  .setcard{display:flex;flex-direction:column;gap:2px;padding:10px 12px;border-radius:10px;background:var(--surface2);margin-bottom:4px}
+  .setcard small{color:var(--muted);font-size:.74rem}
+  .modal-head .x.back{font-size:1.5rem;line-height:1}
   .verbadge{font-family:ui-monospace,monospace;font-size:.68rem;color:var(--muted);
     flex:none;white-space:nowrap;align-self:center}
   .verbadge.upd{color:var(--accent);cursor:pointer;font-weight:700}
@@ -3412,29 +3420,60 @@ function importSession(){
 
 // ---- 모달 시스템 ----
 let _modalOpener=null;
-function closeModal(){
+// 설정 안에서 화면 쌓기(2026-10-15 사장님: 설정 항목을 누르면 설정이 닫히고 딴 창이 떠서 되돌아갈 길이 없었다).
+// SETNAV 가 있는 동안 openModal 은 같은 창 안에 한 겹 쌓고(머리 왼쪽 ‹), closeModal 은 한 겹 걷는다 —
+// 하위 화면 코드는 그대로(끝나면 closeModal → 설정으로 돌아옴). 첫 화면으로 돌아오면 상태를 새로 읽어 다시 그린다.
+// 같은 제목 화면을 다시 열면(2FA 켜기 → showSecurity 재호출 등) 그 겹을 갈아 끼운다(쌓임 폭주 방지).
+// ✕·바깥 누르기는 전부 닫기, Esc 는 한 겹.
+let SETNAV=null;   // {stack:[{title, body, foot, refresh?}]}
+function _rawCloseModal(){
   const o=$('#overlay'); if(o)o.remove();
   try{ document.removeEventListener('keydown', _modalKey); }catch(e){}
+}
+function closeModal(){
+  if(SETNAV){
+    SETNAV.stack.pop();
+    if(SETNAV.stack.length===1&&SETNAV.stack[0].refresh){ SETNAV.stack[0].refresh(); return; }
+    if(SETNAV.stack.length){ _showModal(SETNAV.stack[SETNAV.stack.length-1]); return; }
+    SETNAV=null;
+  }
+  _rawCloseModal();
   // 닫힌 뒤 포커스는 모달을 연 버튼으로(DR-13)
   try{ if(_modalOpener && _modalOpener.focus){ _modalOpener.focus(); } }catch(e){}
   _modalOpener=null;
 }
+function closeAllModals(){ SETNAV=null; closeModal(); }
 function _modalKey(e){ if(e.key==='Escape'){ closeModal(); } }
 function openModal(title, bodyEl, footChildren){
+  if(SETNAV&&SETNAV.stack.length){
+    const i=SETNAV.stack.findIndex((p,k)=>k>0&&p.title===title);
+    if(i>0) SETNAV.stack.length=i;
+    const pg={title, body:bodyEl, foot:footChildren}; SETNAV.stack.push(pg); _showModal(pg); return;
+  }
   closeModal();
   try{ _modalOpener=(document.activeElement&&document.activeElement.tagName==='BUTTON')?document.activeElement:null; }catch(e){}
+  const pg={title, body:bodyEl, foot:footChildren};
+  if(SETNAV) SETNAV.stack.push(pg);
+  _showModal(pg);
+}
+function _showModal(pg){
+  _rawCloseModal();
+  const title=pg.title, bodyEl=pg.body, footChildren=pg.foot;
   const ov=el('div','overlay'); ov.id='overlay';
   const m=el('div','modal');
   try{ m.setAttribute('role','dialog'); m.setAttribute('aria-modal','true'); m.setAttribute('aria-labelledby','modal-title'); }catch(e){}
-  const h=el('div','modal-head'); const ht=el('h3',null,title); ht.id='modal-title'; h.appendChild(ht);
-  const x=el('button','x','✕'); x.title='닫기'; x.onclick=closeModal; h.appendChild(x);
+  const h=el('div','modal-head');
+  if(SETNAV&&SETNAV.stack.length>1){
+    const bk=el('button','x back','‹'); bk.title='뒤로'; bk.onclick=closeModal; h.appendChild(bk); }
+  const ht=el('h3',null,title); ht.id='modal-title'; h.appendChild(ht);
+  const x=el('button','x','✕'); x.title='닫기'; x.onclick=closeAllModals; h.appendChild(x);
   try{ document.addEventListener('keydown', _modalKey); }catch(e){}
   m.appendChild(h);
   const b=el('div','modal-body'); if(bodyEl)b.appendChild(bodyEl); m.appendChild(b);
   if(footChildren&&footChildren.length){ const f=el('div','modal-foot');
     footChildren.forEach(c=>f.appendChild(c)); m.appendChild(f); }
   ov.appendChild(m);
-  ov.onclick=(e)=>{ if(e.target===ov)closeModal(); };
+  ov.onclick=(e)=>{ if(e.target===ov)closeAllModals(); };
   document.body.appendChild(ov);
   // 초기 포커스: 푸터 첫 버튼 → 없으면 닫기(DR-13)
   try{ const first=(footChildren&&footChildren[0])||x; setTimeout(()=>{ try{ first.focus(); }catch(e){} },0); }catch(e){}
@@ -5234,82 +5273,100 @@ $('#btn-settings').onclick=()=>showSettings();
 $('#btn-todo').onclick=()=>showTodo();
 for(const b of document.querySelectorAll('#tabbar button')) b.onclick=()=>tabbarGo(b.dataset.v);
 
-// ---- ⚙ 설정 화면: 흩어져 있던 도구를 한곳에(5개 섹션). 로컬 전용 항목은
-// 원격에서 숨기지 않고 🔒+안내로 보여준다 — 기능의 존재와 보안 설계를 설명.
+// ---- ⚙ 설정 화면(2026-10-15 재기획, docs/designs/ux-reorg.md §4-6b) ----
+// · 항목을 누르면 설정 창 안에서 그 화면으로 넘어가고 ‹ 로 돌아온다(SETNAV — 모달 시스템 참고).
+// · 첫 화면에서 각 항목의 지금 상태(켜짐/꺼짐·개수·최신 여부)를 바로 보여 준다 — 눌러 봐야 알던 것을 줄인다.
+//   손볼 게 있는 항목(2FA 꺼짐·스킬 옛판·알림 꺼짐·새 버전)은 주황 점.
+// · 순서: 이 PC → 새 버전(있을 때) → 알림·보안 → 세션 → 스킬(PC) → 시스템 → 이 기기(폰).
+//   「고급」 접기와 「팀」 줄(탭 막대 👥 와 중복)은 없앴다.
+// 로컬 전용 항목(opt.local)은 외부(릴레이) 접속에선 그리지 않는다(2026-09-30). 섹션 제목은 항목이 있을 때만.
+const setStat={
+  push: async()=>{ const sub=await pushCurrentSub(); if(!sub) return {t:'꺼짐 — 눌러서 켜기', warn:true};
+    let n=0; try{ n=((await T.api('GET','/api/owner/push/subscriptions')).subscriptions||[]).length; }catch(e){}
+    return {t:'켜짐'+(n?' · 받는 기기 '+n+'개':'')+(n>1?' (중복이면 정리)':'')}; },
+  tfa: async()=>{ const st=await T.api('GET','/api/owner/2fa/status');
+    return st.required?{t:'켜짐 ✅'}:{t:'꺼짐 — 켜는 것을 권장', warn:true}; },
+  devices: async()=>{ const st=await T.api('GET','/api/owner/devices'); const a=st.active|0, t=st.total|0;
+    return {t:a?('활성 '+a+'대'+(t>a?' · 해제 '+(t-a):'')):'등록된 기기 없음 — 외부 접속 차단 중'}; },
+  housekeeping: async()=>{ const st=await T.api('GET','/api/owner/housekeeping'); const jobs=st.jobs||[];
+    const j=jobs.find(x=>x.id==='idle_sessions'); const on=jobs.filter(x=>x.enabled).length;
+    return {t:(j?(j.enabled?('쉬는 세션 '+st.idle_hours+'시간 뒤 정리'):'쉬는 세션 정리 꺼짐')+' · ':'')+'켜진 작업 '+on+'/'+jobs.length}; },
+  trash: async()=>{ const n=((await T.api('GET','/api/owner/trash')).trash||[]).length;
+    return {t:n?('세션 '+n+'개 — 30일 안에 되살리기'):'비어 있음'}; },
+  skill: (key)=>async()=>{ const st=await T.api('GET','/api/owner/skills/'+key);
+    return !st.installed?{t:'설치 안 됨 — 눌러서 설치'}:st.up_to_date?{t:'설치됨 · 최신'}:{t:'새 내용 있음 — 눌러서 갱신', warn:true}; },
+  ptyd: async()=>{ const st=await T.api('GET','/api/owner/ptyd');
+    return !st||!st.enabled?{t:'꺼짐 — Host 업데이트 때 터미널 종료'}:!st.running?{t:'대기 — 터미널을 열면 시작'}
+      :{t:'실행 중 · 터미널 '+(st.sessions||0)+'개'+(st.update_pending?' · ⬆ 업데이트 대기':''), warn:!!st.update_pending}; },
+};
 function showSettings(){
   const body=el('div');
-  // 로컬 전용 항목(opt.local)은 외부(릴레이) 접속에선 아예 그리지 않는다 — 🔒 잠금 표시로 두면 누를 수 없는 줄만
-  // 남는다(2026-09-30 사장님). 섹션 제목은 실제로 항목이 하나라도 들어갈 때만 붙인다(빈 섹션 방지).
   let pendingSec=null;
   const sec=(t)=>{ pendingSec=el('div','setsec',t); };
-  const flushSec=()=>{ if(pendingSec){ body.appendChild(pendingSec); pendingSec=null; } };
-  const add=(node)=>{ flushSec(); body.appendChild(node); };
+  const add=(node)=>{ if(pendingSec){ body.appendChild(pendingSec); pendingSec=null; } body.appendChild(node); };
+  const isRoot=()=>SETNAV&&SETNAV.stack.length===1&&SETNAV.stack[0].body===body;
   const row=(icon,title,desc,fn,opt)=>{
     opt=opt||{};
     if(opt.local && MODE!=='local') return;
-    const b=el('button','setrow');
+    const b=el('button','setrow'+(opt.warn?' warn':'')+(opt.danger?' danger':''));
     b.appendChild(el('span','si',icon));
     const st=el('span','st'); st.appendChild(el('span',null,title));
-    if(desc){ const s=document.createElement('small'); s.textContent=desc; st.appendChild(s); }
+    const sm=document.createElement('small'); sm.textContent=desc||''; st.appendChild(sm);
     b.appendChild(st);
-    b.onclick=()=>{ closeModal(); fn(); };
+    b.appendChild(el('span','chev','›'));
+    // 하위 화면은 이 창 안에서 열린다. 화면 없이 끝나는 동작(알림 켜기 등)은 끝난 뒤 첫 화면 상태를 다시 읽는다.
+    b.onclick=async()=>{ try{ await fn(); }catch(e){ toast('실패: '+e.message); } if(isRoot()) showSettings(); };
+    if(opt.status) Promise.resolve().then(opt.status).then(r=>{ if(!r) return;
+      sm.textContent=r.t; b.classList.toggle('warn',!!r.warn); }).catch(()=>{});
     add(b);
   };
 
-  // 배치(ux-reorg §4-6): 새 버전 알림 → 연결 → 알림·승인(매일) → 보안 → 데이터·사용량 → 고급(접힘: 한 번 쓰는 것·진단)
-  const updRow=()=>row('⬆','업데이트',
-      VERSTATE.latest?('새 버전 v'+VERSTATE.latest+' 설치 가능'):'현재 버전 확인 · 재설치',
-      ()=>{ if(VERSTATE.latest) showUpdateApply(VERSTATE.cur,VERSTATE.latest);
-            else checkUpdateNow(VERSTATE.cur); });
-  // 업데이트 적용: 로컬은 바로, 원격(폰)은 2차 인증 뒤(사장님 2026-09-30 — 원격에서도 Host 업데이트). 서명 검증은 Host 가 한다.
-  if(VERSTATE.latest){ sec('새 버전'); updRow(); }
-
-  sec('연결');
-  { const info=el('div','setrow'); info.style.cursor='default';
-    const st=el('span','st');
-    st.appendChild(el('span',null,'🖥 '+(MODE==='local'?'localhost (이 PC)':curPcLabel())));
+  // 이 PC(접속 정보) — 누르는 줄이 아니라 머리 카드
+  { const info=el('div','setcard');
+    info.appendChild(el('b',null,'🖥 '+(MODE==='local'?'이 PC (localhost)':curPcLabel())));
     const parts=[];
     if(VERSTATE.cur) parts.push('v'+VERSTATE.cur+(VERSTATE.latest?' → v'+VERSTATE.latest:''));
     parts.push(MODE==='local'?'로컬 접속':('릴레이 접속'+(conn&&conn.e2eeKey?' · 🔒 E2EE':'')));
-    const s=document.createElement('small'); s.textContent=parts.join(' · '); st.appendChild(s);
-    info.appendChild(st); add(info); }
+    info.appendChild(el('small',null,parts.join(' · ')));
+    add(info); }
+  if(MODE==='relay'&&iosHintNeeded(navigator.userAgent, !!navigator.standalone, !!(window.ClewBridge&&ClewBridge.isApp())))
+    add(el('div','cwd','홈 화면에 추가해 앱처럼 열어보세요 — Safari 탭은 오래 안 쓰면 페어링이 지워질 수 있습니다.'));
+  // 업데이트 적용: 로컬은 바로, 원격(폰)은 2차 인증 뒤(2026-09-30). 서명 검증은 Host 가 한다.
+  if(VERSTATE.latest) row('⬆','새 버전 v'+VERSTATE.latest+' 설치','지금 v'+(VERSTATE.cur||'?')+' — 눌러서 바꾸기',
+    ()=>showUpdateApply(VERSTATE.cur,VERSTATE.latest),{warn:true});
+
+  sec('알림 · 보안');
+  if(pushSupported()) row('🔔','알림','권한 요청·작업 완료 푸시 · 받는 기기 관리',togglePush,{status:setStat.push});
+  else add(el('div','cwd','이 브라우저는 웹 푸시를 지원하지 않습니다'));
+  row('🔒','2차 인증(2FA)','원격 접속 보호',showSecurity,{local:true,status:setStat.tfa});
+  row('📱','외부 접속 기기','폰 연결(QR) · 페어링 해제',showDevices,{local:true,status:setStat.devices});
+
+  sec('세션');
+  row('🧹','정기 작업','쉬는 세션 정리 · 모델 목록 갱신',showHousekeeping,{status:setStat.housekeeping});
+  row('🗑','휴지통','삭제한 세션 되살리기 (30일 보관)',showTrash,{local:true,status:setStat.trash});
+  row('📥','세션 가져오기','내보낸 세션 zip 불러오기',importSession);
+  row('📈','API 사용량','토큰 · 환산 비용 통계',showUsage);
+
+  sec('스킬 (이 PC 의 claude 에 설치)');
+  row('📦','워커 스킬','여러 세션이 한 팀으로 일하는 규칙 · /clewpath-workers',installWorkersSkill,{local:true,status:setStat.skill('workers')});
+  row('📦','비서 스킬','개인 비서 세션 규칙 · /clewpath-assistant',()=>installBundledSkill('assistant'),{local:true,status:setStat.skill('assistant')});
+
+  sec('시스템');
+  if(!VERSTATE.latest) row('⬆','업데이트','v'+(VERSTATE.cur||'?')+' · 최신인지 확인 · 재설치',()=>checkUpdateNow(VERSTATE.cur));
+  row('🖥','터미널 관리 프로세스','Host 업데이트에도 터미널을 살려 두는 프로세스',showPtyd,{status:setStat.ptyd});
+  row('🩺','진단','설치 상태 · 세션 수 · 설정 파일 위치',showDiagnostics,{local:true});
+
   if(MODE==='relay'){
-    // '내 PC' 는 헤더 🖧 버튼으로(설정 중복 제거, 2026-09-30)
-    if(iosHintNeeded(navigator.userAgent, !!navigator.standalone, !!(window.ClewBridge&&ClewBridge.isApp())))
-      add(el('div','cwd','홈 화면에 추가해 앱처럼 열어보세요 — Safari 탭은 오래 안 쓰면 페어링이 지워질 수 있습니다.'));
+    sec('이 기기');
+    row('🧹','이 기기 초기화','저장된 페어링·접속 자격·암호화 키를 모두 지웁니다',resetDevice,{danger:true});
   }
 
-  sec('알림');
-  if(pushSupported()) row('🔔','알림 설정','권한 요청·작업 완료 푸시 · 받는 기기 관리',togglePush);
-  else add(el('div','cwd','이 브라우저는 웹 푸시를 지원하지 않습니다'));
-
-  sec('보안');
-  row('🔒','2차 인증(2FA)','원격 접속 보호 · 설정 변경',showSecurity,{local:true});
-  row('📱','외부 접속 기기','폰 연결(QR) · 폐기 · 킬',showDevices,{local:true});
-  if(MODE==='relay') row('🧹','이 기기 초기화','저장된 페어링·접속 자격·암호화 키를 모두 지웁니다',resetDevice);
-
-  sec('데이터 · 사용량');
-  row('🗑','휴지통','삭제한 세션 복구 (30일 보관)',showTrash,{local:true});
-  row('📥','세션 가져오기','내보낸 세션 파일 불러오기',importSession);
-  row('📈','API 사용량','토큰 · 환산 비용 통계',showUsage);
-  row('🧹','정기 작업','쉬는 세션 정리(메모리 확보) · 모델 목록 갱신 — 켜기/끄기 · 기준 시간 · 지금 실행',showHousekeeping);
-
-  // 고급: 처음 한 번 쓰거나 문제 생길 때만 보는 것 — 접어 둔다
-  flushSec();
-  const advBtn=el('button','setadv','▸ 고급 — 스킬 설치 · 팀 · 터미널 관리 · 진단');
-  const adv=el('div','setadvbody hidden');
-  body.appendChild(advBtn); body.appendChild(adv);
-  advBtn.onclick=()=>{ const open=adv.classList.toggle('hidden')===false; advBtn.textContent=(open?'▾':'▸')+' 고급 — 스킬 설치 · 팀 · 터미널 관리 · 진단'; };
-  const advRow=(icon,title,desc,fn,opt)=>{ const before=body.children.length; row(icon,title,desc,fn,opt);
-    if(body.children.length>before){ const n=body.children[body.children.length-1]; body.removeChild(n); if(n.remove) n.remove(); adv.appendChild(n); } };
-  if(!VERSTATE.latest) advRow('⬆','업데이트','현재 버전 확인 · 재설치',()=>checkUpdateNow(VERSTATE.cur));
-  advRow('👥','팀','목록의 👥 팀 보기로 — 구성원 · 일감 · 기록 · 알림',()=>{ closeModal(); setListView('groups'); loadList(); });
-  advRow('📦','워커 스킬 설치','하위 세션 분배 스킬(clewpath-workers)을 ~/.claude/skills 에 설치',installWorkersSkill,{local:true});
-  advRow('📦','비서 스킬 설치','개인 비서 스킬(clewpath-assistant)을 ~/.claude/skills 에 설치',()=>installBundledSkill('assistant'),{local:true});
-  advRow('🖥','터미널 관리 프로세스','Host 업데이트에도 터미널을 살려 두는 프로세스 · 상태 · 업데이트',showPtyd);
-  advRow('🩺','진단','설치 상태 · 세션 수 · 설정 파일 위치',showDiagnostics,{local:true});
-
+  // 첫 화면은 SETNAV 의 바닥 겹 — 하위 화면에서 돌아오면 showSettings 로 다시 그린다(상태 새로 읽기)
+  const keep=SETNAV?_modalOpener:null;
+  SETNAV=null;
   openModal('⚙ 설정', body, []);
+  if(keep) _modalOpener=keep;
+  SETNAV={stack:[{title:'⚙ 설정', body, foot:[], refresh:showSettings}]};
 }
 // ---- 👥 팀 · 경력(워커 P2P 단계 2) — PC 로컬 전용(팀 API 는 로컬에서만, eng E-2 / S2-4) ----
 // 모든 내용은 textContent 로만 그린다(세션 원문이 섞이므로 HTML 해석 금지).
