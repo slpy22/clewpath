@@ -16,6 +16,11 @@ if not os.environ.get("_SM_TEST_HOME_SET"):
     os.environ["SESSION_MANAGER_CLAUDE_HOME"] = tempfile.mkdtemp(prefix="sm-test-home-")
     os.environ["_SM_TEST_HOME_SET"] = "1"
 os.environ["SM_PTY_BROKER"] = "off"
+# 진짜 CP·릴레이와도 격리한다(2026-10-15 사고): ClewPath 가 띄운 세션은 Host 의 SM_CP_URL 을 물려받아, 테스트 중
+# 뒤에서 도는 연결 스레드가 진짜 CP 에 익명 등록(/provision/anonymous)을 한 번씩 보내 「I9」 등록이 46개 쌓였다.
+# CP 가 필요한 테스트는 monkeypatch 로 가짜 주소를 넣는다.
+for _k in ("SM_CP_URL", "SM_RELAY_URL", "SM_RELAY_AGENT_TOKEN", "SM_RELAY_CLIENT_TOKEN", "SM_RELAY_ROOM"):
+    os.environ.pop(_k, None)
 
 
 @pytest.fixture(autouse=True)

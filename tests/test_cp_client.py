@@ -219,7 +219,7 @@ def test_revoked_credential_reprovisions(monkeypatch):
     monkeypatch.setenv("SM_CP_URL", "http://cp.test")
     cp_client.save_creds({"cp_url": "http://cp.test", "connector_id": "c_old",
                           "room_key": "rm_old", "credential_public_id": "pub_old",
-                          "secret": "cxs_old"})
+                          "secret": "cxs_old", "claim_secret": "clm_old"})
     seen = {"provisioned": False}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -230,7 +230,7 @@ def test_revoked_credential_reprovisions(monkeypatch):
             return httpx.Response(200, json={"token": "jwt.new", "expires_at": 1,
                                              "room_key": "rm_new"})
         if request.url.path == "/provision/anonymous":
-            seen["provisioned"] = True
+            seen["provisioned"] = True; seen["body"] = json.loads(request.content)
             return httpx.Response(200, json={
                 "connector_id": "c_new", "room_key": "rm_new",
                 "credential_public_id": "pub_new", "secret": "cxs_new",
@@ -242,6 +242,8 @@ def test_revoked_credential_reprovisions(monkeypatch):
     assert seen["provisioned"] is True
     assert out["token"] == "jwt.new"
     assert cp_client.load_creds()["connector_id"] == "c_new"
+    # 옛 커넥터를 '대체됨'으로 은퇴시키도록 함께 보낸다(2026-10-15)
+    assert seen["body"]["replaces"] == {"connector_id": "c_old", "claim_secret": "clm_old"}
 
 
 # ---- ★회귀★ 로그가 콘솔 인코딩 때문에 기능을 깨뜨리지 않아야 한다 ----

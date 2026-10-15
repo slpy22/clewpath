@@ -52,7 +52,7 @@ def sync_once(notify=None) -> dict | None:
     result = {"phone_revoked": [], "removed": [], "pending_cleared": [], "pending_revoked": []}
 
     # 2) 재대조 반영(잠금 안, 파일 I/O 만)
-    ap = devices.apply_cp_status(statuses)
+    ap = devices.apply_cp_status(statuses, asked=set(ids))
     result["phone_revoked"] = ap["phone_revoked"]
     result["removed"] = ap["removed"]
     for did in ap["phone_revoked"]:
@@ -68,6 +68,9 @@ def sync_once(notify=None) -> dict | None:
                 continue
             cpub = item[len("revoke:"):]
             st = statuses.get(cpub)
+            if st is None and cpub in ids:
+                devices.pop_cp_pending(did, item); result["pending_cleared"].append(cpub)   # 이 커넥터 것이 아님 — 폐기 불가
+                continue
             if st and st.get("status") == "revoked":
                 devices.pop_cp_pending(did, item); result["pending_cleared"].append(cpub)
             elif cp_client.revoke_client_credential(cpub):

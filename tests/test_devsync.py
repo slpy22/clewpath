@@ -137,3 +137,16 @@ def test_thread_first_delay_and_kick(fake_claude_home, cp, monkeypatch):
     assert until(1, 3.0) == 1
     devsync.kick(); assert until(2, 4.0) == 2, "kick 이면 주기를 기다리지 않는다"
     devsync.stop(); th.join(3); assert not th.is_alive()
+
+
+def test_delete_pending_row_of_other_connector_removed(fake_claude_home, cp):
+    """2026-10-15: 예전 커넥터 시절 기기를 지우면 CP 가 '내 것 아님'(응답에 없음)으로 답해 폐기할 수 없다 —
+    「삭제 대기」로 영원히 남지 않게, 물었는데 응답에 없으면 행을 지운다. 지우지 않은 행은 그대로(무접촉)."""
+    a = devices.add_device("옛폰"); devices.set_client_public_id(a["id"], "cpub_old")
+    devices.mark_revoked(a["id"], by="pc"); devices.set_delete_pending(a["id"], True); devices.add_cp_pending(a["id"], "revoke:cpub_old")
+    b = devices.add_device("지금폰"); devices.set_client_public_id(b["id"], "cpub_b")
+    cp["statuses"] = {"cpub_b": {"status": "active"}}
+    r = devsync.sync_once()
+    assert a["id"] in r["removed"]
+    assert [d["id"] for d in devices.list_devices()] == [b["id"]]
+    assert not any(c[0] == "revoke" for c in cp["calls"]), "권한 없는 폐기를 다시 시도하지 않는다"

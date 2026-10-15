@@ -421,11 +421,14 @@ def sync_snapshot() -> list[dict]:
     return _read(_f)
 
 
-def apply_cp_status(statuses: dict) -> dict:
+def apply_cp_status(statuses: dict, asked: list | set | None = None) -> dict:
     """CP 응답을 (device_id, cpub) 재대조로 반영(잠금 안, 파일 I/O 만). 응답에 없는 cpub 은 건드리지 않는다.
 
     - 활성 행의 cpub 이 CP 에서 revoked → 행 revoked(by=phone) + 📵 (폰 self-revoke 수신)
     - delete_pending 행의 cpub 이 revoked → 행 제거(폐기 확인)
+    - delete_pending 행의 cpub 을 물었는데(asked) 응답에 없음 → 행 제거(2026-10-15). CP 는 '이 커넥터 것이 아님'을
+      빼고 답한다 — 이 PC 가 예전 커넥터 시절에 페어링한 기기라 지금 커넥터로는 폐기할 권한이 없어, 기다려도
+      끝나지 않는 「삭제 대기」로 영원히 남던 문제. 그 자격은 CP 관리(옛 커넥터 은퇴)가 정리한다.
     반환: {"phone_revoked": [id...], "removed": [id...]}
     """
     out = {"phone_revoked": [], "removed": []}
@@ -434,7 +437,11 @@ def apply_cp_status(statuses: dict) -> dict:
         keep = []
         changed = False
         for x in d["devices"]:
-            st = statuses.get(x.get("client_public_id") or "")
+            cpub = x.get("client_public_id") or ""
+            st = statuses.get(cpub)
+            if x.get("delete_pending") and not st and asked is not None and cpub in asked:
+                out["removed"].append(x["id"]); changed = True
+                continue
             if st and st.get("status") == "revoked":
                 if x.get("delete_pending"):
                     out["removed"].append(x["id"]); changed = True

@@ -115,15 +115,20 @@ def clear_room_mismatch() -> None:
     _state.pop("room_mismatch", None)
 
 
-def provision(client: httpx.Client, display_name: str = "") -> dict | None:
-    """자격증명이 없으면 CP 에 익명 발급 요청. 성공 시 저장하고 반환, 실패 시 None."""
+def provision(client: httpx.Client, display_name: str = "", replaces: dict | None = None) -> dict | None:
+    """자격증명이 없으면 CP 에 익명 발급 요청. 성공 시 저장하고 반환, 실패 시 None.
+
+    replaces: 같은 CP 의 옛 자격(거절돼 다시 등록하는 경우). connector_id + claim_secret 을 함께 보내 CP 가 옛 커넥터를
+    '대체됨'으로 은퇴시키게 한다(2026-10-15 — 한 PC 의 옛 등록이 CP 에 계속 살아 있던 문제). 모르는 CP 는 무시한다.
+    """
     base = cp_url()
     if not base:
         return None
+    body = {"display_name": display_name or os.environ.get("COMPUTERNAME", "")}
+    if replaces and replaces.get("connector_id") and replaces.get("claim_secret") and replaces.get("cp_url") == base:
+        body["replaces"] = {"connector_id": replaces["connector_id"], "claim_secret": replaces["claim_secret"]}
     try:
-        r = client.post(f"{base}/provision/anonymous",
-                        json={"display_name": display_name or os.environ.get("COMPUTERNAME", "")},
-                        timeout=10)
+        r = client.post(f"{base}/provision/anonymous", json=body, timeout=10)
     except Exception as e:  # noqa: BLE001
         _set_state("fallback", f"provision_error:{type(e).__name__}")
         return None
@@ -258,7 +263,7 @@ def fetch_jwt(display_name: str = "") -> dict | None:
             _set_state("fallback", "credential_revoked",
                        connector_id=creds.get("connector_id"))
             log("[cp] 자격증명이 거부됨(폐기?) -> 재발급 시도")
-            creds = provision(client, display_name)
+            creds = provision(client, display_name, replaces=creds)
             if not creds:
                 return None
             try:

@@ -881,8 +881,10 @@ def create_app() -> FastAPI:
             from session_manager import cp_client
             if not cp_client.revoke_client_credential(cpub):
                 # False 는 '이미 폐기됨'(폰 self-revoke 📵 행)일 수도 있다 — CP 상태로 확인되면 폐기 완료로 본다
-                st = cp_client.client_status([cpub]) or {}
-                if (st.get(cpub) or {}).get("status") != "revoked":
+                st = cp_client.client_status([cpub])
+                # 응답에 없으면(st 가 {} 이고 cpub 없음) 이 PC 의 예전 커넥터가 발급한 자격 — 지금 커넥터로는 폐기할
+                # 권한이 없어 기다려도 끝나지 않는다(2026-10-15). 바로 지우고, 그 자격은 CP 관리가 정리한다.
+                if st is None or (cpub in st and st[cpub].get("status") != "revoked"):
                     pending = True
         connector.request_drop_device(device_id, notice="device_removed")
         devices.audit("delete", device_id, cpub=cpub, pending=pending)
