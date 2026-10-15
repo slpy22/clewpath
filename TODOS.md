@@ -4,6 +4,12 @@
 설계 근거: `docs/2026-09-03-multi-session-monitoring-design.md`,
 `docs/2026-09-10-multi-terminal-tabs-design.md`
 
+## 진행중: 멀티 OS(Windows + macOS) — docs/designs/multi-os.md (2026-10-15 사장님 결정)
+- [x] 1단계(0.23.0): `session_manager/osdep/`(_win·_posix) 경계 — pty·자식 동반 종료·프로세스 목록/종료·DPAPI·런처·재개 창·경로·업데이트 러너. Windows 동작 불변, 가드 test_osdep.py
+- [ ] 2단계(이 PC + 리눅스 `*-test` 컨테이너, `macos` 브랜치): POSIX pty(spawn_pty)·프로세스 그룹 동반 종료·ptyd POSIX 대응(브로커 해시 바뀜 — 교체 대기 안내)·Windows 전용 테스트 skipif
+- [ ] 3단계(맥 실기): launchd 자동 시작·자기 회복 · 키체인 · `install.sh`·`get.sh`·`start-connector.sh`·`update_runner.sh` · CP `/get.sh`·랜딩 OS 별 한 줄 설치(서비스 모니터 의뢰) · 매니페스트 platforms 표시 · Terminal.app 재개 · 실제 claude 왕복
+- [ ] 맥 확인 거리: claude 설치 경로·pty 출력 차이, 터미널 앱 전체 디스크 접근 권한 필요 여부, Gatekeeper(curl 설치 시 격리 속성)
+
 ## 진행중: 화면 재배치 — docs/designs/ux-reorg.md
 - [x] 1단계(0.18.0): 머리줄(⚙만·PC 칩) · 보기 전환에 🧑‍💼 비서 · 검색 옆 ⟳ · 세션 상세(주 동작 위·요약·알림 띠·더 보기·위험 구역) · 목록 줄 ✎ 제거 · 기기 등록 한 줄 띠 · 설정(자주→고급 접힘)
 - [x] 2단계(0.19.0): 폰 아래 탭 막대(세션·그룹·파일·비서, 터미널·편집기 전체 화면엔 숨김) · 머리줄 🔔 할 일(승인 요청·권한 대기·입력 대기 배지 + 최근 완료) — 설정의 승인 대기 제거

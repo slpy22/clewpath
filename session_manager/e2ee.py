@@ -21,7 +21,6 @@ from __future__ import annotations
 import base64
 import json
 import os
-import sys
 from typing import Any
 
 from session_manager import config
@@ -45,30 +44,9 @@ def unb64u(s: str) -> bytes:
 # ---------------------------------------------------------------- DPAPI
 
 def _dpapi(data: bytes, protect: bool) -> bytes | None:
-    """Windows DPAPI(사용자 스코프). 실패/비Windows 면 None."""
-    if sys.platform != "win32":
-        return None
-    try:
-        import ctypes
-        from ctypes import wintypes
-
-        class BLOB(ctypes.Structure):
-            _fields_ = [("cbData", wintypes.DWORD),
-                        ("pbData", ctypes.POINTER(ctypes.c_char))]
-
-        crypt32 = ctypes.windll.crypt32
-        inb = BLOB(len(data), ctypes.cast(ctypes.create_string_buffer(data, len(data)),
-                                          ctypes.POINTER(ctypes.c_char)))
-        out = BLOB()
-        fn = crypt32.CryptProtectData if protect else crypt32.CryptUnprotectData
-        if not fn(ctypes.byref(inb), None, None, None, None, 0, ctypes.byref(out)):
-            return None
-        try:
-            return ctypes.string_at(out.pbData, out.cbData)
-        finally:
-            ctypes.windll.kernel32.LocalFree(out.pbData)
-    except Exception:  # noqa: BLE001
-        return None
+    """OS 비밀 보관(Windows DPAPI 사용자 스코프, 맥 키체인 예정). 실패/미지원이면 None."""
+    from session_manager import osdep
+    return osdep.protect(data) if protect else osdep.unprotect(data)
 
 
 # ---------------------------------------------------------------- 룸 키

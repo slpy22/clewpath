@@ -416,8 +416,8 @@ def kill_session(session_id: str) -> dict:
     반환: {"killed": [{how, pid?, origin?}], "errors": [{pid, reason}]}
     """
     import os
-    import subprocess
-    import sys
+
+    from session_manager import osdep
     res: dict = {"killed": [], "errors": []}
     try:
         from session_manager import webterm
@@ -445,14 +445,7 @@ def kill_session(session_id: str) -> dict:
             res["errors"].append({"pid": pid, "reason": "pid_reused"})
             continue
         try:
-            if sys.platform == "win32":
-                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, timeout=10)
-            else:
-                import psutil
-                pr = psutil.Process(pid)
-                for c in pr.children(recursive=True):
-                    c.kill()
-                pr.kill()
+            osdep.kill_tree(pid)
             res["killed"].append({"how": "process", "pid": pid, "origin": (p.get("origin") or {}).get("origin")})
         except Exception as e:  # noqa: BLE001
             res["errors"].append({"pid": pid, "reason": type(e).__name__})

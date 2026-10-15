@@ -64,10 +64,8 @@ def _inside(child: str, root: str) -> bool:
 def _hidden_roots() -> list[str]:
     """항상 숨기는 절대 경로들(정규화). 홈 폴더 세션이면 여기에 다 걸린다."""
     home = Path.home()
-    out = [config.claude_home(), config.data_dir(), home / ".ssh", home / ".gnupg", home / "AppData"]
-    la = os.environ.get("LOCALAPPDATA")
-    if la:
-        out.append(Path(la))
+    from session_manager import osdep
+    out = [config.claude_home(), config.data_dir(), home / ".ssh", home / ".gnupg", *osdep.hidden_dirs()]
     return [_norm(p) for p in out]
 
 

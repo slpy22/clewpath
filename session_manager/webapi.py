@@ -66,23 +66,14 @@ def sweep_orphan_streams() -> int:
     전체 프로세스(pid/ppid)를 한 번에 받아 '부모 사망'을 존재 여부로 정확히
     판정한다(이름 휴리스틱 금지). 명령줄은 claude 류에만 실려 오면 충분.
     """
+    from session_manager import osdep
     try:
-        out = subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
-             "Get-CimInstance Win32_Process | "
-             "Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress"],
-            capture_output=True, timeout=30).stdout.decode("utf-8", "replace")
-        rows = json.loads(out or "[]")
-        if isinstance(rows, dict):
-            rows = [rows]
-        procs = [{"pid": int(r["ProcessId"]), "ppid": int(r.get("ParentProcessId") or 0),
-                  "cmdline": r.get("CommandLine") or ""} for r in rows]
+        procs = osdep.list_processes()
         killed = 0
         for pid in find_orphan_stream_pids(procs):
             cmd = next((p["cmdline"] for p in procs if p["pid"] == pid), "")
             print(f"[sweep] 고아 웹재개 스트림 정리 pid={pid}: {cmd[:100]}", flush=True)
-            subprocess.run(["taskkill", "/PID", str(pid), "/F"],
-                           capture_output=True, timeout=10)
+            osdep.kill(pid)
             killed += 1
         if killed:
             print(f"[sweep] 고아 스트림 {killed}개 정리 완료", flush=True)

@@ -30,7 +30,6 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 import time
 import urllib.request
 import zipfile
@@ -264,7 +263,8 @@ def stage(zip_path: Path, manifest: dict[str, Any]) -> Path:
 # ---------------------------------------------------------------- 적용
 
 def runner_script() -> Path:
-    return Path(__file__).resolve().parent / "update_runner.ps1"
+    from session_manager import osdep
+    return Path(__file__).resolve().parent / osdep.UPDATE_RUNNER
 
 
 def apply(manifest: dict[str, Any], staged: Path, restart_cmd: str | None = None) -> dict:
@@ -293,11 +293,12 @@ def apply(manifest: dict[str, Any], staged: Path, restart_cmd: str | None = None
     runner_src = runner_script()
     if not runner_src.is_file():
         raise UpdateError(f"updater 스크립트가 없습니다: {runner_src}")
-    runner = work_dir() / "update_runner.ps1"
+    from session_manager import osdep
+    runner = work_dir() / runner_src.name
     shutil.copy2(runner_src, runner)
 
     if restart_cmd is None:
-        start_ps = root / "start-connector.ps1"
+        start_ps = root / osdep.START_SCRIPT
         restart_cmd = str(start_ps) if start_ps.is_file() else ""
 
     # 헬스체크 포트. apply() 는 살아있는 서버 안에서 불리므로 서버가 실제로 바인드한
@@ -317,27 +318,12 @@ def apply(manifest: dict[str, Any], staged: Path, restart_cmd: str | None = None
             pass
 
     log = work_dir() / f"apply-{manifest['ver']}.log"
-    pwsh = shutil.which("pwsh") or shutil.which("powershell") or "powershell"
-    args = [pwsh, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(runner),
-            "-InstallRoot", str(root),
-            "-StageDir", str(staged),
-            "-BackupDir", str(work_dir() / f"backup-{current_version()}"),
-            "-WaitPid", str(os.getpid()),
-            "-Port", str(port),
-            "-Version", str(manifest["ver"]),
-            "-LogFile", str(log)]
-    if restart_cmd:
-        args += ["-RestartScript", restart_cmd]
+    args = osdep.update_runner_argv(runner, install_root=root, stage_dir=staged,
+                                    backup_dir=work_dir() / f"backup-{current_version()}", wait_pid=os.getpid(),
+                                    port=port, version=str(manifest["ver"]), log_file=log,
+                                    restart_script=restart_cmd or "")
 
-    # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP.
-    # ⚠ DETACHED_PROCESS(0x8) 를 쓰면 안 된다 — 실측으로 확인했듯 pwsh 는 콘솔이
-    #   아예 없으면 아무것도 안 하고 exit 0 으로 즉시 끝난다(에러도 안 남긴다).
-    #   그러면 업데이트가 "성공했다"고 응답해놓고 실제로는 아무 일도 안 일어난다.
-    #   CREATE_NO_WINDOW 는 콘솔을 주되 창을 안 띄운다. 프로세스 수명은 원래
-    #   부모와 독립이라 우리가 죽어도 자식은 계속 돈다.
-    flags = 0
-    if sys.platform == "win32":
-        flags = 0x08000000 | 0x00000200
+    # 분리 기동 — Windows 에서 DETACHED_PROCESS 를 쓰면 안 되는 이유는 osdep._win.detached_popen_kwargs
     # runner 가 우리를 강제 종료하므로 lifespan 의 표식이 안 남을 수 있다 → 미리 '업데이트' 표식
     # + 릴레이에 bye(의도된 단절 — '연결 끊김' 알림 억제)
     try:
@@ -350,7 +336,7 @@ def apply(manifest: dict[str, Any], staged: Path, restart_cmd: str | None = None
         connector.request_bye("update")
     except Exception:  # noqa: BLE001
         pass
-    subprocess.Popen(args, close_fds=True, creationflags=flags,
+    subprocess.Popen(args, close_fds=True, **osdep.detached_popen_kwargs(),
                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                      stdin=subprocess.DEVNULL)
     return write_state(applying=manifest["ver"], apply_log=str(log),

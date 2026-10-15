@@ -25,7 +25,7 @@ import shutil
 import time
 from pathlib import Path
 
-from session_manager import config, team
+from session_manager import config, osdep, team
 
 MAX_BYTES_PER_PASS = 4 * 1024 * 1024
 MIN_FREE_BYTES = 1024 * 1024 * 1024
@@ -192,7 +192,7 @@ def _always_allowed() -> list[str]:
     """세션 자기 메모리·스크래치·gstack 작업공간은 늘 허용(브리지와 같음)."""
     home = os.path.expanduser("~")
     roots = [os.path.join(str(config.claude_home()), "projects"),          # projects/*/memory 는 접두로 충분히 좁다
-             os.path.join(os.environ.get("LOCALAPPDATA", os.path.join(home, "AppData", "Local")), "Temp", "claude"),
+             osdep.temp_claude_dir(),
              os.path.join(home, ".gstack")]
     return [_norm_path(r) for r in roots]
 

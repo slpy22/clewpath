@@ -16,7 +16,7 @@ import sys
 import threading
 import time
 
-from session_manager import ptyd
+from session_manager import osdep, ptyd
 
 _lock = threading.Lock()
 _ctl = None                 # 제어 연결(요청-응답, _lock 으로 직렬화)
@@ -29,7 +29,7 @@ class BrokerDown(Exception):
 
 
 def enabled() -> bool:
-    if sys.platform != "win32" and not os.environ.get("SM_PTY_BROKER"):
+    if not osdep.IS_WIN and not os.environ.get("SM_PTY_BROKER"):
         return False
     v = os.environ.get("SM_PTY_BROKER")
     if v is None:
@@ -95,15 +95,9 @@ def launch() -> None:
     """브로커를 분리 기동한다 — Host 잡에 넣지 않으므로 Host 가 죽어도 산다(S1 실측)."""
     ptyd.authkey(create=True)
     log = ptyd.state_path().with_name("ptyd.log")
-    flags = 0
-    if sys.platform == "win32":
-        # NEW_PROCESS_GROUP | CREATE_NO_WINDOW — '보이지 않는 콘솔' 을 준다. DETACHED_PROCESS 는 쓰지 않는다:
-        # venv 런처(.venv\Scripts\python.exe)가 그 아래 진짜 python 을 띄울 때 콘솔이 없으면 Windows 가 **새 콘솔 창**을
-        # 만들어 화면에 뜨고, 사용자가 그 창을 닫으면 브로커와 모든 터미널이 함께 죽는다(2026-10-10 실사고).
-        flags = 0x00000200 | 0x08000000
-    with open(log, "ab") as fh:
+    with open(log, "ab") as fh:     # 분리 기동 — 콘솔 창 사고(2026-10-10)는 osdep._win.detached_popen_kwargs
         subprocess.Popen([sys.executable, "-m", "session_manager.ptyd"], stdin=subprocess.DEVNULL,
-                         stdout=fh, stderr=subprocess.STDOUT, creationflags=flags, close_fds=True,
+                         stdout=fh, stderr=subprocess.STDOUT, **osdep.detached_popen_kwargs(), close_fds=True,
                          env=ptyd.clean_env(), cwd=str(ptyd.state_path().parent))
 
 

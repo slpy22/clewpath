@@ -407,18 +407,9 @@ def pick_legacy_orphans(procs: list[dict]) -> list[int]:
 
 def sweep_legacy_orphans() -> int:
     """부팅 시: 구버전이 남긴 레거시 PTY 고아 소급 정리(등록부 이전 시대분)."""
-    import subprocess
+    from session_manager import osdep
     try:
-        out = subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
-             "Get-CimInstance Win32_Process | "
-             "Select-Object ProcessId,ParentProcessId,CommandLine | ConvertTo-Json -Compress"],
-            capture_output=True, timeout=30).stdout.decode("utf-8", "replace")
-        rows = json.loads(out or "[]")
-        if isinstance(rows, dict):
-            rows = [rows]
-        procs = [{"pid": int(r["ProcessId"]), "ppid": int(r.get("ParentProcessId") or 0),
-                  "cmdline": r.get("CommandLine") or ""} for r in rows]
+        procs = osdep.list_processes()
     except Exception as e:  # noqa: BLE001
         print(f"[sweep] 레거시 고아 조회 실패, 건너뜀: {e}", flush=True)
         return 0
@@ -426,8 +417,7 @@ def sweep_legacy_orphans() -> int:
     for pid in pick_legacy_orphans(procs):
         cmd = next((p["cmdline"] for p in procs if p["pid"] == pid), "")
         print(f"[sweep] 레거시 PTY 고아 정리 pid={pid} (구버전 잔재): {cmd[:100]}", flush=True)
-        import subprocess as _sp
-        _sp.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True, timeout=10)
+        osdep.kill(pid)
         killed += 1
     if killed:
         print(f"[sweep] 레거시 고아 {killed}개 정리 완료", flush=True)
@@ -436,30 +426,20 @@ def sweep_legacy_orphans() -> int:
 
 def sweep_orphan_ptys() -> int:
     """기동 시: 이전 Host 가 등록부에 남긴 PTY 고아 정리(강제 종료 대비 제2방어선)."""
-    import subprocess
+    from session_manager import osdep
     with _REG_LOCK:
         entries = _registry_load()
         if not entries:
             return 0
         try:
-            out = subprocess.run(
-                ["powershell", "-NoProfile", "-Command",
-                 "Get-CimInstance Win32_Process -Filter \"Name like '%claude%'\" | "
-                 "Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress"],
-                capture_output=True, timeout=30).stdout.decode("utf-8", "replace")
-            rows = json.loads(out or "[]")
-            if isinstance(rows, dict):
-                rows = [rows]
-            procs = [{"pid": int(r["ProcessId"]), "cmdline": r.get("CommandLine") or ""}
-                     for r in rows]
+            procs = osdep.list_processes("claude")
         except Exception as e:  # noqa: BLE001
             print(f"[sweep] PTY 고아 조회 실패, 건너뜀: {e}", flush=True)
             return 0
         killed = 0
         for pid in pick_orphans(entries, procs):
             print(f"[sweep] PTY 고아 정리 pid={pid} (이전 Host 의 등록부 기반)", flush=True)
-            subprocess.run(["taskkill", "/PID", str(pid), "/F"],
-                           capture_output=True, timeout=10)
+            osdep.kill(pid)
             killed += 1
         _registry_save([])          # 등록부는 이번 기동 기준으로 리셋
         if killed:
@@ -571,7 +551,7 @@ def _spawn(session_id: str, skip_permissions: bool = True,
     호출 전에 살아 있는지(_get_live)는 호출자가 확인한다 — 같은 세션에 프로세스가
     2개 생기면 대화가 갈라지므로, 여기 오는 건 '없음' 이 확정된 뒤여야 한다.
     """
-    from winpty import PtyProcess
+    from session_manager import osdep
     key = fork_id or session_id
     # 서버측 PTY 상한(진짜 안전 밸브). 재접속은 프로세스를 안 늘리니 새 스폰만 막는다.
     cap = _max_live_pty()
@@ -625,15 +605,14 @@ def _spawn(session_id: str, skip_permissions: bool = True,
         _start_reader(sess)
         return sess
     try:
-        proc = PtyProcess.spawn(argv, cwd=cwd, dimensions=(24, 80))
+        proc = osdep.spawn_pty(argv, cwd, 24, 80)
     except Exception as e:  # noqa: BLE001
         raise TermStartError("spawn_failed", f"터미널 시작 실패: {e}",
                              f"\r\n\x1b[31m[오류] 터미널 시작 실패: {e}\x1b[0m\r\n")
     sess = _TermSession(key, proc, persist=not fork_id)
     # 고아 방지 3중: ① Job Object(커널 동반 종료 - Host 가 어떻게 죽든)
     # ② 자기 등록부(① 실패 대비 부팅 청소) ③ 정상 종료 shutdown_all
-    from session_manager import jobguard
-    jobguard.guard(getattr(proc, "pid", None))
+    osdep.guard_child(getattr(proc, "pid", None))
     _registry_add(getattr(proc, "pid", None), session_id)
     _ACTIVE[key] = sess
     _start_reader(sess)
@@ -746,8 +725,6 @@ async def run_terminal(ws, session_id: str, skip_permissions: bool = True,
 
     호출 측에서 ws.accept()는 이미 끝난 상태로 가정한다.
     """
-    from winpty import PtyProcess
-
     loop = asyncio.get_event_loop()
     key = fork_id or session_id
     # 살아있는 세션만 재접속 대상 - 시체는 _get_live 가 정리해 새 스폰으로 떨어진다.

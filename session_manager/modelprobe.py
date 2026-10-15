@@ -200,15 +200,15 @@ _BAD_START = ("trust this folder", "Select login method", "Do you want to use th
 
 def probe(exe: str, cwd: str, timeout: float = 30.0, spawn=None) -> dict:
     """숨은 터미널에서 /model 화면을 읽는다 → {ok, models:[{label,one_m,…}], session_id, error?}.
-    spawn(argv, cwd, env, rows, cols) 는 테스트용 주입(기본 winpty)."""
+    spawn(argv, cwd, env, rows, cols) 는 테스트용 주입(기본 osdep.spawn_pty)."""
     sid = str(uuid.uuid4())
     env = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE", "SM_"))}
     rows, cols = 40, 160
     if spawn is None:
-        from winpty import PtyProcess
+        from session_manager import osdep
 
         def spawn(argv, cwd, env, rows, cols):   # noqa: F811
-            return PtyProcess.spawn(argv, cwd=cwd, env=env, dimensions=(rows, cols))
+            return osdep.spawn_pty(argv, cwd, rows, cols, env)
     scr = Screen(rows, cols)
     lock = threading.Lock()
     proc = spawn([exe, "--session-id", sid], cwd, env, rows, cols)

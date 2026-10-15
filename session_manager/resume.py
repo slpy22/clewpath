@@ -6,11 +6,9 @@
 """
 from __future__ import annotations
 
-import subprocess
-import sys
 from pathlib import Path
 
-from session_manager import config
+from session_manager import config, osdep
 from session_manager.scanner import scan_one, resolve_launch_cwd
 
 
@@ -51,18 +49,8 @@ def launch_terminal(session_id: str, skip_permissions: bool = True) -> dict:
 
     flag = f" {_SKIP_FLAG}" if skip_permissions else ""
     try:
-        if sys.platform == "win32":
-            # 작업 폴더는 cd 명령(명령줄)이 아니라 subprocess cwd= 로 지정한다.
-            # 한글 등 비ASCII 경로를 명령줄로 넘기면 새 콘솔 코드페이지에서 깨져
-            # "filename ... syntax is incorrect" 오류가 나기 때문. cwd= 는 유니코드 안전.
-            subprocess.Popen(
-                ["cmd", "/c", "start", "cmd", "/k",
-                 f"claude --resume {session_id}{flag}"],
-                cwd=cwd,
-                shell=False,
-            )
-        else:
-            # macOS/Linux: 사용 가능한 터미널이 환경마다 달라 명령어 반환에 의존
+        if not osdep.open_resume_terminal(f"claude --resume {session_id}{flag}", cwd):
+            # 아직 새 터미널 창을 못 여는 OS 면 명령어 반환에 의존
             return {**info, "launched": False,
                     "note": "이 플랫폼에서는 자동 실행을 지원하지 않습니다. 명령어를 직접 실행하세요."}
         return {**info, "launched": True}

@@ -13,7 +13,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import sys
 import threading
 import time
 from pathlib import Path
@@ -75,26 +74,8 @@ def _read_json(p: Path) -> dict | None:
 
 
 def pid_alive(pid: int) -> bool:
-    if not pid or pid <= 0:
-        return False
-    if sys.platform == "win32":
-        import ctypes
-        k32 = ctypes.windll.kernel32
-        h = k32.OpenProcess(0x1000, False, int(pid))          # PROCESS_QUERY_LIMITED_INFORMATION
-        if not h:
-            return False
-        try:
-            code = ctypes.c_ulong()
-            if not k32.GetExitCodeProcess(h, ctypes.byref(code)):
-                return False
-            return code.value == 259                           # STILL_ACTIVE
-        finally:
-            k32.CloseHandle(h)
-    try:
-        os.kill(int(pid), 0)
-        return True
-    except OSError:
-        return False
+    from session_manager import osdep
+    return osdep.pid_alive(pid)
 
 
 def log_tail(n: int = 10) -> list[str]:
@@ -169,29 +150,18 @@ def _version() -> str:
 
 
 def ensure_launcher(port: int | None = None) -> str | None:
-    """설치본이면 ensure_task.ps1 로 런처 v2·반복 트리거를 맞춘다(버전당 1회). 개발 트리는 건너뜀."""
-    if sys.platform != "win32":
-        return None
+    """설치본이면 자동 시작·반복 트리거를 맞춘다(Windows: ensure_task.ps1 → 예약 작업). 버전당 1회, 개발 트리는 건너뜀."""
+    from session_manager import appconfig, osdep
     root = _install_root()
-    if not (root / "start-connector.ps1").is_file():
+    if not (root / osdep.START_SCRIPT).is_file():
         return None                                             # 설치본 레이아웃이 아님(개발 실행)
     marker = config.data_dir() / f"launcher-ensured-{_version()}"
     if marker.exists():
         return None
-    import shutil
-    import subprocess
-    pwsh = shutil.which("pwsh") or shutil.which("powershell")
-    if not pwsh:
-        return None
-    from session_manager import appconfig
-    args = [pwsh, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
-            str(root / "session_manager" / "ensure_task.ps1"),
-            "-Root", str(root), "-DataDir", str(config.data_dir()),
-            "-ConfFile", str(appconfig.config_path()), "-Port", str(port or 5100)]
     try:
-        r = subprocess.run(args, capture_output=True, timeout=60,
-                           creationflags=0x08000000 if sys.platform == "win32" else 0)
-        out = r.stdout.decode("utf-8", "replace").strip()
+        out = osdep.ensure_launcher(root, config.data_dir(), appconfig.config_path(), port or 5100)
+        if out is None:
+            return None
         marker.write_text(out, encoding="utf-8")
         return out
     except Exception as e:  # noqa: BLE001
