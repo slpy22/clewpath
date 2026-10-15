@@ -4,16 +4,17 @@
 
     python -m session_manager.ptyd          ← Host 가 필요할 때 분리 기동(DETACHED, Host 잡에 넣지 않음)
 
-- 이 프로세스가 ConPTY 와 그 안의 `claude --resume` 을 **소유**한다. 자식은 자기 Job(KILL_ON_JOB_CLOSE)에 넣어
-  브로커가 어떻게 죽든 커널이 함께 끝낸다 → 주인 없는 claude(8/21 형 고아) 0.
-- Host 와는 사용자 로컬 named pipe(`multiprocessing.connection`, authkey = 데이터 폴더의 비밀 파일, HMAC 챌린지)로만
-  말한다. TCP 없음. 원격 접근은 지금처럼 Host 인증·2FA 를 거친다.
+- 이 프로세스가 pty(Windows ConPTY, 맥·리눅스 ptyprocess)와 그 안의 `claude --resume` 을 **소유**한다.
+  브로커가 어떻게 죽든 자식도 끝난다 → 주인 없는 claude(8/21 형 고아) 0.
+  Windows 는 자기 Job(KILL_ON_JOB_CLOSE), POSIX 는 pty 주인 쪽(master)이 닫히면 커널이 보내는 SIGHUP.
+- Host 와는 사용자 로컬 통로(`multiprocessing.connection`, Windows named pipe / POSIX 유닉스 소켓 0600,
+  authkey = 데이터 폴더의 비밀 파일, HMAC 챌린지)로만 말한다. TCP 없음. 원격 접근은 지금처럼 Host 인증·2FA 를 거친다.
 - 세션마다 출력 링 버퍼를 두고, Host 의 스트림 연결(세션당 1개)이 붙어 있으면 그대로 흘려보낸다(백프레셔: 전송이
   막히면 PTY 읽기도 늦춘다 — 지금 Host 내장 PTY 와 같은 동작). Host 가 떨어지면 버퍼에만 쌓고, 다시 붙으면 꼬리부터.
 - 일회성(fork, persist=False) 세션은 스트림이 끊기는 순간 종료(D4) — Host 가 죽어도 화면 없는 fork 가 남지 않는다.
 
 이 파일은 **Host 업데이트와 독립적으로 오래 산다**(코드는 기동 때 한 번 읽힘). 바꾸면 해시가 달라져 Host 가
-'브로커 업데이트 대기' 로 표시하고, 세션이 0개일 때 자동 교체(D2). 그래서 표준 라이브러리 + pywinpty + jobguard 만 쓴다.
+'브로커 업데이트 대기' 로 표시하고, 세션이 0개일 때 자동 교체(D2). 그래서 표준 라이브러리 + osdep(pywinpty·jobguard / ptyprocess) 만 쓴다.
 """
 from __future__ import annotations
 
@@ -48,7 +49,17 @@ def _data_dir() -> Path:
     return config.data_dir()
 
 
+FAMILY = "AF_PIPE" if sys.platform == "win32" else "AF_UNIX"
+
+
 def pipe_address(data_dir: Path | None = None) -> str:
+    if FAMILY == "AF_UNIX":
+        p = str((data_dir or _data_dir()) / "ptyd.sock")
+        if len(p.encode("utf-8")) < 100:            # 유닉스 소켓 경로 상한(맥 104바이트)
+            return p
+        import tempfile
+        h = hashlib.sha1(p.encode("utf-8")).hexdigest()[:12]
+        return os.path.join(tempfile.gettempdir(), f"clewpath-ptyd-{os.getuid()}-{h}.sock")
     d = str(data_dir or _data_dir()).lower()
     return r"\\.\pipe\clewpath-ptyd-" + hashlib.sha1(d.encode("utf-8")).hexdigest()[:12]
 
@@ -85,14 +96,14 @@ def code_hash() -> str:
 
 
 def _pty_spawn(argv, cwd, cols, rows, env):
-    """ConPTY 스폰(테스트에서 가짜로 바꾼다)."""
-    from winpty import PtyProcess
-    return PtyProcess.spawn(argv, cwd=cwd, dimensions=(rows, cols), env=env)
+    """pty 스폰(테스트에서 가짜로 바꾼다)."""
+    from session_manager import osdep
+    return osdep.spawn_pty(argv, cwd, rows, cols, env)
 
 
 def _guard(pid) -> None:
-    from session_manager import jobguard
-    jobguard.guard(pid)
+    from session_manager import osdep
+    osdep.guard_child(pid)
 
 
 class _Sess:
@@ -133,7 +144,18 @@ class Broker:
     # ---------------------------------------------------------------- 수명
     def serve_forever(self) -> None:
         from multiprocessing.connection import Listener
-        self.listener = Listener(self.address, family="AF_PIPE", authkey=self.key)
+        if FAMILY == "AF_UNIX":
+            try:
+                os.unlink(self.address)          # 죽은 브로커가 남긴 소켓(살아 있는지는 main 이 먼저 확인)
+            except FileNotFoundError:
+                pass
+            old = os.umask(0o177)                # 소켓 0600 — 이 사용자만
+            try:
+                self.listener = Listener(self.address, family=FAMILY, authkey=self.key)
+            finally:
+                os.umask(old)
+        else:
+            self.listener = Listener(self.address, family=FAMILY, authkey=self.key)
         while not self.stopping:
             try:
                 conn = self.listener.accept()
@@ -362,7 +384,7 @@ def main() -> int:
     b = Broker(address, key)
     try:
         from multiprocessing.connection import Client
-        c = Client(address, family="AF_PIPE", authkey=key)   # 이미 떠 있으면 두 번째는 조용히 끝
+        c = Client(address, family=FAMILY, authkey=key)   # 이미 떠 있으면 두 번째는 조용히 끝
         c.close()
         return 0
     except Exception:  # noqa: BLE001

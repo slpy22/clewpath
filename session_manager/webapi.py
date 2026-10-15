@@ -54,7 +54,8 @@ def find_orphan_stream_pids(procs: list[dict]) -> list[int]:
 
     procs: [{"pid":int, "ppid":int, "cmdline":str}, ...] 전체 프로세스 목록.
     """
-    alive = {p["pid"] for p in procs}
+    from session_manager import osdep
+    alive = {p["pid"] for p in procs} - osdep.ADOPTER_PIDS     # POSIX 고아는 init(1)이 입양 — 부모 사망과 같다
     return [p["pid"] for p in procs
             if _our_stream_signature(p.get("cmdline", ""))
             and p.get("ppid") not in alive]
@@ -200,9 +201,10 @@ async def run_resume_api(ws, session_id: str, skip_permissions: bool = True,
         await _send(ws, {"type": "error", "message": f"claude 시작 실패: {e}"})
         await _safe_close(ws)
         return
-    # 고아 방지: 커널 동반 종료(Job Object) - Host 가 어떻게 죽든 스트림도 정리
-    from session_manager import jobguard
-    jobguard.guard(proc.pid)
+    # 고아 방지: Windows 는 커널 동반 종료(Job Object) - Host 가 어떻게 죽든 스트림도 정리.
+    # POSIX 는 Host 가 죽으면 stdin 파이프가 닫혀(EOF) stream-json 입력의 claude -p 가 끝난다 + 기동 청소.
+    from session_manager import osdep
+    osdep.guard_child(proc.pid)
 
     await _send(ws, {"type": "ready", "session_id": session_id, "cwd": cwd,
                      "fork_id": fork_id, "forked": bool(fork_id),

@@ -6,7 +6,8 @@
 
 ## 진행중: 멀티 OS(Windows + macOS) — docs/designs/multi-os.md (2026-10-15 사장님 결정)
 - [x] 1단계(0.23.0): `session_manager/osdep/`(_win·_posix) 경계 — pty·자식 동반 종료·프로세스 목록/종료·DPAPI·런처·재개 창·경로·업데이트 러너. Windows 동작 불변, 가드 test_osdep.py
-- [ ] 2단계(이 PC + 리눅스 `*-test` 컨테이너, `macos` 브랜치): POSIX pty(spawn_pty)·프로세스 그룹 동반 종료·ptyd POSIX 대응(브로커 해시 바뀜 — 교체 대기 안내)·Windows 전용 테스트 skipif
+- [x] 2단계(`macos` 브랜치, 2026-10-15): POSIX pty(ptyprocess)·pty 끊김 SIGHUP 동반 종료·브로커 유닉스 소켓(0600)·고아 판정 init 입양·범위 감시 POSIX 경로·테스트 OS 분기 — 리눅스 컨테이너 571 통과 + 브로커 통합 확인, Windows 579 통과. **main 배포 시 ptyd 해시가 바뀌어 브로커 업데이트 대기 1회**
+- [ ] (발견) extras `mcp>=1.0.0` 이 잠금에서 mcp 2.0.0 — 2.x 엔 `mcp.server.fastmcp` 가 없어 mcp_server 가 안 뜬다. 설치본엔 extra 가 안 들어가 운영 영향 없음. `<2` 고정 또는 2.x 대응
 - [ ] 3단계(맥 실기): launchd 자동 시작·자기 회복 · 키체인 · `install.sh`·`get.sh`·`start-connector.sh`·`update_runner.sh` · CP `/get.sh`·랜딩 OS 별 한 줄 설치(서비스 모니터 의뢰) · 매니페스트 platforms 표시 · Terminal.app 재개 · 실제 claude 왕복
 - [ ] 맥 확인 거리: claude 설치 경로·pty 출력 차이, 터미널 앱 전체 디스크 접근 권한 필요 여부, Gatekeeper(curl 설치 시 격리 속성)
 

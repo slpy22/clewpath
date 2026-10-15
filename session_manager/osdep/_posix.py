@@ -1,7 +1,7 @@
 """macOS·리눅스 구현.
 
-1단계(2026-10-15): psutil·os.kill 로 바로 되는 것만. pty·자식 동반 종료·비밀 보관·자동 기동·업데이트 러너는
-2단계(리눅스 컨테이너 검증)·3단계(맥 실기) 에서 채운다 — docs/designs/multi-os.md.
+2단계(2026-10-15): pty(ptyprocess)·자식 동반 종료(pty 끊김 SIGHUP)·프로세스 목록/종료 — 리눅스 컨테이너에서 검증.
+비밀 보관·자동 기동·재개 창·업데이트 러너는 3단계(맥 실기) — docs/designs/multi-os.md.
 """
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from pathlib import Path
 
 NAME = "mac" if sys.platform == "darwin" else "linux"
 NO_WINDOW = 0
+ADOPTER_PIDS = frozenset({1})           # 부모가 죽은 프로세스를 입양하는 init/launchd — 고아 판정에선 '부모 없음'
 START_SCRIPT = "start-connector.sh"
 UPDATE_RUNNER = "update_runner.sh"
 
@@ -22,12 +23,32 @@ def detached_popen_kwargs() -> dict:
     return {"start_new_session": True}
 
 
+_PTY_CLS = None
+
+
+def _pty_cls():
+    """pywinpty.PtyProcess 와 같은 모양(read→str·write·setwinsize·isalive·terminate(force)·pid) — 둘 다 ptyprocess 계열."""
+    global _PTY_CLS
+    if _PTY_CLS is None:
+        from ptyprocess import PtyProcessUnicode
+
+        class _Pty(PtyProcessUnicode):
+            def __init__(self, pid, fd, encoding="utf-8", codec_errors="replace"):
+                super().__init__(pid, fd, encoding=encoding, codec_errors=codec_errors)   # 잘린 UTF-8 에도 안 죽게
+
+        _PTY_CLS = _Pty
+    return _PTY_CLS
+
+
 def spawn_pty(argv: list[str], cwd: str, rows: int = 24, cols: int = 80, env: dict | None = None):
-    raise NotImplementedError("POSIX 터미널은 아직 없습니다(멀티 OS 2단계)")
+    """자식은 새 세션의 리더(pty 가 제어 터미널). 주인이 죽어 master 가 닫히면 커널이 SIGHUP 을 보낸다."""
+    return _pty_cls().spawn(list(argv), cwd=cwd, env=env, dimensions=(rows, cols))
 
 
 def guard_child(pid) -> bool:
-    return False                        # 2단계: 프로세스 그룹 + 브로커 감시
+    """주인과 함께 끝나게. pty 자식은 이미 그렇다(master 닫힘 → SIGHUP). 파이프 자식(웹 재개 -p)은 stdin EOF 로 끝나고,
+    남은 것은 기동 청소(ADOPTER_PIDS)가 줍는다. 맥엔 Job·PDEATHSIG 같은 커널 장치가 없다."""
+    return bool(pid)
 
 
 def pid_alive(pid: int) -> bool:
@@ -35,11 +56,15 @@ def pid_alive(pid: int) -> bool:
         return False
     try:
         os.kill(int(pid), 0)
-        return True
     except PermissionError:
         return True                     # 있지만 남의 프로세스
-    except OSError:
+    except (OSError, OverflowError):    # 없음 · pid 범위 밖(다른 OS 가 남긴 표식)
         return False
+    try:                                # 끝났지만 아직 거둬지지 않은 좀비는 죽은 것
+        import psutil
+        return psutil.Process(int(pid)).status() != psutil.STATUS_ZOMBIE
+    except Exception:  # noqa: BLE001
+        return True
 
 
 def kill(pid: int) -> None:

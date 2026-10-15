@@ -10,6 +10,8 @@
 """
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from tests.conftest import write_session
@@ -44,6 +46,10 @@ def test_diagnostics_does_not_call_scan_all(fake_claude_home, monkeypatch):
         assert j["ok"] is True
 
 
+_WIN_RUNNER = pytest.mark.skipif(sys.platform != "win32", reason="update_runner.sh 는 멀티 OS 3단계")
+
+
+@_WIN_RUNNER
 def test_apply_concurrency_lock(fake_claude_home, monkeypatch):
     from session_manager import updater
     # 실제 runner 스폰은 막는다(부작용 없이 잠금 로직만 검증)
@@ -97,6 +103,7 @@ def _apply_port(fake_claude_home, monkeypatch, bound_port, runtime_port):
     return a[a.index("-Port") + 1]
 
 
+@_WIN_RUNNER
 def test_apply_prefers_bound_port_over_stale_runtime_json(fake_claude_home, monkeypatch):
     # 실사고(2026-09-10 운영자 PC): 5199 테스트 서버가 남긴 stale runtime.json 때문에
     # runner 가 5199 를 헬스체크해 멀쩡한 0.7.0 을 롤백. 살아있는 서버가 아는 실제
@@ -105,6 +112,7 @@ def test_apply_prefers_bound_port_over_stale_runtime_json(fake_claude_home, monk
     assert _apply_port(fake_claude_home, monkeypatch, bound_port=5100, runtime_port=5199) == "5100"
 
 
+@_WIN_RUNNER
 def test_apply_falls_back_to_runtime_json_without_bound_port(fake_claude_home, monkeypatch):
     # 서버 밖(테스트·CLI)에서는 BOUND_PORT 가 없으니 runtime.json 이 그대로 폴백.
     monkeypatch.delenv("SM_PORT", raising=False)

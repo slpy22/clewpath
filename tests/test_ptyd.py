@@ -298,11 +298,15 @@ def test_launch_uses_hidden_console_not_detached(fake_claude_home, monkeypatch):
         def __init__(self, args, **kw):
             seen.update(kw, args=args)
     monkeypatch.setattr(subprocess, "Popen", P)
-    monkeypatch.setattr(ptyclient.sys, "platform", "win32")
     ptyclient.launch()
-    f = seen["creationflags"]
+    from session_manager import osdep
+    from session_manager.osdep import _posix, _win
+    for k, v in osdep.detached_popen_kwargs().items():
+        assert seen[k] == v, "OS 별 분리 기동 인자를 그대로 쓴다"
+    f = _win.detached_popen_kwargs()["creationflags"]
     assert not f & 0x00000008, "DETACHED_PROCESS 금지(콘솔 창이 새로 뜸)"
     assert f & 0x08000000 and f & 0x00000200, "CREATE_NO_WINDOW + NEW_PROCESS_GROUP"
+    assert _posix.detached_popen_kwargs() == {"start_new_session": True}
     assert seen["args"][1:] == ["-m", "session_manager.ptyd"]
 
 

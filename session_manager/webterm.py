@@ -399,7 +399,8 @@ def is_legacy_orphan_cmdline(cmdline: str) -> bool:
 
 def pick_legacy_orphans(procs: list[dict]) -> list[int]:
     """전체 프로세스 목록에서 '레거시 서명 + 부모 사망' PID(순수 판정)."""
-    alive = {p["pid"] for p in procs}
+    from session_manager import osdep
+    alive = {p["pid"] for p in procs} - osdep.ADOPTER_PIDS
     return [p["pid"] for p in procs
             if is_legacy_orphan_cmdline(p.get("cmdline", ""))
             and p.get("ppid") not in alive]

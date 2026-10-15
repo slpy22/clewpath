@@ -59,7 +59,7 @@ class _FakeWS:
 
 @pytest.mark.asyncio
 async def test_new_spawn_refused_at_cap(monkeypatch):
-    import winpty
+    from session_manager import osdep
     # 새 스폰 경로 강제(재접속 대상 없음) + 상한 도달
     monkeypatch.setattr(webterm, "_get_live", lambda key: None)
     monkeypatch.setattr(webterm, "_live_count", lambda: 12)
@@ -67,7 +67,7 @@ async def test_new_spawn_refused_at_cap(monkeypatch):
 
     def _boom(*a, **k):
         raise AssertionError("상한인데 스폰됨!")
-    monkeypatch.setattr(winpty.PtyProcess, "spawn", staticmethod(_boom))
+    monkeypatch.setattr(osdep, "spawn_pty", _boom)
 
     ws = _FakeWS()
     await webterm.run_terminal(ws, "sid-x")
