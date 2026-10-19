@@ -327,3 +327,51 @@ def test_same_session_reused_across_teams_and_failed_create_leaves_no_team(T, mo
     with pytest.raises(T.TeamError):
         T.create_team("Bad", manager_session="s-x")
     assert len(T.list_teams()) == n, "관리자 등록 실패 시 반쪽 팀이 남지 않는다"
+
+
+def test_shared_manager_new_session_splits_instead_of_hijacking(T):
+    """한 관리 세션으로 두 팀을 만들면 에이전트를 함께 쓴다. 한 팀에서 새 세션을 붙이면 그 팀 몫으로 에이전트를 갈라
+    붙이고, 다른 팀의 관리자는 원래 세션 그대로다(2026-10-19 NKCLASS 생성 → NKLAW 관리가 죽은 세션을 가리킨 사고)."""
+    a = T.create_team("북한법 논문", manager_session="s-law")
+    b = T.create_team("수업", manager_session="s-law")
+    ma, mb = a["members"][0], b["members"][0]
+    assert ma["agent_id"] == mb["agent_id"], "같은 세션 = 같은 관리 에이전트(한 관리자가 여러 팀)"
+    t = T.create_task(b["id"], "수업 준비", owner="관리", idem_key="k1")
+    r = T.bind_session(b["id"], "관리", "s-class", reason="replaced")
+    assert r["agent_id"] != ma["agent_id"] and r["session_id"] == "s-class" and r["member_role"] == "manager"
+    assert T.get_team(a["id"])["members"][0]["session_id"] == "s-law", "다른 팀 관리자는 그대로"
+    gb = T.get_team(b["id"])
+    assert gb["manager_agent"] == r["agent_id"] and [m["alias"] for m in gb["members"]] == ["관리"]
+    assert T.task_detail(b["id"], t["id"])["owner"] == r["agent_id"], "진행 중 일감은 이 팀 쪽이 가져감"
+    # 혼자 쓰는 에이전트는 예전처럼 같은 에이전트에 이어 붙는다
+    c = T.create_team("혼자", manager_session="s-solo")
+    aid = c["members"][0]["agent_id"]
+    assert T.bind_session(c["id"], "관리", "s-solo2")["agent_id"] == aid
+
+
+def test_rebind_previous_session_makes_it_current_again(T):
+    """예전에 붙었던 세션을 다시 붙이면 지금 세션으로 되살린다 — 전에는 멱등 무시라 API 로 되돌릴 수 없었다."""
+    t = T.create_team("팀", manager_session="s-1")
+    T.bind_session(t["id"], "관리", "s-2")
+    assert T.get_team(t["id"])["members"][0]["session_id"] == "s-2"
+    T.bind_session(t["id"], "관리", "s-1")
+    assert T.get_team(t["id"])["members"][0]["session_id"] == "s-1"
+    ev = list(T._read().execute("SELECT kind FROM events WHERE team_id=?", (t["id"],)))
+    assert sum(1 for e in ev if e["kind"] == "session_bound") == 2, "되살리기도 이력에 남는다"
+    T.bind_session(t["id"], "관리", "s-1")                       # 이미 지금 세션 — 멱등
+    with pytest.raises(T.TeamError):
+        u = T.create_team("다른", manager_session="s-x")
+        T.bind_session(u["id"], "관리", "s-2")                   # 다른 에이전트의 세션은 여전히 409
+
+
+def test_add_member_existing_agent_with_other_session_gets_own_agent(T):
+    """다른 팀 관리 에이전트를 다른 세션과 함께 데려오면 새 에이전트로 만든다 — 실제 10-17 사고 경로(add_member)."""
+    a = T.create_team("논문", manager_session="s-law")
+    law_agent = a["members"][0]["agent_id"]
+    b = T.create_team("수업")
+    m = T.add_member(b["id"], "관리", member_role="manager", agent_id=law_agent, session_id="s-class")
+    assert m["agent_id"] != law_agent and m["session_id"] == "s-class"
+    assert T.get_team(a["id"])["members"][0]["session_id"] == "s-law", "논문 팀 관리자는 그대로"
+    # 같은 세션으로 데려오는 것은 예전처럼 같은 에이전트(한 관리자가 여러 팀)
+    c = T.create_team("세미나")
+    assert T.add_member(c["id"], "관리", member_role="manager", agent_id=law_agent, session_id="s-law")["agent_id"] == law_agent
