@@ -13,8 +13,6 @@
     deny_patterns     프롬프트/응답에서 차단할 정규식 목록
     max_prompt_chars  프롬프트 최대 길이
     max_output_chars  응답 최대 길이
-    settings          claude --settings 로 넘길 설정(허용 키만: SETTINGS_KEYS). 예: {"autoMemoryEnabled": false}
-                      — 다른 세션과 같은 폴더를 쓰는 서빙 세션이 그 폴더의 자동 기억(MEMORY.md)을 문맥·기록에 싣지 않게(2026-10-19)
 """
 from __future__ import annotations
 
@@ -28,18 +26,9 @@ from session_manager import config
 _LOCK = threading.Lock()
 _FIELDS = ("permission_mode", "allowed_tools", "denied_tools", "model",
            "max_budget_usd", "system_prompt", "deny_patterns",
-           "max_prompt_chars", "max_output_chars", "settings")
+           "max_prompt_chars", "max_output_chars")
 _LIST_FIELDS = ("allowed_tools", "denied_tools", "deny_patterns")
 _NUM_FIELDS = ("max_budget_usd", "max_prompt_chars", "max_output_chars")
-SETTINGS_KEYS = {"autoMemoryEnabled": bool}   # 넓히지 않는다 — 권한 규칙 등은 가드레일 필드로만
-
-
-def clean_settings(v) -> dict | None:
-    """허용 키·타입만 남긴다. 비면 None."""
-    if not isinstance(v, dict):
-        return None
-    out = {k: v[k] for k, t in SETTINGS_KEYS.items() if k in v and isinstance(v[k], t)}
-    return out or None
 
 
 def _now() -> str:
@@ -102,8 +91,6 @@ def set_record(session_id: str, **fields) -> dict:
             val = fields[key]
             if key in _LIST_FIELDS:
                 rec[key] = _clean_list(val)
-            elif key == "settings":
-                rec[key] = clean_settings(val)
             elif key in _NUM_FIELDS:
                 rec[key] = (float(val) if key == "max_budget_usd" else int(val)) \
                     if val not in (None, "") else None

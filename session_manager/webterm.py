@@ -474,14 +474,6 @@ def _claude_argv(session_id: str, skip_permissions: bool = True,
             _mdl = None
         if _mdl:
             argv += ["--model", _mdl]
-        # 서빙 세션 프로필의 claude 설정(예: 자동 기억 끄기)은 사람이 터미널로 열 때도 똑같이 — 열자마자 기억이 기록에 실리지 않게
-        try:
-            from session_manager import profiles as _profiles
-            _st = _profiles.get(session_id).get("settings")
-        except Exception:  # noqa: BLE001
-            _st = None
-        if _st:
-            argv += ["--settings", json.dumps(_st)]
     if skip_permissions:
         argv.append("--dangerously-skip-permissions")
     return argv
@@ -737,7 +729,7 @@ _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 
 
 def start_new(cwd: str, prompt: str = "", skip_permissions: bool = True,
-              session_id: str | None = None, settings: dict | None = None) -> dict:
+              session_id: str | None = None) -> dict:
     """새 **대화형** 세션을 화면 없이 띄운다(워커 만들기, 2026-10-19 사장님: 워커를 -p 로 만들지 않는다).
 
     `claude --session-id <uuid> [--dangerously-skip-permissions] "<prompt>"` — 첫 지시를 받아 처리한 뒤
@@ -758,10 +750,6 @@ def start_new(cwd: str, prompt: str = "", skip_permissions: bool = True,
     argv = [_cfg.claude_exe(), "--session-id", sid]
     if skip_permissions:
         argv.append("--dangerously-skip-permissions")
-    from session_manager import profiles as _profiles
-    st = _profiles.clean_settings(settings)
-    if st:
-        argv += ["--settings", json.dumps(st)]   # 허용 키만(자동 기억 끄기 등) — 첫 턴부터 적용
     if prompt:
         argv.append(prompt)
     with session_lock(sid):

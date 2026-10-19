@@ -140,7 +140,6 @@ def effective_guardrails(session_id: str) -> dict:
         "deny_patterns": prof.get("deny_patterns") or [],
         "max_prompt_chars": prof.get("max_prompt_chars"),
         "max_output_chars": prof.get("max_output_chars"),
-        "settings": prof.get("settings") or None,     # claude --settings(허용 키만, profiles.SETTINGS_KEYS)
     }
 
 
