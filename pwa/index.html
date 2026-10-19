@@ -2707,7 +2707,7 @@ function removeTab(key){ TABS.list=TABS.list.filter(t=>t.key!==key); if(TABS.act
   termView.closeTabInstance(key); }   // 보유하던 xterm/iframe 해제
 
 // ---- 멀티탭 동작: 탭 스트립·전환·닫기·추가·저장/복원·재접속 ----
-const TAB_SOFT_CAP=6;   // 클라 경고선. 서버 하드 상한(SM_MAX_TERMINALS, 기본 8)은 webterm 이 따로 막는다.
+const TAB_SOFT_CAP=6;   // 클라 경고선. 서버 하드 상한(SM_MAX_TERMINALS, 기본 15)은 webterm 이 따로 막는다.
 function sessLabel(s){ return s.title||s.label_name||s.slug||(s.session_id||'').slice(0,8); }
 // 서버(webterm.TAKEOVER_NOTE)가 밀려나는 화면에 보내는 인계 통지 문구 — 스트림에서 감지해 탭을 taken 으로
 const TAKEOVER_NOTE='다른 화면이 이 세션을 가져갔습니다';
