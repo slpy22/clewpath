@@ -88,3 +88,56 @@ def set_native_title(session_id: str, title: str,
         except Exception:  # noqa: BLE001
             pass
     return out
+
+
+# ---------------------------------------------------------------- 통신 이름 맞추기(2026-10-19 사장님 승인)
+# 10-15 전에 붙인 이름·다른 경로로 붙은 제목은 custom-title 만 있고 agent-name 이 비어 있어,
+# 다른 세션이 부르는 이름(피어 이름)이 `004-8c` 처럼 프로세스마다 바뀐다. 설정 화면에서 목록을 보고
+# 확인창을 거쳐 세션마다 agent-name 한 줄만 append 한다(claude /rename 과 같은 형식, 제목은 그대로).
+
+def agent_name_mismatches(metas=None) -> list[dict]:
+    """claude 이름(custom-title)은 있는데 통신 이름(agent-name)이 비었거나 다른 세션.
+    자동 실행(-p) 기록·이어받은 옛 줄은 뺀다(옛 줄에 쓰면 이어받은 새 세션과 이름이 갈린다)."""
+    out = []
+    for m in (metas if metas is not None else scanner.scan_all()):
+        t = (m.custom_title or "").strip()
+        if not t or m.headless or m.continued_in or (m.agent_name or "") == t:
+            continue
+        out.append({"session_id": m.session_id, "title": t, "agent_name": m.agent_name, "cwd": m.cwd,
+                    "status": session_status(m.session_id)})
+    names = {}
+    for x in out:
+        names[x["title"]] = names.get(x["title"], 0) + 1
+    try:
+        from session_manager import peers
+        taken = {p["name"]: p["session_id"] for p in peers.snapshot()}
+    except Exception:  # noqa: BLE001
+        taken = {}
+    for x in out:
+        x["conflict"] = names[x["title"]] > 1 or taken.get(x["title"], x["session_id"]) != x["session_id"]
+    out.sort(key=lambda x: x["title"])
+    return out
+
+
+def sync_agent_names(session_ids: list[str]) -> dict:
+    """고른 세션에 agent-name(= 지금 claude 이름) 한 줄씩 append. 생성 중(busy)인 세션은 건너뛴다(동시 쓰기 방지)."""
+    want = {str(s) for s in (session_ids or [])}
+    done, skipped = [], []
+    for x in agent_name_mismatches():
+        if x["session_id"] not in want:
+            continue
+        if x["status"] == "busy":
+            skipped.append({"session_id": x["session_id"], "reason": "busy"})
+            continue
+        meta = scanner.scan_one(x["session_id"])
+        rec = {"type": "agent-name", "agentName": x["title"], "sessionId": x["session_id"]}
+        try:
+            with open(meta.jsonl_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        except Exception as e:  # noqa: BLE001
+            skipped.append({"session_id": x["session_id"], "reason": f"write_failed: {e}"})
+            continue
+        scanner.invalidate(str(meta.jsonl_path))
+        done.append({"session_id": x["session_id"], "name": x["title"], "after_restart": bool(x["status"])})
+    gone = sorted(want - {d["session_id"] for d in done} - {s["session_id"] for s in skipped})
+    return {"done": done, "skipped": skipped + [{"session_id": s, "reason": "not_mismatched"} for s in gone]}
