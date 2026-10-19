@@ -62,8 +62,8 @@ async def test_new_spawn_refused_at_cap(monkeypatch):
     import winpty
     # 새 스폰 경로 강제(재접속 대상 없음) + 상한 도달
     monkeypatch.setattr(webterm, "_get_live", lambda key: None)
-    monkeypatch.setattr(webterm, "_live_count", lambda: 12)
-    monkeypatch.delenv("SM_MAX_TERMINALS", raising=False)   # cap=12
+    monkeypatch.setattr(webterm, "_live_count", lambda: webterm.DEFAULT_MAX_TERMINALS)
+    monkeypatch.delenv("SM_MAX_TERMINALS", raising=False)   # cap=기본값
 
     def _boom(*a, **k):
         raise AssertionError("상한인데 스폰됨!")
