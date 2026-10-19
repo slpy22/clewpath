@@ -5862,6 +5862,7 @@ async function showNameSync(){
     picks.set(s.session_id, cb); r.appendChild(cb);
     const t=el('span',null,s.title+'  ← '+(s.agent_name?('지금 「'+s.agent_name+'」'):'지금 이름 없음(자동 이름)'));
     r.appendChild(t);
+    if(s.source==='label') r.appendChild(el('small',null,' · ClewPath 이름 — claude 이름도 같이 적음'));
     if(s.conflict) r.appendChild(el('small',null,' ⚠ 같은 이름이 이미 있음'));
     if(s.status==='busy') r.appendChild(el('small',null,' ⏳ 답 쓰는 중'));
     else if(s.status) r.appendChild(el('small',null,' · 떠 있음(다시 뜰 때 적용)'));
