@@ -16,13 +16,13 @@ from session_manager import webterm
 
 def test_max_live_pty_env(monkeypatch):
     monkeypatch.delenv("SM_MAX_TERMINALS", raising=False)
-    assert webterm._max_live_pty() == 12           # 기본값(2026-10-05 8→12)
+    assert webterm._max_live_pty() == 15           # 기본값(2026-10-05 8→12, 2026-10-19 12→15)
     monkeypatch.setenv("SM_MAX_TERMINALS", "3")
     assert webterm._max_live_pty() == 3
     monkeypatch.setenv("SM_MAX_TERMINALS", "0")     # 0/음수/오타 → 기본값
-    assert webterm._max_live_pty() == 12
+    assert webterm._max_live_pty() == 15
     monkeypatch.setenv("SM_MAX_TERMINALS", "oops")
-    assert webterm._max_live_pty() == 12
+    assert webterm._max_live_pty() == 15
 
 
 def test_live_count_counts_alive_and_reaps_dead(monkeypatch):
