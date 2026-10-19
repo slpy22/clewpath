@@ -5503,6 +5503,8 @@ const setStat={
     return {t:n?('세션 '+n+'개 — 30일 안에 되살리기'):'비어 있음'}; },
   skill: (key)=>async()=>{ const st=await T.api('GET','/api/owner/skills/'+key);
     return !st.installed?{t:'설치 안 됨 — 눌러서 설치'}:st.up_to_date?{t:'설치됨 · 최신'}:{t:'새 내용 있음 — 눌러서 갱신', warn:true}; },
+  names: async()=>{ const n=((await T.api('GET','/api/owner/names/agent-mismatch')).sessions||[]).length;
+    return n?{t:n+'개 세션의 통신 이름이 화면 이름과 다름 — 눌러서 맞추기', warn:true}:{t:'모두 같음'}; },
   ptyd: async()=>{ const st=await T.api('GET','/api/owner/ptyd');
     return !st||!st.enabled?{t:'꺼짐 — Host 업데이트 때 터미널 종료'}:!st.running?{t:'대기 — 터미널을 열면 시작'}
       :{t:'실행 중 · 터미널 '+(st.sessions||0)+'개'+(st.update_pending?' · ⬆ 업데이트 대기':''), warn:!!st.update_pending}; },
@@ -5554,6 +5556,7 @@ function showSettings(){
   sec('세션');
   row('🧹','정기 작업','쉬는 세션 정리 · 모델 목록 갱신',showHousekeeping,{status:setStat.housekeeping});
   row('🗑','휴지통','삭제한 세션 되살리기 (30일 보관)',showTrash,{local:true,status:setStat.trash});
+  row('🏷','통신 이름 맞추기','다른 세션이 부르는 이름을 화면 이름과 같게',showNameSync,{local:true,status:setStat.names});
   row('📥','세션 가져오기','내보낸 세션 zip 불러오기',importSession);
   row('📈','API 사용량','토큰 · 환산 비용 통계',showUsage);
 
@@ -5837,6 +5840,41 @@ function pickAssistantSession(){
   list.forEach(s=>body.appendChild(teamRow('💬', s.title||s.slug||s.session_id.slice(0,8), (s.cwd||'')+' · '+s.session_id.slice(0,8),
     ()=>requestApproval('assistant_set', {session_id:s.session_id}, ()=>openAssistant()))));
   closeModal(); openModal('비서로 지정할 세션', body, []);
+}
+
+// ---- 🏷 통신 이름 맞추기(2026-10-19 사장님 승인) — 화면 이름(claude custom-title)은 있는데 통신 이름(agent-name)이
+// 비어 다른 세션이 `004-8c` 같은 떠도는 이름으로 부르는 세션을 한 번에 맞춘다. claude 파일에 한 줄씩 쓰므로 확인창 필수.
+async function showNameSync(){
+  let list=[]; try{ list=(await T.api('GET','/api/owner/names/agent-mismatch')).sessions||[]; }
+  catch(e){ toast('목록 조회 실패: '+e.message); return; }
+  const body=el('div');
+  if(!list.length){ body.appendChild(el('p',null,'모든 세션의 통신 이름이 화면 이름과 같습니다.')); openModal('🏷 통신 이름 맞추기', body, []); return; }
+  body.appendChild(el('p',null,'다른 세션이 SendMessage 로 부르는 이름을 화면 이름과 같게 맞춥니다.'));
+  const why=el('div','cwd'); why.style.whiteSpace='pre-line';
+  why.textContent='· 세션 기록 끝에 이름 한 줄을 덧붙입니다(claude 의 /rename 과 같은 형식, 기존 줄은 그대로)'
+    +'\n· 지금 떠 있는 세션은 다음에 다시 뜰 때부터 새 이름으로 불립니다'
+    +'\n· 답을 쓰는 중인 세션은 건너뜁니다 — 나중에 다시 누르세요';
+  body.appendChild(why);
+  const picks=new Map();
+  for(const s of list){
+    const r=el('label','namesync'); r.style.display='flex'; r.style.gap='8px'; r.style.alignItems='baseline';
+    const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=!s.conflict && s.status!=='busy';
+    picks.set(s.session_id, cb); r.appendChild(cb);
+    const t=el('span',null,s.title+'  ← '+(s.agent_name?('지금 「'+s.agent_name+'」'):'지금 이름 없음(자동 이름)'));
+    r.appendChild(t);
+    if(s.conflict) r.appendChild(el('small',null,' ⚠ 같은 이름이 이미 있음'));
+    if(s.status==='busy') r.appendChild(el('small',null,' ⏳ 답 쓰는 중'));
+    else if(s.status) r.appendChild(el('small',null,' · 떠 있음(다시 뜰 때 적용)'));
+    body.appendChild(r);
+  }
+  const ok=el('button','btn','🏷 고른 세션 맞추기');
+  ok.onclick=async()=>{ const ids=[...picks].filter(([,cb])=>cb.checked).map(([id])=>id);
+    if(!ids.length){ toast('고른 세션이 없습니다'); return; }
+    ok.disabled=true;
+    try{ const r=await T.api('POST','/api/owner/names/agent-sync',{body:{session_ids:ids}});
+         closeModal(); toast((r.done||[]).length+'개 맞춤'+((r.skipped||[]).length?(' · 건너뜀 '+r.skipped.length):'')); }
+    catch(e){ ok.disabled=false; toast('실패: '+e.message); } };
+  openModal('🏷 통신 이름 맞추기', body, [ok]);
 }
 
 // ---- 🧑‍💼 사장님 프로필(A-8) — 비서가 제안, 사장님이 승인으로 확정·거절·수정·삭제 ----

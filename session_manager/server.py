@@ -551,6 +551,18 @@ def create_app() -> FastAPI:
         code = 200 if r.get("ok") else (409 if r.get("error") == "session_live" else 400)
         return JSONResponse(r, status_code=code)
 
+    # ---- 통신 이름 맞추기(2026-10-19 사장님 승인): 제목은 있는데 agent-name 이 비어 피어 이름이 떠도는 세션 ----
+    #      설정 화면 목록 + 확인창으로만. 세션마다 agent-name 한 줄 append(claude /rename 형식). 로컬 전용.
+    @app.get("/api/owner/names/agent-mismatch")
+    def agent_name_mismatch():
+        return {"sessions": native_title.agent_name_mismatches()}
+
+    @app.post("/api/owner/names/agent-sync")
+    def agent_name_sync(request: Request, session_ids: list[str] = Body(..., embed=True)):
+        if not _is_local(request):
+            return JSONResponse({"error": "이 PC(로컬)에서만 바꿀 수 있습니다."}, status_code=403)
+        return native_title.sync_agent_names(session_ids)
+
     # ---- 세션 가드레일 프로파일 (웹, 쿠키 인증) ----
     @app.get("/api/sessions/{session_id}/profile")
     def get_session_profile(session_id: str):

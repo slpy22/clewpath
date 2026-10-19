@@ -121,3 +121,45 @@ def test_peer_name_conflict_and_restart_note(home):
     r = native_title.set_native_title(sid, "겹치는이름")
     assert r["ok"] and r.get("peer_name_after_restart") is True
     assert r.get("peer_name_conflict") is True
+
+
+def test_agent_name_mismatch_list_and_sync(home, monkeypatch):
+    """제목(custom-title)만 있고 통신 이름(agent-name)이 빈 세션을 찾아, 고른 세션에만 agent-name 한 줄을 덧붙인다
+    (2026-10-19 사장님 승인). 제목은 다시 쓰지 않고, 생성 중(busy) 세션·자동 실행 기록·옛 줄은 건드리지 않는다."""
+    tmp, sid, jf = home
+    proj = jf.parent
+    def mk(s, lines):
+        p = proj / f"{s}.jsonl"
+        p.write_text("".join(json.dumps(x, ensure_ascii=False) + "\n" for x in lines), encoding="utf-8")
+        return p
+    base = [{"type": "permission-mode"}, {"type": "user", "cwd": "C:\work\demo", "entrypoint": "cli"}]
+    with jf.open("a", encoding="utf-8") as f:
+        f.write(json.dumps({"type": "custom-title", "customTitle": "북한법서비스", "sessionId": sid}, ensure_ascii=False) + "\n")
+    busy = "22222222-2222-3333-4444-555555555555"
+    mk(busy, base + [{"type": "custom-title", "customTitle": "바쁜세션", "sessionId": busy}])
+    same = "33333333-2222-3333-4444-555555555555"
+    mk(same, base + [{"type": "custom-title", "customTitle": "같음", "sessionId": same},
+                     {"type": "agent-name", "agentName": "같음", "sessionId": same}])
+    auto = "44444444-2222-3333-4444-555555555555"
+    mk(auto, [{"type": "user", "cwd": "C:\work\demo", "entrypoint": "sdk-cli"},
+              {"type": "custom-title", "customTitle": "자동", "sessionId": auto}])
+    old = "55555555-2222-3333-4444-555555555555"
+    mk(old, base + [{"type": "custom-title", "customTitle": "옛줄", "sessionId": old},
+                    {"type": "continued-in", "continuedInSessionId": "x"}])
+    monkeypatch.setattr(native_title, "session_status", lambda s: "busy" if s == busy else None)
+    monkeypatch.setattr("session_manager.peers.snapshot", lambda *a, **k: [])
+    lst = {x["session_id"]: x for x in native_title.agent_name_mismatches()}
+    assert set(lst) == {sid, busy}, "같은 이름·자동 실행·옛 줄은 목록에 없다"
+    assert lst[sid]["title"] == "북한법서비스" and lst[sid]["agent_name"] is None and not lst[sid]["conflict"]
+    before = jf.read_text(encoding="utf-8")
+    r = native_title.sync_agent_names([sid, busy, same])
+    assert [d["session_id"] for d in r["done"]] == [sid]
+    assert {s["session_id"]: s["reason"] for s in r["skipped"]} == {busy: "busy", same: "not_mismatched"}
+    after = jf.read_text(encoding="utf-8")
+    assert after.startswith(before), "기존 줄은 그대로 — 끝에 덧붙이기만"
+    assert json.loads(after.splitlines()[-1]) == {"type": "agent-name", "agentName": "북한법서비스", "sessionId": sid}
+    assert after.count('"custom-title"') == 1, "제목은 다시 쓰지 않는다"
+    assert scanner.scan_one(sid).agent_name == "북한법서비스"
+    assert sid not in {x["session_id"] for x in native_title.agent_name_mismatches()}
+    monkeypatch.setattr("session_manager.peers.snapshot", lambda *a, **k: [{"name": "바쁜세션", "session_id": "other"}])
+    assert native_title.agent_name_mismatches()[0]["conflict"] is True, "다른 세션이 이미 그 이름이면 표시"
