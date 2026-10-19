@@ -37,6 +37,8 @@ JOBS = {
                "desc": "claude /model 화면(claude 가 업데이트됐을 때·7일마다 숨은 터미널로 읽음) + 이 PC 실사용 모델로 재개 모델 목록을 새로 만듭니다(화면을 못 읽었으면 내장 기본)"},
     "worklog": {"name": "작업 장부 채우기", "interval": 5 * 60, "default_on": True,
                 "desc": "모든 세션의 요청·답 요약을 비서용 장부에 이어 적습니다(읽기만 · claude 가 기록을 지워도 장부는 남음)"},
+    "serve_keep": {"name": "서빙 세션 보관 유지", "interval": 24 * 3600, "default_on": True,
+                   "desc": "API 가 요청마다 fork 해서만 쓰는 세션(가드레일 프로필이 있는 세션)은 원본이 갱신되지 않아 claude 가 보관 기간 뒤 지웁니다. 지워지기 3일 전에 원본과 한 번 짧게 주고받아 기한을 늘립니다"},
     "cleanup_watch": {"name": "지워질 세션 예고", "interval": 24 * 3600, "default_on": True,
                       "desc": "claude 가 보관 기간(기본 30일)이 지난 대화 기록을 지우기 전에, 3일 안에 지워질 세션을 폰으로 한 번 알립니다"},
 }
@@ -386,12 +388,58 @@ def watch_cleanup(metas=None, now: float | None = None) -> dict:
     return {"soon": soon, "notified": [c["session_id"] for c in new], "days": days, "summary": summary}
 
 
+KEEP_PROMPT = "(ClewPath 보관 유지 점검 — 방문자 질문이 아님) 'ok' 라고만 답하라."
+
+
+def keep_serving(metas=None, now: float | None = None, run=None) -> dict:
+    """fork 로만 쓰는 서빙 세션(프로필 있음)을 claude 의 보관 기간 삭제에서 지킨다(2026-10-19 사장님 승인 —
+    북한법 챗봇 기준 세션 614cb260 이 fork 만 받다가 30일 만에 지워진 사고).
+
+    지워지기 ALERT_DAYS 안에 든 것만, 원본을 `-p --resume` 으로 한 번 짧게 주고받는다(claude 가 기록을 이어 쓰며
+    수정 시각이 늘어난다 — ClewPath 는 파일을 직접 건드리지 않는다). 가드레일은 fork 때와 같다.
+    지금 떠 있는 세션은 건드리지 않는다(프로세스 2개 = 대화 분기)."""
+    import os as _os
+    import subprocess
+    from session_manager import peers, policy, profiles, ptyd, retention, scanner, webapi, webterm
+    now = now or time.time()
+    if not retention.period_days():
+        return {"kept": [], "failed": [], "summary": "claude 자동 삭제 꺼짐 — 할 일 없음"}
+    recs = profiles.all_records()
+    metas = [m for m in (metas if metas is not None else scanner.scan_all()) if m.session_id in recs]
+    soon = retention.soon(metas, retention.ALERT_DAYS, now)
+    live = peers.peer_map()
+    kept, failed, skipped = [], [], []
+    for c in soon:
+        sid, cwd = c["session_id"], c.get("cwd")
+        if webterm.has_terminal(sid) or sid in live:
+            skipped.append(sid)
+            continue
+        if not cwd or not _os.path.isdir(cwd):
+            failed.append({"session_id": sid, "error": "no_cwd"})
+            continue
+        from session_manager import config as _cfg
+        argv = [_cfg.claude_exe(), "-p", "--resume", sid, "--output-format", "json"]
+        argv += webapi._guardrail_args(policy.effective_guardrails(sid), True)
+        try:
+            with webterm.session_lock(sid):
+                r = (run or subprocess.run)(argv, input=KEEP_PROMPT, cwd=cwd, env=ptyd.clean_env(), capture_output=True,
+                                            text=True, encoding="utf-8", timeout=300,
+                                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            (kept if r.returncode == 0 else failed).append(
+                sid if r.returncode == 0 else {"session_id": sid, "error": f"exit {r.returncode}"})
+        except Exception as e:  # noqa: BLE001
+            failed.append({"session_id": sid, "error": str(e)[:200]})
+    summary = (f"서빙 세션 {len(kept)}개 기한 연장" if kept else "기한이 다가온 서빙 세션 없음") +               (f" · 실패 {len(failed)}" if failed else "") + (f" · 떠 있어서 건너뜀 {len(skipped)}" if skipped else "")
+    return {"kept": kept, "failed": failed, "skipped": skipped, "summary": summary}
+
+
 def _run_worklog() -> dict:
     from session_manager import worklog
     return worklog.collect()
 
 
-_RUNNERS = {"idle_sessions": reap_idle, "models": refresh_models, "cleanup_watch": watch_cleanup, "worklog": _run_worklog}
+_RUNNERS = {"idle_sessions": reap_idle, "models": refresh_models, "serve_keep": keep_serving,
+            "cleanup_watch": watch_cleanup, "worklog": _run_worklog}
 
 
 def run_job(jid: str) -> dict:

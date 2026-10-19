@@ -95,7 +95,7 @@ def test_hours_option_and_job_state(terms):
     with pytest.raises(ValueError):
         hk.set_options(hours=3)
     hk.set_options(job="idle_sessions", on=False)
-    assert hk._due(time.time()) == ["models", "worklog", "cleanup_watch"], "꺼진 작업은 때가 돼도 줄에 안 선다"
+    assert hk._due(time.time()) == ["models", "worklog", "serve_keep", "cleanup_watch"], "꺼진 작업은 때가 돼도 줄에 안 선다"
     res = hk.run_job("idle_sessions")
     st = {j["id"]: j for j in hk.status()["jobs"]}
     assert st["idle_sessions"]["last_ok"] is True and st["idle_sessions"]["last_summary"] == res["summary"]
@@ -151,7 +151,7 @@ def test_api_and_remote_privilege(fake_claude_home, monkeypatch):
     from session_manager import labels
     with TestClient(create_app()) as c:
         st = c.get("/api/owner/housekeeping").json()
-        assert {j["id"] for j in st["jobs"]} == {"idle_sessions", "models", "worklog", "cleanup_watch"} and st["idle_hours"] == 4
+        assert {j["id"] for j in st["jobs"]} == {"idle_sessions", "models", "worklog", "serve_keep", "cleanup_watch"} and st["idle_hours"] == 4
         assert st["builtin"] and st["idle_candidates"] == []
         assert c.post("/api/owner/housekeeping", json={"hours": 8}).json()["idle_hours"] == 8
         assert c.post("/api/owner/housekeeping", json={"hours": 5}).status_code == 400
@@ -268,3 +268,32 @@ def test_cleanup_watch_warns_once_before_claude_deletes(fake_claude_home, monkey
     settings.write_text(before, encoding="utf-8")
     assert settings.read_text(encoding="utf-8") == before, "claude 설정은 읽기만"
     assert retention.delete_at(1000.0, 22) == 1000 + 22 * day
+
+
+def test_keep_serving_resumes_only_expiring_profiled_sessions(fake_claude_home, monkeypatch, tmp_path):
+    """fork 로만 쓰는 서빙 세션은 원본이 안 바뀌어 30일 뒤 claude 가 지운다(2026-10-19 북한법 챗봇 614cb260).
+    프로필 있는 세션 중 3일 안에 지워질 것만 원본을 -p --resume 으로 한 번 주고받는다 — 가드레일 그대로, 떠 있으면 건너뜀."""
+    from session_manager import peers, profiles, webterm
+    now = time.time()
+    day = 86400
+    m = lambda sid, age: NS(session_id=sid, mtime=now - age * day, cwd=str(tmp_path), custom_title=sid, ai_title=None,
+                            slug=None, headless=False)
+    metas = [m("serve-old", 28), m("serve-fresh", 5), m("plain-old", 28), m("serve-live", 28)]
+    for sid in ("serve-old", "serve-fresh", "serve-live"):
+        profiles.set_record(sid, permission_mode="dontAsk", allowed_tools=["Read(E:/x/**)"], denied_tools=["Bash"])
+    monkeypatch.setattr(peers, "peer_map", lambda: {"serve-live": {"pid": 1}})
+    monkeypatch.setattr(webterm, "has_terminal", lambda sid: False)
+    calls = []
+    def run(argv, **kw):
+        calls.append((argv, kw)); return NS(returncode=0)
+    r = hk.keep_serving(metas, now, run=run)
+    assert r["kept"] == ["serve-old"] and r["skipped"] == ["serve-live"] and r["failed"] == []
+    argv, kw = calls[0]
+    assert argv[1:5] == ["-p", "--resume", "serve-old", "--output-format"] and "--fork-session" not in argv
+    assert "--permission-mode" in argv and argv[argv.index("--permission-mode") + 1] == "dontAsk"
+    assert "--dangerously-skip-permissions" not in argv, "프로필의 권한 모드가 자동 허용보다 우선"
+    assert kw["input"] == hk.KEEP_PROMPT and kw["cwd"] == str(tmp_path)
+    assert not any(k.upper().startswith("CLAUDE_CODE_") for k in kw["env"]), "하위 claude 표식 제거(기록 저장 꺼짐 방지)"
+    assert "1개 기한 연장" in r["summary"]
+    r = hk.keep_serving(metas, now, run=lambda argv, **kw: NS(returncode=1))
+    assert r["kept"] == [] and r["failed"][0]["session_id"] == "serve-old"
