@@ -446,11 +446,20 @@ def adopt_groups() -> dict:
 def _bind(c, agent_id: str, session_id: str, reason: str, team_id: str | None = None) -> bool:
     """세션을 에이전트에 붙인다. 같은 에이전트면 멱등(False), 다른 에이전트 소유면 409.
     team_id = 그 세션이 일한 당시 소속(경력 귀속, Codex C2-6). 없으면 지금 소속."""
-    row = c.execute("SELECT agent_id FROM agent_sessions WHERE session_id=?", (session_id,)).fetchone()
+    row = c.execute("SELECT agent_id, ended FROM agent_sessions WHERE session_id=?", (session_id,)).fetchone()
     if row:
         if row["agent_id"] != agent_id:
             raise TeamError("session_owned_by_other_agent", 409)
-        return False
+        cur = c.execute("SELECT session_id FROM agent_sessions WHERE agent_id=? ORDER BY (ended IS NULL) DESC, started DESC, rowid DESC LIMIT 1",
+                        (agent_id,)).fetchone()
+        if row["ended"] is None and cur and cur["session_id"] == session_id:
+            return False                             # 이미 지금 세션 — 멱등
+        # 예전에 붙었던 세션을 다시 붙임 = 지금 세션으로 되살린다(2026-10-19: 멱등 무시라 API 로 되돌릴 수 없었다)
+        now = _now()
+        c.execute("UPDATE agent_sessions SET ended=? WHERE agent_id=? AND ended IS NULL AND session_id<>?",
+                  (now, agent_id, session_id))
+        c.execute("UPDATE agent_sessions SET ended=NULL, started=?, reason=? WHERE session_id=?", (now, reason, session_id))
+        return True
     now = _now()
     if not team_id:
         r = c.execute("SELECT team_id FROM memberships WHERE agent_id=? AND left_at IS NULL ORDER BY joined DESC LIMIT 1",
@@ -489,6 +498,15 @@ def add_member(team_id: str, alias: str, role: str = "", tags=None, session_id: 
                          (t["id"], agent_id)).fetchone():
                 raise TeamError("already_member", 409)
             aid = agent_id
+            # 다른 팀에서 일하는 에이전트를 '다른 세션' 과 함께 데려오면 그 팀의 지금 세션까지 바뀐다
+            # (2026-10-17 NKCLASS 생성: NKLAW 관리 + 수업 세션 → NKLAW 관리가 수업 세션을 가리킴). 이 팀 몫 새 에이전트로.
+            if session_id and not c.execute("SELECT 1 FROM agent_sessions WHERE session_id=? AND agent_id=?",
+                                            (str(session_id), aid)).fetchone() \
+                    and c.execute("SELECT 1 FROM memberships WHERE agent_id=? AND left_at IS NULL", (aid,)).fetchone():
+                src = c.execute("SELECT role, tags_json FROM agents WHERE id=?", (aid,)).fetchone()
+                aid = "ag_" + secrets.token_hex(4)
+                c.execute("INSERT INTO agents(id,alias,role,tags_json,created) VALUES(?,?,?,?,?)",
+                          (aid, alias, _clean(role, 120) or src["role"], src["tags_json"], _now()))
         else:
             aid = "ag_" + secrets.token_hex(4)
             c.execute("INSERT INTO agents(id,alias,role,tags_json,created) VALUES(?,?,?,?,?)",
@@ -509,10 +527,40 @@ def bind_session(team_id: str, agent_id: str, session_id: str, reason: str = "re
         raise TeamError("bad_reason")
     with _Tx() as c:
         t = _team_row(c, team_id)
-        aid = _member_row(c, t["id"], agent_id)["agent_id"]       # 별칭으로 불러도 실제 에이전트 id 로
-        if _bind(c, aid, str(session_id), reason):
+        m = _member_row(c, t["id"], agent_id)
+        aid = m["agent_id"]                                       # 별칭으로 불러도 실제 에이전트 id 로
+        sid = str(session_id)
+        # 여러 팀이 함께 쓰는 에이전트(한 관리자가 여러 팀)에 새 세션을 붙이면 다른 팀의 '지금 세션' 까지 바뀐다
+        # (2026-10-19 NKCLASS 생성 때 NKLAW 관리가 죽은 수업 세션을 가리킨 사고). 이 팀 몫으로 에이전트를 갈라 붙인다.
+        shared = c.execute("SELECT 1 FROM memberships WHERE agent_id=? AND left_at IS NULL AND team_id<>?",
+                           (aid, t["id"])).fetchone()
+        mine = c.execute("SELECT 1 FROM agent_sessions WHERE session_id=? AND agent_id=?", (sid, aid)).fetchone()
+        if shared and not mine:
+            aid = _split_member(c, t, m)
+        if _bind(c, aid, sid, reason):
             _event(c, t["id"], "session_bound", agent_id=aid, payload={"session_id": session_id, "reason": reason})
     return member(team_id, aid)
+
+
+def _split_member(c, t, m) -> str:
+    """이 팀의 구성원 m 을 새 에이전트로 갈라낸다(별칭·역할·편집 범위·관리자 지위·진행 중 일감은 이 팀 쪽이 그대로 가져감).
+    옛 에이전트는 다른 팀에 그대로 남고 이력도 그대로다."""
+    old = m["agent_id"]
+    a = c.execute("SELECT alias, role, tags_json FROM agents WHERE id=?", (old,)).fetchone()
+    new = "ag_" + secrets.token_hex(4)
+    now = _now()
+    c.execute("INSERT INTO agents(id,alias,role,tags_json,created) VALUES(?,?,?,?,?)",
+              (new, a["alias"], a["role"], a["tags_json"], now))
+    c.execute("UPDATE memberships SET left_at=? WHERE team_id=? AND agent_id=? AND left_at IS NULL", (now, t["id"], old))
+    c.execute("INSERT INTO memberships(team_id,agent_id,alias,member_role,write_scope_json,joined) VALUES(?,?,?,?,?,?)",
+              (t["id"], new, m["alias"], m["member_role"], m["write_scope_json"], now))
+    if t["manager_agent"] == old:
+        c.execute("UPDATE teams SET manager_agent=? WHERE id=?", (new, t["id"]))
+    c.execute(f"UPDATE tasks SET owner_agent=? WHERE team_id=? AND owner_agent=? AND status IN ({','.join('?' * len(OPEN_STATUSES))})",
+              (new, t["id"], old, *OPEN_STATUSES))
+    _event(c, t["id"], "member_split", agent_id=new,
+           payload={"alias": m["alias"], "from": old, "note": "다른 팀과 함께 쓰던 에이전트에 새 세션을 붙여 이 팀 몫으로 갈라냄"})
+    return new
 
 
 def _member_row(c, team_id: str, agent_ref: str):
@@ -593,7 +641,7 @@ def current_session(agent_id: str) -> str | None:
     새 세션이 나오면 agent_sessions 에 'continued' 로 적는다(eng E-3: 워커 교체도 추적)."""
     c = _read()
     try:
-        r = c.execute("SELECT session_id FROM agent_sessions WHERE agent_id=? ORDER BY started DESC, rowid DESC LIMIT 1",
+        r = c.execute("SELECT session_id FROM agent_sessions WHERE agent_id=? ORDER BY (ended IS NULL) DESC, started DESC, rowid DESC LIMIT 1",
                       (agent_id,)).fetchone()
     finally:
         c.close()
