@@ -25,7 +25,8 @@ ClewPath 는 claude 를 **관찰·중계·실행**하는 도구이지, claude �
     (피어 이름(SendMessage·ListAgents)이 목록 이름과 갈리지 않게, 이름 없는 세션에 이름 붙이기 포함). 결과는 claude 의 /rename 과
     같아서 헤드리스(-p) 세션에 이름을 붙이면 claude 재개 피커에도 나타난다(사장님 감수). native_title.py, 가드: test_native_title.py
   · **2026-10-19 사장님 승인 — 통신 이름 맞추기**: 설정 → 🏷 통신 이름 맞추기(목록 + 확인창)로만, 제목(custom-title)은 있는데
-    agent-name 이 비었거나 다른 세션에 agent-name **한 줄만** append(제목은 다시 쓰지 않음). 생성 중(busy)·자동 실행(-p)·이어받은 옛 줄은
+    agent-name 이 비었거나 다른 세션에 agent-name **한 줄만** append(제목은 다시 쓰지 않음). 화면 이름이 ClewPath 라벨 이름뿐인
+    세션은 이름 바꾸기와 같은 두 줄(custom-title + agent-name)을 적는다(0.23.7). 생성 중(busy)·자동 실행(-p)·이어받은 옛 줄은
     건너뜀, 로컬 전용. 떠 있는 세션은 다시 뜰 때 새 이름. 화면 이름과 통신 이름은 하나로 관리한다(별도 체계 두지 않음).
     native_title.agent_name_mismatches / sync_agent_names, 가드: test_native_title.py::test_agent_name_mismatch_list_and_sync
 - 세션 이사(move_session) → jsonl 을 새 cwd 인코딩 폴더로 물리 이동 + cwd 치환

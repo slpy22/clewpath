@@ -163,3 +163,20 @@ def test_agent_name_mismatch_list_and_sync(home, monkeypatch):
     assert sid not in {x["session_id"] for x in native_title.agent_name_mismatches()}
     monkeypatch.setattr("session_manager.peers.snapshot", lambda *a, **k: [{"name": "바쁜세션", "session_id": "other"}])
     assert native_title.agent_name_mismatches()[0]["conflict"] is True, "다른 세션이 이미 그 이름이면 표시"
+
+
+def test_agent_name_sync_label_named_session(home, monkeypatch):
+    """화면 이름이 ClewPath 라벨 이름에서만 오는 세션(claude 이름 없음)도 목록에 나오고, 맞추면 claude 이름과 통신 이름을
+    함께 적는다 — 기존 이름 바꾸기와 같은 두 줄(2026-10-19 북한법률정보센터 관리 세션 사례)."""
+    _, sid, jf = home
+    monkeypatch.setattr(native_title, "session_status", lambda s: None)
+    monkeypatch.setattr("session_manager.peers.snapshot", lambda *a, **k: [])
+    monkeypatch.setattr("session_manager.labels.all_records", lambda: {sid: {"name": "북한법률정보센터"}})
+    lst = native_title.agent_name_mismatches()
+    assert [(x["session_id"], x["title"], x["source"]) for x in lst] == [(sid, "북한법률정보센터", "label")]
+    assert native_title.sync_agent_names([sid])["done"][0]["name"] == "북한법률정보센터"
+    tail = [json.loads(l) for l in jf.read_text(encoding="utf-8").splitlines()[-2:]]
+    assert tail == [{"type": "custom-title", "customTitle": "북한법률정보센터", "sessionId": sid},
+                    {"type": "agent-name", "agentName": "북한법률정보센터", "sessionId": sid}]
+    m = scanner.scan_one(sid)
+    assert m.custom_title == m.agent_name == "북한법률정보센터" and native_title.agent_name_mismatches() == []

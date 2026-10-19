@@ -96,15 +96,20 @@ def set_native_title(session_id: str, title: str,
 # 확인창을 거쳐 세션마다 agent-name 한 줄만 append 한다(claude /rename 과 같은 형식, 제목은 그대로).
 
 def agent_name_mismatches(metas=None) -> list[dict]:
-    """claude 이름(custom-title)은 있는데 통신 이름(agent-name)이 비었거나 다른 세션.
-    자동 실행(-p) 기록·이어받은 옛 줄은 뺀다(옛 줄에 쓰면 이어받은 새 세션과 이름이 갈린다)."""
+    """화면 이름은 있는데 통신 이름(agent-name)이 비었거나 다른 세션.
+    화면 이름 = claude 이름(custom-title), 없으면 ClewPath 에서 붙인 이름(라벨 name — 맞출 때 claude 이름도 함께 적는다,
+    source="label"). 자동 실행(-p) 기록·이어받은 옛 줄은 뺀다(옛 줄에 쓰면 이어받은 새 세션과 이름이 갈린다)."""
+    from session_manager import labels
+    names_of = labels.all_records()
     out = []
     for m in (metas if metas is not None else scanner.scan_all()):
-        t = (m.custom_title or "").strip()
+        t, src = (m.custom_title or "").strip(), "claude"
+        if not t:
+            t, src = ((names_of.get(m.session_id) or {}).get("name") or "").strip(), "label"
         if not t or m.headless or m.continued_in or (m.agent_name or "") == t:
             continue
         out.append({"session_id": m.session_id, "title": t, "agent_name": m.agent_name, "cwd": m.cwd,
-                    "status": session_status(m.session_id)})
+                    "source": src, "status": session_status(m.session_id)})
     names = {}
     for x in out:
         names[x["title"]] = names.get(x["title"], 0) + 1
@@ -130,10 +135,12 @@ def sync_agent_names(session_ids: list[str]) -> dict:
             skipped.append({"session_id": x["session_id"], "reason": "busy"})
             continue
         meta = scanner.scan_one(x["session_id"])
-        rec = {"type": "agent-name", "agentName": x["title"], "sessionId": x["session_id"]}
+        recs = [{"type": "agent-name", "agentName": x["title"], "sessionId": x["session_id"]}]
+        if x["source"] == "label":    # ClewPath 이름뿐이면 claude 이름도 같이(= 기존 이름 바꾸기와 같은 두 줄)
+            recs.insert(0, {"type": "custom-title", "customTitle": x["title"], "sessionId": x["session_id"]})
         try:
-            with open(meta.jsonl_path, "a", encoding="utf-8") as f:
-                f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            with open(meta.jsonl_path, "a", encoding="utf-8") as f:   # 한 번에(두 줄 사이에 다른 쓰기가 끼지 않게)
+                f.write("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in recs))
         except Exception as e:  # noqa: BLE001
             skipped.append({"session_id": x["session_id"], "reason": f"write_failed: {e}"})
             continue
