@@ -55,6 +55,7 @@ class ProfileReq(BaseModel):
     deny_patterns: list[str] | None = None
     max_prompt_chars: int | None = None
     max_output_chars: int | None = None
+    settings: dict | None = None
 
     def to_fields(self) -> dict:
         return {k: v for k, v in self.model_dump().items() if v is not None}
@@ -1659,12 +1660,13 @@ def create_app() -> FastAPI:
     #      → {"status":"started","session_id":…,"pid":…}. 로컬 전용(terminal/start 와 같음).
     @app.post("/api/terminal/new")
     def terminal_new(request: Request, cwd: str = Body(..., embed=True), prompt: str = Body("", embed=True),
-                     skip: bool = Body(True, embed=True), session_id: str | None = Body(None, embed=True)):
+                     skip: bool = Body(True, embed=True), session_id: str | None = Body(None, embed=True),
+                     settings: dict | None = Body(None, embed=True)):
         from session_manager import webterm
         if not _is_local(request):
             return JSONResponse({"error": "이 PC(로컬)에서만 워커를 만들 수 있습니다."}, status_code=403)
         try:
-            return webterm.start_new(cwd, prompt, skip_permissions=skip, session_id=session_id)
+            return webterm.start_new(cwd, prompt, skip_permissions=skip, session_id=session_id, settings=settings)
         except webterm.TermStartError as e:
             status = {"cap": 409, "exists": 409, "no_cwd": 404}.get(e.code, 400 if e.code.startswith("bad_") else 500)
             return JSONResponse({"error": e.code, "message": str(e)}, status_code=status)

@@ -100,6 +100,8 @@ def _guardrail_args(g: dict, skip_permissions: bool) -> list[str]:
         args += ["--model", str(g["model"])]
     if g.get("system_prompt"):
         args += ["--append-system-prompt", str(g["system_prompt"])]
+    if g.get("settings"):
+        args += ["--settings", json.dumps(g["settings"])]
     if g.get("max_budget_usd") and g["max_budget_usd"] > 0:
         args += ["--max-budget-usd", str(g["max_budget_usd"])]
     # 권한 모드가 지정되면 그걸 쓰고, 아니면 비인터랙티브용 skip
