@@ -179,7 +179,7 @@ def test_new_endpoint_local_only(fake_claude_home, monkeypatch, tmp_path):
     from session_manager import server as _srv
     from session_manager.server import create_app
     calls = []
-    monkeypatch.setattr(webterm, "start_new", lambda cwd, prompt="", skip_permissions=True, session_id=None, settings=None:
+    monkeypatch.setattr(webterm, "start_new", lambda cwd, prompt="", skip_permissions=True, session_id=None:
                         calls.append((cwd, prompt, skip_permissions, session_id)) or {"status": "started", "session_id": W, "pid": 7})
     body = {"cwd": str(tmp_path), "prompt": "안녕"}
     with TestClient(create_app()) as c:
@@ -269,28 +269,3 @@ def test_no_skill_install_on_startup(fake_claude_home, monkeypatch):
         r = c.post("/api/owner/skills/workers/install")
         assert r.status_code == 200 and skillinstall.target_path().is_file()
         assert c.post("/api/owner/skills/workers/install").status_code == 409
-
-
-def test_profile_settings_pass_through_everywhere(fake_claude_home, monkeypatch, tmp_path):
-    """서빙 세션을 다른 세션과 같은 폴더에 두면 그 폴더의 자동 기억(MEMORY.md)이 문맥·기록에 실린다(2026-10-19 실측).
-    프로필 settings(허용 키만)를 fork(API)·보관 유지·사람이 여는 터미널·새 세션 만들기 모두에 --settings 로 넘긴다."""
-    import json as _json
-    from session_manager import policy, profiles, webapi
-    rec = profiles.set_record(W, settings={"autoMemoryEnabled": False, "permissions": {"allow": ["Bash"]}, "x": 1})
-    assert rec["settings"] == {"autoMemoryEnabled": False}, "허용 키만 남는다 — 권한 규칙은 settings 로 못 넣는다"
-    g = policy.effective_guardrails(W)
-    args = webapi._guardrail_args(g, True)
-    assert args[args.index("--settings") + 1] == _json.dumps({"autoMemoryEnabled": False})
-    argv = webterm._claude_argv(W, True)
-    assert argv[argv.index("--settings") + 1] == _json.dumps({"autoMemoryEnabled": False})
-    assert "--settings" not in webterm._claude_argv(M, True), "프로필 없는 세션은 그대로"
-    assert profiles.set_record(W, settings={"autoMemoryEnabled": "no"}) == {}, "타입이 틀리면 버린다(레코드가 비면 삭제)"
-    webterm._ACTIVE.clear()
-    launched = []
-    monkeypatch.setattr(webterm, "_launch", lambda key, sid, argv, cwd, persist, cap: launched.append(argv) or
-                        webterm._TermSession(key, _FakeProc(1), persist=True))
-    webterm.start_new(str(tmp_path), "ready", skip_permissions=False, session_id=M,
-                      settings={"autoMemoryEnabled": False, "env": {"A": "1"}})
-    a = launched[0]
-    assert a[a.index("--settings") + 1] == _json.dumps({"autoMemoryEnabled": False}) and a[-1] == "ready"
-    webterm._ACTIVE.clear()
