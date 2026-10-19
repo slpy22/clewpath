@@ -134,6 +134,65 @@ def test_start_endpoint_local_only_and_errors(fake_claude_home, monkeypatch):
         assert r.status_code == 409 and r.json()["error"] == "cap"
 
 
+def test_start_new_interactive_session(monkeypatch, fake_claude_home, tmp_path):
+    """워커 만들기(2026-10-19 사장님): -p 가 아니라 대화형 claude 를 --session-id 로 띄운다 — 헤드리스로
+    분류돼 목록에서 숨는 일이 없다. 멱등·상한·검증은 terminal/start 와 같은 규칙."""
+    webterm._ACTIVE.clear()
+    launched = []
+    def fake_launch(key, sid, argv, cwd, persist, cap):
+        launched.append((key, argv, cwd, persist))
+        s = webterm._TermSession(key, _FakeProc(2000 + len(launched)), persist=persist); webterm._ACTIVE[key] = s; return s
+    monkeypatch.setattr(webterm, "_launch", fake_launch)
+    r = webterm.start_new(str(tmp_path), "너는 '조선중앙통신' 워커다. 지금은 ready 라고만 답하라.", session_id=W)
+    assert r == {"status": "started", "session_id": W, "pid": 2001}
+    key, argv, cwd, persist = launched[0]
+    assert key == W and cwd == str(tmp_path) and persist is True
+    assert argv[1:] == ["--session-id", W, "--dangerously-skip-permissions", "너는 '조선중앙통신' 워커다. 지금은 ready 라고만 답하라."]
+    assert "-p" not in argv and "--print" not in argv and "--resume" not in argv
+    assert webterm.start_new(str(tmp_path), "x", session_id=W)["status"] == "already_live" and len(launched) == 1
+    webterm._ACTIVE.clear()
+    auto = webterm.start_new(str(tmp_path), "", skip_permissions=False)        # id 생략 → 새 uuid, 지시 없음
+    assert webterm._UUID_RE.match(auto["session_id"]) and launched[-1][1][1:] == ["--session-id", auto["session_id"]]
+    for kw, code in ((dict(cwd=str(tmp_path / "없음")), "no_cwd"), (dict(cwd=str(tmp_path), session_id="nope"), "bad_session_id"),
+                     (dict(cwd=str(tmp_path), prompt="--model x"), "bad_prompt")):
+        with pytest.raises(webterm.TermStartError) as e:
+            webterm.start_new(**kw)
+        assert e.value.code == code
+    write_session(fake_claude_home, "C--x", M, [{"type": "user", "cwd": str(tmp_path)}])
+    with pytest.raises(webterm.TermStartError) as e:
+        webterm.start_new(str(tmp_path), "x", session_id=M)                 # 있는 세션은 새로 만들지 않는다
+    assert e.value.code == "exists"
+    webterm._ACTIVE.clear()
+    monkeypatch.setenv("SM_MAX_TERMINALS", "1")
+    webterm._ACTIVE["other"] = webterm._TermSession("other", _FakeProc(1), persist=True)
+    with pytest.raises(webterm.TermStartError) as e:
+        webterm.start_new(str(tmp_path), "x")
+    assert e.value.code == "cap"
+    webterm._ACTIVE.clear()
+
+
+def test_new_endpoint_local_only(fake_claude_home, monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+    for k in ("SM_RELAY_URL", "SM_RELAY_ROOM", "SM_RELAY_AGENT_TOKEN", "SM_CP_URL"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("SM_HOST", "127.0.0.1")
+    from session_manager import server as _srv
+    from session_manager.server import create_app
+    calls = []
+    monkeypatch.setattr(webterm, "start_new", lambda cwd, prompt="", skip_permissions=True, session_id=None:
+                        calls.append((cwd, prompt, skip_permissions, session_id)) or {"status": "started", "session_id": W, "pid": 7})
+    body = {"cwd": str(tmp_path), "prompt": "안녕"}
+    with TestClient(create_app()) as c:
+        assert c.post("/api/terminal/new", json=body).status_code == 403
+        monkeypatch.setattr(_srv, "_is_local", lambda r: True)
+        r = c.post("/api/terminal/new", json=body)
+        assert r.status_code == 200 and r.json()["session_id"] == W and calls == [(str(tmp_path), "안녕", True, None)]
+        def boom(*a, **k):
+            raise webterm.TermStartError("bad_prompt", "x", "")
+        monkeypatch.setattr(webterm, "start_new", boom)
+        assert c.post("/api/terminal/new", json=body).status_code == 400
+
+
 # ---------------------------------------------------------------- monitor: SendMessage 호출선·수신
 
 def _use_sendmsg(tid, to, msg="일감 1"):

@@ -1654,6 +1654,21 @@ def create_app() -> FastAPI:
             status = {"cap": 409, "bg_hold": 409, "continued": 409, "no_cwd": 404}.get(e.code, 500)
             return JSONResponse({"error": e.code, "message": str(e)}, status_code=status)
 
+    # ---- 새 대화형 세션을 화면 없이 띄운다(워커 만들기, 2026-10-19 사장님: -p 로 만들지 않는다) ----
+    #      body {"cwd": "...", "prompt": "<첫 지시>", "skip": true, "session_id": "<uuid, 생략 가능>"}
+    #      → {"status":"started","session_id":…,"pid":…}. 로컬 전용(terminal/start 와 같음).
+    @app.post("/api/terminal/new")
+    def terminal_new(request: Request, cwd: str = Body(..., embed=True), prompt: str = Body("", embed=True),
+                     skip: bool = Body(True, embed=True), session_id: str | None = Body(None, embed=True)):
+        from session_manager import webterm
+        if not _is_local(request):
+            return JSONResponse({"error": "이 PC(로컬)에서만 워커를 만들 수 있습니다."}, status_code=403)
+        try:
+            return webterm.start_new(cwd, prompt, skip_permissions=skip, session_id=session_id)
+        except webterm.TermStartError as e:
+            status = {"cap": 409, "exists": 409, "no_cwd": 404}.get(e.code, 400 if e.code.startswith("bad_") else 500)
+            return JSONResponse({"error": e.code, "message": str(e)}, status_code=status)
+
     # ---- 원격 권한 승인: 실행 중인 ClewPath 터미널의 권한 프롬프트에 키 주입 ----
     @app.post("/api/owner/sessions/{session_id}/respond")
     async def owner_session_respond(session_id: str, request: Request):
