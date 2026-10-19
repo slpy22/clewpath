@@ -67,14 +67,23 @@ v1 등록부로 팀 만들기 `team_import` `{"path":"<프로젝트 루트>"}` �
 
 ### 워커 만들기 (워커당 1회)
 
-```bash
-cd <워커 작업 폴더> && claude -p --output-format json "너는 '<별칭>' 워커다(역할: <역할>). 팀 <팀 코드>, 명부는 http://127.0.0.1:5100/api/v1/team/<team>(<team> = 팀 코드). 동료와의 통신은 clewpath-workers 스킬의 워커 모드를 따른다. 터미널에 쓰는 글은 모두 한국어로 쓴다(동료 메시지 본문은 영어 가능, 첫 줄 결론은 한국어). 지금은 'ready' 라고만 답하라."
-# 응답 JSON 의 session_id 로 → POST /api/v1/team/<team>/members {"alias":"<별칭>","role":"<역할>","session_id":"…","write_scope":["<경로 패턴>"]}
+ClewPath 가 **대화형** claude 를 화면 없이 띄워 새 세션을 만든다. **`claude -p` 로 만들지 않는다** — `-p` 산물은 자동 실행 기록(headless)으로 분류돼
+ClewPath 세션 목록·claude 재개 목록에 나오지 않는다(2026-10-19 사장님).
+
+```
+POST http://127.0.0.1:5100/api/terminal/new
+{"cwd":"<워커 작업 폴더>","skip":true,
+ "prompt":"너는 '<별칭>' 워커다(역할: <역할>). 팀 <팀 코드>, 명부는 http://127.0.0.1:5100/api/v1/team/<team>(<team> = 팀 코드). 동료와의 통신은 clewpath-workers 스킬의 워커 모드를 따른다. 터미널에 쓰는 글은 모두 한국어로 쓴다(동료 메시지 본문은 영어 가능, 첫 줄 결론은 한국어). 지금은 'ready' 라고만 답하라."}
+→ {"status":"started","session_id":"<새 uuid>","pid":…}     실패: 409 cap / 404 no_cwd / 400 bad_prompt('-' 로 시작 금지)
 ```
 
-**처음 쓰는 폴더**면 터미널로 띄운 워커가 Claude Code 의 '이 폴더를 신뢰합니까?' 질문에서 멈춘다(팀 GET 에서 `live:false` 가 계속됨). 사용자에게 ClewPath 에서 그 세션 탭을 열어 'Yes, I trust this folder' 를 고르게 하거나, 이미 신뢰한 폴더를 작업 폴더로 쓴다. 이 질문에 대신 답하지 않는다(보안 확인은 사람 몫).
+응답의 `session_id` 로 바로 `POST /api/v1/team/<team>/members {"alias":"<별칭>","role":"<역할>","session_id":"…","write_scope":["<경로 패턴>"]}`.
+띄운 워커는 첫 지시에 답한 뒤 **살아 있는 워커로 남는다**(곧바로 일감을 보내도 된다 — 「보내는 법」 1단계로 address 를 읽는다).
+한글 JSON 은 `printf '%s' '<json>' | curl -s -X POST … -H 'Content-Type: application/json' --data-binary @-` 로 보낸다.
 
-이 `-p` 는 **아직 살아 있지 않은 새 세션을 만드는 1회성**이라 규칙 1 과 충돌하지 않는다. 이미 있는 워커(v1)에는 위 문장과 같은 **온보딩 메시지를 SendMessage 로 1회** 보낸다.
+**처음 쓰는 폴더**면 워커가 Claude Code 의 '이 폴더를 신뢰합니까?' 질문에서 멈춘다(팀 GET 에서 `live:false` 가 계속됨). 사용자에게 ClewPath 에서 그 세션 탭을 열어 'Yes, I trust this folder' 를 고르게 하거나, 이미 신뢰한 폴더를 작업 폴더로 쓴다. 이 질문에 대신 답하지 않는다(보안 확인은 사람 몫).
+
+예전에 `-p` 로 만든 워커는 `terminal/start` 로 한 번 띄워 일감을 보내면 대화형 기록이 생겨 일반 세션으로 보인다. 이미 있는 워커(v1)에는 위 지시와 같은 **온보딩 메시지를 SendMessage 로 1회** 보낸다.
 
 ### 일감 배정
 

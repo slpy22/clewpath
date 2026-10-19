@@ -23,8 +23,10 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 import threading
 import time
+import uuid
 from collections import deque
 from contextlib import contextmanager
 
@@ -552,7 +554,6 @@ def _spawn(session_id: str, skip_permissions: bool = True,
     호출 전에 살아 있는지(_get_live)는 호출자가 확인한다 — 같은 세션에 프로세스가
     2개 생기면 대화가 갈라지므로, 여기 오는 건 '없음' 이 확정된 뒤여야 한다.
     """
-    from session_manager import osdep
     key = fork_id or session_id
     # 서버측 PTY 상한(진짜 안전 밸브). 재접속은 프로세스를 안 늘리니 새 스폰만 막는다.
     cap = _max_live_pty()
@@ -596,12 +597,17 @@ def _spawn(session_id: str, skip_permissions: bool = True,
                 "포크로 재개하거나, PC 터미널의 claude agents 에서 해당 "
                 "에이전트를 확인·종료한 뒤 다시 재개하세요.\r\n")
     argv = _claude_argv(session_id, skip_permissions, fork_id)
-    from session_manager import ptyclient
+    return _launch(key, session_id, argv, cwd, persist=not fork_id, cap=cap)
+
+
+def _launch(key: str, session_id: str, argv: list[str], cwd: str, persist: bool, cap: int) -> _TermSession:
+    """argv 를 PTY 로 띄워 등록한다(브로커 우선). _spawn·start_new 공용."""
+    from session_manager import osdep, ptyclient
     if ptyclient.enabled():
         # 터미널 관리 프로세스(브로커)가 소유 — Host 재기동·업데이트에도 산다(docs/designs/pty-broker.md).
         # 고아 방지는 브로커의 Job 이 맡는다(브로커가 죽으면 커널이 claude 를 함께 끝냄).
-        proc = _broker_spawn(key, session_id, argv, cwd, persist=not fork_id, cap=cap)
-        sess = _TermSession(key, proc, persist=not fork_id)
+        proc = _broker_spawn(key, session_id, argv, cwd, persist=persist, cap=cap)
+        sess = _TermSession(key, proc, persist=persist)
         _ACTIVE[key] = sess
         _start_reader(sess)
         return sess
@@ -610,7 +616,7 @@ def _spawn(session_id: str, skip_permissions: bool = True,
     except Exception as e:  # noqa: BLE001
         raise TermStartError("spawn_failed", f"터미널 시작 실패: {e}",
                              f"\r\n\x1b[31m[오류] 터미널 시작 실패: {e}\x1b[0m\r\n")
-    sess = _TermSession(key, proc, persist=not fork_id)
+    sess = _TermSession(key, proc, persist=persist)
     # 고아 방지 3중: ① Job Object(커널 동반 종료 - Host 가 어떻게 죽든)
     # ② 자기 등록부(① 실패 대비 부팅 청소) ③ 정상 종료 shutdown_all
     osdep.guard_child(getattr(proc, "pid", None))
@@ -718,6 +724,44 @@ def start_terminal(session_id: str, skip_permissions: bool = True) -> dict:
             return {"status": "already_live", "pid": getattr(live.proc, "pid", None)}
         sess = _spawn(session_id, skip_permissions, None)
         return {"status": "started", "pid": getattr(sess.proc, "pid", None)}
+
+
+_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+def start_new(cwd: str, prompt: str = "", skip_permissions: bool = True,
+              session_id: str | None = None) -> dict:
+    """새 **대화형** 세션을 화면 없이 띄운다(워커 만들기, 2026-10-19 사장님: 워커를 -p 로 만들지 않는다).
+
+    `claude --session-id <uuid> [--dangerously-skip-permissions] "<prompt>"` — 첫 지시를 받아 처리한 뒤
+    살아 있는 워커로 남는다. -p 로 만든 세션은 헤드리스로 분류돼 목록에서 빠지고 피커에도 안 나온다.
+    처음 쓰는 폴더면 claude 가 폴더 신뢰 질문에서 멈춘다 — 대신 답하지 않는다(사용자가 탭을 열어 고른다).
+    """
+    sid = (session_id or str(uuid.uuid4())).lower()
+    if not _UUID_RE.match(sid):
+        raise TermStartError("bad_session_id", "session_id 는 UUID 여야 합니다", "")
+    if scan_one(sid) is not None:
+        raise TermStartError("exists", f"이미 있는 세션입니다: {sid} — terminal/start 로 띄우세요", "")
+    if not cwd or not os.path.isdir(cwd):
+        raise TermStartError("no_cwd", f"작업 폴더를 찾을 수 없습니다: {cwd or '(미상)'}", "")
+    prompt = (prompt or "").strip()
+    if prompt.startswith("-"):
+        raise TermStartError("bad_prompt", "첫 지시는 '-' 로 시작할 수 없습니다(옵션으로 읽힘)", "")
+    from session_manager import config as _cfg
+    argv = [_cfg.claude_exe(), "--session-id", sid]
+    if skip_permissions:
+        argv.append("--dangerously-skip-permissions")
+    if prompt:
+        argv.append(prompt)
+    with session_lock(sid):
+        live = _get_live(sid)
+        if live is not None:
+            return {"status": "already_live", "session_id": sid, "pid": getattr(live.proc, "pid", None)}
+        cap = _max_live_pty()
+        if _live_count() >= cap:
+            raise TermStartError("cap", f"동시에 열 수 있는 터미널 상한({cap}개)에 도달했습니다", "")
+        sess = _launch(sid, sid, argv, cwd, persist=True, cap=cap)
+    return {"status": "started", "session_id": sid, "pid": getattr(sess.proc, "pid", None)}
 
 
 async def run_terminal(ws, session_id: str, skip_permissions: bool = True,
