@@ -662,7 +662,7 @@ def adopt_broker_sessions() -> int:
     h = ptyclient.hello()
     if not h or not h.get("ok"):
         return 0
-    if h.get("hash") != ptyclient.ptyd.code_hash() and not h.get("sessions"):
+    if ptyclient.stale(h) and not h.get("sessions"):
         ptyclient.restart(force=False)       # 다음 스폰이 새 코드로 띄운다
         return 0
     n = 0

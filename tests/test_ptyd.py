@@ -317,3 +317,31 @@ def test_test_process_never_reaches_real_broker():
     real = Path.home() / ".claude"
     assert config.claude_home().resolve() != real.resolve()
     assert ptyd.pipe_address() != ptyd.pipe_address(real / "session_manager")
+
+
+def test_code_hash_fixed_at_start_and_legacy_broker_is_stale(monkeypatch):
+    """0.28.1: 해시는 기동 때 한 번. 업데이트가 설치 폴더의 ptyd.py 를 바꿔쳐도 떠 있는 브로커는 옛 해시를 말해야 한다
+    (예전엔 부를 때마다 파일을 다시 읽어 옛 브로커도 새 해시를 말했다 → 업데이트 대기가 안 떴다)."""
+    h0 = ptyd.code_hash()
+    monkeypatch.setattr(ptyd, "_file_hash", lambda: "changed00000")     # 디스크의 파일이 바뀐 상황
+    assert ptyd.code_hash() == h0
+    ok = {"ok": True, "hash": h0, "hash_at": ptyd.HASH_AT}
+    assert ptyclient.stale(ok) is False
+    assert ptyclient.stale({**ok, "hash": "other0000000"}) is True
+    assert ptyclient.stale({"ok": True, "hash": h0}) is True, "hash_at 없는 옛 브로커는 한 번 교체 대상"
+    assert ptyclient.stale(None) is False and ptyclient.stale({"ok": False}) is False
+
+
+def test_legacy_broker_swapped_only_when_no_sessions(monkeypatch):
+    """옛 브로커(hash_at 없음): 세션 0 이면 Host 기동 때 조용히 교체(D2), 세션이 있으면 그대로 두고 설정에서 확인."""
+    calls = []
+    monkeypatch.setattr(ptyclient, "enabled", lambda: True)
+    monkeypatch.setattr(ptyclient, "restart", lambda force=False: calls.append(force) or {"ok": True})
+    monkeypatch.setattr(ptyclient, "sessions", lambda: [])
+    monkeypatch.setattr(ptyclient, "hello", lambda: {"ok": True, "hash": ptyd.code_hash(), "sessions": 0})
+    webterm.adopt_broker_sessions()
+    assert calls == [False]
+    calls.clear()
+    monkeypatch.setattr(ptyclient, "hello", lambda: {"ok": True, "hash": ptyd.code_hash(), "sessions": 3})
+    webterm.adopt_broker_sessions()
+    assert calls == []

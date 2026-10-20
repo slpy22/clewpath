@@ -87,12 +87,22 @@ def authkey(data_dir: Path | None = None, create: bool = True) -> bytes | None:
     return k
 
 
-def code_hash() -> str:
-    """이 파일 내용의 해시 — Host 의 번들 ptyd.py 와 다르면 '브로커 업데이트 대기'."""
+def _file_hash() -> str:
     try:
         return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:12]
     except Exception:  # noqa: BLE001
         return "?"
+
+
+# 기동(import) 때 한 번만 계산한다(0.28.1). 예전엔 부를 때마다 파일을 다시 읽어서, 업데이트가 설치 폴더의
+# ptyd.py 를 바꿔치면 옛 코드로 도는 브로커도 새 해시를 말했다 → '브로커 업데이트 대기' 가 영영 안 떴다.
+_CODE_HASH = _file_hash()
+HASH_AT = "start"          # hello 에 싣는 표식 — 이 표식이 없는 브로커는 옛 방식(해시를 믿을 수 없음)
+
+
+def code_hash() -> str:
+    """이 코드(기동 때 읽은 ptyd.py)의 해시 — Host 의 번들 ptyd.py 와 다르면 '브로커 업데이트 대기'."""
+    return _CODE_HASH
 
 
 def _pty_spawn(argv, cwd, cols, rows, env):
@@ -310,7 +320,7 @@ class Broker:
 
     def _op(self, op, req) -> dict:
         if op == "hello":
-            return {"ok": True, "proto": PROTO, "hash": code_hash(), "pid": os.getpid(),
+            return {"ok": True, "proto": PROTO, "hash": code_hash(), "hash_at": HASH_AT, "pid": os.getpid(),
                     "sessions": len(self._live())}
         if op == "list":
             return {"ok": True, "sessions": [s.info() for s in self._live()]}

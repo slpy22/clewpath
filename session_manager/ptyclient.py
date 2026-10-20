@@ -201,6 +201,14 @@ def sessions() -> list[dict]:
         return []
 
 
+def stale(h: dict | None) -> bool:
+    """떠 있는 브로커가 번들 코드와 다른가(업데이트 대기). 0.28.1 전 브로커는 해시를 부를 때마다 디스크에서 다시 읽어
+    업데이트 뒤에도 새 해시를 말한다 — hash_at 표식이 없으면 옛 코드로 보고 한 번 교체 대상으로 친다."""
+    if not h or not h.get("ok"):
+        return False
+    return h.get("hash") != ptyd.code_hash() or h.get("hash_at") != ptyd.HASH_AT
+
+
 def status() -> dict:
     """설정 화면용: 모드·실행 여부·세션 수·업데이트 대기(번들 코드와 해시 다름)."""
     on = enabled()
@@ -208,7 +216,7 @@ def status() -> dict:
     st = {"enabled": on, "running": bool(h and h.get("ok")), "bundled_hash": ptyd.code_hash()}
     if h and h.get("ok"):
         st.update(pid=h.get("pid"), proto=h.get("proto"), hash=h.get("hash"), sessions=h.get("sessions", 0),
-                  update_pending=h.get("hash") != ptyd.code_hash())
+                  update_pending=stale(h))
     return st
 
 
