@@ -1564,7 +1564,8 @@ function jumpToSession(s){
 const _findSess=(sid)=>(SESSIONS||[]).find(x=>x.session_id===sid || (x.session_id||'').startsWith(sid));
 async function openSessionById(sid){
   if(!sid) return;
-  if(CURRENT_TERM_SID===sid) return;   // 이미 그 세션 터미널을 보는 중 - 화면 갈아엎지 않음
+  // 이미 그 세션 터미널을 보는 중 - 화면 갈아엎지 않음. 폰에서 '‹ 목록'으로 숨겨 둔 것이면 다시 보여 주기만(1-3)
+  if(CURRENT_TERM_SID===sid){ if(paneDetail().classList.contains('term-mode')) showDetailPane(); return; }
   // 배경 탭으로 열려 있는 세션이면 새 화면을 만들지 않고 그 탭으로 전환한다
   const t=TABS.list.find(x=>x.s.session_id===sid || (x.s.session_id||'').startsWith(sid));
   if(t){ switchTab(t.key); return; }
@@ -2844,7 +2845,8 @@ function switchTab(key){
   const t=findTab(key); if(!t) return;
   // 이미 전경 — 단 터미널 화면이 실제로 떠 있을 때만(상세/목록으로 나간 뒤엔 탭이 '활성'이어도
   // 화면이 없다 → 다시 구축해야 한다. 알림→탭 점프 e2e 에서 발견)
-  if(key===TABS.active&&termView.sid===t.s.session_id&&!termView.disconnected&&!t.taken&&paneDetail().classList.contains('term-mode')) return;
+  // 폰에서 '‹ 목록'으로 숨겨 둔 것이면 다시 보여 주기만 한다(재접속 없음, 1-3)
+  if(key===TABS.active&&termView.sid===t.s.session_id&&!termView.disconnected&&!t.taken&&paneDetail().classList.contains('term-mode')){ showDetailPane(); return; }
   // 목록의 최신 세션 객체로 갱신(제목·live_terminal 변동 반영)
   const fresh=(SESSIONS||[]).find(s=>s.session_id===t.s.session_id); if(fresh) t.s=fresh;
   loadTerminal(t.s, t.safe);   // 뷰가 떠 있으면 fast-path(attach 만), 아니면 구축
