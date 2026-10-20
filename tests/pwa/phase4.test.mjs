@@ -46,6 +46,7 @@ test("Conn: connect(hello)→상태 콜백, req 는 id 로 응답 매칭, 소켓
   same((await p2).data, { n: 2 }); same((await p1).data, { sessions: [] });
   ws.push({ type: "res", id: "c999", ok: true });                     // 모르는 id 는 무시
   ws.push({ type: "peer", event: "agent_offline" }); ws.push({ type: "peer", event: "agent_online" });
+  await tick();                                                        // 피어 통지도 받은 순서대로 줄을 선다(_rxq, 검토 4회차)
   same(ev(ctx, "globalThis.__st").slice(1), [[true, false], [true, true]]);
   // api(): HTTP 상태를 예외로, 정상은 json 만
   const pa = ev(ctx, "conn.api('GET', '/api/x').then(v => ['ok', v], e => ['err', e.message, e.status])");

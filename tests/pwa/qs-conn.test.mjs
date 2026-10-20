@@ -514,3 +514,41 @@ test("T65c 아무것도 누르지 않았으면 재연결 뒤 보던 터미널을
   assert.deepEqual(plain({ idle: await run(false), pressed: await run(true) }),
                    { idle: { terminalsOnWs2: ["a"], now: "terminal:a" }, pressed: { terminalsOnWs2: ["b"], now: "terminal:b" } });
 });
+
+// ---------------------------------------------------------------- 검토 4회차
+// 결함 D4: E2EE 에서 PC 가 응답을 보낸 직후 릴레이에서 떠나면(응답 봉투 → agent_offline 순서로 도착) — 봉투는 _rxq 에서 비동기로 복호되는데
+// peer 통지는 onmessage 에서 바로 처리되어 _agentGone 이 먼저 돌았다. 이미 도착한 성공 응답이 agent_offline 실패로 바뀌고(PC 는 처리했는데
+// 화면은 실패), 부트 해시 페어링(앱 QR 스캔)은 멀쩡한 QR 을 되돌렸다(pcs 비움·자격 삭제). main 은 agent_offline 에 대기를 끝내지 않아 그대로 전달됐다.
+test("T66 E2EE: 응답 봉투 바로 뒤에 온 agent_offline 이 그 응답을 실패로 바꾸지 않는다 — 받은 순서대로(요청·부트 해시 페어링)", async () => {
+  // ① 일반 요청('⏹ 세션 종료' 같은 POST) — PC 는 처리하고 답한 뒤 바로 떠났다
+  const env = await bootPc({ e2ee: true });
+  const { ctx, reply } = env;
+  const ws = await connectAuthed(env);
+  ev(ctx, "globalThis.__r = 'pending'; conn.req('api', { verb: 'POST', path: '/api/sessions/s1/terminal/stop' }).then((r) => { __r = r; });");
+  await settle();
+  const q = (await env.frames(ws)).at(-1);
+  await reply(ws, { type: "res", id: q.id, cid: "c1", ok: true, data: { status: 200, json: { stopped: true } } });   // 봉인 → 복호는 비동기
+  ws.push({ type: "peer", event: "agent_offline" });
+  await settle(); await tick(30);
+  const req = plain(ev(ctx, "__r"));
+  // ② 부트 해시 페어링 — PC 가 새 QR 의 기기 인증을 받아들인 직후 커넥터가 한 번 끊겼다 다시 붙는다
+  let els;
+  const ctx2 = await load({ hash: "#room=roomB&token=tokB&dev=devB&rk=" + rk(5), setup: (sb) => { els = regIds(sb); sb.__all = browserWs(sb); } });
+  holdTimers(ctx2);
+  ev(ctx2, "globalThis.__entered = 0; enterApp = () => { __entered++; }; openModal = () => {}; loadList = async () => {}; refreshVer = async () => {}; showVer = () => {};");
+  const pcB = await roomConn(ctx2, "roomB");
+  const sockets = ctx2.__all;
+  await until(() => sockets.length === 1);
+  const wsB = sockets[0]; wsB.open(); wsB.push({ type: "hello", peer_present: true, cid: "c1" });
+  await until(() => wsB.sent.length >= 1); await settle();
+  const a = await pcB._openEnv(wsB.sent[0]);
+  wsB.push({ ...(await pcB._seal({ type: "res", id: a.id, cid: "c1", ok: true, data: { id: "dB", name: "B", hostname: "PC-B", pv: 2 } })), cid: "c1" });
+  wsB.push({ type: "peer", event: "agent_offline" });
+  await settle(); await tick(30);
+  wsB.push({ type: "peer", event: "agent_online" });
+  await settle(); await tick(30);
+  const pair = { entered: ev(ctx2, "__entered"), pcs: JSON.parse(ctx2.localStorage.getItem("sm_pcs") || "[]").map((x) => x.room),
+                 dev: ctx2.localStorage.getItem("sm_devtoken"), err: els["p-err"].textContent, current: ev(ctx2, "conn.ws") === wsB };
+  assert.deepEqual({ req: { ok: req.ok, json: req.data && req.data.json }, pair },
+                   { req: { ok: true, json: { stopped: true } }, pair: { entered: 1, pcs: ["roomB"], dev: "devB", err: "", current: true } });
+});

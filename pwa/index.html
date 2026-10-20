@@ -1288,13 +1288,15 @@ class Conn{
                      else if(this.devToken){ this.authed=false; done=true; res({...m, auth:{ok:false, error:'agent_offline', data:null}}); }
                      else { done=true; res({...m, auth:null}); } }
           return; }
-        if(m.type==='peer'){
-          if(m.event==='agent_offline'){ this._agentGone(); this.onstatus(true,false); return; }
-          if(m.event==='agent_online'){ this.peer=true; this.onstatus(true,true); this._onAgentOnline(); return; }
-          this.onstatus(true,this.peer); return; }
-        // 나머지: 봉투면 복호(수신 직렬화로 순서 보존) 후 디스패치
+        // 나머지(PC 의 오고 감 통지 포함)는 받은 순서대로: 봉투면 복호(수신 직렬화로 순서 보존) 후 디스패치. 피어 통지도 이 줄을 선다 —
+        // 바로 처리하면 응답 봉투 바로 뒤에 온 agent_offline 이 복호 중인 그 응답의 대기를 먼저 끝내, PC 가 처리한 동작이 실패로 보이고
+        // 부트 해시 페어링(앱 QR 스캔)은 멀쩡한 QR 을 되돌렸다(검토 4회차)
         this._rxq=this._rxq.then(async()=>{
           if(this._gone.has(ws)) return;
+          if(m.type==='peer'){
+            if(m.event==='agent_offline'){ this._agentGone(); this.onstatus(true,false); return; }
+            if(m.event==='agent_online'){ this.peer=true; this.onstatus(true,true); this._onAgentOnline(); return; }
+            this.onstatus(true,this.peer); return; }
           if(m&&m.e==='a1'&&m.p){
             if(!this.e2eeKey) return;      // 키 없이 온 봉투는 처리 불가
             try{ m=await this._openEnv(m); }catch(e){ return; }
