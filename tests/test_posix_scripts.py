@@ -54,10 +54,8 @@ PATHS = {
 SCRIPTS = ("get.sh", "install.sh", "uninstall.sh", "start-connector.template.sh", "update_runner.sh")
 HOME_SCRIPTS = ("get.sh", "install.sh", "uninstall.sh", "update_runner.sh")
 
-# 아직 만들지 않은 것(명세 1.4 의 단계). 만들면 여기서 뺀다.
-PENDING = {
-    "posix_e2e",                        # 8단계
-}
+# 아직 만들지 않은 것(명세 1.4 의 단계). 만들면 여기서 뺀다 — 8단계(tests/posix_e2e)까지 다 생겼다.
+PENDING: set[str] = set()
 
 # 공통 경로 블록 — 명세 3.0. 네 스크립트가 이것과 글자까지 같아야 한다(바꾸면 넷 다, 그리고 여기).
 HOME_BLOCK = '''\
@@ -662,4 +660,18 @@ def test_e2e_harness_never_touches_release_keys_or_production():
             if re.search(r"release-keys|keygen|pyongso\.com", line):
                 bad.append(f"{p.relative_to(ROOT).as_posix()}:{i}: {line.strip()[:80]}")
     assert not bad, "시험 하네스는 운영 키·운영 CP 를 모른다(S19·S44):\n  " + "\n  ".join(bad)
+
+
+def test_e2e_harness_shell_is_posix():
+    """e2e 이미지 빌드에서 도는 셸(warm_cache.sh)도 다섯 스크립트와 같은 규칙 — LF·BOM 없음·#!/bin/sh·POSIX sh 만."""
+    shs = sorted(_need("posix_e2e").glob("*.sh"))
+    assert shs, "tests/posix_e2e 에 셸 스크립트가 없다"
+    for p in shs:
+        raw = p.read_bytes()
+        assert raw.startswith(b"#!/bin/sh\n") and b"\r" not in raw and not raw.startswith(b"\xef\xbb\xbf"), p.name
+        hits = _violations(raw.decode("utf-8"))
+        assert not hits, f"{p.name}:\n  " + "\n  ".join(hits)
+        for sid, shell in _SHELLS.items():
+            r = subprocess.run([*shell, "-n", str(p)], capture_output=True, timeout=30)
+            assert r.returncode == 0, (p.name, sid, r.stderr.decode("utf-8", "replace"))
 

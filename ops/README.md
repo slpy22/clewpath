@@ -29,7 +29,9 @@ pwsh -File ops/release.ps1 -Version X.Y.Z -Publish -Apply                       
 ```
 사전점검(CHANGELOG 항목·버전 일치·작업 트리·서명 키·pytest)에서 걸리면 즉시 중단. 로그 `ops/logs/release-<ver>.log`(토큰 없음).
 받는 OS 는 `-Platforms`(기본 `win`, 지금은 win 만 낸다). win 은 늘 들어가야 하고, `mac`·`linux`를 넣으면 같은 HEAD 에서 통과한
-POSIX e2e 기록(`ops/logs/posix-e2e-<ver>.json`)이 있어야 한다. 패키지 직후 zip 내용 게이트(맥·리눅스 스크립트·이름 구분자 `/`·
+POSIX e2e 기록(`ops/logs/posix-e2e-<ver>.json`)이 있어야 한다 — 기록은 `python -m pytest -m posix_e2e tests/test_posix_e2e.py`
+(docker 필요, 리눅스 `*-test` 컨테이너 왕복 — `tests/posix_e2e/README.md`)가 통과하고 작업 트리가 깨끗할 때 남는다.
+패키지 직후 zip 내용 게이트(맥·리눅스 스크립트·이름 구분자 `/`·
 `RELEASE_KEYS`가 저장소와 같음 — 시험 빌드 차단)를 지나야 서명한다.
 CHANGELOG 항목 본문이 곧 매니페스트 notes(업데이트 화면 문구) — 한 문장을 한 곳에만 쓴다.
 아래 수동 절차는 스크립트가 하는 일의 설명이다.

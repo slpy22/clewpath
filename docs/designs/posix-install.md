@@ -170,6 +170,7 @@ $CLEWPATH_HOME/
 ├─ app/                          설치 루트(ROOT). get.sh --dir 로 바꿀 수 있다
 │  ├─ session_manager/ pwa/ pyproject.toml uv.lock install.ps1 install.sh uninstall.sh README.md LICENSE   ← PAYLOAD
 │  ├─ .venv/                     uv sync 로 맞춘다(업데이트는 교체하지 않고 sync)
+│  ├─ clewpath_host.egg-info/    uv sync 의 편집 설치(setuptools)가 만든다 — PAYLOAD 밖, sync 가 버전마다 다시 쓴다(8단계 실측)
 │  ├─ start-connector.sh         렌더 결과(0755)
 │  └─ .clewpath-install          설치 기록
 ├─ bin/uv, bin/uvx               고정 버전, 0755
@@ -1360,6 +1361,20 @@ docker run --rm --init --network none --name clewpath-pytest-test -u 1000 clewpa
 ```
 
 pytest 연결: `tests/test_posix_e2e.py`(`@pytest.mark.posix_e2e`, docker가 없으면 skip)가 위 0~2단계를 감싸고 드라이버 JSON을 단정한다. 기본 실행에서는 addopts로 빠진다.
+
+**구현 메모 (8단계, 2026-10-21 — 6.3·6.4 와 다른 점과 뒤 단계가 맞출 약속)**
+- 이름: 이미지도 `clewpath-posix-e2e-test`(명세의 `clewpath-posix-e2e:local` 대신) — 이 PC 의 규칙(일회용 컨테이너·이미지 이름은 `-test`·`-verify`)에 맞췄다. 실행은 `docker run --rm --init --network none --name clewpath-posix-e2e-test clewpath-posix-e2e-test`, 볼륨·운영 네트워크 없음. 이미지는 다음 실행을 위해 남긴다.
+- 컨텍스트(`--out`): `Dockerfile` + `base/`(uv tarball·`warm_cache.sh`·데우기용 최소 트리 = A 의 pyproject·uv.lock·LICENSE·`session_manager/__init__.py`) + `ctx/`(매번 바뀌는 zip·매니페스트·get.sh·드라이버·가짜 CP·`index.json`). 데우기 층을 ctx 보다 앞에 두었다 — 시험 키가 실행마다 새로 생겨 zip 이 바뀌어도 PyPI 데우기를 다시 하지 않는다(명세는 ctx 를 COPY 한 뒤 데움). `--out`은 저장소 밖이어야 하고, 이 도구가 만든 표(`.clewpath-e2e-build`)가 없는 비어 있지 않은 폴더는 거부한다(남의 폴더를 지우지 않게). 키 가드는 이름(`*.pem`·`*.key`·키 폴더)과 내용(개인키 머리글)을 zip 안까지 본다.
+- 기본 zip: pwsh 가 있으면 진짜 `package-for-user.ps1 -OutDir`(TEMP 를 임시 폴더로 — 사용자 `%TEMP%`에 스테이지를 만들지 않게). 파이썬 판은 ps1 의 `$include`·`$excludePatterns`를 그대로 읽어 같은 목록·같은 `-like '*패턴*'` 규칙을 쓰고, 시험이 pwsh 결과와 파일·폴더 항목 목록까지 대조한다.
+- zipfile 은 항목 속성이 0 이면 쓸 때 `0o600 << 16`을 넣는다(`ZipFile._open_to_write`, 실측) — unzip 은 FAT 항목의 그 값을 유닉스 권한으로 받아 0600 으로 푼다. 변형 zip 이 배포 zip(Compress-Archive, 속성 0)과 같게 풀리도록 속성 0 을 그대로 쓰게 했다(시험이 다시 읽어 확인). `tests/test_get_sh.py`의 `_zip_bytes`도 같은 성질인데 거기 단정에는 영향이 없다.
+- 변형: 표의 A·B·C·D·L·P·Z·T·M 에 더해 E(90.0.4 — S9 의 `bash --posix` 러너용, CP 로 내지 않고 드라이버가 `updater.stage`·`osdep.update_runner_argv`로 apply 와 같은 자리를 만든다), L-noinstall(linux 클레임은 있으나 install.sh 없음 — 받아서 푼 뒤 거부되는 길). Z 는 세 zip(`../`·절대 경로·심볼릭 링크), T 는 세 매니페스트(sha256·size 큼·size 작음 — curl 63, 같은 시험 키로 다시 서명). 모든 변형의 README 첫 줄 표식, B~E 는 런처 템플릿 3행 뒤 주석(`# e2e-build: X`) — C 는 뜨지 못하므로 롤백 뒤 런처가 B 그대로인지도 본다.
+- 순서: S9 를 S8 앞에 돌린다(설치본이 있어야 한다). S5 에 S23 확인을 더했다 — maintenance.flag 가 있으면 수동 적용이 400 으로 거부되고 Host·러너가 그대로다. S8 은 watch 를 띄운 채 제거하고, watch·Host·브로커를 첫 길(watch.lock.d·런처 stop·ptyd.json)로 멈췄는지(남은 것 쓸기는 빈손인지)도 본다 — 둘째 방어선이 첫 길의 고장을 가리지 않게.
+- S3 의 '옛 pid normal 표식': 새 Host 가 기동하며 소비한다(`check_previous_exit`). 그래서 '표식이 소비됐고 사고 기록이 없음'으로 본다. 표식 자체는 S4⑤에서 stop 직후 `shutdown.json`으로 확인한다.
+- S4: ①에 '멈춘 뒤 동시에 start 셋 → Host 하나'를 더했다. ④는 시체 잠금 두 갈래(pid 죽음·pid 없이 2분 넘음). ⑤의 TERM 을 받지 못하는 Host 는 진짜 Host 를 SIGSTOP 해서 만든다(15초 뒤 KILL, forced-stop 표식 → 다음 기동이 사고로 보지 않음). 브로커는 Host 의 `/api/owner/ptyd/restart`(→ `ptyclient.ensure`)로 띄운다 — 명령줄이 `venv python -m session_manager.ptyd`인지 본다. ⑪은 산 pid·`CLEWPATH_UPDATER=1`·`by=runner`인데 러너가 아닌 pid(재사용)·죽은 pid 네 갈래.
+- 실측: ⑧의 막는 소켓도 SO_REUSEADDR 가 필요했다 — 방금 내린 Host 의 연결이 5100 에 TIME_WAIT 로 남는다(urllib 은 `Connection: close`라 응답마다 서버 쪽이 먼저 닫는다). 곧 ⑨의 상황은 사람이 로컬 웹을 열기만 해도 생긴다. ⑨는 그 TIME_WAIT 에서 평범한 bind 가 `EADDRINUSE`인 것을 확인한 뒤 곧바로 start 해 5100 에 뜨는지 본다.
+- 설치 루트에 `clewpath_host.egg-info`가 생긴다(uv sync 의 setuptools 편집 설치, 실측) — 2.3 에 더했다. PAYLOAD 밖이라 러너가 건드리지 않고 sync 가 버전마다 다시 쓴다.
+- 결과: 드라이버는 표준출력 마지막 줄 `E2E-RESULT {json}`(단계별 성공·실패·근거·시간), 실패하면 launcher·host·apply·recover·가짜 CP 로그 꼬리를 앞에 찍는다. pytest 는 `CLEWPATH_E2E_OUT`(없으면 tmp)에 `e2e-run.log`·`e2e-result.json`·`docker-build.log`·`fixtures.log`를 남기고, 통과했고 작업 트리가 깨끗하면(release.ps1 과 같은 기준) `ops/logs/posix-e2e-<ver>.json` = `{version, head, ok}`를 쓴다(4.5 게이트). env `CLEWPATH_E2E_UV_ARCHIVE`(고정 해시와 같은 uv tarball — 없으면 GitHub 공식 릴리스에서 받아 `.sha256`·고정값과 대조), `CLEWPATH_GET_SH`.
+- 시험: `tests/test_posix_e2e.py` — 하네스 시험(모든 OS: ps1 과 같은 패키지 목록·zip 모양·pwsh 결과 대조, 변형 내용, 시험 키 서명과 운영 키 거부, 컨텍스트·키 가드, uv 고정 해시, 가짜 CP 라우트·요청 로그, 드라이버의 컨테이너 밖 거부, 릴리스 기록 조건)과 컨테이너 왕복 1건(`-m posix_e2e`, 186 단정·약 4분). `test_posix_scripts`의 PENDING 이 비었고, `tests/posix_e2e`의 셸(`warm_cache.sh`)도 POSIX 규칙으로 검사한다. 배포 zip 사본(또는 get.sh 사본)에 버그를 하나씩 넣어(12종 — port_free 평범한 bind·커넥터가 설정 포트로 프록시·훅 curl.exe·런처 env 정리 없음·런처 umask 077·강제 종료 표식 없음·러너 uv sync 건너뜀·롤백이 브로커까지·apply 의 유지보수 표식 무시·제거가 브로커를 첫 길로 멈추지 않음/두 길 다·get.sh 의 `..` 허용) 컨테이너 왕복을 돌려 모두 겨냥한 단정에서 잡히는 것을 확인했다 — '첫 길로 멈추지 않음'은 처음에 둘째 방어선(sweep)이 가려 놓쳤고, 그래서 S8 의 '제 길로 멈춤' 단정을 더했다.
 
 ## 7. CP 쪽 변경 (서비스 모니터 배포 의뢰 대상)
 
