@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import re
 import json
 import os
@@ -34,6 +35,16 @@ from websockets.asyncio.client import connect
 
 DEFAULT_LOCAL_BASE = os.environ.get(
     "SM_LOCAL_BASE", "http://127.0.0.1:5100").rstrip("/")
+
+# 로컬 Host(local_base)로 가는 길은 프록시를 쓰지 않는다 — httpx·websockets(15+)는 http_proxy·ALL_PROXY(맥·Windows 는
+# 시스템 프록시 설정까지)를 루프백에도 써서, 폰·웹의 요청이 프록시로 나가 실패하고 사람 증명 헤더·세션 내용이 프록시로 샌다.
+# Host 는 사용자 env 를 그대로 물려받는다(런처 S38). 릴레이(원격)로 나가는 연결은 사용자의 프록시를 그대로 따른다.
+# websockets 15 전에는 프록시 기능도 인자도 없다.
+_LOCAL_WS_KW = {"proxy": None} if "proxy" in inspect.signature(connect).parameters else {}
+
+
+def _connect_local(uri: str):
+    return connect(uri, max_size=None, **_LOCAL_WS_KW)
 
 # 릴레이 프레임 프로토콜 버전. 서버(릴레이)가 최소 지원 버전을 강제할 때 쓴다.
 # 프레임 형식이 호환 불가하게 바뀌면 올린다. (정본은 아래 두 번째 정의 — 같은 값으로 유지)
@@ -228,7 +239,7 @@ class Connector:
         self.token = token
         self.local_base = (local_base or DEFAULT_LOCAL_BASE).rstrip("/")
         self.ws = None                       # 릴레이 연결
-        self.http = httpx.AsyncClient(timeout=310)
+        self.http = httpx.AsyncClient(timeout=310, trust_env=False)   # local_base 전용 — 프록시 env 를 따르지 않는다
         self.streams: dict[str, asyncio.Task] = {}   # id -> resume 파이프 태스크
         self.stream_in: dict[str, asyncio.Queue] = {}  # id -> client 입력 큐
         self.req_cid: dict[str, str] = {}    # rid -> cid (응답을 요청 기기로 라우팅)
@@ -495,7 +506,7 @@ class Connector:
 
     async def _pipe_resume(self, rid: str, local_ws: str) -> None:
         try:
-            async with connect(local_ws, max_size=None) as lws:
+            async with _connect_local(local_ws) as lws:
                 async def up():  # client → local
                     q = self.stream_in[rid]
                     while True:
@@ -583,7 +594,7 @@ class Connector:
 
     async def _pipe_terminal(self, rid: str, local_ws: str) -> None:
         try:
-            async with connect(local_ws, max_size=None) as lws:
+            async with _connect_local(local_ws) as lws:
                 async def up():  # client → local (input/resize 제어객체)
                     q = self.stream_in[rid]
                     while True:
@@ -631,7 +642,7 @@ class Connector:
 
     async def _pipe_monitor(self, rid: str, local_ws: str) -> None:
         try:
-            async with connect(local_ws, max_size=None) as lws:
+            async with _connect_local(local_ws) as lws:
                 async def up():  # client → local (그룹 add/remove 제어 객체)
                     q = self.stream_in[rid]
                     while True:

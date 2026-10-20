@@ -582,8 +582,8 @@ def s2():
     check("진단 version = A", version_now() == ver("A"), diag())
     hooks = (read_json(SETTINGS) or {}).get("hooks") or {}
     cmds = [h.get("command", "") for g in hooks.values() for x in g for h in (x.get("hooks") or [])]
-    check("settings.json 훅: curl -s -m 3 …(curl.exe 아님) 5개",
-          len(cmds) == 5 and all(c.startswith("curl -s -m 3 ") and "curl.exe" not in c
+    check("settings.json 훅: curl -s -m 3 --noproxy 127.0.0.1 …(curl.exe 아님) 5개",
+          len(cmds) == 5 and all(c.startswith("curl -s -m 3 --noproxy 127.0.0.1 ") and "curl.exe" not in c
                                  and c.endswith(f"http://127.0.0.1:{DEFAULT_PORT}/api/hooks/event") for c in cmds), cmds)
     check(f"Host umask = 드라이버 umask({UMASK:04o})(S38)", proc_umask(pid) == f"{UMASK:04o}", proc_umask(pid))
     env = proc_env(pid)
