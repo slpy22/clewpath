@@ -144,7 +144,7 @@ def _to_ws(base: str) -> str:
     return "ws://" + base[len("http://"):]
 
 
-def relay_config_from_env() -> dict | None:
+def relay_config_from_env(bound_port: int | None = None) -> dict | None:
     """통합(006 내장) 릴레이 모드 설정을 환경변수에서 읽는다.
 
     필수: SM_RELAY_URL + SM_RELAY_AGENT_TOKEN.
@@ -154,7 +154,8 @@ def relay_config_from_env() -> dict | None:
     둘 다 없으면 None(=릴레이 OFF). 즉 SM_CP_URL 만 있으면 room 없이도 켜진다
     (신규 사용자는 room 을 알 수 없으므로 CP 가 발급해 준다).
 
-    로컬 베이스는 SM_LOCAL_BASE 또는 http://127.0.0.1:{SM_PORT} (자기 자신).
+    로컬 베이스는 SM_LOCAL_BASE 또는 http://127.0.0.1:{포트} (자기 자신). 포트는 서버가 실제로 연 포트(bound_port,
+    lifespan 이 넘김)가 먼저다 — 설정 포트가 사용 중이라 옆 포트로 떴으면 SM_PORT 는 틀린 주소다.
     """
     url = os.environ.get("SM_RELAY_URL")
     token = os.environ.get("SM_RELAY_AGENT_TOKEN") or ""
@@ -178,7 +179,7 @@ def relay_config_from_env() -> dict | None:
         except Exception:  # noqa: BLE001
             room = ""
 
-    port = os.environ.get("SM_PORT", "5100")
+    port = bound_port or os.environ.get("SM_PORT", "5100")
     local_base = os.environ.get("SM_LOCAL_BASE") or f"http://127.0.0.1:{port}"
     return {"relay_url": url, "room": room, "token": token,
             "local_base": local_base}

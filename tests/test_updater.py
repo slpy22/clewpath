@@ -189,15 +189,35 @@ def test_stage_drops_unlisted_entries(tmp_path, monkeypatch):
     assert "start-connector.ps1" not in names and "evil" not in names
 
 
-def test_payload_matches_runner_script():
-    """updater.py 의 PAYLOAD 와 update_runner.ps1 의 $Payload 가 어긋나면
-    교체되는 것과 백업되는 것이 달라져 롤백이 반쪽이 된다."""
+_ROOT = Path(updater.__file__).resolve().parent.parent
+# 패키지 화이트리스트($include)에 아직 안 넣은 PAYLOAD 항목 — 명세(posix-install.md) 1.4 의 7단계(패키징)에서 넣는다.
+# 넣으면 여기서 빼야 아래 시험이 통과한다(없는 채로 두면 '넣었는데 목록에 남음'으로 실패).
+_NOT_YET_PACKAGED = {"install.sh", "uninstall.sh"}
+
+
+def test_payload_lists_agree():
+    """교체 대상은 네 곳이 같아야 한다 — updater.PAYLOAD · update_runner.ps1 $Payload · update_runner.sh PAYLOAD ·
+    package-for-user.ps1 $include. 어긋나면 교체되는 것과 백업되는 것(또는 zip 에 담기는 것)이 달라져 롤백이 반쪽이 된다."""
     import re
-    txt = (Path(updater.__file__).parent / "update_runner.ps1").read_text(encoding="utf-8")
+    want = set(updater.PAYLOAD)
+    txt = (Path(updater.__file__).parent / "update_runner.ps1").read_text(encoding="utf-8-sig")
     m = re.search(r'\$Payload = @\((.*?)\)', txt, re.S)
     assert m, "update_runner.ps1 에서 $Payload 를 못 찾음"
     listed = set(re.findall(r'"([^"]+)"', m.group(1)))
-    assert listed == set(updater.PAYLOAD), f"불일치: {listed ^ set(updater.PAYLOAD)}"
+    assert listed == want, f"ps1 불일치: {listed ^ want}"
+
+    sh = Path(updater.__file__).parent / "update_runner.sh"
+    if sh.is_file():                    # 맥·리눅스 러너(posix-install 3단계) — 있는지는 test_posix_scripts 가 묶는다
+        m = re.search(r'^PAYLOAD="([^"]*)"', sh.read_text(encoding="utf-8"), re.M)
+        assert m, "update_runner.sh 에서 PAYLOAD=\"…\" 를 못 찾음"
+        assert m.group(1).split() == list(updater.PAYLOAD), "sh PAYLOAD 는 같은 순서·같은 이름"
+
+    pkg = (_ROOT / "ops" / "package-for-user.ps1").read_text(encoding="utf-8-sig")
+    m = re.search(r'\$include = @\((.*?)\n\)', pkg, re.S)
+    assert m, "package-for-user.ps1 에서 $include 를 못 찾음"
+    included = set(re.findall(r'"([^"]+)"', m.group(1)))
+    assert not (included & _NOT_YET_PACKAGED), f"패키지에 넣었으면 _NOT_YET_PACKAGED 에서 빼세요: {included & _NOT_YET_PACKAGED}"
+    assert included == want - _NOT_YET_PACKAGED, f"패키지 불일치: {included ^ (want - _NOT_YET_PACKAGED)}"
 
 
 # ---- 자동 적용 안전 가드 (재기동 자동적용 · 개발체크아웃 · 롤백루프) ----
@@ -212,6 +232,105 @@ def test_is_dev_checkout_detects_ops_or_git(tmp_path, monkeypatch):
     shutil.rmtree(tmp_path / "ops")
     (tmp_path / ".git").mkdir()
     assert updater.is_dev_checkout() is True             # .git = 체크아웃
+
+
+# ---- 어느 OS 가 받는가(platforms 클레임, posix-install.md 4.2·4.6) ----
+
+@pytest.fixture
+def served(signer, tmp_path, monkeypatch):
+    """check() 가 받아 갈 매니페스트를 심는다(네트워크 없이). 반환: 클레임을 받아 토큰을 심는 함수."""
+    monkeypatch.setenv("SESSION_MANAGER_CLAUDE_HOME", str(tmp_path))
+    monkeypatch.setattr(updater, "current_version", lambda: "1.0.0")
+    pem, kid = signer
+    box = {}
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return box["tok"].encode()
+
+    monkeypatch.setattr(updater.urllib.request, "urlopen", lambda req, timeout=None: _Resp())
+
+    def serve(**claims):
+        box["tok"] = _sign(pem, kid, ver="2.0.0", **claims)
+        return box["tok"]
+    return serve
+
+
+@pytest.mark.parametrize("os_name,claims,ok", [
+    ("win", {}, True),                                          # 0.28 까지의 릴리스(클레임 없음) = win 전용
+    ("linux", {}, False),
+    ("mac", {}, False),
+    ("win", {"platforms": ["win"]}, True),
+    ("linux", {"platforms": ["win"]}, False),                   # 이번 출시(posix-install) 모양
+    ("linux", {"platforms": ["win", "mac", "linux"]}, True),
+    ("mac", {"platforms": ["win", "linux"]}, False),
+    ("win", {"platforms": "win"}, False),                       # 모양이 이상하면 아무도 받지 않는다(fail-closed)
+    ("win", {"platforms": ["win", 1]}, False),
+    ("linux", {"platforms": []}, False),
+])
+def test_check_respects_platforms(served, monkeypatch, os_name, claims, ok):
+    from session_manager import osdep
+    monkeypatch.setattr(osdep, "NAME", os_name)
+    tok = served(**claims)
+    st = updater.check()
+    assert st["available"] is ok and st["latest"] == "2.0.0" and st["error"] is None
+    if ok:
+        assert st["manifest"] == tok and not st.get("unsupported")
+    else:
+        assert st["manifest"] is None and os_name in st["unsupported"] and "2.0.0" in st["unsupported"]
+
+
+def test_supported_check_clears_old_unsupported_note(served, monkeypatch):
+    from session_manager import osdep
+    monkeypatch.setattr(osdep, "NAME", "linux")
+    served()
+    assert updater.check()["unsupported"]
+    served(platforms=["win", "linux"])
+    assert updater.read_state().get("unsupported") and updater.check().get("unsupported") is None
+
+
+def test_apply_refuses_other_os_release(fake_claude_home, monkeypatch):
+    """check 를 거치지 않은 경로가 생겨도 마지막 관문(apply)에서 막는다 — 러너를 띄우지 않고 잠금도 남기지 않는다."""
+    from session_manager import osdep
+    monkeypatch.setattr(osdep, "NAME", "linux")
+    monkeypatch.setattr(updater.subprocess, "Popen", lambda *a, **k: pytest.fail("러너를 띄우면 안 된다"))
+    with pytest.raises(updater.UpdateError, match="지원하지 않습니다"):
+        updater.apply({"ver": "9.9.9", "platforms": ["win"]}, fake_claude_home, restart_cmd="")
+    assert not (updater.work_dir() / "apply.lock").exists()
+
+
+def test_apply_refuses_while_maintenance_flag(fake_claude_home, monkeypatch):
+    """유지보수 표식이 있으면 런처가 아무것도 띄우지 않는다 → 적용하면 재기동이 막혀 롤백되고 Host 가 꺼진 채 남는다."""
+    from session_manager import config
+    monkeypatch.setattr(updater.subprocess, "Popen", lambda *a, **k: pytest.fail("러너를 띄우면 안 된다"))
+    d = config.data_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "maintenance.flag").write_text("by=stop\n", encoding="utf-8")
+    with pytest.raises(updater.UpdateError, match="maintenance.flag"):
+        updater.apply({"ver": "9.9.9", "platforms": ["win", "mac", "linux"]}, fake_claude_home, restart_cmd="")
+    assert not (updater.work_dir() / "apply.lock").exists(), "거절은 잠금 전에 — 다음 시도를 5분 막지 않는다"
+
+
+def test_manual_apply_reports_unsupported_reason(fake_claude_home, monkeypatch):
+    from fastapi.testclient import TestClient
+    for k in ("SM_RELAY_URL", "SM_RELAY_ROOM", "SM_RELAY_AGENT_TOKEN", "SM_CP_URL"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("SM_HOST", "127.0.0.1")
+    monkeypatch.setattr(updater, "is_dev_checkout", lambda: False)
+    monkeypatch.setattr(updater, "check_and_stage", lambda: {"available": False, "error": None,
+                                                             "unsupported": "이 릴리스(2.0.0)는 linux 를 지원하지 않습니다"})
+    from session_manager import server as S
+    monkeypatch.setattr(S, "_client_host", lambda r: "127.0.0.1")         # 이 PC(로컬)에서 누른 적용
+    with TestClient(S.create_app()) as c:
+        r = c.post("/api/owner/update/apply")
+    assert r.status_code == 200 and r.json()["applied"] is False
+    assert "지원하지 않습니다" in r.json()["reason"]
 
 
 def test_recently_failed_blocks_rollback_loop(tmp_path, monkeypatch):

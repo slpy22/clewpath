@@ -13,6 +13,7 @@ _NEW_PROCESS_GROUP = 0x00000200         # CREATE_NEW_PROCESS_GROUP
 ADOPTER_PIDS: frozenset = frozenset()   # Windows 는 고아를 입양하지 않는다(부모 pid 가 그냥 사라짐)
 START_SCRIPT = "start-connector.ps1"
 UPDATE_RUNNER = "update_runner.ps1"
+CURL = "curl.exe"                       # 훅 명령 — PowerShell 의 curl 별칭(Invoke-WebRequest)을 피한다
 
 
 def detached_popen_kwargs() -> dict:
@@ -127,6 +128,22 @@ def ensure_launcher(root: Path, data_dir: Path, conf_file: Path, port: int) -> s
             "-ConfFile", str(conf_file), "-Port", str(port)]
     r = subprocess.run(args, capture_output=True, timeout=60, creationflags=NO_WINDOW)
     return r.stdout.decode("utf-8", "replace").strip()
+
+
+def port_free(host: str, port: int) -> bool:
+    """그 포트에 실제로 bind 가 되는지 본다(0.28 까지 server._port_free 본문 그대로).
+
+    "연결이 되나" 로 확인하면 안 된다 — 방화벽·다른 인터페이스 때문에 오판한다.
+    우리가 뜰 때와 같은 조건(같은 host)으로 bind 를 시도해 보는 게 유일하게 정확하다.
+    SO_REUSEADDR 은 켜지 않는다. Windows 에선 켜면 남이 듣고 있는 포트에도 bind 돼 비어 보인다.
+    """
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind((host, port))
+            return True
+        except OSError:
+            return False
 
 
 def open_resume_terminal(command: str, cwd: str) -> bool:

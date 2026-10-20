@@ -394,7 +394,9 @@ async def _lifespan(app: FastAPI):
         upd_task = asyncio.create_task(_update_watch())
 
     from session_manager import connector as _connector
-    cfg = _connector.relay_config_from_env()
+    # 커넥터가 부를 로컬 주소는 이번에 실제로 연 포트 — 폴백(5101)으로 떴는데 SM_PORT(5100)로 프록시하면 원격이 다 끊긴다.
+    # SM_PORT 를 고쳐 쓰지 않는 이유: 업데이트 러너를 거쳐 재기동 Host 가 물려받아 포트가 계속 밀린다.
+    cfg = _connector.relay_config_from_env(_updater_mod.BOUND_PORT)
     task = None
     if cfg:
         conn = _connector.Connector(**cfg)
@@ -787,7 +789,8 @@ def create_app() -> FastAPI:
         try:
             st = updater.check_and_stage()
             if not st.get("staged"):
-                return {"applied": False, "reason": st.get("error") or "최신 버전입니다",
+                return {"applied": False,
+                        "reason": st.get("error") or st.get("unsupported") or "최신 버전입니다",
                         **st}
             token = st["manifest"]
             m = updater.verify_manifest(token)
@@ -2099,19 +2102,10 @@ app = create_app()
 
 
 def _port_free(host: str, port: int) -> bool:
-    """그 포트에 실제로 bind 가 되는지 본다.
-
-    "연결이 되나" 로 확인하면 안 된다 — 방화벽·다른 인터페이스 때문에 오판한다.
-    우리가 뜰 때와 같은 조건(같은 host)으로 bind 를 시도해 보는 게 유일하게 정확하다.
-    SO_REUSEADDR 은 켜지 않는다. 켜면 남이 쓰는 포트도 비어 보일 수 있다.
-    """
-    import socket
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        try:
-            s.bind((host, port))
-            return True
-        except OSError:
-            return False
+    """그 포트에 실제로 bind 가 되는지 본다 — 판정은 OS 별(osdep.port_free: 맥·리눅스는 재기동 직후의
+    TIME_WAIT 를 '사용 중'으로 오판하지 않는다). 얇은 함수로 남긴 이유: 시험이 이 이름을 바꿔 끼운다."""
+    from session_manager import osdep
+    return osdep.port_free(host, port)
 
 
 def _clewpath_already_there(host: str, port: int) -> bool:
@@ -2119,13 +2113,15 @@ def _clewpath_already_there(host: str, port: int) -> bool:
 
     이게 없으면 이미 떠 있는 ClewPath 위로 두 번째 인스턴스가 옆 포트에 뜬다.
     사용자는 왜 북마크가 안 열리는지 모른 채 두 개가 같은 세션 폴더를 만지게 된다.
+    프록시는 쓰지 않는다 — urllib 은 http_proxy 를 따라 127.0.0.1 요청도 프록시로 보내(맥·리눅스, no_proxy 없을 때)
+    여기서 '아니다'로 오판하고 두 번째 인스턴스를 띄운다.
     """
     import json
     import urllib.request
     probe = "127.0.0.1" if host in ("0.0.0.0", "") else host
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     try:
-        with urllib.request.urlopen(f"http://{probe}:{port}/api/owner/diagnostics",
-                                    timeout=2) as r:
+        with opener.open(f"http://{probe}:{port}/api/owner/diagnostics", timeout=2) as r:
             return "claude_home" in json.loads(r.read())
     except Exception:  # noqa: BLE001
         return False

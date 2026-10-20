@@ -45,18 +45,19 @@ def _read_marks(sd: dict | None) -> dict:
     return {}
 
 
-def mark_shutdown(reason: str) -> None:
+def mark_shutdown(reason: str, pid: int | None = None) -> None:
     """정상 종료 표식. 다음 기동이 '의심' 판정에서 제외한다.
 
     pid 별로 쌓는다(0.10.2): 업데이트 적용 중 옛 Host 가 남긴 표식을 그 사이 뜬 다른(짧은) 프로세스의
     정상 종료 표식이 **덮어써** 새 Host 가 옛 Host 를 '비정상 종료' 로 오판하고 복구 알림을 보내던 사고
     (2026-09-30 0.10.1 apply, pid 143148 표식이 pid 77156 로 교체됨). 최근 _MARK_KEEP 개만 보관.
+    pid: 남의 종료를 대신 적을 때(맥·리눅스 런처의 강제 stop 이 죽인 Host). 없으면 이 프로세스.
     """
     try:
         p = shutdown_file()
         p.parent.mkdir(parents=True, exist_ok=True)
         marks = _read_marks(_read_json(p))
-        marks[str(os.getpid())] = {"reason": reason, "at": int(time.time())}
+        marks[str(pid or os.getpid())] = {"reason": reason, "at": int(time.time())}
         if len(marks) > _MARK_KEEP:
             for k in sorted(marks, key=lambda k: int((marks[k] or {}).get("at") or 0))[: len(marks) - _MARK_KEEP]:
                 marks.pop(k, None)
@@ -78,17 +79,27 @@ def pid_alive(pid: int) -> bool:
     return osdep.pid_alive(pid)
 
 
+LAUNCHER_MARK = b"=== launcher start"     # 맥·리눅스 런처가 기동 직전 host.log 에 넣는 구분줄(이어쓰기라 옛 꼬리가 남는다)
+
+
 def log_tail(n: int = 10) -> list[str]:
-    """host.log 마지막 n 줄(ANSI 제거, 줄당 200자). 새 프로세스의 출력이 섞이기 전에 읽는다."""
+    """host.log 마지막 n 줄(ANSI 제거, 줄당 200자). 새 프로세스의 출력이 섞이기 전에 읽는다.
+
+    마지막 런처 구분줄이 있으면 그 앞까지만 — 새 Host 가 이미 찍은 첫 줄들이 죽은 Host 의 꼬리에 섞이지 않게.
+    """
     p = config.data_dir() / "host.log"
     try:
         with p.open("rb") as f:
             f.seek(0, 2)
             size = f.tell()
             f.seek(max(0, size - 20_000))
-            lines = f.read().decode("utf-8", "replace").splitlines()
+            raw = f.read()
     except OSError:
         return []
+    cut = raw.rfind(LAUNCHER_MARK)
+    if cut >= 0:
+        raw = raw[:cut]
+    lines = raw.decode("utf-8", "replace").splitlines()
     out = [_ANSI.sub("", ln).strip()[:200] for ln in lines if ln.strip()]
     return out[-n:]
 
@@ -150,7 +161,8 @@ def _version() -> str:
 
 
 def ensure_launcher(port: int | None = None) -> str | None:
-    """설치본이면 자동 시작·반복 트리거를 맞춘다(Windows: ensure_task.ps1 → 예약 작업). 버전당 1회, 개발 트리는 건너뜀."""
+    """설치본이면 런처·자동 시작을 맞춘다(Windows: ensure_task.ps1 → 런처 v2·예약 작업, 맥·리눅스: start-connector.sh 를
+    지금 템플릿으로 다시 렌더). 버전당 1회, 개발 트리는 건너뜀."""
     from session_manager import appconfig, osdep
     root = _install_root()
     if not (root / osdep.START_SCRIPT).is_file():

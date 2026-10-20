@@ -10,8 +10,6 @@
 """
 from __future__ import annotations
 
-import sys
-
 import pytest
 
 from tests.conftest import write_session
@@ -46,11 +44,24 @@ def test_diagnostics_does_not_call_scan_all(fake_claude_home, monkeypatch):
         assert j["ok"] is True
 
 
-_WIN_RUNNER = pytest.mark.skipif(sys.platform != "win32", reason="update_runner.sh 는 멀티 OS 3단계")
+# 모든 OS 의 릴리스 — 클레임이 없으면 win 전용이라 맥·리눅스에선 apply 가 먼저 거절한다(updater.supports_this_os)
+_ALL_OS = ["win", "mac", "linux"]
 
 
-@_WIN_RUNNER
-def test_apply_concurrency_lock(fake_claude_home, monkeypatch):
+@pytest.fixture
+def runner_script(monkeypatch, tmp_path):
+    """잠금·포트 판단만 본다(러너 내용 무관). 이 OS 의 러너가 아직 없으면(posix-install 3단계 전의 맥·리눅스)
+    빈 대역으로 — 있으면 진짜를 복사해 쓴다."""
+    from session_manager import updater
+    real = updater.runner_script()
+    if not real.is_file():
+        stub = tmp_path / real.name
+        stub.write_text("#!/bin/sh\n", encoding="utf-8")
+        monkeypatch.setattr(updater, "runner_script", lambda: stub)
+    return updater.runner_script()
+
+
+def test_apply_concurrency_lock(fake_claude_home, monkeypatch, runner_script):
     from session_manager import updater
     # 실제 runner 스폰은 막는다(부작용 없이 잠금 로직만 검증)
     calls = {"n": 0}
@@ -60,7 +71,7 @@ def test_apply_concurrency_lock(fake_claude_home, monkeypatch):
             calls["n"] += 1
     monkeypatch.setattr(updater.subprocess, "Popen", _FakePopen)
 
-    m = {"ver": "9.9.9"}
+    m = {"ver": "9.9.9", "platforms": _ALL_OS}
     staged = fake_claude_home / "stage"
     staged.mkdir()
     # 1회차: 정상 실행(잠금 생성)
@@ -98,13 +109,12 @@ def _apply_port(fake_claude_home, monkeypatch, bound_port, runtime_port):
         lock.unlink()
     staged = fake_claude_home / f"stage-{bound_port}-{runtime_port}"
     staged.mkdir()
-    updater.apply({"ver": "9.9.9"}, staged, restart_cmd="")
+    updater.apply({"ver": "9.9.9", "platforms": _ALL_OS}, staged, restart_cmd="")
     a = captured["args"]
     return a[a.index("-Port") + 1]
 
 
-@_WIN_RUNNER
-def test_apply_prefers_bound_port_over_stale_runtime_json(fake_claude_home, monkeypatch):
+def test_apply_prefers_bound_port_over_stale_runtime_json(fake_claude_home, monkeypatch, runner_script):
     # 실사고(2026-09-10 운영자 PC): 5199 테스트 서버가 남긴 stale runtime.json 때문에
     # runner 가 5199 를 헬스체크해 멀쩡한 0.7.0 을 롤백. 살아있는 서버가 아는 실제
     # 바인드 포트(BOUND_PORT)가 권위여야 한다.
@@ -112,8 +122,7 @@ def test_apply_prefers_bound_port_over_stale_runtime_json(fake_claude_home, monk
     assert _apply_port(fake_claude_home, monkeypatch, bound_port=5100, runtime_port=5199) == "5100"
 
 
-@_WIN_RUNNER
-def test_apply_falls_back_to_runtime_json_without_bound_port(fake_claude_home, monkeypatch):
+def test_apply_falls_back_to_runtime_json_without_bound_port(fake_claude_home, monkeypatch, runner_script):
     # 서버 밖(테스트·CLI)에서는 BOUND_PORT 가 없으니 runtime.json 이 그대로 폴백.
     monkeypatch.delenv("SM_PORT", raising=False)
     assert _apply_port(fake_claude_home, monkeypatch, bound_port=None, runtime_port=5199) == "5199"

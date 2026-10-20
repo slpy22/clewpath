@@ -38,7 +38,7 @@ $ErrorActionPreference = "Continue"
 
 # 교체 대상. updater.py 의 PAYLOAD 와 반드시 같아야 한다.
 $Payload = @("session_manager","pwa",
-             "pyproject.toml","uv.lock","install.ps1","README.md","LICENSE")
+             "pyproject.toml","uv.lock","install.ps1","install.sh","uninstall.sh","README.md","LICENSE")
 
 function Log($m) {
     $line = "[{0}] {1}" -f (Get-Date -Format "HH:mm:ss"), $m

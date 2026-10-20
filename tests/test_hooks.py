@@ -42,7 +42,20 @@ def test_register_fresh(home):
     assert "||" not in cmd                          # PS 5.1 파서 에러(타 PC 실사고)
     assert "@- " not in cmd and '"@-"' in cmd       # 맨몸 @- 는 PS 스플래팅 파서 에러
     assert '-H Content-Type:application/json' in cmd  # 공백/인용 헤더 금지(셸 지뢰)
-    assert "curl.exe" in cmd                        # PS 의 curl 별칭(IWR) 회피
+    from session_manager import osdep
+    assert cmd.split()[0] == osdep.CURL               # Windows 는 curl.exe(PS 의 curl 별칭 IWR 회피)
+    assert ("curl.exe" in cmd) is osdep.IS_WIN        # 맥·리눅스엔 curl.exe 가 없다
+
+
+def test_hook_command_uses_this_os_curl(monkeypatch):
+    """맥·리눅스 설치본의 훅이 curl.exe 를 부르면 매 이벤트가 'command not found' 로 버려진다(posix-install.md 4.4)."""
+    from session_manager import osdep
+    monkeypatch.setattr(osdep, "CURL", "curl")
+    cmd = hooks.hook_command(5101)
+    assert cmd.startswith("curl -s -m 3 ") and "curl.exe" not in cmd
+    assert cmd.endswith("http://127.0.0.1:5101/api/hooks/event")
+    monkeypatch.setattr(osdep, "CURL", "curl.exe")
+    assert hooks.hook_command(5101).startswith("curl.exe -s -m 3 ")
 
 
 def test_register_is_idempotent(home):

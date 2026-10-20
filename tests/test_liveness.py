@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
+
+import pytest
 
 from session_manager import config, liveness
 
@@ -63,6 +66,28 @@ def test_mark_shutdown_writes_own_pid(fake_claude_home):
     assert d["pids"][str(os.getpid())]["reason"] == "normal"      # 0.10.2: pid 별 표식
 
 
+def test_mark_shutdown_for_another_pid_masks_that_exit(fake_claude_home):
+    """맥·리눅스 런처의 강제 stop(15초 뒤 KILL)은 죽인 Host 의 pid 로 표식을 남긴다 — 사람이 시킨 종료는 사고가 아니다."""
+    liveness.mark_shutdown("forced-stop", pid=DEAD_PID)
+    marks = json.loads(liveness.shutdown_file().read_text(encoding="utf-8"))["pids"]
+    assert marks[str(DEAD_PID)]["reason"] == "forced-stop" and str(os.getpid()) not in marks
+    _runtime(DEAD_PID)
+    assert liveness.check_previous_exit() is None and not liveness.incidents_file().exists()
+
+
+def test_log_tail_stops_at_last_launcher_mark(fake_claude_home):
+    """맥·리눅스 런처는 host.log 를 이어 쓰고 기동 직전 구분줄을 넣는다. 새 Host 가 이미 찍은 첫 줄은 죽은 Host 의
+    꼬리가 아니다 — 마지막 구분줄 앞까지만."""
+    config.data_dir().mkdir(parents=True, exist_ok=True)
+    _log(["=== launcher start 2026-10-19 09:00:00 ===", "old 1", "old 2: Traceback 마지막",
+          "=== launcher start 2026-10-20 10:00:00 ===", "[config] 새 프로세스 첫 줄", "[serve] http://127.0.0.1:5100"])
+    assert liveness.log_tail(10) == ["=== launcher start 2026-10-19 09:00:00 ===",   # 죽은 Host 가 뜬 때(그 구간의 머리)
+                                     "old 1", "old 2: Traceback 마지막"]
+    assert liveness.log_tail(1) == ["old 2: Traceback 마지막"]
+    _log(["no mark a", "no mark b"])                              # Windows(덮어쓰기)·구분줄 없는 로그는 그대로
+    assert liveness.log_tail(10) == ["no mark a", "no mark b"]
+
+
 def test_notify_incident_payload(fake_claude_home, monkeypatch):
     from session_manager import push
     sent = []
@@ -88,6 +113,27 @@ def test_launcher_template_and_ensure_script_contract():
 def test_ensure_launcher_skips_dev_tree(fake_claude_home):
     assert liveness.ensure_launcher(5100) is None               # 리포 실행 = start-connector.ps1 없음
     assert not list(config.data_dir().glob("launcher-ensured-*"))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="맥·리눅스 런처(start-connector.sh) 경로")
+def test_ensure_launcher_posix_regenerates_once_per_version(fake_claude_home, tmp_path, monkeypatch):
+    """업데이트 뒤 첫 기동이 새 템플릿으로 런처를 다시 렌더한다(버전당 1회). 폴백 포트로 떴어도 DEFAULT_PORT 는 그대로."""
+    from session_manager.osdep import _posix
+    root = tmp_path / "app"
+    (root / "session_manager").mkdir(parents=True)
+    (root / "session_manager" / _posix.LAUNCHER_TEMPLATE).write_text(
+        "#!/bin/sh\n# clewpath-launcher v2 (posix)\nDATA_DIR={{DATA_DIR}}\nCONF_FILE={{CONF_FILE}}\nDEFAULT_PORT={{PORT}}\n",
+        encoding="utf-8")
+    (root / _posix.START_SCRIPT).write_text("#!/bin/sh\n# 옛 런처\nDEFAULT_PORT=5100\n", encoding="utf-8")
+    monkeypatch.setattr(liveness, "_install_root", lambda: root)
+    monkeypatch.setattr(liveness, "_version", lambda: "9.9.9")
+    config.data_dir().mkdir(parents=True, exist_ok=True)          # 설치본에선 Host 가 뜨기 전에 이미 있다
+    out = liveness.ensure_launcher(5101)
+    assert out == "launcher: regenerated (posix v2)"
+    assert (config.data_dir() / "launcher-ensured-9.9.9").read_text(encoding="utf-8") == out
+    text = (root / _posix.START_SCRIPT).read_text(encoding="utf-8")
+    assert "DEFAULT_PORT=5100\n" in text and f"DATA_DIR={config.data_dir()}" in text.replace("'", "")
+    assert liveness.ensure_launcher(5101) is None                 # 버전당 1회
 
 
 def test_marks_are_per_pid_and_survive_overwrite_by_other_process(fake_claude_home, monkeypatch):

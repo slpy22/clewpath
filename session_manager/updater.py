@@ -18,9 +18,14 @@
 
 무엇이 교체되고 무엇이 남는가
 -----------------------------
-    교체:  session_manager/ control_plane/ relay/ pwa/ pyproject.toml uv.lock install.ps1
-    유지:  .venv (uv sync 로 맞춤), start-connector.ps1(재생성됨),
+    교체:  PAYLOAD — session_manager/ pwa/ pyproject.toml uv.lock install.ps1 install.sh uninstall.sh README.md LICENSE
+    유지:  .venv (uv sync 로 맞춤), 런처 start-connector.ps1·.sh (설치본마다 렌더 — Host 가 템플릿으로 다시 맞춘다),
            ~/.claude/session_manager/ 전체 (설정·기기·자격증명) ← 여기가 안 건드려지는 게 핵심
+
+어느 OS 가 받는가
+-----------------
+매니페스트의 platforms 클레임(osdep.NAME: win·mac·linux)에 자기 OS 가 있어야 받는다. 클레임이 없으면
+win 전용(0.28 까지의 릴리스), 모양이 이상하면 아무도 받지 않는다(fail-closed).
 """
 from __future__ import annotations
 
@@ -53,8 +58,11 @@ RELEASE_KEYS: dict[str, str] = {
 # 업데이트로 갈아끼우는 대상. 여기 없는 것은 건드리지 않는다.
 # control_plane/relay 는 서버 전용이라 배포·교체 대상이 아니다 (0.3.6부터 zip 에서 제외.
 # 그 전 설치본에 남은 사본은 install.ps1 이 재설치 때 걷어낸다).
+# 네 곳이 같아야 한다(test_updater.test_payload_lists_agree): 여기·update_runner.ps1 $Payload·
+# update_runner.sh PAYLOAD·ops/package-for-user.ps1 $include. install.sh·uninstall.sh 는 맥·리눅스용 —
+# 옛 설치본의 stage() 는 모르는 최상위 항목을 버리므로 Windows 설치본에는 다음다음 업데이트부터 들어간다(쓰지 않음).
 PAYLOAD = ("session_manager", "pwa",
-           "pyproject.toml", "uv.lock", "install.ps1", "README.md", "LICENSE")
+           "pyproject.toml", "uv.lock", "install.ps1", "install.sh", "uninstall.sh", "README.md", "LICENSE")
 
 
 class UpdateError(Exception):
@@ -169,6 +177,20 @@ def verify_manifest(token: str) -> dict[str, Any]:
     return claims
 
 
+def supports_this_os(claims: dict[str, Any]) -> bool:
+    """서명된 매니페스트가 이 OS 용인가. platforms 가 없으면 win 전용(0.28 까지), 문자열 목록이 아니면 아무도 아님."""
+    from session_manager import osdep
+    plats = claims.get("platforms", ["win"])
+    if not (isinstance(plats, list) and all(isinstance(p, str) for p in plats)):
+        plats = []                                          # 모양이 이상하면 fail-closed
+    return osdep.NAME in plats
+
+
+def _unsupported_msg(claims: dict[str, Any]) -> str:
+    from session_manager import osdep
+    return f"이 릴리스({claims.get('ver')})는 {osdep.NAME} 를 지원하지 않습니다"
+
+
 # ---------------------------------------------------------------- 확인/다운로드
 
 def manifest_url() -> str:
@@ -201,10 +223,15 @@ def check(timeout: int = 20) -> dict[str, Any]:
     except UpdateError as e:
         return write_state(last_check=int(time.time()), available=False,
                            error=str(e), current=cur)
+    if not supports_this_os(m):
+        # 오류가 아니다 — 최신 릴리스가 이 OS 를 아직 안 낸 것. 받지도 적용하지도 않는다.
+        return write_state(last_check=int(time.time()), available=False, error=None,
+                           current=cur, latest=m["ver"], notes=m.get("notes", ""),
+                           manifest=None, unsupported=_unsupported_msg(m))
     newer = is_newer(m["ver"], cur)
     return write_state(last_check=int(time.time()), available=newer, error=None,
                        current=cur, latest=m["ver"], notes=m.get("notes", ""),
-                       manifest=token if newer else None)
+                       manifest=token if newer else None, unsupported=None)
 
 
 def download(manifest: dict[str, Any], token: str, timeout: int = 600) -> Path:
@@ -273,6 +300,13 @@ def apply(manifest: dict[str, Any], staged: Path, restart_cmd: str | None = None
     updater 는 설치 폴더 밖(데이터 폴더)으로 복사해서 실행한다 — 설치 폴더를
     통째로 갈아끼우는 동안 자기 자신이 사라지면 안 된다.
     """
+    # 유지보수 표식(사람이 만들었거나 맥·리눅스 런처의 stop --hold)이 있으면 런처가 아무것도 띄우지 않는다 —
+    # 여기서 적용하면 러너의 재기동이 막혀 헬스 실패 → 롤백 → 그 재기동도 막혀 Host 가 꺼진 채로 남는다.
+    if (config.data_dir() / "maintenance.flag").exists():
+        raise UpdateError("유지보수 표식(maintenance.flag)이 있어 적용하지 않습니다 — 재기동이 막혀 롤백됩니다. "
+                          "표식을 지운 뒤 다시 하세요.")
+    if not supports_this_os(manifest):                  # check() 가 걸렀어도 마지막 관문에서 한 번 더
+        raise UpdateError(_unsupported_msg(manifest))
     # ★ 동시 실행 방지 잠금(실사고 2026-09-04): 사용자가 업데이트를 연달아 누르거나
     #   재기동 자동적용이 겹치면 runner 가 2개 이상 동시에 돌아 포트 경합으로 서비스가
     #   완전히 죽는다. 5분 내 진행 중인 apply 가 있으면 거부한다(만료 시 자기치유).

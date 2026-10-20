@@ -106,12 +106,14 @@ def hook_command(port: int) -> str:
       처럼 공백 없이(curl 유효 문법)
     - `cmd /c` 래핑 금지: bash(MSYS)가 `/c` 를 `C:\` 경로로 변환해 cmd 가
       대화형으로 떠버린다(실측)
-    - `curl.exe` 명시: PS 의 curl 별칭(Invoke-WebRequest) 회피
+    - 실행 파일 이름은 osdep.CURL: Windows 는 `curl.exe` 명시(PS 의 curl 별칭 Invoke-WebRequest 회피),
+      맥·리눅스는 `curl`(curl.exe 가 없다)
     실패 무음화(구 `|| exit 0`)는 셸 공통 문법이 없어 포기 - Host 가 꺼져 있으면
     로그 창에 non-blocking 한 줄이 남지만 세션 진행엔 영향 없다.
     -m 3: Host 다운 시에도 Claude 를 3초 이상 붙잡지 않는다.
     """
-    return ("curl.exe -s -m 3 --data-binary \"@-\" "
+    from session_manager import osdep
+    return (f"{osdep.CURL} -s -m 3 --data-binary \"@-\" "
             "-H Content-Type:application/json "
             f"http://127.0.0.1:{port}/api/hooks/event")
 
