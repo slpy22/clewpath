@@ -2557,6 +2557,10 @@ async function loadDetail(s){
 const TABS={ list:[], active:null };
 const tabKey=(s)=>(s.fork_id||s.session_id);
 const findTab=(key)=>TABS.list.find(t=>t.key===key)||null;
+// 이 페이지가 스스로 놓은 화면 id(탭 인스턴스 해체·새로 띄우기). 20초 목록의 screen 이 아직 이 값이면 내 옛 화면이지
+// 다른 기기가 아니다 — 정리한 터미널로 금방 돌아올 때 가짜 인계 확인창을 막는다(quick-switch 1-1). 오래된 것부터 버림.
+const RELEASED_SCREENS=[];
+function releaseScreen(id){ if(!id) return; RELEASED_SCREENS.push(id); if(RELEASED_SCREENS.length>50) RELEASED_SCREENS.shift(); }
 
 // termView: 터미널 영역(wrap) 안에 탭별 화면 인스턴스(릴레이=xterm, 로컬=iframe)를 보유한다.
 //  · 전환은 즉시다: 이전 탭은 tc 만 닫고(stream_close → 서버 화면 detach, PTY·xterm 버퍼 유지)
@@ -2645,7 +2649,7 @@ const termView={
     }
     if(t.tc) return;                       // 이미 라이브(같은 탭 재호출)
     const term=t.term;
-    if(fresh){ term.reset(); t.lastDim=''; t.screenId=this._newScreenId(); t.ended=false; }
+    if(fresh){ term.reset(); t.lastDim=''; releaseScreen(t.screenId); t.screenId=this._newScreenId(); t.ended=false; }
     // 보조키 바는 터치 기기에서만, 전경 탭 것만 붙인다
     if(matchMedia('(pointer: coarse)').matches && t.ux&&t.ux.bar) this.main.appendChild(t.ux.bar);
     // 세션 잠금 감지: 이전 Host 강제종료로 남은 고아가 claude bg 에이전트로
@@ -2694,6 +2698,7 @@ const termView={
   detach(){ const c=this.cur(); if(c&&c.tc){ try{c.tc.close();}catch(e){} c.tc=null; } this.sid=null; },
   // 탭 하나의 인스턴스 해체(탭 닫기). 로컬 iframe 은 about:blank 로 WS 를 닫게 한다.
   closeTabInstance(key){ const t=this.tabs[key]; if(!t) return;
+    releaseScreen(t.screenId);             // 버리는 화면 id — 목록이 옛값이어도 가짜 인계 확인창이 안 뜨게(1-1)
     if(t.tc){ try{t.tc.close();}catch(e){} t.tc=null; }
     if(t.ux){ try{t.ux.dispose();}catch(e){} if(t.ux.bar) t.ux.bar.remove(); }
     if(t.term){ try{t.term.dispose();}catch(e){} }
@@ -2724,6 +2729,7 @@ function shouldConfirmTakeover(s, t0){
   // 로컬(iframe)은 화면 id 가 없어 목록의 screen 이 '내 iframe' 인지 남인지 못 가린다 → 통지(taken)로만 판단
   if(MODE==='local') return false;
   const sc=s&&s.screen; if(!sc||!sc.attached) return false;      // 붙은 화면 없음(또는 stale false — 상대 통지가 메운다)
+  if(RELEASED_SCREENS.indexOf(sc.screen_id)>=0) return false;     // 이 페이지가 놓은 옛 화면(20초 목록의 옛값) — 남이 아니다(1-1)
   const mine=t0&&termView.tabs&&termView.tabs[t0.key]&&termView.tabs[t0.key].screenId;
   return !(mine&&sc.screen_id===mine);                            // 붙은 화면이 내 것이면 그냥 재접속
 }
