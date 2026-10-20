@@ -77,7 +77,8 @@ test("Conn: 터미널/모니터 스트림 라우팅, close 는 stream_close, 소
   same(ws.sent.slice(-3).map((f) => [f.type, f.id, f.data]), [
     ["stream_in", ft.id, { type: "input", data: "ls" }], ["stream_in", fm.id, { type: "add", session_id: "c", role: "sub" }],
     ["stream_in", fm.id, { type: "remove", session_id: "b" }]]);
-  ev(ctx, "globalThis.__m.close()");                                  // 모니터 close 는 핸들러만
+  ev(ctx, "globalThis.__m.close()");                                  // 모니터 close 도 서버에 stream_close(PC 쪽 관제 파이프 해체) + 핸들러 제거
+  same(ws.sent.at(-1), { v: 1, type: "stream_close", id: fm.id }, "핸들러만 지우면 PC 쪽 파이프가 남는다(quick-switch 1-2)");
   ws.push({ type: "stream", id: fm.id, data: "late" }); await tick();
   assert.equal(ev(ctx, "globalThis.__mon.length"), 1);
   // 서버가 2fa 로 스트림을 끝냄 → eof + error 전달

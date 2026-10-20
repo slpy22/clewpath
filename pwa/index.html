@@ -1243,7 +1243,8 @@ class Conn{
       id,
       input:(text)=>this._tx({v:1,type:'stream_in',id,
         data:{type:'user',message:{role:'user',content:[{type:'text',text}]}}}),
-      close:()=>this.streams.delete(id),
+      // 터미널처럼 서버에도 stream_close — 핸들러만 지우면 PC 의 재개 파이프(claude -p)가 릴레이가 끊길 때까지 남았다(1-2)
+      close:()=>{ try{this._tx({v:1,type:'stream_close',id});}catch(e){} this.streams.delete(id); },
     };
   }
   // 웹터미널 스트림(원시 텍스트). onData(data,eof)
@@ -1270,7 +1271,8 @@ class Conn{
         data:{type:'add',session_id:sid,role:role||'sub'}}),
       remove:(sid)=>this._tx({v:1,type:'stream_in',id,
         data:{type:'remove',session_id:sid}}),
-      close:()=>this.streams.delete(id),
+      // 관제·뷰어 실시간·탭 배지도 서버에 stream_close — PC 쪽 관제 파이프를 끊는다(1-2)
+      close:()=>{ try{this._tx({v:1,type:'stream_close',id});}catch(e){} this.streams.delete(id); },
     };
   }
   _closeMsg(code){
