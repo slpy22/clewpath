@@ -45,14 +45,15 @@ async function boot({ width = 1400, local = false, hash = "", setup = null } = {
 }
 
 // ---------------------------------------------------------------- 방금 띄운 터미널로 돌아오기(F1)
-test("T26 방금 띄운 터미널(20초 목록은 아직 꺼짐)을 떠났다가 같은 세션 줄로 돌아오면 목록을 새로 받아 판정한다 — 살아 있으면 그 탭으로, 정말 꺼졌으면 탭을 닫고 상세(새 claude 없음)", async () => {
+test("T26 방금 띄운 터미널(20초 목록은 아직 꺼짐)을 떠났다가 같은 세션 줄로 돌아오면 목록을 새로 받아 판정한다 — 살아 있으면 그 탭으로, 정말 꺼졌으면 탭을 닫고 상세(새 claude 없음), 목록을 못 받으면 떠나기 직전의 관찰대로", async () => {
   const paths = [];
-  for (const mode of ["릴레이", "로컬"]) for (const via of ["loadViewer", "loadDetail"]) for (const pty of ["살아 있음", "꺼짐"]) paths.push([mode, via, pty].join("|"));
+  for (const mode of ["릴레이", "로컬"]) for (const via of ["loadViewer", "loadDetail"]) for (const pty of ["살아 있음", "꺼짐", "목록 못 받음"]) paths.push([mode, via, pty].join("|"));
   const got = await each(paths, async (p) => {
     const [mode, via, pty] = p.split("|");
     const { ctx, pd } = await boot({ local: mode === "로컬" });
     ev(ctx, `SESSIONS.forEach((s) => { s.live_terminal = false; });   // 20초 목록은 아직 이 PTY 를 모른다
-      globalThis.__lists = 0; T.list = async () => { __lists++; return { sessions: SESSIONS.map((s) => ({ ...s, live_terminal: ${pty === "살아 있음"} && s.session_id === '${A}' })) }; };`);
+      globalThis.__lists = 0; T.list = async () => { __lists++; ${pty === "목록 못 받음" ? "throw new Error('disconnected');" : ""}
+        return { sessions: SESSIONS.map((s) => ({ ...s, live_terminal: ${pty === "살아 있음"} && s.session_id === '${A}' })) }; };`);
     await ctx.loadTerminal(ev(ctx, "SESSIONS[0]"), false); await tick(RENDER);   // ▶ 재개 → 터미널(새로 띄움)
     await ev(ctx, `${via}(SESSIONS[1])`); await tick();                          // 20초 안에 다른 세션 화면으로
     const menuAway = ev(ctx, "rowMenuItems(SESSIONS[0])[0][1]");                 // 떠나 있는 사이 그 줄의 ⋯ 첫 항목
@@ -60,7 +61,7 @@ test("T26 방금 띄운 터미널(20초 목록은 아직 꺼짐)을 떠났다가
     return { menuAway, termMode: pd.classList.contains("term-mode"), tabs: ev(ctx, "TABS.list.length"), lists: ev(ctx, "__lists"),
              now: ev(ctx, "PANE_NOW.kind"), newTerm: mode === "릴레이" ? ev(ctx, "__tc.length") : "-" };
   });
-  const want = (mode, pty) => pty === "살아 있음"
+  const want = (mode, pty) => pty !== "꺼짐"
     ? { menuAway: "터미널 열기", termMode: true, tabs: 1, lists: 1, now: "terminal", newTerm: mode === "릴레이" ? 2 : "-" }
     : { menuAway: "터미널 열기", termMode: false, tabs: 0, lists: 1, now: "detail", newTerm: mode === "릴레이" ? 1 : "-" };
   assert.deepEqual(got, Object.fromEntries(paths.map((p) => { const [mode, , pty] = p.split("|"); return [p, want(mode, pty)]; })));
