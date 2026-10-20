@@ -7,7 +7,7 @@ hostctl.py·tests/posix_e2e 는 명세 1.4 의 차례로 하나씩 생긴다. �
 
 스크립트가 지킬 약속(새 스크립트를 쓰는 사람이 볼 곳):
 - 형식: LF, BOM 없음, 1행 `#!/bin/sh`. 런처 템플릿 2행에 `clewpath-launcher v2`. 실행 비트에 기대지 않는다.
-- POSIX sh 만(_BASHISMS), 금지 명령(_FORBIDDEN — 맥에 없는 도구·GNU 전용 옵션·set -x·env 덤프).
+- POSIX sh 만(_BASHISMS), 금지 명령(_FORBIDDEN — 맥에 없는 도구·GNU 전용 옵션·set -x·env 덤프·trap '' 신호 무시).
   `umask` 는 하위 셸 `( umask 077; … )` 꼴만(S38: Host 를 띄우는 경로는 사용자의 umask 를 바꾸지 않는다).
 - 인라인 파이썬은 맨 앞 칸의 `NAME_PY='` 한 줄로 열고 `'` 한 줄로 닫는 셸 변수에 둔다. 안에 작은따옴표 금지,
   그대로 컴파일돼야 한다. 런처의 PROBE_PY·SPAWN_PY 는 session_manager 를 import 하지 않는다(롤백 뒤 버전 어긋남).
@@ -51,7 +51,6 @@ HOME_SCRIPTS = ("get.sh", "install.sh", "uninstall.sh", "update_runner.sh")
 
 # 아직 만들지 않은 것(명세 1.4 의 단계). 만들면 여기서 뺀다.
 PENDING = {
-    "update_runner.sh",                 # 3단계 러너
     "install.sh", "hostctl.py",         # 4단계
     "uninstall.sh",                     # 5단계
     "get.sh",                           # 6단계
@@ -266,6 +265,9 @@ _FORBIDDEN = [
     ("date -d(GNU 전용)", _C + r"date\s+-[A-Za-z]*d"),
     ("cp -T/mv -T(GNU 전용)", _C + r"(?:cp|mv)\s+(?:-[A-Za-z]+\s+)*-[A-Za-z]*T"),
     ("flock/setsid/timeout(맥에 없음)", _C + r"(?:flock|setsid|timeout)(?![\w=-])"),
+    # 무시('')한 신호는 exec 로 자식에게 물려간다 — 재기동한 Host·브로커·claude 가 HUP 를 못 받으면 브로커가 죽어도
+    # claude 가 끝나지 않는다. 막기만 하려면 빈 처리(trap ':' HUP)를 쓴다
+    ("trap '' 신호 무시(자식에게 물려간다)", _C + r"trap\s+(?:''|\"\")\s"),
 ]
 _UMASK = re.compile(_C + r"umask\b")
 _UMASK_OK = re.compile(r"umask\s+0?077\s*(?:;|&&)")
@@ -340,6 +342,8 @@ case "$p" in *[[:cntrl:]]*) printf '%s\n' "bad" ;; esac
 x=$(printf '%s' "$msg" | tr -d '[:space:]')
 n=$((1 + 2)); [ "$n" -eq 3 ] && [ "$a" = "b" ] && printf '%s %s %s\n' "${x:-d}" "${#x}" "${x%/*}"
 ( umask 077; printf 'pid=%s\n' "$$" > "$DATA_DIR/update.inprogress" )
+trap ':' HUP INT
+trap 'STOP_REQ=1' TERM
 cat <<'EOF'
 local x; [[ $a == b ]]; source y; timeout 5 z
 EOF
@@ -358,6 +362,7 @@ _BAD = [
     "trap 'cleanup' ERR", "set -x", "set -eux", "printenv", "env", "export -p", "sed -i 's/a/b/' f",
     "sed -n -i.bak 's/a/b/' f", "readlink -f .", "stat -c %Y f", "date -d yesterday", "cp -T a b", "flock f cmd",
     "setsid cmd", "x=$(timeout 5 cmd)", "umask 077", "( umask 022; : )", "cmd |& tee f",
+    "trap '' HUP INT", 'trap "" TERM',
 ]
 
 

@@ -298,7 +298,7 @@ recover_swap_leftovers() {   # 0 계속 / 10 보류(러너가 교체 중) / 1 �
     </dev/null >>"$DATA_DIR/updates/recover.log" 2>&1
   _rc=$?
   if [ "$_rc" = 3 ]; then
-    llog "skip: 다른 러너가 돌고 있음(복구 rc=3)"
+    llog "skip: 복구 보류(rc=3 — 다른 러너가 돌고 있거나 이 설치본의 Host 가 떠 있음)"
     return 10
   fi
   if [ "$_rc" != 0 ] || swap_left; then

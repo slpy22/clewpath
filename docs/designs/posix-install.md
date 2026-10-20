@@ -664,7 +664,7 @@ cmd_start() {
 **구현 메모 (2단계, 2026-10-20 — 뒤 단계가 맞출 약속)**
 - `start`는 띄운 뒤 runtime.json에 새 pid가 적히거나(`up`) 끝날 때까지 최대 15초 잠금을 쥔다. 그 사이 온 다른 `start`가 "runtime.json 없음"을 죽음으로 읽고 겹쳐 띄우지 않게 하려는 것이다. 기동 직후 끝나면 `fail: 기동 직후 종료`를 남기고 종료코드 1.
 - 잠금(`launcher.lock`·`watch.lock.d`·`updates/runner.lock.d`)과 `update.inprogress`의 pid는 명령줄까지 본다. 잠금은 런처 파일 이름, 러너 잠금과 `by=runner` 표식은 `update_runner`, `by=install` 표식은 `install.sh`가 명령줄에 있어야 산 것이다(pid 재사용 방지). `by=`가 없으면 pid만 본다. pid 없는 표식은 1분, pid 없는 잠금은 2분까지 "쓰는 중"으로 본다. 러너·install.sh는 표식을 임시 파일에 쓰고 mv 한다.
-- 교체 잔재가 있고 러너가 살아 있으면 `CLEWPATH_UPDATER=1`(러너 자신의 재기동)만 통과하고 나머지는 보류(0)한다. 러너 사본의 `-RecoverOnly` 종료코드: 0이면 복구(잔재가 남으면 실패로 봄), 3이면 다른 러너가 도는 중이라 보류, 그 밖은 막힘(1).
+- 교체 잔재가 있고 러너가 살아 있으면 `CLEWPATH_UPDATER=1`(러너 자신의 재기동)만 통과하고 나머지는 보류(0)한다. 러너 사본의 `-RecoverOnly` 종료코드: 0이면 복구(잔재가 남으면 실패로 봄), 3이면 다른 러너가 도는 중이거나 이 설치본의 Host 가 떠 있어(3단계) 보류, 그 밖은 막힘(1).
 - probe는 pid가 좀비이거나, 내 uid가 아니거나, runtime.json의 `started_at`보다 5초 넘게 뒤에 생긴 프로세스면 죽은 것으로 본다(맥 재부팅 뒤 남의 프로세스가 같은 pid를 받는 경우).
 - `watch`의 틱은 `( cmd_start )` 대신 `/bin/sh "$SELF" start` 새 프로세스로 돈다. 잠금 pid가 진짜 pid가 되고, 다시 렌더된 런처를 쓴다. Host가 살아 있으면(ok·busy) start를 부르지 않는다.
 - 출력: `stop`은 `not running` / `stopped (pid N)` / `stopped (pid N, forced)`. `status`는 위 키에 `maintenance=0|1`을 더하고, venv가 없거나 판정이 안 되면 `venv=missing|broken`을 붙인다. 사람용 안내는 터미널일 때만 표준오류로 낸다(실패는 늘 표준오류).
@@ -828,6 +828,23 @@ PAYLOAD="session_manager pwa pyproject.toml uv.lock install.ps1 install.sh unins
 | :229-238 last_apply(PS5.1은 BOM) | printf와 mv, BOM 없음 | |
 | :240-242 apply.lock 삭제 | 모든 경로와 하트비트 | |
 | 없음 | runner.lock.d, update.inprogress, 잔재 복구 | 겹침, 감독자 경합 |
+
+**구현 메모 (3단계, 2026-10-20 — 위 설계와 다른 점과 뒤 단계가 맞출 약속)**
+- 되돌림은 지우지 않고 반대로 옮기기만 한다. `new x`는 `ROOT/x`를 `SWAP/new/x`로 되돌리고(명세의 `rm -rf ROOT/x` 대신), `old x`는 `SWAP/old/x`를 제자리로 옮긴다. 되돌리다 죽어도 다시 돌리면 같은 결과다(멱등). 설치 폴더의 항목은 어떤 길에서도 rm 하지 않는다.
+- 저널이 없거나 비어 있으면 아무것도 옮기지 않은 것이라 치우기만 한다. 저널 폴더를 지울 때는 `journal` 파일부터 지운다. 롤백·복구는 되돌림 → uv sync → 저널 정리 순서라, 그 사이에 죽어도 다음 복구가 다시 맞춘다. 저널을 rename 직전에 쓰는 순서가 이 규칙의 전제다(시험: rename 마다 SIGKILL).
+- 지난 교체 잔재 복구는 1단계(잠금·표식)가 아니라 2단계(본체 종료 대기) 뒤, 백업 앞에서 한다. 잔재가 있는데 Host 가 떠 있다면 그 Host 가 잔재 트리로 돌고 있으므로, 내려간 뒤에 되돌린다. 복구가 실패하면 재기동하지 않고 끝낸다(install.sh 안내).
+- `-RecoverOnly`: `InstallRoot/session_manager`가 없어도 교체 저널(`info`)이 있으면 받는다(교체 도중 죽으면 `SWAP/old`에 있다). apply.lock 은 건드리지 않고, 일하는 동안 잠금과 표식을 쥔다. 커밋된 저널은 치우기만 한다(uv sync·last_apply 없음). 되돌렸으면 uv sync 와 `last_apply`(info 의 version, ok=false). 잔재가 있는데 이 설치본의 Host 가 떠 있으면(러너가 재기동 뒤 헬스 전에 죽어 그 Host 가 잔재 트리로 돌고 있다) 되돌리지 않고 3 — 런처는 확인 전에 복구를 부르므로 그대로 보류(0)한다(런처 로그 문구 `skip: 복구 보류(rc=3 …)`). Host 가 내려간 뒤의 start·다음 업데이트가 되돌린다. 종료코드 0 됨·잔재 없음 / 1 실패 / 2 인자 / 3 다른 러너·떠 있는 Host.
+- `info`는 `key=value` 줄(`format=1`, `runner_pid`, `version`, `from`, `started`). `format`이 1이 아니거나 저널에 PAYLOAD 밖 이름·모르는 줄이 있으면 아무것도 옮기지 않고 실패한다.
+- 신호: `trap ':' HUP INT`(빈 처리). 명세의 `trap '' HUP INT`(무시)는 exec 로 uv·런처·재기동 Host·그 Host 가 새로 띄우는 브로커와 claude 까지 물려가, 브로커가 죽어도 claude 가 SIGHUP 으로 끝나지 않는다. `test_posix_scripts`에 `trap ''` 금지 규칙을 더했다.
+- 헬퍼(`HELPER_PY`, `-I -S`)는 `health`만 한다. 부를 때마다 venv 파이썬 → [linux] python3 → curl 문자열 검사 순으로 고른다(업데이트 중 venv 가 바뀔 수 있어서). waitpid·cmdline·procs·JSON 이스케이프는 셸 한 길(`/proc`, 맥은 `ps -A -ww -o pid= -o command=`, sed)로 한다.
+- `-HealthSeconds`(기본 45)를 더했다. 파이썬은 넘기지 않는다(시험과 느린 PC 용).
+- 재기동이 실패하면(런처 종료코드가 0이 아님 — 기동 직후 종료·막힘) 헬스 45초를 기다리지 않고 곧바로 롤백한다.
+- 사전 조건 오류(종료코드 2)라도 설치 루트가 멀쩡하면 옛 버전으로 계속한다. 본체를 죽이지 않고 `WaitSeconds`까지 스스로 내려가기를 기다렸다가(수동 적용은 1.5초 뒤 내려간다) 런처 start 를 부르고, 안 내려가면(재기동 자동 적용) 그대로 둔다. 인자가 망가졌으면(상대·빈 경로, 제어문자) 아무것도 하지 않는다. 교체 전 중단(TERM·백업 실패·스테이지 복사 실패·교체 도중 실패 후 되돌림)도 같은 길이다. 이때는 잠금과 표식을 먼저 풀고 `CLEWPATH_UPDATER` 없이 부른다. 그래야 런처가 평소대로(남의 잔재가 있으면 -RecoverOnly 포함) 판단한다.
+- `last_apply`(ok=false)는 롤백을 시작할 때 먼저 쓴다. 다시 띄운 옛 Host 의 재기동 자동 적용이 같은 버전을 또 받지 않게 하려는 것이다. 살아 있는 설치 표식(`by=install`)도 종료코드 3이다.
+- 인자 검증: `-BackupDir`는 로그 폴더 바로 아래, `-Version`은 `[0-9][0-9A-Za-z.+-]*`(64자까지 — 파일 이름과 JSON 에 들어간다), 숫자 인자는 앞자리 0 금지(`$(( ))`가 8진수로 읽는다), 경로는 절대 경로이고 제어문자·`.`·`..` 조각이 없어야 한다. rm -rf 는 `BackupDir`·`BackupDir.tmp.*`·`BackupDir-failed-*`·`InstallRoot/.clewpath-swap.*`·`WORK/runner.lock.d`에만 한다.
+- 스크립트 전체를 `main()`에 넣었다. updater.apply 의 `copy2`가 같은 자리에 덮어써도, 돌고 있는 sh 는 이미 다 읽은 함수만 쓴다.
+- 시험: `tests/test_update_runner_sh.py`(R①~R⑮, rename 마다 SIGKILL 17곳, curl 길, uv 찾는 순서, 런처 + 진짜 러너 복구, 업데이트 중 감독자 대기, Host 가 떠 있을 때 복구 보류), `test_update_safety`(러너 사본 실행). 리눅스 컨테이너에서 러너에 버그를 하나씩 넣어 시험이 잡는지 확인했다.
+- 뒤 단계가 맞출 것: install.sh 는 `.clewpath-install`에 `uv=`·`python_pref=`·`python_install_dir=`를 쓴다(러너가 읽는다). install.sh 의 표식은 `by=install`이고 명령줄에 `install.sh`가 있어야 러너가 산 것으로 본다(그동안 러너는 종료코드 3). uninstall.sh 는 살아 있는 러너 표식(`by=runner`)이 있으면 끝나기를 기다리거나 거부하는 편이 안전하다(러너가 끝에 Host 를 다시 띄운다 — 5단계에서 정할 것).
 
 ### 3.5 uninstall.sh (설치 루트)
 
