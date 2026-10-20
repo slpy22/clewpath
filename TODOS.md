@@ -26,6 +26,7 @@
 - [ ] 사용 중인 실제 소켓 e2e 하네스(scratchpad qs-e2e)를 저장소 tests/ 로 옮겨 릴리스 전 회귀로 둘지 검토
 
 ## 진행중: 멀티 OS(Windows + macOS, 리눅스는 시험용) — docs/designs/multi-os.md (2026-10-15 사장님 결정)
+- [ ] **맥·리눅스를 platforms 에 넣기 전 필수:** 맥·리눅스 전용 스크립트(install.sh·uninstall.sh·get.sh·start-connector.template.sh·update_runner.sh)와 1회차 검토 수리 커밋(0111fde·f09a26e·c834a8b·7630da6·297c502)의 2회차 적대적 검토 — 2026-10-21 사용량 한도로 미룸. Windows 에 닿는 부분(공통 파이썬·출시 도구)은 같은 날 직접 검토·실행 시험함
 - [x] 1단계(0.23.0): `session_manager/osdep/`(_win·_posix) 경계 — pty·자식 동반 종료·프로세스 목록/종료·DPAPI·런처·재개 창·경로·업데이트 러너. Windows 동작 불변, 가드 test_osdep.py
 - [x] 2단계(`macos` 브랜치, 2026-10-15 → **main 합침 0.28.0, 2026-10-20 재검증: 리눅스 컨테이너 612 통과·Windows 620 통과**): POSIX pty(ptyprocess)·pty 끊김 SIGHUP 동반 종료·브로커 유닉스 소켓(0600)·고아 판정 init 입양·범위 감시 POSIX 경로·테스트 OS 분기 — 리눅스 컨테이너 571 통과 + 브로커 통합 확인, Windows 579 통과. **main 배포 시 ptyd 해시가 바뀌어 브로커 업데이트 대기 1회**
 - [ ] (발견) extras `mcp>=1.0.0` 이 잠금에서 mcp 2.0.0 — 2.x 엔 `mcp.server.fastmcp` 가 없어 mcp_server 가 안 뜬다. 설치본엔 extra 가 안 들어가 운영 영향 없음. `<2` 고정 또는 2.x 대응(리눅스 컨테이너 pytest 에선 test_mcp_team 이 이 때문에 건너뛰어진다)
