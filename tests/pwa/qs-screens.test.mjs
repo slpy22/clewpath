@@ -235,3 +235,80 @@ test("T36 폰 웹 재개: 아래 탭 막대로 나가도 '‹ 목록'처럼 재�
   assert.deepEqual(got, { "응답 중 아님": { view: "list", afterLeave: 1, closed: 1, handle: true },
                           "응답 중": { view: "list", afterLeave: 0, closed: 1, handle: true } });
 });
+
+// ---------------------------------------------------------------- 검토 2회차: 목록을 새로 받는 사이의 누름(§4 공통 '연달아 누르면 마지막 누름만')
+const nowAt = (ctx) => ev(ctx, "PANE_NOW.kind + ':' + (PANE_NOW.sid || '').slice(0, 1)");
+
+test("T48 방금 본 터미널 줄(A)이 목록을 새로 받는 사이 다른 줄(B 상세)을 누르면 마지막 누름(B)이 이긴다 — 늦게 끝난 A 가 B 를 덮지 않는다(릴레이·로컬, 목록이 늦게 옴·안 옴)", async () => {
+  const paths = ["릴레이|늦게 옴", "릴레이|안 옴", "로컬|늦게 옴"];
+  const got = await each(paths, async (p) => {
+    const [mode, net] = p.split("|");
+    const { ctx, pd } = await boot({ local: mode === "로컬" });
+    ev(ctx, "SESSIONS.forEach((s) => { s.live_terminal = false; }); globalThis.__lr = []; T.list = async () => ({ sessions: SESSIONS.map((s) => ({ ...s })) });");
+    await ctx.loadTerminal(ev(ctx, "SESSIONS[0]"), false); await tick(RENDER);   // ▶ 재개 → 터미널 A(새로 띄움 — 20초 목록은 아직 모른다)
+    await ev(ctx, "loadViewer(SESSIONS[1])"); await tick(15);                     // 다른 화면으로 떠남
+    ev(ctx, "T.list = () => new Promise((r) => __lr.push(r));");               // 느린 망
+    const pA = ctx.jumpToSession(ev(ctx, "SESSIONS[0]")); await tick(50);        // 목록 줄 A — 목록을 새로 받는 중
+    ctx.jumpToSession(ev(ctx, "SESSIONS[1]")); await tick(50);                   // 기다리다 줄 B(탭 없음 → 상세)
+    const afterB = nowAt(ctx);
+    if (net === "늦게 옴") ev(ctx, `__lr[0]({ sessions: SESSIONS.map((s) => ({ ...s, live_terminal: s.session_id === '${A}' })) })`);
+    await pA; await tick(RENDER);
+    return { afterB, final: nowAt(ctx), termMode: pd.classList.contains("term-mode"), tabA: ev(ctx, "TABS.list.length") };
+  });
+  assert.deepEqual(got, all(paths, { afterB: "detail:b", final: "detail:b", termMode: false, tabA: 1 }));
+});
+
+test("T49 느린 망(목록이 3초 안에 오지 않음): 방금 본 터미널 줄을 누르면 기다리는 동안 받아들였음을 알리고, 3초 뒤 그 탭으로 간다 — 목록을 두 번 기다리지 않는다", async () => {
+  const { ctx } = await boot();
+  ev(ctx, "SESSIONS.forEach((s) => { s.live_terminal = false; }); T.list = async () => ({ sessions: SESSIONS.map((s) => ({ ...s })) });"
+        + "globalThis.__toasts = []; toast = (m) => __toasts.push(m);");
+  await ctx.loadTerminal(ev(ctx, "SESSIONS[0]"), false); await tick(RENDER);
+  const mine = ev(ctx, "__tc[0].opts.screen");
+  ev(ctx, `SESSIONS[0].screen = { attached: true, screen_id: ${JSON.stringify(mine)} }`);   // 떠나기 전에 받은 20초 목록(내 화면이 붙어 있음)
+  await ev(ctx, "loadViewer(SESSIONS[1])"); await tick(15);
+  ev(ctx, "globalThis.__lists = 0; T.list = () => { __lists++; return new Promise(() => {}); };");   // 목록 응답이 오지 않는다
+  const t0 = Date.now();
+  const p = ctx.jumpToSession(ev(ctx, "SESSIONS[0]"));
+  await tick(700);
+  const waiting = { now: ev(ctx, "PANE_NOW.kind"), told: ev(ctx, "__toasts.some((m) => m.includes('확인하는 중'))") };
+  await p; await tick(RENDER);
+  assert.deepEqual({ waiting, now: ev(ctx, "PANE_NOW.kind"), lists: ev(ctx, "__lists"), conns: ev(ctx, "__tc.length"), inTime: Date.now() - t0 < 3700 },
+                   { waiting: { now: "viewer", told: true }, now: "terminal", lists: 1, conns: 2, inTime: true });
+});
+
+test("T50 폰: 새로고침 뒤 '중지됨'으로 되살린 탭의 줄을 누르면 목록을 기다리지 않고 바로 상세로 간다(이 페이지가 살아 있음을 본 적 없는 탭은 목록대로) — 이어 누른 줄이 이긴다", async () => {
+  const SAVED = JSON.stringify({ active: A, list: [{ key: A, sid: A, safe: false }], mru: [A] });
+  const { ctx } = await boot({ width: 390, setup: (sb) => { sb.localStorage.setItem("sm_room", "room1"); sb.localStorage.setItem("sm_tabs_room1", SAVED); } });
+  ev(ctx, "SESSIONS.forEach((s) => { s.live_terminal = false; }); T.list = async () => ({ sessions: SESSIONS.map((s) => ({ ...s })) });");
+  await ev(ctx, "loadList()"); await tick(RENDER);                       // 첫 목록 → 탭 기억 복원(A: 중지됨 — 쉬는 세션 4시간 정리 등)
+  const restored = ev(ctx, "TABS.list.map((t) => t.s.title + (t.dead ? '(중지됨)' : '')).join(',')");
+  ev(ctx, "globalThis.__lists = 0; T.list = () => { __lists++; return new Promise(() => {}); };");   // 느린 망
+  ctx.jumpToSession(ev(ctx, "SESSIONS[0]")); await tick(100);            // 목록 줄 A
+  const atA = nowAt(ctx);
+  ctx.jumpToSession(ev(ctx, "SESSIONS[1]")); await tick(100);            // 이어서 줄 B
+  await tick(3100);                                                        // (고치기 전에는 3초 뒤 A 의 늦은 판정이 B 를 덮었다)
+  assert.deepEqual({ restored, atA, final: nowAt(ctx), lists: ev(ctx, "__lists"), tabs: ev(ctx, "TABS.list.length"), conns: ev(ctx, "__tc.length") },
+                   { restored: "A(중지됨)", atA: "detail:a", final: "detail:b", lists: 0, tabs: 0, conns: 0 });
+});
+
+test("T48b 터미널·웹 재개가 2차 인증 확인을, 알림 진입이 목록을 기다리는 사이 다른 줄(B 상세)을 누르면 그 줄이 이긴다 — 늦게 끝난 앞 누름은 화면을 바꾸지 않는다", async () => {
+  const paths = ["터미널", "웹 재개", "알림"];
+  const got = await each(paths, async (p) => {
+    const { ctx, pd } = await boot();
+    const releases = [];
+    ctx.ensurePriv = () => new Promise((r) => releases.push(r));
+    ev(ctx, "SESSIONS[1].live_terminal = false; globalThis.__lr = []; T.list = () => new Promise((r) => __lr.push(r));");
+    const pA = p === "터미널" ? ctx.jumpToSession(ev(ctx, "SESSIONS[0]"))            // 목록상 살아 있음 → 터미널(2차 인증 확인 중)
+             : p === "웹 재개" ? ev(ctx, "loadResume(SESSIONS[0], true, false)")
+             : ctx.openSessionById(A);                                                // 알림 → 목록을 새로 받는 중
+    await tick(20);
+    ctx.jumpToSession(ev(ctx, "SESSIONS[1]")); await tick(20);                        // 기다리다 줄 B(탭 없음·꺼짐 → 상세)
+    const afterB = nowAt(ctx);
+    for (const r of ev(ctx, "__lr.slice()")) r({ sessions: ev(ctx, "SESSIONS").map((x) => ({ ...x })) });
+    await tick(20);
+    while (releases.length) releases.shift()({});                                      // 앞 누름의 2차 인증 확인이 늦게 끝남
+    await pA; await tick(RENDER);
+    return { afterB, final: nowAt(ctx), termMode: pd.classList.contains("term-mode"), terms: ev(ctx, "__tc.length"), resumes: ev(ctx, "__res.length") };
+  });
+  assert.deepEqual(got, all(paths, { afterB: "detail:b", final: "detail:b", termMode: false, terms: 0, resumes: 0 }));
+});
