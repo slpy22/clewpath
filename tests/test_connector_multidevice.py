@@ -606,3 +606,85 @@ async def test_requests_from_many_devices_are_capped(conn, monkeypatch):
         h.gate(f"r{i}").set()
     await _drain(conn)
     assert len([f for f in conn.sent if f.get("type") == "res"]) == n and h.max == connector._REQ_CONCURRENCY
+
+
+# ---- 검토 4회차: 떠나기 직전에 받은 요청 — 같은 읽기에 온 client_offline·bye_device 가 인증을 먼저 지워, 받아 둔 요청이 실행되지 않았다 ----
+# run() 은 `async for raw in ws: await self._on_frame(raw)` 이고 websockets 는 쌓인 프레임을 쉬지 않고 돌려준다. 따로 도는 요청은 받을 때 인증을 보고
+# 그 기기를 쥔다(main·f1dcf7b 처럼 떠나기 전에 보낸 요청은 실행된다). 실행 직전에는 그 사이 PC 에서 해제·재발급했는지만 다시 본다.
+
+def _sealed_req(key, rid, method, params):
+    return _env(key, "cidA", {"v": 1, "type": "req", "id": rid, "method": method, "params": params})
+
+
+@pytest.mark.asyncio
+async def test_request_received_just_before_the_device_leaves_is_still_executed(fake_claude_home, monkeypatch):
+    """폰이 요청 하나를 보내고 바로 닫혀도(앱 종료·화면 끄기 — 릴레이의 client_offline 이 같은 읽기로 온다) 그 요청은 실행된다."""
+    c, key, gate, hits, dev = await _e2ee_phone(monkeypatch)
+    await c._on_frame(_sealed_req(key, "c2", "api", {"verb": "POST", "path": "/api/sessions/S1/label", "body": {"name": "x"}}))
+    await c._on_frame(json.dumps({"v": 1, "type": "peer", "event": "client_offline", "cid": "cidA"}))
+    await _drain(c)
+    posts = [h for h in hits if h[0] == "POST"]
+    assert [p[1] for p in posts] == ["http://127.0.0.1:5100/api/sessions/S1/label"]
+    from session_manager import connector
+    assert posts[0][2].get(connector.DEVICE_HEADER) == dev["id"] and posts[0][2].get(connector.PROOF_HEADER) == connector.RELAY_PROOF, \
+        "사람 증명은 받을 때 인증된 기기로"
+    assert _answers(key, c, "c2") == [], "떠난 기기 앞 답은 보내지 않는다"
+
+
+@pytest.mark.asyncio
+async def test_request_received_just_before_bye_device_runs_before_the_self_revoke(fake_claude_home, monkeypatch):
+    """폰이 요청 하나 뒤에 곧바로 자기 해제(bye_device)를 보내면 그 요청이 먼저 실행되고, 해제는 그 뒤에 — 받은 순서대로."""
+    from session_manager import devices
+    c, key, gate, hits, dev = await _e2ee_phone(monkeypatch)
+    await c._on_frame(_sealed_req(key, "c2", "api", {"verb": "POST", "path": "/api/sessions/S1/label", "body": {"name": "x"}}))
+    await c._on_frame(_sealed_req(key, "c3", "bye_device", {}))
+    await _drain(c)
+    assert [h[1] for h in hits if h[0] == "POST"] == ["http://127.0.0.1:5100/api/sessions/S1/label"]
+    a = _answers(key, c, "c3")
+    assert len(a) == 1 and a[0]["sealed"] and a[0]["data"] == {"revoked": True}
+    assert not devices.is_active(dev["id"]) and "cidA" not in c.authed
+
+
+@pytest.mark.asyncio
+async def test_bye_device_still_revokes_when_the_phone_left_before_it_ran(fake_claude_home, monkeypatch):
+    """bye_device 가 앞 요청 뒤에 줄 서 있는 사이 폰이 떠나도(client_offline) 자기 해제는 된다 — 받을 때 인증한 기기로."""
+    from session_manager import devices
+    c, key, gate, hits, dev = await _e2ee_phone(monkeypatch)
+    await c._on_frame(_sealed_req(key, "c2", "api", {"verb": "GET", "path": "/api/sessions/S1/messages"}))
+    await c._on_frame(_sealed_req(key, "c3", "bye_device", {}))
+    await c._on_frame(json.dumps({"v": 1, "type": "peer", "event": "client_offline", "cid": "cidA"}))
+    gate.set()
+    await _drain(c)
+    assert not devices.is_active(dev["id"])
+
+
+@pytest.mark.asyncio
+async def test_queued_request_of_a_device_revoked_on_the_pc_is_not_executed(fake_claude_home, monkeypatch):
+    """줄 서 있는 사이 PC 에서 그 기기를 해제(또는 QR 재발급)했으면 아직 시작하지 않은 요청은 실행하지 않는다."""
+    from session_manager import devices
+    c, key, gate, hits, dev = await _e2ee_phone(monkeypatch)
+    await c._on_frame(_sealed_req(key, "c2", "api", {"verb": "GET", "path": "/api/sessions/S1/messages"}))
+    await c._on_frame(_sealed_req(key, "c3", "api", {"verb": "POST", "path": "/api/sessions/S1/label", "body": {"name": "x"}}))
+    await _ticks()
+    devices.revoke(dev["id"])
+    assert await c.drop_device(dev["id"], notice="device_removed") == 1
+    gate.set()
+    await _drain(c)
+    assert [h[0] for h in hits] == ["GET"], hits
+
+
+@pytest.mark.asyncio
+async def test_request_from_an_unauthenticated_device_is_refused_when_received(fake_claude_home, monkeypatch):
+    """인증 없는 기기의 요청은 받을 때 바로 auth_required — 줄을 세우지 않는다."""
+    import os
+    c = _conn()
+    c.ws = _RelayWS()
+    hits = []
+
+    async def _get(url, params=None, headers=None):
+        hits.append(url)
+        return _Resp({})
+    monkeypatch.setattr(c.http, "get", _get)
+    await c._on_frame(_req("cidZ", "c1", "api", {"verb": "GET", "path": "/api/x"}))
+    assert c.ws.wire == [{"v": 1, "type": "res", "id": "c1", "cid": "cidZ", "ok": False, "error": "auth_required"}]
+    assert not c._req_tasks and hits == []

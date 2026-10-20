@@ -147,9 +147,10 @@ def _is_privileged_api(path: str) -> bool:
 # 오래 걸릴 수 있는 요청(로컬 API 프록시·목록·통계·ask·내보내기/가져오기·2FA 확인)은 릴레이 프레임을 받는 길을 막지 않게 따로 돈다.
 # 프레임을 하나씩 처리하면 Host 쪽 느린 요청 하나(업데이트 확인·큰 목록·내보내기)가 그 PC 의 모든 기기 프레임 — 다른 기기의 기기 인증,
 # client_offline, 터미널 입력 — 을 그 요청이 끝날 때까지 막았고(재연결 3.6초), 늦은 응답이 뒤에 줄 선 client_offline 보다 먼저 나가
-# 떠난 기기 앞 응답이 방 전체로 broadcast 됐다(검토 3회차). 기기 인증·스트림 시작·ping·bye_device 는 그 자리에서 — 순서가 뜻을 가진다
-# (인증 뒤의 요청은 인증된 상태를 보고, 스트림 시작 뒤의 입력은 그 스트림의 입력 큐로 간다).
-_SPAWN_METHODS = frozenset({"list_sessions", "get_stats", "ask", "api", "export", "import", "grant"})
+# 떠난 기기 앞 응답이 방 전체로 broadcast 됐다(검토 3회차). 기기 인증·스트림 시작·ping 은 그 자리에서 — 순서가 뜻을 가진다
+# (인증 뒤의 요청은 인증된 상태를 보고, 스트림 시작 뒤의 입력은 그 스트림의 입력 큐로 간다). bye_device(폰의 자기 해제)는 그 기기의 줄 맨 뒤에
+# 선다 — 그 앞에 보낸 요청이 먼저 실행된다(검토 4회차: 그 자리에서 해제하면 같은 읽기로 온 앞 요청이 인증을 잃어 실행되지 않았다).
+_SPAWN_METHODS = frozenset({"list_sessions", "get_stats", "ask", "api", "export", "import", "grant", "bye_device"})
 # 따로 도는 요청도 기기마다 받은 순서대로 하나씩 돈다(_spawn_req) — 순서·상한 없이 돌리자 한 기기가 연달아 보낸 쓰기 둘(팀 알림 체크 두 개)이
 # Host 에서 겹쳐, 잠금 없이 같은 .tmp 이름으로 쓰는 저장소가 깨지고(관제 그룹 사라짐) 몰린 요청이 Host 의 스레드(anyio 40)를 다 써 PC 자신의
 # /api/health 가 5초를 넘겼다(검토 4회차). 그래서 전체 동시 실행에도 상한을 두고, Host 상태를 바꾸는 요청(_is_write)은 기기가 달라도 한 번에
@@ -182,11 +183,15 @@ class _Req:
     sealed: 봉투로 받았거나 그 기기가 봉투로 말하던 중이었다 → 답은 봉투로만(키가 없으면 버린다), 평문으로는 절대 나가지 않는다.
     보낼 때 정하면 그 사이 릴레이가 위조한 client_offline(enc_cids 에서 뺌)과 평문 ping(떠남 표시를 풂)만으로 봉투로 받은 요청의 답
     (대화·목록·2차 인증 유예 토큰)이 평문으로 나갔다 — E2EE 가 막아야 할 상대가 바로 릴레이다(검토 4회차).
-    live: 받을 때 그 cid 의 _Presence."""
-    __slots__ = ("cid", "sealed", "live")
+    live: 받을 때 그 cid 의 _Presence.
+    dev·admitted: 따로 도는 요청은 받을 때 기기 인증을 보고(_admit) 그 기기를 쥔다 — 줄을 서는 사이 그 기기가 떠나도(client_offline·
+    bye_device) 떠나기 전에 보낸 요청은 그대로 실행되고, 사람 증명 헤더·자기 해제도 그 기기로 한다."""
+    __slots__ = ("cid", "sealed", "live", "dev", "admitted")
 
     def __init__(self, cid, sealed: bool, live: _Presence) -> None:
         self.cid, self.sealed, self.live = cid, sealed, live
+        self.dev: dict | None = None
+        self.admitted = False
 
 
 # 지금 처리 중인 요청(_Req). 따로 도는 요청은 자기 태스크에서, 그 자리에서 처리하는 요청은 처리하는 동안만 건다. 스트림 파이프 태스크는
@@ -370,6 +375,33 @@ class Connector:
         self.authed.pop(cid, None)
         self.enc_cids.discard(cid)
 
+    def _req_dev(self, cid):
+        """이 요청을 보낸 기기 — 따로 도는 요청은 받을 때 인증한 기기(그 사이 떠났어도, _admit), 아니면 지금 인증된 기기."""
+        rq = _REQ.get()
+        if rq is not None and rq.cid == cid and rq.dev:
+            return rq.dev
+        return self.authed.get(cid)
+
+    async def _admit(self, frame: dict, rq: _Req) -> bool:
+        """따로 도는 요청의 기기 인증은 받을 때 본다 — 줄을 서는 사이 그 기기가 떠나도(같은 읽기로 온 client_offline·bye_device) 떠나기
+        전에 보낸 요청은 실행된다(main·f1dcf7b 처럼). 실행할 때 보면 그 요청은 auth_required 로 끝나고 그 답도 떠난 기기 앞이라 버려져,
+        PC 에 닿은 요청이 아무 흔적 없이 사라졌다(검토 4회차). 인증 없는 기기의 요청은 여기서 바로 거부한다(줄을 세우지 않는다)."""
+        from session_manager import devices
+        rid, cid = frame.get("id"), frame.get("cid")
+        if not devices.enforced():
+            rq.dev = self.authed.get(cid)
+            return True
+        dev = self.authed.get(cid)
+        stale = bool(dev) and devices.token_version(dev["id"]) != dev.get("tver")
+        if not dev or not devices.is_active(dev["id"]) or stale:
+            self.authed.pop(cid, None)
+            if cid is not None and not isinstance(rid, tuple):
+                self._track_cid(rid, cid)
+            await self._res(rid, False, error="auth_required")
+            return False
+        rq.dev, rq.admitted = dev, True
+        return True
+
     def _presence(self, cid) -> _Presence:
         """그 cid 의 지금 _Presence(없으면 새로). 무한 증식 방지 상한 — 넘으면 오래된 것부터 끝낸다(그 답은 버려진다)."""
         p = self._live.get(cid)
@@ -469,12 +501,21 @@ class Connector:
             # 인증 강제(enforced) 시: 미인증/폐기 기기의 모든 메서드(ping 제외) 거부.
             # 등록 기기 0개면 아무도 통과 못 함 = 외부 전면 차단.
             if devices.enforced() and method != "ping":
-                dev = self.authed.get(cid)
-                stale = bool(dev) and devices.token_version(dev["id"]) != dev.get("tver")
-                if not dev or not devices.is_active(dev["id"]) or stale:
-                    self.authed.pop(cid, None)
-                    await self._res(rid, False, error="auth_required")
-                    return
+                rq = _REQ.get()
+                if rq is not None and rq.admitted and rq.cid == cid:
+                    # 받을 때 인증했다(_admit) — 그 사이 그 기기가 떠났어도 실행한다(떠나기 전에 보낸 요청). 그 사이 PC 에서 해제·QR 재발급했으면
+                    # 아직 시작하지 않은 요청은 실행하지 않는다
+                    dev = rq.dev
+                    if not devices.is_active(dev["id"]) or devices.token_version(dev["id"]) != dev.get("tver"):
+                        await self._res(rid, False, error="auth_required")
+                        return
+                else:
+                    dev = self.authed.get(cid)
+                    stale = bool(dev) and devices.token_version(dev["id"]) != dev.get("tver")
+                    if not dev or not devices.is_active(dev["id"]) or stale:
+                        self.authed.pop(cid, None)
+                        await self._res(rid, False, error="auth_required")
+                        return
 
             if method == "ping":
                 await self.send({"v": 1, "type": "pong", "id": self._wire(rid)[0],
@@ -483,7 +524,8 @@ class Connector:
             elif method == "bye_device":
                 # 폰이 자기 자격을 CP 에서 self-revoke 한 뒤 알린다(B-4) → 등록부 revoked(by=phone) 📵 + 연결 해체.
                 # 인증된 자기 기기에만 적용(위 enforced 검사 통과 = authed). CP 동기화(devsync)가 없어도 즉시 반영.
-                dev = self.authed.get(cid) or {}
+                # 그 기기의 앞 요청 뒤에 줄 서 있는 사이 폰이 떠났어도 받을 때 인증한 기기로 해제한다(_req_dev)
+                dev = self._req_dev(cid) or {}
                 did = dev.get("id")
                 if did:
                     changed = devices.mark_revoked(did, by="phone")
@@ -576,8 +618,8 @@ class Connector:
         query = params.get("query") or {}
         body = params.get("body")
         via = {VIA_HEADER: "relay"}          # 서버가 로컬 전용 경로를 스스로 거부하게(2중 방어)
-        dev = self.authed.get(cid) if cid is not None else None
-        if dev and dev.get("id"):            # 인증된 기기의 요청에만 사람 증명(A-2)
+        dev = self._req_dev(cid) if cid is not None else None
+        if dev and dev.get("id"):            # 인증된 기기의 요청에만 사람 증명(A-2) — 받을 때 인증한 기기로(그 사이 떠났어도)
             via.update({PROOF_HEADER: RELAY_PROOF, DEVICE_HEADER: str(dev["id"])})
         if verb == "GET":
             r = await self.http.get(url, params=query, headers=via)
@@ -872,14 +914,15 @@ class Connector:
         if t == "req":
             # 받을 때 정한다(_Req): 봉투로 받았거나 봉투로 말하던 기기면 답도 봉투로만, 그리고 지금 이 기기 연결의 표(_Presence)
             rq = _Req(cid, sealed or (cid is not None and cid in self.enc_cids), self._presence(cid))
-            if frame.get("method") in _SPAWN_METHODS:
-                self._spawn_req(frame, rq)      # 받는 길을 막지 않는다(위 _SPAWN_METHODS)
-            else:
-                tok = _REQ.set(rq)
-                try:
+            tok = _REQ.set(rq)
+            try:
+                if frame.get("method") in _SPAWN_METHODS:
+                    if await self._admit(frame, rq):    # 기기 인증은 받을 때(위 _admit)
+                        self._spawn_req(frame, rq)      # 받는 길을 막지 않는다(위 _SPAWN_METHODS)
+                else:
                     await self._handle_req(frame)
-                finally:
-                    _REQ.reset(tok)
+            finally:
+                _REQ.reset(tok)
         elif t == "stream_in":
             await self._handle_stream_in(frame)
         elif t == "stream_close":
