@@ -272,26 +272,49 @@ mark_take() {   # update.inprogress 를 내 것으로 — 임시 파일에 쓰�
   return 1
 }
 
+# 시체 잠금을 치우고 새로 잡는다(mkdir 까지) — 런처와 같은 규칙. 치우는 권리(옆 폴더 $1.reclaim)를 쥔 하나만 다시 보고
+# 지우고 잡는다: 둘이 같은 시체를 따로 지우면 늦은 쪽이 먼저 잡은 쪽의 새 잠금을 지워 두 러너가 같은 교체 저널을 동시에
+# 되돌린다(시체는 러너가 교체 도중 죽었을 때 — 곧 복구가 필요할 때 — 남는다). 2분 넘게 남은 권리 폴더는 치우다 죽은 것
+lock_reclaim() {
+  if ! mkdir "$1.reclaim" 2>/dev/null; then
+    [ -n "$(find "$1.reclaim" -maxdepth 0 -mmin +2 2>/dev/null)" ] || return 1
+    rmdir "$1.reclaim" 2>/dev/null
+    mkdir "$1.reclaim" 2>/dev/null || return 1
+  fi
+  _lr=1
+  if ! lock_live "$1" "$2"; then
+    log "버려진 러너 잠금을 치웁니다"
+    rm_guarded "$1" && mkdir "$1" 2>/dev/null && _lr=0
+  fi
+  rmdir "$1.reclaim" 2>/dev/null
+  return "$_lr"
+}
+
+runner_lock_take() {   # $1=러너 잠금 폴더 → 0 잡음(pid 까지) / 1 살아 있는 러너가 쥠 / 2 남이 막 잡음·치우는 중 / 3 pid 를 못 씀
+  if ! mkdir "$1" 2>/dev/null; then
+    lock_live "$1" update_runner && return 1
+    lock_reclaim "$1" update_runner || return 2
+  fi
+  if ! { printf '%s\n' "$$" >"$1/pid"; } 2>/dev/null; then
+    rmdir "$1" 2>/dev/null                                 # pid 없는 잠금을 남기면 남들이 2분을 기다린다
+    return 3
+  fi
+  return 0
+}
+
 take_lock_and_mark() {   # 1. 러너는 한 번에 하나(살아 있는 러너·설치가 있으면 종료코드 3 — apply.lock 은 그쪽 것이라 둔다)
   RL="$WORK/runner.lock.d"
-  if ! mkdir "$RL" 2>/dev/null; then
-    if lock_live "$RL" update_runner; then
-      log "다른 러너가 실행 중입니다(pid $(sed -n '1p' "$RL/pid" 2>/dev/null)) — 이번 실행은 건너뜁니다"
-      KEEP_APPLY_LOCK=1
-      finish false 3
-    fi
-    log "버려진 러너 잠금을 치웁니다"
-    rm_guarded "$RL"
-    if ! mkdir "$RL" 2>/dev/null; then
-      log "다른 러너가 방금 잠금을 잡았습니다 — 이번 실행은 건너뜁니다"
-      KEEP_APPLY_LOCK=1
-      finish false 3
-    fi
-  fi
-  if ! { printf '%s\n' "$$" >"$RL/pid"; } 2>/dev/null; then
-    rmdir "$RL" 2>/dev/null                                # pid 없는 잠금을 남기면 남들이 2분을 기다린다
-    fail_args "러너 잠금을 쓸 수 없습니다: $RL"
-  fi
+  runner_lock_take "$RL"
+  case $? in
+    0) ;;
+    1) log "다른 러너가 실행 중입니다(pid $(sed -n '1p' "$RL/pid" 2>/dev/null)) — 이번 실행은 건너뜁니다"
+       KEEP_APPLY_LOCK=1
+       finish false 3 ;;
+    2) log "다른 러너가 방금 잠금을 잡았습니다 — 이번 실행은 건너뜁니다"
+       KEEP_APPLY_LOCK=1
+       finish false 3 ;;
+    *) fail_args "러너 잠금을 쓸 수 없습니다: $RL" ;;
+  esac
   HAVE_LOCK=1
   if marker_live; then
     log "업데이트·설치가 진행 중입니다(update.inprogress: pid ${MK_PID:-?}, by=${MK_BY:-?}) — 이번 실행은 건너뜁니다"
@@ -377,6 +400,26 @@ write_result() {   # 9. $1=true|false [$2=버전] — last_apply.json(BOM 없는
 
 journal() { { printf '%s %s\n' "$1" "$2" >>"$SWAP/journal"; } 2>>"$LogFile"; }
 
+# 런처(start-connector.sh)는 PAYLOAD 밖이지만 새 버전 Host 가 뜨자마자(헬스 판정 전) 자기 템플릿으로 다시 렌더한다
+# (liveness.ensure_launcher). 그래서 교체 전 런처를 저널(SWAP/launcher)·백업에 함께 두고 되돌림 때 제자리로 — 안 그러면
+# 롤백한 옛 버전이 실패한 릴리스의 런처로 재기동되고(launcher-ensured-<옛 버전> 표식이 있어 다시 렌더하지 않는다)
+# 그 뒤 모든 기동도 그렇다. 템플릿이 문제인 릴리스면 옛 버전이 영영 못 뜬다.
+launcher_restore() {   # $1=옛 런처 사본 → 제자리로(임시 파일 → rename). 0 됨(사본 없음 포함) / 1 못 함(경고만)
+  exists "$1" || return 0
+  _lt="$InstallRoot/.start-connector.sh.runner.$$"
+  if cp -p "$1" "$_lt" 2>>"$LogFile" && mv -f "$_lt" "$InstallRoot/start-connector.sh" 2>>"$LogFile"; then
+    return 0
+  fi
+  rm -f "$_lt" 2>/dev/null
+  log "  [WARN] 런처를 되돌리지 못했습니다: $InstallRoot/start-connector.sh"
+  return 1
+}
+
+launcher_forget() {   # $1=되돌린 버전 — 그 버전의 런처 보장 표식을 지운다(다시 받으면 그때 새 템플릿으로 렌더하게)
+  [ -n "$1" ] && rm -f "$DATA/launcher-ensured-$1" 2>/dev/null
+  return 0
+}
+
 swap_prepare() {   # 4a. $1(스테이지·백업)의 PAYLOAD 항목을 SWAP/new 로 복사 — 설치 폴더는 아직 그대로. $2=새 버전 $3=옛 버전
   SWAP="$InstallRoot/.clewpath-swap.$$"            # 설치 루트 안 — mv 가 곧 rename(2)
   if exists "$SWAP"; then
@@ -391,7 +434,9 @@ swap_prepare() {   # 4a. $1(스테이지·백업)의 PAYLOAD 항목을 SWAP/new 
   fi
   if ! mkdir "$SWAP/new" "$SWAP/old" 2>>"$LogFile" \
      || ! { printf 'format=1\nrunner_pid=%s\nversion=%s\nfrom=%s\nstarted=%s\n' "$$" "$2" "$3" "$(date +%s)" \
-              >"$SWAP/info"; } 2>>"$LogFile"; then
+              >"$SWAP/info"; } 2>>"$LogFile" \
+     || { exists "$InstallRoot/start-connector.sh" \
+          && ! cp -p "$InstallRoot/start-connector.sh" "$SWAP/launcher" 2>>"$LogFile"; }; then
     log "[FAIL] 교체 저널을 만들 수 없습니다: $SWAP"
     swap_drop "$SWAP"
     SWAP=
@@ -468,6 +513,7 @@ swap_undo() {   # $1=교체 저널 폴더 — 저널을 거꾸로 읽어 rename 
         fi ;;
     esac
   done <"$_ur"
+  launcher_restore "$U_SD/launcher"                # 새 버전 Host 가 다시 렌더했을 런처도(사본은 복사라 다시 돌려도 같다)
   return 0
 }
 
@@ -515,6 +561,7 @@ recover_leftovers() {   # 지난 러너가 남긴 .clewpath-swap.* — 커밋된
     sync_deps "복구" || log "  [WARN] 복구 뒤 의존성 동기화 실패 — install.sh·다음 업데이트가 다시 맞춥니다"
     _rvv=$(sed -n 's/^version=\([0-9A-Za-z.+-]*\)$/\1/p' "$RV_SD/info" 2>/dev/null | head -n 1)
     [ -n "$_rvv" ] && write_result false "$_rvv"
+    launcher_forget "$_rvv"
     swap_drop "$RV_SD" || return 1
     log "중단된 업데이트 되돌림 완료(${_rvv:-버전 모름})"
     RV_DONE=1
@@ -745,7 +792,7 @@ backup() {   # 3. 교체 대상만 백업 — .tmp 에 다 만든 뒤 rename(완
   _bk=1
   rm_guarded "$_bt" || _bk=0
   if [ "$_bk" = 1 ] && ! mkdir "$_bt" 2>>"$LogFile"; then _bk=0; fi
-  for _bn in $PAYLOAD; do
+  for _bn in $PAYLOAD start-connector.sh; do       # 런처도(PAYLOAD 밖 — 교체 저널 없이 되돌릴 때 쓴다)
     [ "$_bk" = 1 ] || break
     exists "$InstallRoot/$_bn" || continue
     if ! cp -pR "$InstallRoot/$_bn" "$_bt/$_bn" 2>>"$LogFile"; then
@@ -774,6 +821,7 @@ restore_from_backup() {   # 8c. 교체 저널이 없을 때(밖에서 지워졌�
   swap_prepare "$BackupDir" "$OLD_VER" "$Version" || return 1
   swap_moves || return 1
   commit_swap
+  launcher_restore "$BackupDir/start-connector.sh"
   return 0
 }
 
@@ -807,6 +855,7 @@ rollback() {   # 8. 실패한 새 버전을 되돌린다 — 돌아오지 않는
     log "이전 버전 복원 완료"
     sync_deps "롤백" || log "  [WARN] 롤백 의존성 동기화 실패"
   fi
+  launcher_forget "$Version"
   _rb=1                                           # e. 옛 버전 재기동·헬스 — 옛 버전을 기대(옛 코드가 새 버전을 말하는 어긋남도 잡는다)
   if restart_host 1; then
     health_check "$OLD_VER"

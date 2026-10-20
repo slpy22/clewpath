@@ -80,6 +80,16 @@ except OSError:
 print(f"fake host {os.getpid()} {FAKE.get('tag')} up", flush=True)
 if FAKE.get("exit_now"):
     sys.exit(3)
+if FAKE.get("render_launcher"):    # 진짜 Host 처럼 뜨자마자(헬스 전) 이 트리의 템플릿으로 런처를 다시 렌더한다(liveness.ensure_launcher)
+    import shlex
+    tpl = (HERE / "start-connector.template.sh").read_text(encoding="utf-8")
+    rendered = (tpl.replace("{{DATA_DIR}}", shlex.quote(str(DATA))).replace("{{CONF_FILE}}", shlex.quote(str(CONF)))
+                .replace("{{PORT}}", str(PORT)))
+    tmp = ROOT / ".start-connector.sh.fake-render"
+    tmp.write_text(rendered, encoding="utf-8")
+    os.chmod(tmp, 0o755)
+    os.replace(tmp, ROOT / "start-connector.sh")
+    (DATA / f"launcher-ensured-{VERSION}").write_text("launcher: regenerated (posix v2)", encoding="utf-8")
 
 
 def _term(signum, frame):
@@ -627,6 +637,55 @@ def test_version_mismatch_rolls_back_to_the_old_version(upd, shell, as_data_dir)
                    "이전 버전 복원 완료", "의존성 동기화 완료 (롤백)", "롤백 후 정상 동작 확인"):
         assert needle in log, needle
     assert log.rstrip().endswith("=== 종료 (성공: false) ===")
+
+
+def _mark_template(tree: Path, text: str) -> None:
+    """그 트리의 런처 템플릿에 표지 주석 한 줄(3행 뒤) — 그 트리로 뜬 Host 가 렌더한 런처를 알아본다."""
+    tpl = tree / "session_manager" / _posix.LAUNCHER_TEMPLATE
+    lines = tpl.read_text(encoding="utf-8").splitlines(keepends=True)
+    tpl.write_text("".join(lines[:3] + [f"# {text}\n"] + lines[3:]), encoding="utf-8")
+
+
+def test_rollback_restores_the_launcher_the_failed_version_rendered(upd):
+    """새 버전 Host 는 뜨자마자(헬스 판정 전) 자기 템플릿으로 start-connector.sh 를 다시 렌더한다. 런처는 PAYLOAD 밖이라
+    교체 저널이 몰랐다 — 롤백한 옛 버전이 실패한 릴리스의 런처로 재기동되고(launcher-ensured-<옛 버전> 표식이 있어 다시
+    렌더하지 않는다) 그 뒤 모든 기동도 그랬다. 템플릿이 문제인 릴리스면 옛 버전이 영영 못 뜬다."""
+    old_launcher = upd.launcher.read_bytes()
+    _mark_template(upd.stage, "failed-release-launcher")
+    upd.set_fake(upd.stage, render_launcher=True, report_version="9.9.9")    # 떠서 렌더도 하지만 버전이 어긋난다
+    old = upd.start_old()
+    (upd.data / f"launcher-ensured-{OLD}").write_text("launcher: ok (posix v2)", encoding="utf-8")
+    rc = upd.run(upd.argv(wait_pid=old, health_seconds=3), stop_host=old)
+    assert rc == 1 and "롤백 후 정상 동작 확인" in upd.logtext(), upd.diag()
+    assert any(tag == "new" for _, tag in upd.fakes()), "새 버전이 실제로 떠서 런처를 렌더했다"
+    assert upd.launcher.read_bytes() == old_launcher, "롤백은 런처도 되돌린다"
+    assert os.access(upd.launcher, os.X_OK)
+    assert upd.running_tag() == "old"
+    assert not (upd.data / f"launcher-ensured-{NEW}").exists(), "그 버전을 다시 받으면 그때 새 템플릿으로 렌더하게"
+    assert (upd.data / f"launcher-ensured-{OLD}").exists()
+    upd.clean_after()
+
+
+def test_recovery_restores_the_launcher_after_the_runner_died(upd):
+    """러너가 새 버전을 띄운 뒤(런처는 이미 새 템플릿) 헬스 전에 죽었다 — 그 Host 가 내려간 뒤의 -RecoverOnly 가 교체와 함께
+    런처도 되돌린다(교체 저널에 옛 런처를 함께 둔다)."""
+    old_launcher = upd.launcher.read_bytes()
+    _mark_template(upd.stage, "failed-release-launcher")
+    upd.set_fake(upd.stage, render_launcher=True, report_version="9.9.9")
+    old = upd.start_old()
+    p = upd.spawn(upd.argv(wait_pid=old, health_seconds=60), stop_host=old)
+    assert _wait(lambda: b"failed-release-launcher" in upd.launcher.read_bytes(), 60), upd.diag()
+    os.kill(p.pid, signal.SIGKILL)                                   # 헬스를 기다리던 러너가 죽었다
+    p.wait(timeout=10)
+    assert upd.swaps(), "교체 저널이 남았다"
+    for pid in upd.hosts():                                          # 그 Host 도 내려간 뒤(재부팅·kill)
+        os.kill(pid, signal.SIGKILL)
+        assert _wait(lambda pid=pid: _gone(pid), 10)
+    r = upd.recover()                                                # 죽은 러너의 잠금·표식은 시체로 치운다
+    assert r.returncode == 0, upd.diag(r.stdout.decode() + r.stderr.decode())
+    assert not upd.swaps() and upd.read("pwa/index.html") == "old pwa"
+    assert upd.launcher.read_bytes() == old_launcher, "복구는 런처도 되돌린다"
+    assert not (upd.data / f"launcher-ensured-{NEW}").exists()
 
 
 def test_new_version_that_dies_at_start_rolls_back_without_waiting(upd):

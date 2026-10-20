@@ -32,11 +32,13 @@ NL='
 '
 
 # 상태 판정 — 출력 "<ok|busy|dead|none> <pid> <port>". runtime.json 의 port 로 health(프록시 무시) → 안 되면 pid 를
-# 본다: 있고·좀비 아니고·내 uid·runtime.json 기록보다 먼저 생겼고·명령줄 인자가 Host 모듈이면 busy(기동 중·응답 불능).
+# 본다: 있고·좀비 아니고·내 uid·명령줄이 이 설치본의 Host(인자 하나는 ROOT/.venv/bin/…, 다른 하나는 Host 모듈)면
+# busy(기동 중·응답 불능). pid 재사용은 명령줄로 거른다 — 기동 시각(started_at)과 견주지 않는다: 리눅스 psutil 의
+# create_time 은 지금의 부팅 시각으로 계산해 시계가 앞으로 뛰면(WSL2·VM 재개·NTP) 같이 밀려, 산 Host 를 시체로 본다.
 PROBE_PY='
 import json, os, sys, urllib.request
-data, port = sys.argv[1], int(sys.argv[2])
-pid, started = 0, 0
+data, port, root = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+pid = 0
 try:
     with open(os.path.join(data, "runtime.json"), encoding="utf-8-sig") as f:
         rt = json.load(f)
@@ -44,8 +46,6 @@ try:
         port = rt["port"]
     if type(rt.get("pid")) is int and rt["pid"] > 0:
         pid = rt["pid"]
-    if type(rt.get("started_at")) in (int, float):
-        started = rt["started_at"]
 except Exception:
     pass
 healthy = False
@@ -59,7 +59,8 @@ except Exception:
 
 
 def is_host(args):
-    return any(a == "session_manager.server" or a.endswith("/clewpath-host") for a in args)
+    return (any(a.startswith(root + "/.venv/bin/") for a in args)
+            and any(a == "session_manager.server" or a.endswith("/clewpath-host") for a in args))
 
 
 def by_proc(pid):
@@ -90,8 +91,6 @@ def state_of(pid):
         p = psutil.Process(pid)
         if p.status() == psutil.STATUS_ZOMBIE or p.uids().real != os.getuid():
             return "dead"
-        if started and p.create_time() > started + 5:
-            return "dead"
         return "busy" if is_host(p.cmdline()) else "dead"
     except psutil.AccessDenied:
         return "busy"
@@ -105,9 +104,12 @@ print("ok" if healthy else state_of(pid), pid, port)
 # 기동 — env 에서 claude 표식·러너 표식을 빼고 toml 위치를 고정해, 새 세션(setsid)으로 띄운다. 로그는 이어 쓰기.
 # runtime.json 에 새 pid 가 적히거나(up) 끝날 때(exited:rc)까지 최대 15초 기다린다 — 그동안 잠금을 쥐고 있어야
 # 다른 런처가 '아직 runtime.json 없음'을 죽음으로 읽고 겹쳐 띄우지 않는다. 출력 "<pid> <up|starting|exited:rc>".
-# exec 모드(foreground)는 이 프로세스를 Host 로 바꾼다(pid 그대로 — launchd·systemd 가 지켜볼 수 있게).
+# HUP·INT·QUIT 은 기본 처리로 되돌려 띄운다 — nohup(HUP)·스크립트의 &(INT·QUIT)가 둔 '무시'는 exec 로 Host → 브로커 →
+# pty 안의 claude 까지 물려가, 브로커가 죽어도 pty 자식이 SIGHUP 으로 끝나지 않는다(새 세션이라 터미널 신호는 오지 않는다).
+# exec 모드(foreground)는 이 프로세스를 Host 로 바꾼다(pid 그대로 — launchd·systemd 가 지켜볼 수 있게). 이때는 부른 쪽의
+# 신호 처리를 그대로 둔다 — launchd·systemd 는 기본값이고, 사람이 nohup 으로 붙잡아 둔 터미널 밖 기동을 풀지 않게.
 SPAWN_PY='
-import json, os, subprocess, sys, time
+import json, os, signal, subprocess, sys, time
 root, data, conf, mode = sys.argv[1:5]
 SCRUB = {"CLAUDECODE", "CLAUDE_PID", "CLAUDE_EFFORT", "CLEWPATH_UPDATER"}
 env = {k: v for k, v in os.environ.items() if k not in SCRUB and not k.upper().startswith("CLAUDE_CODE_")}
@@ -117,6 +119,8 @@ argv = [py, "-m", "session_manager.server"]
 if mode == "exec":
     os.chdir(root)
     os.execve(py, argv, env)
+for s in (signal.SIGHUP, signal.SIGINT, signal.SIGQUIT):
+    signal.signal(s, signal.SIG_DFL)
 with open(os.path.join(data, "host.log"), "ab") as out, open(os.path.join(data, "host.err.log"), "ab") as err:
     p = subprocess.Popen(argv, cwd=root, env=env, start_new_session=True, close_fds=True,
                          stdin=subprocess.DEVNULL, stdout=out, stderr=err)
@@ -227,11 +231,29 @@ lock_drop() {
   case "$1" in "$DATA_DIR"/*.lock|"$DATA_DIR"/*.lock.d) rm -rf "$1" ;; esac
 }
 
-lock_acquire() {   # $1=잠금 폴더 $2=쥔 프로세스 명령줄의 글자. 시체면 지우고 한 번만 다시 잡는다
+# 시체 잠금을 치우고 새로 잡는다(mkdir 까지). 치우는 권리(옆 폴더 $1.reclaim, mkdir)를 쥔 하나만 한다 — 둘이 같은 시체를
+# 보고 따로 지우면 늦게 지운 쪽이 먼저 잡은 쪽의 새 잠금을 지워 둘 다 잡았다고 믿는다(감독자·사람·러너가 겹치면 Host 둘).
+# 권리를 쥔 채 다시 보고(그새 남이 새로 잡았으면 산 잠금) 지우고 잡은 뒤 권리를 놓는다. 권리 폴더가 2분 넘게 남았으면
+# 치우다 죽은 것이다(권리는 수 ms 만 쥔다). 0 = 잡음
+lock_reclaim() {
+  if ! mkdir "$1.reclaim" 2>/dev/null; then
+    [ -n "$(find "$1.reclaim" -maxdepth 0 -mmin +2 2>/dev/null)" ] || return 1
+    rmdir "$1.reclaim" 2>/dev/null
+    mkdir "$1.reclaim" 2>/dev/null || return 1
+  fi
+  _lr=1
+  if ! lock_live "$1" "$2"; then
+    lock_drop "$1"
+    mkdir "$1" 2>/dev/null && _lr=0
+  fi
+  rmdir "$1.reclaim" 2>/dev/null
+  return "$_lr"
+}
+
+lock_acquire() {   # $1=잠금 폴더 $2=쥔 프로세스 명령줄의 글자. 시체면 치우고 한 번만 다시 잡는다
   if ! mkdir "$1" 2>/dev/null; then
     lock_live "$1" "$2" && return 1
-    lock_drop "$1"
-    mkdir "$1" 2>/dev/null || return 1
+    lock_reclaim "$1" "$2" || return 1
   fi
   if ! { printf '%s\n' "$$" >"$1/pid"; } 2>/dev/null; then
     rmdir "$1" 2>/dev/null                             # pid 없는 잠금을 남기면 남들이 2분을 기다린다
@@ -314,7 +336,7 @@ probe_now() {   # P_STATE P_PID P_PORT 를 채운다. 판정 못 하면(venv 파
   P_STATE=none
   P_PID=0
   P_PORT=$DEFAULT_PORT
-  _po=$("$PY" -I -c "$PROBE_PY" "$DATA_DIR" "$DEFAULT_PORT" 2>/dev/null) || return 1
+  _po=$("$PY" -I -c "$PROBE_PY" "$DATA_DIR" "$DEFAULT_PORT" "$ROOT" 2>/dev/null) || return 1
   case "$_po" in "ok "*|"busy "*|"dead "*|"none "*) ;; *) return 1 ;; esac
   P_STATE=${_po%% *}
   _po=${_po#* }

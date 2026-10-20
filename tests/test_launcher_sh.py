@@ -56,8 +56,10 @@ FAKE = CFG.get("fake", {})
 PORT = int(CFG["server"]["port"])
 UMASK = os.umask(0)
 os.umask(UMASK)
+IGN = [n for n in ("SIGHUP", "SIGINT", "SIGQUIT") if signal.getsignal(getattr(signal, n)) == signal.SIG_IGN]
 (DATA / f"fake-{os.getpid()}.json").write_text(json.dumps({
-    "env": dict(os.environ), "umask": UMASK, "cwd": os.getcwd(), "sid": os.getsid(0)}), encoding="utf-8")
+    "env": dict(os.environ), "umask": UMASK, "cwd": os.getcwd(), "sid": os.getsid(0), "sig_ign": IGN}),
+    encoding="utf-8")
 print(f"fake host {os.getpid()} up", flush=True)
 print(f"fake host {os.getpid()} err", file=sys.stderr, flush=True)
 if FAKE.get("exit_now"):
@@ -538,6 +540,146 @@ def test_unresponsive_host_is_busy_not_restarted(inst):
     assert _kv(st.stdout.decode())["pid"] == str(pids[0])
     assert inst.run("start").returncode == 0 and inst.host_pids() == pids
     assert f"skip: pid {pids[0]} 살아 있음" in inst.llog()
+
+
+def test_clock_step_does_not_turn_a_live_host_into_a_corpse(inst):
+    """리눅스 psutil 의 create_time 은 지금의 부팅 시각(/proc/stat btime)으로 계산해 시계가 앞으로 뛰면 같이 밀린다(WSL2·VM
+    재개·NTP 첫 동기화). 기동 때 적은 started_at 과 시각을 비교하면 살아 있는 Host 를 'pid 재사용'으로 보고, 응답이 잠깐 없는
+    틱에 두 번째 Host 를 띄운다(S21). 시계 이동은 started_at 을 그만큼 앞당겨 흉내 낸다(비교되는 차이가 같다)."""
+    inst.conf_write(healthy=False)                                # 살아 있지만 응답 없음(busy)
+    r = inst.run("start")
+    assert r.returncode == 0, inst.diag(r)
+    pids = inst.host_pids()
+    assert len(pids) == 1
+    rt = inst.runtime()
+    rt["started_at"] -= 3600                                      # 기동 뒤 시계가 한 시간 앞으로 뛰었다
+    (inst.data / "runtime.json").write_text(json.dumps(rt), encoding="utf-8")
+    r = inst.run("start")
+    assert r.returncode == 0 and inst.host_pids() == pids, inst.diag(r)
+    assert len(list(inst.data.glob("fake-*.json"))) == 1, "두 번째 Host 를 띄우지 않는다"
+    assert f"skip: pid {pids[0]} 살아 있음" in inst.llog()
+    assert _kv(inst.run("status").stdout.decode())["state"] == "starting"
+
+
+def test_host_module_of_another_tree_is_not_this_install(inst):
+    """runtime.json 의 pid 가 Host 모듈 이름을 단 남의 트리 프로세스(개발 체크아웃·다른 설치본 — pid 재사용)면 이 설치본의
+    Host 가 아니다: 설치 경로(ROOT/.venv/bin/…)까지 본다(S27). 시각 비교 없이 — 그 프로세스는 기록보다 먼저 떴다."""
+    other = inst.popen([sys.executable, "-c", "import time; time.sleep(120)", "-m", "session_manager.server"])
+    assert _wait(lambda: "session_manager.server" in psutil.Process(other.pid).cmdline(), 10)
+    (inst.data / "runtime.json").write_text(json.dumps({"port": inst.port, "pid": other.pid,
+                                                        "started_at": int(time.time()) + 60}), encoding="utf-8")
+    pid = inst.started(inst.run("start"))
+    assert pid != other.pid and other.poll() is None, "남의 프로세스는 건드리지 않고 이 설치본의 Host 를 띄운다"
+    assert f"이전 pid {other.pid} 없음" in inst.llog()
+
+
+def _ignore_job_signals():
+    """nohup(HUP)과 비대화형 셸의 '&'(INT·QUIT)가 하는 일 — README 의 'nohup sh start-connector.sh watch &' 길."""
+    for s in (signal.SIGHUP, signal.SIGINT, signal.SIGQUIT):
+        signal.signal(s, signal.SIG_IGN)
+
+
+def test_spawned_host_does_not_inherit_ignored_job_signals(inst):
+    """무시(SIG_IGN)는 exec 로 Host → 브로커 → pty 안의 프로그램까지 물려가, 브로커가 죽어도 pty 자식이 SIGHUP 으로 끝나지
+    않는다(osdep._posix '주인과 함께 끝나기'). Host 는 새 세션이라 기본 처리여도 터미널 신호는 오지 않는다."""
+    r = subprocess.run(["/bin/sh", str(inst.launcher), "start"], env=inst.env(), capture_output=True, timeout=60,
+                       cwd=str(inst.home), preexec_fn=_ignore_job_signals)
+    pid = inst.started(r)
+    assert inst.fake(pid)["sig_ign"] == []
+    w = inst.popen(["/bin/sh", str(inst.launcher), "watch", "10"], env=inst.env(), cwd=str(inst.home),
+                   preexec_fn=_ignore_job_signals)
+    inst.kill_host()
+    assert _wait(lambda: inst.runtime().get("pid") not in (None, pid) and inst.health(), 25), inst.diag()
+    assert inst.fake(inst.runtime()["pid"])["sig_ign"] == [], "watch 가 되살린 Host 도"
+    w.send_signal(signal.SIGTERM)
+    w.wait(timeout=10)
+
+
+def _shell_funcs(path: Path, names: tuple[str, ...]) -> str:
+    """셸 스크립트에서 그 이름의 함수 정의만 뽑는다(맨 앞 'name() {' 부터 맨 앞 '}' 까지)."""
+    out, on = [], False
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not on and any(line.startswith(f"{n}() {{") for n in names):
+            on = True
+        if on:
+            out.append(line)
+            if line == "}":
+                on = False
+    return "\n".join(out) + "\n"
+
+
+def lock_race(work: Path, funcs: str, contender: str, lock: str, trials: int, n: int) -> list[int]:
+    """시체 잠금(죽은 pid) 하나에 n 이 동시에 덤빈다 — 시도마다 '잡았다고 믿은' 수. 잡은 쪽은 모두가 판정을 마칠 때까지 산다
+    (그래야 늦게 본 쪽이 산 주인을 시체로 볼 수 없다). 경쟁자 파일 이름이 잠금의 명령줄 표지다."""
+    (work / "funcs.sh").write_text(funcs, encoding="utf-8")
+    (work / "bin").mkdir()
+    script = work / "bin" / contender
+    script.write_text(
+        "D=$1\nNL='\n'\n. \"$2\"\n"
+        f"if {{ lock_try \"$D/{lock}\"; }}; then\n"
+        "  printf 'GOT %s\\n' \"$$\" >>\"$D/got\"\n"
+        "  while [ ! -e \"$D/release\" ]; do sleep 0.05; done\n"
+        "fi\n", encoding="utf-8")
+    counts = []
+    for t in range(trials):
+        d = work / f"t{t}"
+        (d / lock).mkdir(parents=True)
+        (d / lock / "pid").write_text(f"{DEAD_PID}\n", encoding="utf-8")
+        procs = [subprocess.Popen(["/bin/sh", str(script), str(d), str(work / "funcs.sh")],
+                                  stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                 for _ in range(n)]
+
+        def held():
+            try:
+                return len((d / "got").read_text(encoding="utf-8").splitlines())
+            except OSError:
+                return 0
+        try:
+            _wait(lambda: sum(p.poll() is not None for p in procs) + held() >= n, 30, 0.02)
+        finally:
+            (d / "release").write_text("", encoding="utf-8")
+            for p in procs:
+                p.wait(timeout=30)
+        counts.append(held())
+    return counts
+
+
+def test_stale_lock_is_taken_over_by_exactly_one(tmp_path):
+    """시체 잠금을 여럿이 동시에 치우면 늦게 지운 쪽이 먼저 잡은 쪽의 새 잠금을 지워 둘 다 잡았다고 믿었다(감독자·사람·러너가
+    겹치면 Host 둘). 치우는 권리(옆 폴더 mkdir)를 쥔 하나만 다시 보고 지우고 새로 잡는다."""
+    funcs = "DATA_DIR=\"$D\"\n" + _shell_funcs(TEMPLATE, ("pid_alive", "cmdline_of", "cmd_has", "lock_live", "lock_drop",
+                                                         "lock_reclaim", "lock_acquire"))
+    funcs += "lock_try() { lock_acquire \"$1\" start-connector.sh; }\n"
+    counts = lock_race(tmp_path, funcs, "start-connector.sh", "launcher.lock", 30, 8)
+    assert counts == [1] * len(counts), f"시도마다 잡은 수: {counts}"
+
+
+def test_runner_stale_lock_is_taken_over_by_exactly_one(tmp_path):
+    """러너 잠금(updates/runner.lock.d)도 같은 경합 — 시체 잠금은 러너가 교체 도중 죽었을 때(곧 복구가 필요할 때) 남으므로,
+    watch·사람·install 의 -RecoverOnly 가 겹치면 같은 교체 저널을 두 러너가 동시에 되돌렸다. 잡는 길(take_lock_and_mark)과
+    같은 함수(runner_lock_take)를 러너에서 그대로 뽑아 쓴다."""
+    runner = REAL_PKG / _posix.UPDATE_RUNNER
+    funcs = ('WORK="$D"\nLogFile="$D/runner.log"\nLOG_OK=1\nBACKUP_OK=0\nROOT_OK=0\n'
+             + _shell_funcs(runner, ("log", "exists", "path_ok", "pid_alive", "cmdline_of", "cmd_has", "lock_live",
+                                     "rm_guarded", "lock_reclaim", "runner_lock_take")))
+    funcs += "lock_try() { runner_lock_take \"$1\"; }\n"
+    counts = lock_race(tmp_path, funcs, "update_runner.sh", "runner.lock.d", 30, 8)
+    assert counts == [1] * len(counts), f"시도마다 잡은 수: {counts}"
+
+
+def test_reclaim_right_left_by_a_dead_reclaimer_expires(inst):
+    """치우는 권리 폴더(<잠금>.reclaim)는 치우는 동안(수 ms)만 있다 — 그 사이 죽어 남은 것이 시체 잠금을 영영 막지 않게,
+    2분 넘게 묵었으면 치우다 죽은 것으로 본다. 2분이 안 됐으면 다른 런처가 치우는 중이니 기다린다(이번엔 건너뜀)."""
+    lock, right = inst.data / "launcher.lock", inst.data / "launcher.lock.reclaim"
+    lock.mkdir()
+    (lock / "pid").write_text(f"{DEAD_PID}\n", encoding="utf-8")
+    right.mkdir()
+    r = inst.run("start")
+    assert r.returncode == 0 and inst.host_pids() == [] and lock.is_dir(), inst.diag(r)
+    old = time.time() - 300
+    os.utime(right, (old, old))
+    inst.started(inst.run("start"))
+    assert not lock.exists() and not right.exists()
 
 
 def test_host_that_exits_at_once_is_reported(inst):
