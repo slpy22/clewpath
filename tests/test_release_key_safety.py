@@ -64,6 +64,44 @@ def test_pem_pattern_in_secret_scan():
     assert "PRIVATE KEY" in txt, "비밀 스캔에 PEM 개인키 패턴이 없다"
 
 
+def test_secret_scan_covers_shell_scripts():
+    """맥·리눅스 스크립트(.sh)도 패키지에 들어간다 — 비밀 스캔 확장자에 .sh 가 있어야 한다(S20)."""
+    txt = PKG.read_text(encoding="utf-8")
+    block = txt[txt.index("$leaks = @()"):]
+    m = re.search(r'\$_\.Extension -in @\(([^)]*)\)', block)
+    assert m, "비밀 스캔의 확장자 목록을 못 찾음"
+    exts = set(re.findall(r'"([^"]+)"', m.group(1)))
+    assert {".sh", ".py", ".ps1", ".toml"} <= exts, exts
+
+
+def test_generated_posix_files_are_excluded_but_the_template_is_not():
+    """설치본이 만드는 런처(start-connector.sh)·설치 기록(.clewpath-install)은 빠지고, 원본 템플릿은 들어간다.
+    제외는 부분일치(-like "*패턴*")라 템플릿 이름이 걸리지 않는지까지 본다."""
+    import fnmatch
+    txt = PKG.read_text(encoding="utf-8")
+    m = re.search(r'\$excludePatterns = @\((.*?)\n\)', txt, re.S)
+    excluded = re.findall(r'"([^"]+)"', m.group(1))
+    assert "start-connector.sh" in excluded and ".clewpath-install" in excluded
+
+    def dropped(rel: str) -> bool:                    # PowerShell -like 는 대소문자를 가리지 않는다
+        return any(fnmatch.fnmatch(rel.lower(), f"*{p.lower()}*") for p in excluded)
+    assert dropped("session_manager\\start-connector.sh") and dropped(".clewpath-install")
+    for keep in ("session_manager\\start-connector.template.sh", "session_manager\\update_runner.sh",
+                 "session_manager\\hostctl.py", "install.sh", "uninstall.sh"):
+        assert not dropped(keep), keep
+
+
+def test_shell_script_format_gate_aborts():
+    """패키지의 .sh 는 LF·BOM 없음·1행 #!/bin/sh 여야 한다 — 편집기가 CRLF 로 저장해도 eol=lf 정규화 때문에 git 은
+    깨끗해 보인다. 어긋나면 zip 을 만들지 않고 멈춘다(실행 시험은 tests/test_package_for_user.py)."""
+    txt = PKG.read_text(encoding="utf-8")
+    block = txt[txt.index("$badSh = @()"):]
+    for needle in ("0xEF", "0xBB", "0xBF", "[byte]13", '"#!/bin/sh"', '-eq ".sh"'):
+        assert needle in block, needle
+    assert re.search(r'셸 스크립트 형식이 어긋났습니다[\s\S]{0,400}?exit 1', block)
+    assert txt.index("$badSh = @()") < txt.index("Compress-Archive"), "zip 을 만들기 전에"
+
+
 def test_gitignore_covers_key():
     assert GITIGNORE.is_file(), ".gitignore 가 없다"
     lines = {ln.strip() for ln in GITIGNORE.read_text(encoding="utf-8").splitlines()}

@@ -309,6 +309,8 @@ take_marker() {   # $1=데이터 폴더 — 업데이트·다른 설치가 돌�
 on_exit() {
   mark_release
   [ -n "$I_TMP" ] && rm -rf "$I_TMP"
+  # get.sh 가 넘긴 임시 stage(설치 루트 옆 .clewpath-get.*) — 서막이 중간에 멈춰도 남기지 않는다(같은 명령이 다시 받는다)
+  if [ -n "$GET_TMP" ]; then chmod -R u+rwX "$GET_TMP" 2>/dev/null; rm -rf "$GET_TMP"; fi
   return 0
 }
 
@@ -410,6 +412,11 @@ prelude() {   # --from-stage: 옮긴 뒤 설치 루트의 install.sh 로 이어 
   fi
   mkdir -p "$DIR" || die "설치 폴더를 만들 수 없습니다: $DIR"
   DIR=$(CDPATH='' cd "$DIR" && pwd -P) || die "설치 폴더를 찾지 못했습니다: $DIR"   # 이어 갈 install.sh 의 ROOT 와 같은 물리 경로
+  GET_TMP=$(dirname "$P_ST")                    # get.sh 의 임시 폴더(설치 루트 옆) — 그 모양일 때만. 이제부터는 성공하면 옮긴 뒤,
+  case "${GET_TMP##*/}" in                      # 실패하면 on_exit 가 지운다
+    .clewpath-get.*) [ "$(dirname "$GET_TMP")" = "$(dirname "$DIR")" ] || GET_TMP='' ;;
+    *) GET_TMP='' ;;
+  esac
   DATA_DIR=$(data_dir_guess "$DIR")
   take_marker "$DATA_DIR"
   stop_host "$DIR"
@@ -420,10 +427,7 @@ prelude() {   # --from-stage: 옮긴 뒤 설치 루트의 install.sh 로 이어 
     exists "$_sw" && die "중단된 업데이트 잔재를 지우지 못했습니다: $_sw — 지운 뒤 같은 명령을 다시 실행하세요"
     ok "중단된 업데이트 잔재를 치웠습니다(받은 파일로 덮음): ${_sw##*/}"
   done
-  _gt=$(dirname "$P_ST")                        # get.sh 의 임시 폴더(설치 루트 옆) — 그 모양일 때만 지운다
-  case "${_gt##*/}" in
-    .clewpath-get.*) [ "$(dirname "$_gt")" = "$(dirname "$DIR")" ] && rm -rf "$_gt" ;;
-  esac
+  if [ -n "$GET_TMP" ]; then rm -rf "$GET_TMP"; GET_TMP=''; fi    # 다 옮겼다 — 빈 stage 와 임시 폴더를 치운다
   ok "설치 폴더에 옮김: $DIR"
   set -- --cp-url "$CP_URL" --relay-url "$RELAY_URL" --app-url "$APP_URL" --port "$PORT" --python "$PYVER" \
          --uv-version "$UV_VERSION"
@@ -976,6 +980,7 @@ main() {
   AGENT_TOKEN=${CLEWPATH_AGENT_TOKEN:-}
   TOKEN_ARGV=0
   I_TMP=''
+  GET_TMP=''
   MARK_DIR=''
   UV=''
   PYEXE=''

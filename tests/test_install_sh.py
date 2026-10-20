@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import select
@@ -27,6 +28,7 @@ import threading
 import time
 import tomllib
 import urllib.request
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -182,10 +184,12 @@ def payload(tmp_path_factory) -> Path:
 
 
 class _FakeCP:
-    """가짜 컨트롤플레인 — 발급(횟수 기록), 나머지(토큰·매니페스트)는 Host 가 fail-open 하는 응답."""
+    """가짜 컨트롤플레인 — 발급(횟수 기록), 원라인 설치 길(routes: get.sh·매니페스트·zip), 나머지(토큰·매니페스트 없음)는
+    Host 가 fail-open 하는 응답."""
 
     def __init__(self):
         self.calls: list[str] = []
+        self.routes: dict[str, tuple[bytes, str]] = {}
         box = self
 
         class H(BaseHTTPRequestHandler):
@@ -208,6 +212,14 @@ class _FakeCP:
 
             def do_GET(self):
                 box.calls.append(self.path)
+                if self.path in box.routes:
+                    body, ctype = box.routes[self.path]
+                    self.send_response(200)
+                    self.send_header("Content-Type", ctype)
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
                 self._send(200, {"ok": True}) if self.path == "/cp/healthz" else self._send(404, {"error": "no_release"})
 
             def log_message(self, *a):
@@ -453,6 +465,61 @@ def test_fresh_install_lays_out_secures_and_starts(box):
                            "UV_PYTHON_BIN_DIR": None, "VIRTUAL_ENV": None, "UV_PYTHON": None}
 
 
+def _release_zip(payload: Path) -> bytes:
+    """배포 zip 모양(Compress-Archive — 구분자 '/', 만든 OS FAT, 유닉스 권한 없음)으로 PAYLOAD 사본을 담는다."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for f in sorted(p for p in payload.rglob("*") if p.is_file()):
+            zi = zipfile.ZipInfo(f.relative_to(payload).as_posix(), date_time=(2026, 10, 20, 0, 0, 0))
+            zi.create_system, zi.external_attr, zi.compress_type = 0, 0, zipfile.ZIP_DEFLATED
+            z.writestr(zi, f.read_bytes())
+    return buf.getvalue()
+
+
+def _manifest(ver: str, url: str, zb: bytes) -> str:
+    """운영과 같은 모양의 클레임(버린 시험 키로 서명) — get.sh 는 서명을 보지 않고 내용만 읽는다(신뢰 모델)."""
+    import jwt as pyjwt
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    pem = Ed25519PrivateKey.generate().private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                                     serialization.NoEncryption())
+    now = int(time.time())
+    claims = {"iss": "clewpath-release", "aud": "clewpath-host", "ver": ver, "url": url,
+              "sha256": hashlib.sha256(zb).hexdigest(), "size": len(zb), "filename": f"clewpath-host-{ver}.zip",
+              "notes": "맥·리눅스 시험", "platforms": ["win", "mac", "linux"], "iat": now, "exp": now + 86400}
+    return pyjwt.encode(claims, pem, algorithm="EdDSA", headers={"kid": "0" * 16})
+
+
+@pytest.mark.skipif(not (shutil.which("curl") and shutil.which("unzip")), reason="curl·unzip 없음(get.sh 길)")
+def test_get_sh_one_liner_installs(box, payload):
+    """curl …/get.sh | sh -s -- … — get.sh 가 매니페스트·zip(배포 모양)을 받아 검사해 설치 루트 옆 stage 에 풀고
+    stage 의 install.sh --from-stage 로 넘겨, 옮기기·설치·기동까지 끝난다(3.1 → 3.2). 임시 폴더는 남지 않는다."""
+    cp = _FakeCP()
+    try:
+        zb = _release_zip(payload)
+        url = f"{cp.url}/updates/download/{VERSION}"
+        cp.routes = {"/cp/get.sh": ((ROOT / "ops" / "get.sh").read_bytes(), "text/plain; charset=utf-8"),
+                     "/cp/updates/manifest": (_manifest(VERSION, url, zb).encode(), "application/jwt"),
+                     f"/cp/updates/download/{VERSION}": (zb, "application/zip")}
+        r = subprocess.run(["/bin/sh", "-c", 'u=$1; shift; curl -fsS "$u" | sh -s -- "$@"', "sh", f"{cp.url}/get.sh",
+                            *box.args(cp=cp.url)], env=box.env(CLEWPATH_CLIENT_TOKEN="tok-GET-SECRET"),
+                           capture_output=True, timeout=240, cwd=str(box.home), stdin=subprocess.DEVNULL)
+        out = r.stdout.decode("utf-8")
+        assert r.returncode == 0 and "=== 설치 완료 ===" in out, box.diag(r)
+        for s in ("=== ClewPath Host 받기 ===", f"최신 버전 : {VERSION}", "[OK]   무결성 확인 (SHA-256)", "[OK]   압축 해제",
+                  "=== ClewPath Host 설치 준비", "설치 폴더에 옮김"):
+            assert s in out, s
+        assert "tok-GET-SECRET" not in out + r.stderr.decode("utf-8")
+        assert all((box.root / n).exists() for n in updater.PAYLOAD)
+        assert not list(box.chome.glob(".clewpath-get.*")) and not list(box.tmpdir.iterdir()), "임시 폴더는 다 치웠다"
+        assert box.record()["installed_version"] == VERSION and box.get("/api/health") == {"status": "ok"}
+        assert tomllib.loads(box.conf.read_text(encoding="utf-8"))["cloud"]["client_token"] == "tok-GET-SECRET"
+        box.host_pid()
+        assert cp.calls[:3] == ["/cp/get.sh", "/cp/updates/manifest", f"/cp/updates/download/{VERSION}"]
+    finally:
+        cp.close()
+
+
 def test_token_argument_is_moved_to_env_with_one_warning(box):
     """--client-token 은 받되(Q19) 경고하고 env 로 옮긴다 — 서막 뒤 exec 한 install.sh 의 인자에는 싣지 않는다."""
     r = box.fresh("--client-token", "tok-ARGV-9")
@@ -613,6 +680,21 @@ def test_recovery_works_when_the_marker_is_already_ours(box):
     box.host_pid()
 
 
+def test_prelude_deletes_only_get_sh_temp_next_to_the_root(box):
+    """서막이 멈추면 get.sh 의 임시 stage 를 치우지만, 그 모양(설치 루트 옆 .clewpath-get.*)이 아닌 stage 의 부모는
+    절대 지우지 않는다 — 손으로 푼 폴더, 이름만 닮은 다른 곳의 폴더."""
+    box.fresh()
+    runner = box.holder("update_runner.sh")
+    (box.data / "update.inprogress").write_text(f"pid={runner.pid}\nat={int(time.time())}\nby=runner\n", encoding="utf-8")
+    for parent in (box.base / "내가 푼 곳", box.base / ".clewpath-get.lookalike"):
+        shutil.copytree(box.payload, parent / "stage")
+        (parent / "keep.txt").write_text("keep", encoding="utf-8")
+        r = box.sh(parent / "stage" / "install.sh", "--from-stage", str(parent / "stage"), "--dir", str(box.root),
+                   *box.args())
+        assert r.returncode == 1 and "진행 중" in r.stdout.decode("utf-8"), box.diag(r)
+        assert (parent / "keep.txt").exists() and (parent / "stage" / "session_manager").is_dir(), parent
+
+
 def test_from_stage_stops_when_leftovers_cannot_be_removed(box):
     box.fresh()
     swap = box.root / ".clewpath-swap.4242"
@@ -637,10 +719,12 @@ def test_refuses_while_an_update_runs(box):
     runner = box.holder("update_runner.sh")
     marker = box.data / "update.inprogress"
     marker.write_text(f"pid={runner.pid}\nat={int(time.time())}\nby=runner\n", encoding="utf-8")
-    for r in (box.install(), box.install_from(box.stage(readme="NOPE\n"))):
+    st = box.stage(readme="NOPE\n")
+    for r in (box.install(), box.install_from(st)):
         assert r.returncode == 1 and "진행 중" in r.stdout.decode("utf-8"), box.diag(r)
         assert box.host_pids() == [pid] and box.text(box.root / "README.md") == readme, "아무것도 바꾸지 않는다"
         assert f"pid={runner.pid}" in box.text(marker), "남의 표식은 그대로"
+    assert not st.parent.exists(), "get.sh 가 넘긴 임시 stage 는 서막이 멈춰도 치운다(같은 명령이 다시 받는다)"
     marker.unlink()
     lock = box.data / "updates" / "runner.lock.d"
     lock.mkdir(parents=True)

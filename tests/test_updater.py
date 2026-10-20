@@ -190,9 +190,6 @@ def test_stage_drops_unlisted_entries(tmp_path, monkeypatch):
 
 
 _ROOT = Path(updater.__file__).resolve().parent.parent
-# 패키지 화이트리스트($include)에 아직 안 넣은 PAYLOAD 항목 — 명세(posix-install.md) 1.4 의 7단계(패키징)에서 넣는다.
-# 넣으면 여기서 빼야 아래 시험이 통과한다(없는 채로 두면 '넣었는데 목록에 남음'으로 실패).
-_NOT_YET_PACKAGED = {"install.sh", "uninstall.sh"}
 
 
 def test_payload_lists_agree():
@@ -216,8 +213,7 @@ def test_payload_lists_agree():
     m = re.search(r'\$include = @\((.*?)\n\)', pkg, re.S)
     assert m, "package-for-user.ps1 에서 $include 를 못 찾음"
     included = set(re.findall(r'"([^"]+)"', m.group(1)))
-    assert not (included & _NOT_YET_PACKAGED), f"패키지에 넣었으면 _NOT_YET_PACKAGED 에서 빼세요: {included & _NOT_YET_PACKAGED}"
-    assert included == want - _NOT_YET_PACKAGED, f"패키지 불일치: {included ^ (want - _NOT_YET_PACKAGED)}"
+    assert included == want, f"패키지 불일치: {included ^ want}"
 
 
 # ---- 자동 적용 안전 가드 (재기동 자동적용 · 개발체크아웃 · 롤백루프) ----

@@ -381,6 +381,19 @@ curl -fsSL …/get.sh | CLEWPATH_CLIENT_TOKEN=… sh                 # 토큰은
 | :91-93 `Expand-Archive -Force`(제자리) | 이름·링크 검사, stage에 풀기, install.sh가 최상위 항목별로 교체 | zip-slip, 반쪽 덮어쓰기 감소 |
 | :97-108 install.ps1 실행(종료코드 무시) | `exec /bin/sh …/install.sh --from-stage …` | 종료코드 전달 |
 
+**구현 메모 (6단계, 2026-10-21 — 위 설계와 다른 점과 뒤 단계가 맞출 약속)**
+- 위치: 결정대로 006 의 `ops/get.sh`(라우트가 없으니 서빙되지 않는다). CP 공개 때 007 `control_plane/get.sh`로 옮긴다 — 시험은 env `CLEWPATH_GET_SH`로 그 파일을 가리킬 수 있다.
+- 순서: 받는 것(매니페스트·zip·이름 목록)은 `${TMPDIR:-/tmp}/clewpath-get.XXXXXX`(작업 폴더)에 두고, 설치 루트 옆 `.clewpath-get.XXXXXX/stage`는 zip 해시·크기와 이름 검사를 통과한 뒤에야 만든다. 그래서 거부될 때(S1) 설치 폴더 옆에는 아무것도 생기지 않는다(설계는 G4 임시 폴더를 G2 전에 만들고 zip 도 거기 받았다). 작업 폴더는 exec 직전에 지운다.
+- 받기 전에 설치 폴더를 본다(install.sh 서막과 같은 거절 — 폴더가 아닌 것·개발 체크아웃(.git·ops)·비어 있지 않은 남의 폴더). 받은 뒤 거절하면 헛걸음이고 임시 폴더만 남는다. `--dir`은 절대 경로만(상대·`.`·`..` 조각·`/`·홈은 2). 설치 폴더가 심볼릭 링크면 물리 경로로 넘긴다 — install.sh 가 `pwd -P`로 맞춰 보는 자리 옆에 stage 가 있어야 옮긴 뒤 치울 수 있다.
+- curl 은 `g_curl` 한 곳: `--proto`·`--proto-redir`(`=https`, `--allow-http`일 때만 `=http,https`)·`--tlsv1.2`, 매니페스트 `--max-filesize 65536`·20초, zip `--max-filesize <size>`(넘으면 curl 63 → "크기 불일치")·300초. 프록시는 사용자 설정을 따르고 이 PC(127.0.0.1·localhost·[::1])로 가는 요청만 `--noproxy '*'` — 설계의 `--noproxy '*'`를 늘 주면 사내 프록시가 필요한 PC 에서 CP 에 닿지 못한다.
+- 매니페스트: 64KB 이하, 세 조각, 내용은 한 줄 인쇄 가능 ASCII(`tr -d ' -~'`가 빈 결과)이고 `{…}`. `ver`·`sha256`·`size`·`url`은 값 자리(앞이 `{`·`,`)에 정확히 한 번. `size`는 9자리까지. `url`에 공백·제어문자·따옴표·역슬래시가 있으면 거부(이스케이프를 풀지 않는다). platforms 목록의 이름은 `[a-z0-9_-]`(앞으로의 이름은 그냥 고르지 않을 뿐), 목록이 아니거나 모양이 이상하면 아무 OS 도 받지 않는다(updater 와 같다).
+- zip 이름 규칙에 더한 것(실측 근거): `^`가 든 이름 — unzip 목록은 제어문자를 `^A`·`^J`로 보여 주고 풀 때 그 글자를 지운다(`\001../x`가 `^A../x`로 보이다가 `../x`가 된다). 같은 이름(대소문자 무시 — APFS) — `unzip -o`는 뒤의 것을 조용히 남긴다. 빈 zip. 심볼릭 링크는 `unzip -Z`의 권한 열(`l`), [linux] python 길은 `external_attr`.
+- 푼 뒤 `chmod -R u+rwX stage`(내 권한만, 링크는 따라가지 않는다)를 사후 확인보다 먼저 한다 — zip 에 유닉스 권한이 적혀 있으면 unzip 이 그대로 쓴다(권한 0 폴더면 사후 확인이 그 안을 못 본다). 배포 zip 은 Windows 에서 만들어 권한이 없다(`create_system=0`·`external_attr=0`). 실패 정리도 권한을 채운 뒤 지운다.
+- 없는 도구는 한 번에 모두 알린다(curl·mktemp·tr·sed·awk·wc·find·dirname·sort·uniq, SHA-256 도구, base64 도구, unzip — [linux]만 python3 대역). 리눅스 경고는 get.sh 와 install.sh 가 한 번씩 낸다. `--agent-token` 인자는 없다(env `CLEWPATH_AGENT_TOKEN`은 그대로 넘어간다).
+- install.sh(4단계 파일): 서막이 stage 를 확인하고 설치 폴더를 정한 뒤로는 실패해도 get.sh 의 임시 폴더를 지운다(`GET_TMP` — 이름이 `.clewpath-get.*`이고 설치 루트 옆일 때만). 전에는 성공했을 때만 지워, 업데이트 중 거절 같은 실패마다 받은 payload 가 숨은 폴더로 남았다. 손으로 푼 stage·이름만 닮은 다른 곳의 폴더는 지우지 않는다(시험으로 고정).
+- 알려진 한계: `curl | sh`가 정확히 마지막 줄의 `main` 바로 뒤에서 끊기면 인자 없이(기본값으로) 돈다 — 모든 `curl | sh` 설치기의 공통 한계이고 결과는 기본 설치다. [mac] 셸(bash 3.2 sh 모드)·BSD 도구는 실기 확인 전이다(R1). Git for Windows 의 dash 는 UTF-8 이어지는 바이트(0x80-0x9F)를 `[[:cntrl:]]`로 보지만(시험 하네스 사정) 리눅스 dash·`bash --posix`는 아니다.
+- 시험: `tests/test_get_sh.py` — 함수 시험(마지막 줄을 뺀 사본을 source, sign_release 가 만든 진짜 매니페스트, 모든 OS)과 실행 시험(가짜 CP, zip 안의 install.sh 는 받은 인자·env·pid·표준 입력을 적는 대역, S1 거부 22가지, 끊긴 다운로드, 파이프 실행, 도구 대역으로 [mac]·옛 맥 base64·shasum·openssl·python 길). `tests/test_install_sh.py::test_get_sh_one_liner_installs`가 `curl …/get.sh | sh` → 진짜 install.sh → Host 기동까지 잇는다. 정적 계약(`test_posix_scripts`): 함수 밖에는 주석·`set -u`·값 대입·함수 정의뿐, curl 은 한 곳, 머리말의 신뢰 모델. 리눅스 컨테이너에서 get.sh·install.sh·sign_release 에 버그를 하나씩 넣어(54종) 모두 겨냥한 단정에서 잡히는 것을 확인했다.
+
 ### 3.2 install.sh (zip 루트, install.ps1에 대응)
 
 **인자**
@@ -1036,6 +1049,15 @@ def port_free(host: str, port: int) -> bool:
 - 클레임이 없으면 `["win"]`로 본다. get.sh와 updater가 같은 규칙을 쓴다.
 - CP는 보관과 배포만 하므로 007 변경이 필요 없다. 다만 CP는 최신 한 건만 준다(007 api.py:543-548). 최신이 어떤 OS를 빼면 그 OS는 그동안 설치·업데이트를 받지 못한다(8절 R6).
 - 이번 단계 릴리스는 `["win"]`이다. 맥 단계가 끝나면 `["win","mac"]`, 리눅스 정식 지원 때 `"linux"`를 더한다. 시험 빌드는 `["win","mac","linux"]`로 서명한다.
+
+**구현 메모 (7단계, 2026-10-21 — 4.5·4.6 과 다른 점과 뒤 단계가 맞출 약속)**
+- `sign_release.py sign --platforms`: argparse 형식 검사라 모르는 이름·빈 목록은 서명 전에 종료코드 2. 쉼표·공백·대소문자·겹침을 받고 클레임은 늘 `win,mac,linux` 순서로 쓴다. 서명 출력 줄(`ver=…`)에 `platforms=`를 붙였다(release.ps1 이 그 줄을 로그에 남긴다). `verify`는 배포본(updater)이 받아들이는지 본 뒤 `platforms=win,mac` 한 줄을 찍는다. 클레임이 없으면 `platforms=(클레임 없음 — win 전용으로 읽힌다)`, 모양이 이상하면(문자열·빈 목록·모르는 이름·문자열이 아닌 항목) `[OK]`를 찍지 않고 1.
+- `release.ps1 -Platforms`: `[string[]]`(기본 `win`) — `-File`로 준 `win,mac`과 PowerShell 안의 배열을 다 받는다. 버전 형식 바로 다음에 본다(다른 사전점검보다 먼저). **win 은 늘 들어가야 한다**(4.5 에 없음) — CP 는 최신 한 건만 주므로(R6) win 이 빠진 릴리스가 최신인 동안 Windows 사용자 전체가 업데이트를 못 받고, get.ps1 은 platforms 를 보지 않아 그 zip 을 Windows 에 그대로 깐다. verify 출력의 `platforms=` 줄을 `-Platforms`와 대조한다.
+- (권장 항목을 이번에 넣음) mac·linux 가 들어가면 `ops/logs/posix-e2e-<ver>.json` = `{"version": "<ver>", "head": "<git rev-parse HEAD>", "ok": true}`가 있어야 한다. 8단계 e2e 가 통과하면 이 모양으로 남길 것. `.gitignore`에 넣어 '깨끗한 트리' 게이트에 걸리지 않게 했다.
+- zip 내용 게이트는 함수 `Test-ReleaseZip`(시험이 AST 로 꺼내 pwsh 로 돌린다): 맥·리눅스 다섯 파일, 이름에 `\` 없음(Windows PowerShell 5.1 의 Compress-Archive 가 만든다 — pwsh 7.6 의 Archive 1.2.6 은 `/`, 실측), `session_manager/updater.py`의 `RELEASE_KEYS` kid 집합이 저장소와 같음(주석 줄의 옛 키는 세지 않는다). 서명 도구가 아니라 여기에 둔 이유: 시험 하네스도 `sign`으로 시험 키 빌드를 서명한다.
+- package-for-user.ps1: `.sh` 형식 게이트는 비밀 스캔 다음·zip 전. 파일마다 이유 한 줄(`(BOM)`·`(CR - 줄끝이 CRLF)`·`(1행이 #!/bin/sh 가 아님)`)을 찍고 1. 1행 비교는 대소문자를 가린다.
+- 드라이런(작업 트리, 출력·스테이지 모두 scratchpad): 98 항목(파일 97 + 하위 폴더만 든 `session_manager/skills/`의 폴더 항목 — Compress-Archive 가 만든다), 역슬래시 0, `create_system=0`·`external_attr=0`, `.sh` 넷 모두 LF·BOM 없음·`#!/bin/sh`, `start-connector.sh`·`.clewpath-install` 없음, `Test-ReleaseZip` 문제 0. 게시·적용은 하지 않았다.
+- 시험: `tests/test_sign_release.py`(새), `tests/test_package_for_user.py`(새 — 가짜 저장소에서 진짜 스크립트를 돌린다, pwsh 가 없으면 건너뜀), `test_release_script`·`test_release_key_safety`·`test_updater`(패키지 대조를 엄격하게 — 넷이 같아야). Windows 에서 두 ps1 에 버그를 하나씩 넣어(18종) 모두 잡히는 것을 확인했다.
 
 ### 4.7 테스트 변경 목록
 

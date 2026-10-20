@@ -9,8 +9,9 @@
 |---|---|---|
 | `start-public.ps1` | 운영자 PC 의 006 기동 (스케줄러 `SessionManager` → `deploy/start-hidden.vbs` 가 호출) | 라이브 비밀번호·토큰 포함 |
 | `start-relay.ps1` | 릴레이 로컬 디버그 (운영은 도커 `util-session-relay`) | 8787 충돌 주의 |
-| `package-for-user.ps1` | 배포 zip 생성 → `dist/` | 비밀·키 스캔 게이트 내장 |
-| `tools/sign_release.py` | 릴리스 keygen/sign/verify/publish | 실행: `python ops/tools/sign_release.py ...` |
+| `package-for-user.ps1` | 배포 zip 생성 → `dist/` | 비밀·키 스캔 게이트, 맥·리눅스 `.sh` 형식 게이트(LF·BOM 없음·`#!/bin/sh`) 내장 |
+| `tools/sign_release.py` | 릴리스 keygen/sign/verify/publish | 실행: `python ops/tools/sign_release.py ...` · `sign --platforms`(받는 OS, 기본 win) |
+| `get.sh` | 맥·리눅스 원라인 설치 부트스트랩(`curl … \| sh`) — CP 공개 전 보관 | 아직 서빙되지 않음. 공개할 때 007 `control_plane/`로 옮기고 라우트·nginx 추가(docs/designs/posix-install.md 7절) |
 | `release-keys/` | ★ 릴리스 서명 개인키 | 유출=전 사용자 PC 장악 · 분실=업데이트 불능. 오프라인 백업 필수. 상세는 안의 README |
 | `deploy/start-hidden.vbs` | 스케줄러가 006 을 창 없이 띄우는 셸 | 로그를 `logs/server.log` 로 리다이렉트 |
 | `deploy/register-relay-task.ps1` | (레거시) 릴레이 태스크 등록 — 도커 전환 후 미사용 | |
@@ -27,6 +28,9 @@ pwsh -File ops/release.ps1 -Version X.Y.Z -Publish                              
 pwsh -File ops/release.ps1 -Version X.Y.Z -Publish -Apply                            #    + 이 PC 적용·헬스·조용한 재기동 확인
 ```
 사전점검(CHANGELOG 항목·버전 일치·작업 트리·서명 키·pytest)에서 걸리면 즉시 중단. 로그 `ops/logs/release-<ver>.log`(토큰 없음).
+받는 OS 는 `-Platforms`(기본 `win`, 지금은 win 만 낸다). win 은 늘 들어가야 하고, `mac`·`linux`를 넣으면 같은 HEAD 에서 통과한
+POSIX e2e 기록(`ops/logs/posix-e2e-<ver>.json`)이 있어야 한다. 패키지 직후 zip 내용 게이트(맥·리눅스 스크립트·이름 구분자 `/`·
+`RELEASE_KEYS`가 저장소와 같음 — 시험 빌드 차단)를 지나야 서명한다.
 CHANGELOG 항목 본문이 곧 매니페스트 notes(업데이트 화면 문구) — 한 문장을 한 곳에만 쓴다.
 아래 수동 절차는 스크립트가 하는 일의 설명이다.
 

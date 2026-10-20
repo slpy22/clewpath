@@ -19,6 +19,8 @@ hostctl.py·tests/posix_e2e 는 명세 1.4 의 차례로 하나씩 생긴다. �
   `uv python find` 는 늘 `--system`(설치 루트의 .venv·VIRTUAL_ENV 가 답을 가로채지 않게), 관리 런타임은 `--no-bin`.
 - install.sh·uninstall.sh: claude 의 settings.json 은 읽기만(쓰기·지우기·옮기기 없음), projects 는 지우지 않는다(S36·S37).
 - hostctl.py: 토큰은 env 로만(argparse 에 *token* 인자 없음, S17). 맨 위 import 는 표준 라이브러리만.
+- get.sh: 맨 위에는 주석·set -u·값 대입·함수 정의뿐이고 맨 끝 줄이 `main "$@"`(curl | sh 가 끊겨도 반쪽이 돌지 않게).
+  curl 은 g_curl 한 곳에서만 부른다(--proto·--proto-redir·--tlsv1.2). 머리말에 신뢰 모델(서명은 여기서 보지 않는다)을 적는다.
 - tests/posix_e2e: release-keys·keygen·pyongso.com 금지(S19·S44) — 거부 단정문 줄은 끝에 `e2e-guard` 표시
   (파이썬·셸은 `# e2e-guard`, 마크다운은 `<!-- e2e-guard -->`).
 """
@@ -54,7 +56,6 @@ HOME_SCRIPTS = ("get.sh", "install.sh", "uninstall.sh", "update_runner.sh")
 
 # 아직 만들지 않은 것(명세 1.4 의 단계). 만들면 여기서 뺀다.
 PENDING = {
-    "get.sh",                           # 6단계
     "posix_e2e",                        # 8단계
 }
 
@@ -555,6 +556,45 @@ def test_uv_pins_match_windows_installer():
     mine = {k.split("|")[1]: v for k, v in pins.items() if k.split("|")[0] == win}
     assert set(mine) == UV_TARGETS, f"대상 4개: {sorted(mine)}"
     assert all(re.fullmatch(r"[0-9a-f]{64}", v) for v in mine.values()), "64자 소문자 hex(공식 .sha256 과 직접 계산이 같을 때만)"
+
+
+# 함수 밖에 둘 수 있는 줄: set -u, 값 대입(NAME_PY=' … 의 닫는 ' 한 줄 포함), 함수 정의의 첫 줄, 맨 끝 main "$@"
+_TOP_OK = re.compile(r"""set -u|[A-Za-z_][A-Za-z0-9_]*=\S*|'|[a-z_][a-z0-9_]*\(\) \{.*|main "\$@\"""")
+
+
+def test_get_sh_runs_only_through_main():
+    """curl | sh 는 받는 대로 실행한다 — 중간에 끊기면 반쪽 스크립트가 돈다. 그래서 맨 위(함수 밖)에는 주석·set -u·값 대입·
+    함수 정의뿐이고, 일은 전부 main() 안에서 맨 끝 줄 `main "$@"` 로만 시작한다(3.1)."""
+    src = _text("get.sh")
+    assert src.rstrip("\n").split("\n")[-1] == 'main "$@"', "맨 끝 줄은 main \"$@\""
+    depth, top = 0, []
+    for i, line in enumerate(_code_view(src).split("\n"), 1):      # 문자열·주석·heredoc 은 공백 — 괄호만 센다
+        if depth == 0 and line.strip():
+            top.append((i, line.strip()))
+        depth += line.count("{") - line.count("}")
+        assert depth >= 0, f"{i}: 괄호 짝"
+    bad = [f"{i}: {s[:60]}" for i, s in top if not _TOP_OK.fullmatch(s)]
+    assert not bad, "함수 밖에서 도는 명령(끊긴 다운로드가 실행할 수 있다):\n  " + "\n  ".join(bad)
+    assert [s for _, s in top].count('main "$@"') == 1 and top[-1][1] == 'main "$@"'
+
+
+def test_get_sh_fetches_only_with_https_curl():
+    """내려받기는 g_curl 한 곳 — https 만(시험용 --allow-http 때만 http), 리다이렉트로 내려가지 않게, TLS 1.2 이상(S7)."""
+    view = _code_view(_text("get.sh"))
+    calls = [ln.strip() for ln in view.split("\n")
+             if re.search(r"(?<![\w$/-])curl(?![\w-])", ln) and not re.match(r"\s*for\s", ln)]
+    assert len(calls) == 1, calls
+    assert all(f in calls[0] for f in ("--proto ", "--proto-redir ", "--tlsv1.2")), calls[0]
+    t = _text("get.sh")
+    assert "_gp='=https'" in t and "_gp='=http,https'" in t and re.search(r'ALLOW_HTTP" = 1 \]; then _gp=\'=http,https\'', t)
+    assert "--max-filesize" in t and "--max-time" in t
+
+
+def test_get_sh_states_its_trust_model():
+    """첫 설치의 신뢰는 TLS 뿐이고 서명은 여기서 보지 않는다는 사실을 머리말에 정직하게(get.ps1 과 같다, R7)."""
+    head = _text("get.sh").split("\nset -u\n", 1)[0]
+    for needle in ("TLS", "서명", "검증하지 않는다", "SHA-256", "공개키"):
+        assert needle in head, needle
 
 
 def test_hostctl_takes_tokens_from_env_only():

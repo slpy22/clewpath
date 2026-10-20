@@ -4,6 +4,8 @@
 #    pwsh -File ops/release.ps1 -Version 0.9.4 -Notes "무엇이 바뀌었나"            # 패키지+서명+검증까지
 #    pwsh -File ops/release.ps1 -Version 0.9.4 -Notes "..." -Publish              # + CP 게시
 #    pwsh -File ops/release.ps1 -Version 0.9.4 -Notes "..." -Publish -Apply       # + 이 PC 적용·헬스·조용한 재기동 확인
+#    -Platforms win,mac                                                           # 받는 OS(기본 win). mac·linux 는 같은 HEAD 의
+#                                                                                 #   POSIX e2e 기록(ops/logs/posix-e2e-<ver>.json)이 있어야
 #
 #  왜: 손으로 7단계(package → rename → sign → verify → publish → apply → poll)를 11번 반복하며
 #  실수 표면이 컸다(retro 2026-09-27). 순서·이름 규칙·토큰 취급을 한 곳에 고정한다.
@@ -23,7 +25,8 @@ param(
     [string]$HostUrl = "http://127.0.0.1:5100",
     [string]$DownloadBase = "https://clewpath.pyongso.com/cp/updates/download",
     [string]$EnvFile = "E:/018_whisper/util/.env",
-    [string]$Python = "python"
+    [string]$Python = "python",
+    [string[]]$Platforms = @("win")
 )
 $ErrorActionPreference = "Stop"
 $env:PYTHONIOENCODING = "utf-8"
@@ -35,10 +38,61 @@ $LogFile = Join-Path $PSScriptRoot "logs\release-$Version.log"
 function Log($m) { $line = "[{0}] {1}" -f (Get-Date -Format "HH:mm:ss"), $m; Write-Host $line; Add-Content -Path $LogFile -Value $line -Encoding UTF8 }
 function Fail($m) { Log "FAIL: $m"; exit 1 }
 
+# 받는 OS(매니페스트 platforms 클레임, docs/designs/posix-install.md 4.6) — 값은 osdep.NAME, 정해진 순서로 "win,mac" 꼴.
+# win 은 늘 들어간다: CP 는 최신 한 건만 주므로 win 이 빠진 릴리스가 최신인 동안 Windows 사용자 전체가 업데이트를
+# 못 받고, get.ps1(Windows 원라인 설치)은 platforms 를 보지 않아 그 zip 을 그대로 깐다(8절 R6).
+function Resolve-Platforms([string[]]$Names) {
+    $known = @("win", "mac", "linux")
+    $want = @($Names | ForEach-Object { "$_" -split '[,\s]+' } | Where-Object { $_ } | ForEach-Object { $_.ToLowerInvariant() })
+    $bad = @($want | Where-Object { $known -notcontains $_ })
+    if ($bad.Count) { throw "모르는 플랫폼: $($bad -join ', ') (쓸 수 있는 값: win, mac, linux)" }
+    if ($want -notcontains "win") { throw "-Platforms 에 win 이 없습니다 - CP 는 최신 한 건만 주므로 그동안 Windows 사용자가 업데이트를 못 받습니다" }
+    return (@($known | Where-Object { $want -contains $_ }) -join ",")
+}
+
+# updater.py 의 RELEASE_KEYS kid 목록(정렬). 주석 줄의 옛 키는 세지 않는다. 못 읽으면 빈 결과
+function Get-ReleaseKids([string]$Text) {
+    $m = [regex]::Match($Text, '(?ms)^RELEASE_KEYS\b[^\n=]*=\s*\{(.*?)^\}')
+    if (-not $m.Success) { return }
+    $body = [regex]::Replace($m.Groups[1].Value, '(?m)#.*$', '')
+    [regex]::Matches($body, '"([0-9a-f]{16})"\s*:') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique
+}
+
+# zip 내용 게이트(posix-install.md 4.5) — 맥·리눅스 설치에 필요한 파일, 항목 이름 구분자(맥·리눅스에서 '\' 는 이름의
+# 일부가 된다 — Windows PowerShell 5.1 의 Compress-Archive 가 그렇게 만든다), 배포본이 믿는 서명 키(시험 키를 심은 시험
+# 빌드는 여기서 걸린다 — sign 은 시험 하네스도 쓰므로 이 검사는 게시 흐름인 여기에만 둔다). 돌려주는 값: 문제 목록
+function Test-ReleaseZip([string]$ZipPath, [string]$RepoRoot) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $problems = New-Object System.Collections.Generic.List[string]
+    $a = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
+    try {
+        $names = @($a.Entries | ForEach-Object { $_.FullName })
+        foreach ($need in @("install.sh", "uninstall.sh", "session_manager/update_runner.sh",
+                            "session_manager/start-connector.template.sh", "session_manager/hostctl.py")) {
+            if ($names -cnotcontains $need) { $problems.Add("zip 에 $need 이(가) 없습니다") }
+        }
+        $bs = @($names | Where-Object { $_.Contains('\') })
+        if ($bs.Count) { $problems.Add("항목 이름에 역슬래시가 있습니다(맥·리눅스에서는 이름의 일부가 됩니다): $($bs[0]) 외 $($bs.Count - 1)개") }
+        $upd = @($a.Entries | Where-Object { $_.FullName -ceq "session_manager/updater.py" })
+        if (-not $upd.Count) { $problems.Add("zip 에 session_manager/updater.py 가 없습니다") }
+        else {
+            $sr = New-Object System.IO.StreamReader($upd[0].Open())
+            try { $zipText = $sr.ReadToEnd() } finally { $sr.Dispose() }
+            $zipKids = @(Get-ReleaseKids $zipText) -join ","
+            $repoKids = @(Get-ReleaseKids ([System.IO.File]::ReadAllText((Join-Path $RepoRoot "session_manager\updater.py")))) -join ","
+            if (-not $zipKids -or -not $repoKids) { $problems.Add("RELEASE_KEYS 를 읽지 못했습니다(zip: '$zipKids', 저장소: '$repoKids')") }
+            elseif ($zipKids -cne $repoKids) { $problems.Add("zip 의 RELEASE_KEYS(kid $zipKids)가 저장소(kid $repoKids)와 다릅니다 - 시험 빌드는 게시하지 않습니다") }
+        }
+    } finally { $a.Dispose() }
+    return $problems.ToArray()
+}
+
 Log "=== release $Version 시작 (publish=$Publish apply=$Apply prepare=$PrepareChangelog) ==="
 
 # ── 0) 사전점검 ─────────────────────────────────────────────
 if ($Version -notmatch '^\d+\.\d+\.\d+$') { Fail "버전 형식은 X.Y.Z 여야 합니다: $Version" }
+try { $plats = Resolve-Platforms $Platforms } catch { Fail $_.Exception.Message }
+Log "받는 OS(platforms): $plats"
 $Changelog = Join-Path $Root "CHANGELOG.md"
 $clText = if (Test-Path $Changelog) { Get-Content $Changelog -Raw } else { "" }
 $hasEntry = $clText -match "(?m)^## $([regex]::Escape($Version)) \("
@@ -65,6 +119,18 @@ if ($pyver -ne $Version) { Fail "pyproject.toml 버전($pyver) 과 -Version($Ver
 $dirty = (git status --porcelain 2>$null | Where-Object { $_ -notmatch '^\?\? (003_crosscheck|\.context)' })
 if ($dirty -and -not $AllowDirty) { Fail "작업 트리가 깨끗하지 않습니다(커밋 먼저, 또는 -AllowDirty):`n$($dirty -join "`n")" }
 if (-not (Test-Path (Join-Path $Root "ops\release-keys\private.pem"))) { Fail "서명 키가 없습니다: ops/release-keys/private.pem" }
+if ($plats -ne "win") {
+    # 맥·리눅스가 받는 릴리스는 같은 HEAD 에서 통과한 컨테이너 왕복(pytest -m posix_e2e) 기록이 있어야 한다(4.5·Q17).
+    # 기록 모양: {"version": "<ver>", "head": "<git rev-parse HEAD>", "ok": true} — .gitignore 라 트리 깨끗 게이트에 안 걸린다
+    $e2eRec = Join-Path $PSScriptRoot "logs\posix-e2e-$Version.json"
+    $head = (git rev-parse HEAD 2>$null | Out-String).Trim()
+    $rec = $null
+    if (Test-Path $e2eRec) { try { $rec = Get-Content $e2eRec -Raw | ConvertFrom-Json } catch { $rec = $null } }
+    if (-not $rec -or $rec.ok -ne $true -or "$($rec.version)" -ne $Version -or "$($rec.head)" -ne $head) {
+        Fail "맥·리눅스($plats)가 받는 릴리스는 같은 HEAD($head)에서 통과한 POSIX e2e 기록이 필요합니다: $e2eRec"
+    }
+    Log "POSIX e2e 기록 확인: $e2eRec (head $head)"
+}
 # 의존성 잠금 검사(0.10.6): pyproject 에 새 의존성을 넣고 uv.lock 을 안 갱신하면 설치본은 `uv sync --frozen` 이라
 # 그 의존성이 영원히 설치되지 않는다(0.10.5 psutil 실사고). lock 이 어긋나면 릴리스를 막는다.
 $uvExe = Join-Path $env:LOCALAPPDATA "ClewPath\bin\uv.exe"
@@ -113,16 +179,20 @@ try {
     $sr = New-Object System.IO.StreamReader($e.Open()); $txt = $sr.ReadToEnd(); $sr.Dispose()
     if ($txt -notmatch "version\s*=\s*`"$([regex]::Escape($Version))`"") { Fail "zip 안 pyproject 버전이 $Version 이 아닙니다" }
 } finally { $a.Dispose() }
+$zipProblems = @(Test-ReleaseZip $zip $Root)
+if ($zipProblems.Count) { Fail ("zip 내용 게이트:`n  " + ($zipProblems -join "`n  ")) }
+Log "zip 내용 게이트 통과(맥·리눅스 스크립트·이름 구분자 /·RELEASE_KEYS 일치)"
 
 # ── 2) 서명 + 검증 ──────────────────────────────────────────
 $manifest = Join-Path $OutDir "manifest-$Version.jwt"
 $sign = & $Python (Join-Path $PSScriptRoot "tools\sign_release.py") sign --version $Version --artifact $zip `
-          --url "$DownloadBase/$Version" --out $manifest --notes $Notes 2>&1
+          --url "$DownloadBase/$Version" --out $manifest --notes $Notes --platforms $plats 2>&1
 if ($LASTEXITCODE -ne 0) { Fail "서명 실패:`n$sign" }
 Log ("서명: " + (($sign | Select-String "ver=") -join ""))
 $ver = & $Python (Join-Path $PSScriptRoot "tools\sign_release.py") verify --manifest $manifest 2>&1
 if ($LASTEXITCODE -ne 0 -or ($ver -join "`n") -notmatch "OK") { Fail "검증 실패:`n$ver" }
-Log "검증: OK"
+if (($ver -join "`n") -notmatch "(?m)^platforms=$([regex]::Escape($plats))\s*$") { Fail "매니페스트의 platforms 가 -Platforms($plats) 와 다릅니다:`n$ver" }
+Log "검증: OK (platforms=$plats)"
 $sha = ((Get-FileHash $zip -Algorithm SHA256).Hash).ToLower()
 
 # ── 3) 게시 ─────────────────────────────────────────────────
