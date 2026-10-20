@@ -2756,7 +2756,8 @@ function restoreTabsOnce(){
     const s=byId.get(it.sid); if(!s||findTab(it.key)) continue;
     TABS.list.push({key:it.key,s,safe:!!it.safe,dead:!s.live_terminal}); n++;
   }
-  if(saved.active&&findTab(saved.active)) TABS.active=saved.active;
+  // 알림 진입(#open=) 등으로 이미 정해진 마지막 탭은 덮지 않는다 — 로컬은 그 터미널이 먼저 동기로 잡혀 화면·기억이 어긋났다(1-4)
+  if(!TABS.active&&saved.active&&findTab(saved.active)) TABS.active=saved.active;
   if(n) toast(`터미널 탭 ${n}개 복원됨 (터미널을 열면 탭 스트립에 보입니다)`);
   saveTabs();
 }
