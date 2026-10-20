@@ -137,6 +137,14 @@ def _is_privileged_api(path: str) -> bool:
     return any(p.endswith(s) for s in _PRIV_API_SUFFIXES)
 
 
+# 오래 걸릴 수 있는 요청(로컬 API 프록시·목록·통계·ask·내보내기/가져오기·2FA 확인)은 릴레이 프레임을 받는 길을 막지 않게 따로 돈다.
+# 프레임을 하나씩 처리하면 Host 쪽 느린 요청 하나(업데이트 확인·큰 목록·내보내기)가 그 PC 의 모든 기기 프레임 — 다른 기기의 기기 인증,
+# client_offline, 터미널 입력 — 을 그 요청이 끝날 때까지 막았고(재연결 3.6초), 늦은 응답이 뒤에 줄 선 client_offline 보다 먼저 나가
+# 떠난 기기 앞 응답이 방 전체로 broadcast 됐다(검토 3회차). 기기 인증·스트림 시작·ping·bye_device 는 그 자리에서 — 순서가 뜻을 가진다
+# (인증 뒤의 요청은 인증된 상태를 보고, 스트림 시작 뒤의 입력은 그 스트림의 입력 큐로 간다).
+_SPAWN_METHODS = frozenset({"list_sessions", "get_stats", "ask", "api", "export", "import", "grant"})
+
+
 def _to_ws(base: str) -> str:
     """http(s)://host → ws(s)://host 로 변환."""
     if base.startswith("https://"):
@@ -236,6 +244,7 @@ class Connector:
         self.e2ee_key: bytes | None = None   # room E2EE 키(접속 시 로드)
         self.enc_cids: set = set()           # 암호화 봉투로 말한 기기들(cid)
         self.gone_cids: dict = {}            # 떠난 기기(cid) — 그 앞 프레임은 보내지 않는다(send). 삽입순 집합, 상한 있음
+        self._req_tasks: set = set()         # 따로 도는 느린 요청(_SPAWN_METHODS) — 끝날 때까지 참조를 쥔다(GC 방지)
 
     # ---- 릴레이 송신 ----
     async def send(self, obj: dict) -> None:
@@ -772,7 +781,10 @@ class Connector:
         if t in ("req", "stream_in", "stream_close") and frame.get("cid") is not None and frame.get("id") is not None:
             frame = {**frame, "id": (frame["cid"], frame["id"])}
         if t == "req":
-            await self._handle_req(frame)
+            if frame.get("method") in _SPAWN_METHODS:
+                self._spawn_req(frame)          # 받는 길을 막지 않는다(위 _SPAWN_METHODS)
+            else:
+                await self._handle_req(frame)
         elif t == "stream_in":
             await self._handle_stream_in(frame)
         elif t == "stream_close":
@@ -808,6 +820,21 @@ class Connector:
             await self.send({"v": 1, "type": "pong", "id": frame.get("id"),
                              **({"cid": frame["cid"]} if frame.get("cid") is not None else {})})
         # 그 외(hello 등)는 무시
+
+    def _spawn_req(self, frame: dict) -> None:
+        task = asyncio.create_task(self._run_req(frame))
+        self._req_tasks.add(task)
+        task.add_done_callback(self._req_tasks.discard)
+
+    async def _run_req(self, frame: dict) -> None:
+        """따로 도는 요청. _handle_req 는 실패를 응답으로 돌려주지만, 그 응답을 보내다 릴레이가 끊기는 등의 예외는 여기서 거둔다
+        (받는 길은 이미 다음 프레임을 처리 중이라 그 예외로 재접속할 이유가 없다 — 끊김은 run() 의 수신이 안다)."""
+        try:
+            await self._handle_req(frame)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            _log(f"[connector] 요청 처리 실패 method={frame.get('method')}: {type(e).__name__}: {e}")
 
     # ---- 접속 URI 구성 (CP 가 설정돼 있으면 단기 JWT 첨부) ----
     async def _build_uri(self) -> tuple[str, str]:

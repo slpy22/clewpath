@@ -55,6 +55,12 @@ def _req(cid, rid, method, params):
     return json.dumps({"v": 1, "type": "req", "id": rid, "cid": cid, "method": method, "params": params})
 
 
+async def _drain(c):
+    """따로 도는 느린 요청(api·목록 등 — _SPAWN_METHODS)이 끝날 때까지. _on_frame 은 그것들을 기다리지 않는다(검토 3회차)."""
+    while c._req_tasks:
+        await asyncio.gather(*list(c._req_tasks))
+
+
 @pytest.fixture
 def conn(monkeypatch):
     c = _conn()
@@ -85,6 +91,7 @@ async def test_same_request_id_from_two_devices_each_gets_own_answer(conn, monke
     await fb
     gates["a"].set()
     await fa
+    await _drain(conn)
     res = {f["cid"]: f for f in conn.sent if f.get("type") == "res"}
     assert res["cidA"]["id"] == "c5" and res["cidA"]["data"]["json"] == {"who": "a"}
     assert res["cidB"]["id"] == "c5" and res["cidB"]["data"]["json"] == {"who": "b"}
@@ -287,6 +294,58 @@ async def test_late_answer_to_departed_device_is_dropped_not_broadcast_in_plaint
     await c._on_frame(json.dumps({"v": 1, "type": "peer", "event": "client_offline", "cid": "cidC"}))
     gate.set()
     await asyncio.gather(*tasks)
+    await _drain(c)
     assert [(f.get("cid"), f.get("e")) for f in c.ws.wire] == [("cidB", "a1")], "떠난 기기 앞 응답은 평문으로도 봉투로도 나가지 않는다"
     inner = e2ee.unwrap_frame(key, c.ws.wire[0])
     assert inner["id"] == "c7" and inner["data"]["json"] == {"secret": "b"}
+
+
+# ---- 검토 3회차: 느린 요청 하나가 그 PC 의 모든 기기 프레임을 막음(줄 막힘)·그 늦은 응답이 떠난 기기 앞으로 broadcast ----
+
+@pytest.mark.asyncio
+async def test_slow_request_does_not_hold_up_other_frames(fake_claude_home, monkeypatch):
+    """커넥터가 프레임을 하나씩 처리해, Host 쪽 느린 요청(업데이트 확인·큰 목록·내보내기) 하나가 끝날 때까지 다른 기기의 기기 인증·
+    client_offline 까지 막혔다(실제 릴레이 e2e: 다시 붙은 폰의 인증이 3.6초 밀림). 그 사이 떠난 기기의 늦은 응답은 그 뒤에 줄 선
+    client_offline 보다 먼저 나가 방 전체로 broadcast 됐다. 느린 요청은 따로 돌고 받는 길은 바로 다음 프레임을 처리한다."""
+    from session_manager import devices
+    c = _conn()
+    c.ws = _RelayWS()
+    monkeypatch.setattr("session_manager.devices.enforced", lambda: False)
+    gate = asyncio.Event()
+
+    async def _get(url, params=None, headers=None):
+        await gate.wait()
+        return _Resp({"slow": url.rsplit("/", 1)[-1]})
+    monkeypatch.setattr(c.http, "get", _get)
+    tablet = devices.add_device("tablet")
+    # 폰 A 의 느린 요청 — 받는 길은 바로 다음 프레임으로 간다(고치기 전: 여기서 응답까지 막혀 시간 초과)
+    await asyncio.wait_for(c._on_frame(_req("cidA", "c6", "api", {"verb": "GET", "path": "/api/owner/update/status"})), 1)
+    # 그 사이 태블릿 B 가 붙어 인증한다 — 느린 요청을 기다리지 않고 바로 답한다
+    await asyncio.wait_for(c._on_frame(_req("cidB", "c1", "auth", {"token": tablet["token"], "pv": 2})), 1)
+    assert "cidB" in c.authed and [(f.get("cid"), f.get("id"), f.get("ok")) for f in c.ws.wire] == [("cidB", "c1", True)]
+    # 폰 A 가 떠난다 — 곧바로 처리돼, 늦게 끝난 A 의 응답은 보내지 않는다
+    await asyncio.wait_for(c._on_frame(json.dumps({"v": 1, "type": "peer", "event": "client_offline", "cid": "cidA"})), 1)
+    gate.set()
+    await _drain(c)
+    assert [f.get("cid") for f in c.ws.wire] == ["cidB"], "떠난 기기 앞 늦은 응답은 나가지 않는다"
+    # 남아 있는 기기의 느린 요청은 끝나면 그대로 답한다 — 그사이 다른 프레임(핑)도 바로 처리된다
+    gate.clear()
+    await asyncio.wait_for(c._on_frame(_req("cidB", "c2", "api", {"verb": "GET", "path": "/api/x"})), 1)
+    await asyncio.wait_for(c._on_frame(_req("cidB", "c3", "ping", {})), 1)
+    assert c.ws.wire[-1] == {"v": 1, "type": "pong", "id": "c3", "cid": "cidB"}
+    gate.set()
+    await _drain(c)
+    assert c.ws.wire[-1]["id"] == "c2" and c.ws.wire[-1]["data"]["json"] == {"slow": "x"}
+
+
+@pytest.mark.asyncio
+async def test_auth_and_stream_start_keep_their_order(wired, monkeypatch):
+    """따로 도는 것은 느릴 수 있는 요청뿐 — 기기 인증 뒤의 요청은 인증된 상태를 보고, 스트림 시작 뒤의 입력은 그 스트림으로 간다."""
+    monkeypatch.setattr("session_manager.connector.connect", lambda url, **kw: _BlockCM())
+    monkeypatch.setattr("session_manager.connector._priv_ok", lambda params: True)
+    c = wired
+    await c._on_frame(_req("cidA", "t1", "terminal", {"session_id": SID}))
+    await c._on_frame(json.dumps({"v": 1, "type": "stream_in", "id": "t1", "cid": "cidA", "data": {"type": "input", "data": "ls"}}))
+    assert c.stream_in[("cidA", "t1")].qsize() == 1          # 시작이 끝난 뒤 입력 — 큐가 이미 있다
+    c.streams[("cidA", "t1")].cancel()
+    await _ticks()
