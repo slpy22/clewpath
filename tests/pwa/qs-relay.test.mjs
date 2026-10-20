@@ -188,3 +188,53 @@ test("T42 릴레이 PC 전환(머리 줄·저장된 PC·새 PC 페어링 × 평�
   });
   assert.deepEqual(got, all(paths, { closedOnA: 3, closedOnB: [], oldSocket: 2, newReq: "pending", newEof: 0, resched: 0, current: true, finishedToast: false }));
 });
+
+// ---------------------------------------------------------------- 검토 2회차: 진행 중이던 연결 시도와 PC 전환
+// 재접속 백오프 타이머(1초 이상)는 붙잡아 손으로 돌린다 — 실제 시간을 기다리지 않고, 재접속이 하나 더 걸리는지 센다
+function holdTimers(ctx) {
+  const timers = [], realT = ctx.setTimeout;
+  ctx.setTimeout = (f, ms) => (ms >= 1000 ? (timers.push(f), 0) : realT(f, ms));
+  return timers;
+}
+async function bootConn({ setup = null } = {}) {
+  const ctx = await load({ setup: (sb) => { sb.localStorage.setItem("sm_room", "roomA"); if (setup) setup(sb); } });
+  for (const id of ["paneDetail", "app", "head", "paneList", "p-err", "p-go"]) ctx.document._register(id, stubEl(id === "p-go" ? "button" : "div"));
+  ctx.document.getElementById("app").setAttribute("data-view", "list");
+  const timers = holdTimers(ctx);
+  ev(ctx, `innerWidth = 1400; globalThis.__toasts = []; toast = (m) => __toasts.push(m); enterApp = () => {};
+    globalThis.__loads = 0; loadList = async () => { __loads++; }; maybeShowIosHint = () => {}; refreshPushBtn = () => {}; refreshVer = async () => {};`);
+  return { ctx, timers };
+}
+const until = async (f, n = 150) => { for (let i = 0; i < n && !f(); i++) await tick(20); return f(); };
+
+test("T43 릴레이: 재접속 connect() 가 진행 중일 때 PC 를 바꿔도 그 시도의 실패가 재접속을 하나 더 걸지 않는다 — 전환 소켓이 지금 연결로 남는다", async () => {
+  const run = async (inFlight) => {
+    const { ctx, timers } = await bootConn();
+    ev(ctx, TWO_PCS);
+    const sockets = browserWs(ctx);
+    const wsA = await connectWs(ctx, sockets, "roomA");
+    let pending = null;
+    if (inFlight) {
+      wsA.finishClose(); await tick();                                   // 망이 잠깐 끊김(1006) → 재접속 예약
+      if (timers.length !== 1) throw new Error("재접속 예약이 없음");
+      timers.shift()();                                                   // 1초 뒤 재접속 — 새 소켓이 hello 를 기다린다(진행 중)
+      await until(() => sockets.length === 2);
+      pending = sockets.at(-1);
+    }
+    const n = sockets.length;
+    const pSwitch = ev(ctx, "switchToPc({ room: 'roomB', name: 'B' })");   // 그 순간 머리 줄에서 PC B 로
+    await until(() => sockets.length > n);
+    const wsB = sockets.at(-1); wsB.open(); wsB.push({ type: "hello", peer_present: true, cid: "cB" });
+    await pSwitch; await settle();
+    (pending || wsA).finishClose(); await settle();                       // 내려놓은 소켓의 닫기 핸드셰이크가 끝남
+    const queued = timers.length;
+    while (timers.length) timers.shift()();                              // 걸린 재접속이 있으면 돌린다
+    await settle();
+    return { reconnectQueued: queued, sockets: sockets.length, current: ev(ctx, "conn.ws") === wsB, switchOpen: wsB.readyState,
+             reconnectedToast: ev(ctx, "__toasts.filter((m) => m === '다시 연결됨').length"), loads: ev(ctx, "__loads") };
+  };
+  assert.deepEqual({ control: await run(false), inFlight: await run(true) }, {
+    control: { reconnectQueued: 0, sockets: 2, current: true, switchOpen: 1, reconnectedToast: 0, loads: 0 },
+    inFlight: { reconnectQueued: 0, sockets: 3, current: true, switchOpen: 1, reconnectedToast: 0, loads: 0 },
+  });
+});
