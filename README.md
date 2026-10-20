@@ -44,6 +44,9 @@
 파이썬도, PowerShell 7 도, 내려받을 파일도 **없어도 된다** — 설치 명령 한 줄이
 전부 알아서 챙긴다.
 
+> **맥·리눅스**는 아직 시험 중이다 — 한 줄 설치가 공개되지 않았고, 게시되는 릴리스도 Windows 전용이다.
+> 시험하는 방법은 아래 상세 레퍼런스의 「맥·리눅스 (시험용)」 절.
+
 ## 2. 설치 (5분)
 
 **터미널을 열고**(⊞ Win 키 → "powershell" 입력 → 엔터) 아래 한 줄을 붙여넣는다:
@@ -209,6 +212,72 @@ Remove-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name 
 
 # 상세 레퍼런스
 
+## 맥·리눅스 (시험용 — 한 줄 설치는 아직 공개 전)
+
+> **아직 일반 사용자용이 아니다.** 맥·리눅스 설치·업데이트·제거 스크립트는 만들었지만 검증은 리눅스 시험 컨테이너에서만 했고,
+> 맥 실기 시험은 다음 단계다. 진행 상황은 `docs/designs/multi-os.md`, 설계는 `docs/designs/posix-install.md`.
+>
+> - **한 줄 설치(`curl … | sh`)는 아직 공개되지 않았다.** 부트스트랩 스크립트 `ops/get.sh` 는 저장소에만 있고,
+>   컨트롤플레인의 `/get.sh` 주소는 맥 단계에서 연다.
+> - **게시되는 릴리스는 Windows 전용**이다(매니페스트 `platforms=["win"]`). 맥·리눅스 설치본은 그 릴리스를 받지 않는다 —
+>   `get.sh` 는 설치를 거부하고, 설치본은 그 버전으로 업데이트하지 않는다.
+
+| | Windows | 맥·리눅스 (시험용) |
+|---|---|---|
+| 설치 | `get.ps1` → `install.ps1` | (공개 전) `get.sh` → `install.sh` |
+| 설치 위치 | `%LOCALAPPDATA%\ClewPath\app` | 맥 `~/Library/Application Support/ClewPath/app`<br>리눅스 `${XDG_DATA_HOME:-~/.local/share}/clewpath/app`<br>`CLEWPATH_HOME` 으로 바꾼다. uv 는 그 아래 `bin/`, uv 가 받은 파이썬은 `python/` |
+| 파이썬 | 서명된 시스템 파이썬, 없으면 uv 런타임 | 리눅스: 시스템 파이썬 3.11 이상, 없으면 uv 런타임 · 맥: uv 런타임만 |
+| 데이터 폴더 | `~/.claude/session_manager` | 같다. 폴더는 0700(설치할 때 안의 파일도 다른 사용자 권한을 뺀다), 설정 파일 0600 |
+| 켜기·끄기 | 예약 작업 | 설치 폴더의 `start-connector.sh` (아래 표) |
+| 자동 시작 | 로그온 + 5분마다 확인(예약 작업) | **아직 없다** — 맥 launchd 는 다음 단계(리눅스 systemd 는 정식 지원 여부와 함께 결정 전). 그동안 직접 켜거나 임시 감시(`watch`) |
+| 업데이트 적용 | `update_runner.ps1` | `update_runner.sh` — 같은 순서(교체 → 의존성 → 재기동 → 헬스체크 → 실패하면 롤백) |
+| 제거 | 위 8절(손으로) | `uninstall.sh` |
+| 아직 안 되는 것 | — | 자동 시작, 키체인(비밀은 파일 권한으로 지킨다), PC 에서 '새 터미널 창으로 재개'(명령어만 알려 준다) |
+
+**시험해 보기**
+
+1. **컨테이너 왕복**(운영 서버·서명 키를 쓰지 않는다) — docker 가 있는 PC 의 저장소에서
+   `python -m pytest -m posix_e2e tests/test_posix_e2e.py`. 가짜 컨트롤플레인과 시험 키로 리눅스 `*-test` 컨테이너 안에서
+   `get.sh` → 설치 → 런처 → 업데이트 → 롤백 → 제거를 돈다(약 4분, 자세히는 `tests/posix_e2e/README.md`).
+2. **손으로**(시험 PC·가상 머신) — 운영자가 만든 배포 zip(`ops/package-for-user.ps1`)을 설치할 폴더에 풀고 그 폴더에서:
+
+   ```sh
+   sh install.sh --dry-run     # 점검만(아무것도 바꾸지 않는다)
+   sh install.sh               # 이 폴더에 설치하고 띄운다
+   ```
+
+   - 일반 사용자로 실행한다(root·sudo 로는 설치하지 않는다). 옵션은 `sh install.sh --help`.
+   - 토큰을 줄 때는 인자 대신 환경변수로: `CLEWPATH_CLIENT_TOKEN=… sh install.sh` (인자는 같은 PC 의 다른 사용자에게 `ps` 로 보인다).
+   - 준비물: `curl`(uv 내려받기와 클로드 상태 훅), `unzip`, 이 PC 에서 클로드 코드를 써 본 적(`~/.claude/projects`).
+   - 새 zip 으로 바꾸려면 `sh uninstall.sh --yes` 로 지운 뒤(데이터는 남는다) 새 zip 을 풀어 다시 설치한다.
+
+**서비스 관리** — 설치 폴더의 멱등 런처 `start-connector.sh`(이미 떠 있으면 아무것도 안 한다). 다른 폴더에서는 경로째 친다
+(설치가 끝날 때 전체 경로로 다시 보여 준다).
+
+| 하고 싶은 것 | 방법 |
+|---|---|
+| 지금 켜기 | `sh start-connector.sh` |
+| 상태 보기 | `sh start-connector.sh status` — `state=running` 이면 정상. `url=`·`pid=`·`watch_pid=` 도 나온다 |
+| 끄기 | `sh start-connector.sh stop` — 계속 꺼 두려면 `sh start-connector.sh stop --hold`(감시·업데이트가 다시 띄우지 않는다), 다시 켜기는 `sh start-connector.sh resume` |
+| 꺼지면 다시 띄우기(임시) | `nohup sh start-connector.sh watch >/dev/null 2>&1 &` — 자동 시작이 생기기 전까지. 끝내려면 `status` 의 `watch_pid` 를 `kill` |
+| 경로 보기 | `sh start-connector.sh paths` — 설치 폴더·데이터 폴더·설정 파일·파이썬 |
+| 로그 | `~/.claude/session_manager/host.log`(오류 `host.err.log`, 런처 기록 `launcher.log`) |
+
+`stop` 은 열린 ClewPath 터미널(터미널 관리 프로세스)을 끝내지 않는다 — 다시 켜면 이어 붙는다(Windows 의 재기동·업데이트와 같다).
+
+**제거** — 설치 폴더에서:
+
+```sh
+sh uninstall.sh                # 확인을 묻고 감시·Host·터미널 관리 프로세스를 멈춘 뒤 설치 폴더를 지운다
+sh uninstall.sh --yes          # 묻지 않고
+sh uninstall.sh --purge-data   # 데이터 폴더(기기 페어링·자격증명·설정)도 — 폰을 다시 페어링해야 한다
+sh uninstall.sh --purge-uv     # ClewPath 가 받은 uv·파이썬 런타임도
+sh uninstall.sh --purge        # 둘 다
+```
+
+클로드 세션 원본(`~/.claude/projects/`)은 어떤 경우에도 남는다. Host 가 클로드 설정(`~/.claude/settings.json`)에 등록한
+상태 훅(Windows 와 같은 방식)도 지우지 않는다 — 클로드의 파일이라 남은 훅과 지우는 방법만 알려 준다.
+
 ## 폴더 구조
 
 ```
@@ -216,12 +285,14 @@ Remove-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name 
 ├─ session_manager/   제품 코드 — Host (로컬 웹 + 커넥터 + 업데이터)     [사용자 배포]
 ├─ pwa/               제품 코드 — 폰·웹 앱 (단일 html)                   [사용자 배포]
 ├─ install.ps1        사용자 설치 스크립트                                [사용자 배포]
+├─ install.sh · uninstall.sh   맥·리눅스 설치·제거 (시험용)              [사용자 배포]
 ├─ pyproject.toml · uv.lock · README.md · LICENSE                        [사용자 배포]
 ├─ tests/             테스트 (배포 안 됨, Host 전용)
 ├─ docs/              Host 설계·API·MCP 문서 (배포 안 됨)
 └─ ops/               ★운영자 전용 — 배포 zip 에 절대 안 들어감
    ├─ start-public.ps1     운영자 PC 의 006 기동 (라이브 비밀 포함)
    ├─ package-for-user.ps1 배포 zip 생성 (비밀·키 스캔 게이트)
+   ├─ get.sh               맥·리눅스 원라인 설치 부트스트랩 (CP 공개 전 보관 — 공개 때 007 로)
    ├─ tools/sign_release.py  릴리스 서명·게시
    ├─ release-keys/        ★릴리스 서명 개인키 (유출=전 사용자 장악)
    ├─ dist/                패키징 산출물 (zip·manifest)
@@ -276,8 +347,11 @@ app_url   = "https://clewpath.pyongso.com/relay/app"
 
 - **매니페스트는 오프라인 릴리스 키로 서명**된 EdDSA JWT다. 공개키는 `session_manager/updater.py` 의 `RELEASE_KEYS` 에 **박혀 있다**(네트워크로 받지 않는다).
 - 릴리스 키는 **CP 의 JWKS 키가 아니다.** CP 개인키는 CP 자신의 DB에 살기 때문에, 그 키로 서명하면 "CP가 뚫려도 코드는 못 민다"가 성립하지 않는다. 릴리스 개인키는 서버에 올라가지 않는다.
-- 교체는 설치 폴더 **밖**에서 도는 별도 프로세스가 한다(실행 중인 파이썬은 자기 코드를 못 덮어쓴다).
-- 갈아끼우는 것: `session_manager/ pwa/ pyproject.toml uv.lock install.ps1 README.md` (서버 전용 코드는 배포되지 않음)
+- 교체는 설치 폴더 **밖**에서 도는 별도 프로세스가 한다(실행 중인 파이썬은 자기 코드를 못 덮어쓴다). Windows 는 `update_runner.ps1`,
+  맥·리눅스는 `update_runner.sh` 다. 맥·리눅스 쪽은 같은 파일 시스템 안에서 rename 으로 갈아끼우며 옮긴 것을 저널에 적어 두어,
+  중간에 끊겨도 다음 기동·재설치가 되돌린다.
+- 갈아끼우는 것: `session_manager/ pwa/ pyproject.toml uv.lock install.ps1 install.sh uninstall.sh README.md LICENSE` (서버 전용 코드는 배포되지 않음)
+- 받는 OS: 매니페스트의 `platforms`(`win`·`mac`·`linux`)에 자기 OS 가 있어야 받는다. 없으면 Windows 전용으로 본다(0.28 까지의 릴리스).
 - 의존성은 `uv sync --frozen` 으로 **`uv.lock` 기준** 설치된다 — pyproject 에 의존성을 추가하고 `uv lock` 을 안 하면 설치본에는 영원히 안 깔린다(0.10.5 psutil 사고). `ops/release.ps1` 이 `uv lock --check` 로 막는다(단 uv 를 못 찾으면 경고만 하고 넘어가고, 아래 수동 package→sign→publish 경로는 이 검사를 거치지 않으니 직접 `uv lock --check` 를 돌릴 것).
   **남는 것**: `.venv`, 그리고 `~/.claude/session_manager/` 전체(설정·기기·자격증명).
 - 실패하면 백업으로 되돌리고 **파일뿐 아니라 설치 메타데이터까지** 복원한다. 안 그러면 코드는 구버전인데 자기를 신버전이라 보고하며 다시는 업데이트를 안 받는다.
@@ -370,6 +444,8 @@ session_manager/
 ├── liveness.py     비정상 종료 감지 · 자기 회복
 ├── jobguard.py     자식 프로세스 동반 종료(Job Object)
 ├── jsonl_log.py    감사 로그 공용 기록(잠금+회전)
+├── osdep/          OS 경계 — Windows(_win)·맥·리눅스(_posix): pty·프로세스·런처·업데이트 러너·포트 판정
+├── hostctl.py      맥·리눅스 install.sh 도우미(경로·설정·런처 렌더·자격증명 발급 — 설치 때만)
 └── server.py       FastAPI + UI 서빙
 pwa/index.html      단일 파일 PWA(로컬 화면·릴레이 앱·Capacitor 앱 공용)
 pwa/native-bridge.js  앱 전용 브리지
@@ -378,13 +454,21 @@ pwa/native-bridge.js  앱 전용 브리지
 ## 테스트
 
 ```bash
-python -m pytest tests/ -q                      # 파이썬 483개(fixture 기반, 실제 ~/.claude 안 건드림)
-node --test --test-reporter=tap tests/pwa/*.test.mjs   # PWA 90개(node:vm 하네스로 index.html 통째 부트)
+python -m pytest tests/ -q                      # 파이썬(fixture 기반, 실제 ~/.claude 안 건드림)
+node --test --test-reporter=tap tests/pwa/*.test.mjs   # PWA(node:vm 하네스로 index.html 통째 부트)
 python -m pytest -q -m e2e -o addopts="" tests/e2e      # 실 CP 페어링 e2e(SM_E2E_CP_URL 있을 때만)
+python -m pytest -m posix_e2e tests/test_posix_e2e.py   # 맥·리눅스 설치 왕복(리눅스 *-test 컨테이너, docker 필요)
 ```
 
 e2e 는 실제 CP 에 `e2e-` 로 시작하는 임시 커넥터(room)를 만든다. `SM_E2E_ADMIN_TOKEN` 을 주면 끝날 때 지우고,
 없으면 남는다(나중에 관리자 API 로 정리). `release.ps1` 은 `SM_E2E_CP_URL` 이 있을 때만 이 단계를 돈다.
+
+맥·리눅스 쪽: 셸 스크립트의 정적 계약(`tests/test_posix_scripts.py`)은 모든 OS 에서 돈다 — Windows 는 Git for Windows 의
+`sh`·`dash`·`bash` 가 PATH 에 있으면 문법 검사까지. 스크립트를 실제로 돌리는 시험(`test_launcher_sh`·`test_update_runner_sh`·
+`test_install_sh`, `test_get_sh` 의 실행 부분)은 Windows 에서 건너뛰고 리눅스 컨테이너(`python:3.11-slim`, 일반 사용자,
+`--network none`)의 전체 pytest 로 돈다. 컨테이너 왕복(`-m posix_e2e`)은 가짜 컨트롤플레인과 시험 키만 쓰고, 통과하면
+`ops/logs/posix-e2e-<버전>.json` 을 남긴다 — `release.ps1 -Platforms` 에 mac·linux 를 넣는 릴리스는 같은 커밋의 이 기록이 있어야
+한다(자세히 `tests/posix_e2e/README.md`).
 
 ## 주의
 

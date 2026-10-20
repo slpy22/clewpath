@@ -1,6 +1,7 @@
 # 맥·리눅스 공통 설치·업데이트 스크립트 구현 명세 (v1, 결정 반영)
 
-> 상태: 검토용 초안, 2026-10-20 작성
+> 상태: 2026-10-20 작성 → 1~9단계 구현·시험 완료(`posix-install` 브랜치, 2026-10-21), main 합침·맥 단계(3b) 대기.
+> 진행 표는 `docs/designs/multi-os.md`, 남은 일은 TODOS 「멀티 OS」·「별건: Windows 기존 결함」
 > 범위: 멀티 OS 계획(`006/docs/designs/multi-os.md`) 가운데 맥·리눅스 공통 설치·업데이트 단계와 리눅스 `*-test` 시험장
 > 근거: 읽기 전용 조사 세 건(설치 부트스트랩, 자동 업데이트, 기동·자기 회복)과 이 문서를 쓰면서 원본을 다시 읽어 확인한 내용. 006·007·nginx·compose 파일은 읽기만 했고 아무것도 바꾸지 않았다. `ops/release-keys/private.pem`은 열지 않았다.
 > 표기:
@@ -115,6 +116,19 @@ sh ROOT/uninstall.sh                   멈춤(watch·Host·브로커는 확인 �
 
 릴리스는 Windows 전체 회귀와 컨테이너 e2e를 통과한 뒤 `platforms=["win"]`로 낸다. Windows 사용자에게도 배포되는 릴리스다.
 
+**구현 메모 (9단계 문서, 2026-10-21)**
+- README: 상세 레퍼런스에 「맥·리눅스 (시험용 — 한 줄 설치는 아직 공개 전)」 절을 두고 사용자 매뉴얼 1절(준비물)에서 가리킨다.
+  번호 절(1~9)은 Windows 그대로라 'README 8절' 같은 참조가 바뀌지 않는다. 공개 주소(`…/get.sh`)는 적지 않았다 — 지금 붙여 넣으면
+  안 되는 명령이라서. 업데이트 교체 목록을 PAYLOAD 와 맞췄다(전엔 LICENSE 도 빠져 있었다).
+- multi-os.md: 단계 표의 3 을 3a(이번, 공통 설치·업데이트)·3b(맥 실기)로 나누고 상태 칸을 더했다. 「3a 결과」 절.
+- TODOS: 멀티 OS 3a 진행(1~9)·합침·후속, 3b, 리눅스 정식 지원(결정 전), 양 OS 별건(Q5·Q15·Q16·R6), 그리고 8.1 R15 의 Windows
+  기존 결함 ①~⑦ 을 별건 절로(건마다 왜·무엇·시작점).
+- CHANGELOG 는 손대지 않았다(1.1-5 와 다름) — 릴리스 때 `release.ps1 -PrepareChangelog` 가 쓴다.
+- 문서와 코드가 어긋나지 않게 `tests/test_docs_multi_os.py`: README 가 보여 주는 명령·옵션·환경변수·저장소 경로가 스크립트에 있는지,
+  사용자가 쓸 런처 하위 명령·제거 옵션이 빠짐없는지, 설치 위치·파이썬 최소 버전·자동 시작 없음·'Windows 전용 릴리스' 말이 코드와
+  같은지, README 에 공개 전 get.sh 주소가 없는지, 교체 목록 = PAYLOAD, 단계 표, TODOS 의 R15 ①~⑦ = 이 문서 8.1.
+  CP `/get.sh` 를 열 때 그 시험('공개 주소 없음')도 함께 바꾼다.
+
 ## 2. 파일 목록
 
 ### 2.1 새 파일
@@ -136,6 +150,7 @@ sh ROOT/uninstall.sh                   멈춤(watch·Host·브로커는 확인 �
 | `tests/test_update_runner_sh.py` | 006 | 없음 | 없음 | POSIX 실행 시험 |
 | `tests/posix_e2e/` (`build_fixtures.py`, `fake_cp.py`, `e2e_driver.py`, `Dockerfile`, `warm_cache.sh`, `README.md`) | 006 | 없음 | 없음 | 컨테이너 e2e 재료 |
 | `tests/test_posix_e2e.py` | 006 | 없음 | 없음 | `-m posix_e2e`. 기본 실행에서는 빠진다 |
+| `tests/test_docs_multi_os.py` | 006 | 없음 | 없음 | 문서 계약(9단계) — README 맥·리눅스 절·multi-os 단계 표·TODOS 가 코드·이 문서와 맞는지. 모든 OS |
 
 ### 2.2 바꿀 파일
 
