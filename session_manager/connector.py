@@ -99,7 +99,7 @@ PROOF_HEADER = "X-ClewPath-Relay-Proof"
 DEVICE_HEADER = "X-ClewPath-Device"
 _LOCAL_ONLY_API = re.compile(
     r"^/api/(owner/(devices(/|$|\?)|services(/|$|\?)|2fa/(provision|toggle)|skills/[^/]+/install|trash/)"
-    r"|sessions/[^/]+/terminal/start|v1/team(/|$|\?))")
+    r"|sessions/[^/]+/terminal/start|v1/team(/|$|\?)|services/)")
 # update/apply 는 0.10.5 부터 로컬 전용이 아니라 특권(2FA) — 원격에서 Host 업데이트(사장님 2026-09-30).
 # 실행되는 코드는 CP 가 서명한 패키지뿐(Host 가 서명·해시 검증)이라 원격 트리거의 위험은 '재기동' 에 국한된다.
 
@@ -108,7 +108,7 @@ def _is_local_only_api(path: str, verb: str) -> bool:
     """릴레이 경유로는 절대 호출될 수 없는 경로. 기기 목록(GET)도 포함 — 이름·접속 시각 누출 방지."""
     if not _LOCAL_ONLY_API.match(path or ""):
         return False
-    if path.startswith(("/api/owner/devices", "/api/owner/services")) or path.startswith("/api/v1/team"):
+    if path.startswith(("/api/owner/devices", "/api/owner/services", "/api/services/")) or path.startswith("/api/v1/team"):
         return True                      # 모든 동사(팀 명부: eng E-2 — 폰은 세션에 요청)
     return verb == "POST"
 

@@ -5608,7 +5608,7 @@ function teamEventText(e){
   if(e.kind==='msg_failed') return String(p.error||'').slice(0,120);
   return p.note||p.goal||'';
 }
-const APPROVAL_KIND={team_create:'팀 만들기', team_archive:'팀 보관', team_delete:'팀 삭제', team_purge:'보존본 지우기', assistant_set:'비서 지정', session_send:'세션에 일 전달',
+const APPROVAL_KIND={team_create:'팀 만들기', team_archive:'팀 보관', team_delete:'팀 삭제', team_purge:'보존본 지우기', assistant_set:'비서 지정', session_send:'세션에 일 전달', service_register:'외부 서비스 등록',
   delegate:'일감 위임', task_decide:'결과 승인/반려/취소', profile_decide:'사장님 프로필 결정'};
 async function showApprovals(){
   let r; try{ r=await T.api('GET','/api/owner/approvals'); }catch(e){ toast('승인 목록 실패: '+e.message); return; }

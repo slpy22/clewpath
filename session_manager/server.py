@@ -47,6 +47,17 @@ class ServiceReq(BaseModel):
     status: str | None = None
 
 
+class ServiceRequestReq(BaseModel):
+    """외부 서비스 등록 신청(S3). bases = {용도: {"new": 프로필} | {"adopt": 세션 id}}."""
+    id: str
+    name: str = ""
+    folder: str
+    purpose: str = ""
+    bases: dict
+    limits: dict | None = None
+    requested_by: str | None = None
+
+
 class TitleReq(BaseModel):
     """네이티브 세션 이름(Ctrl+R custom-title) 설정 바디."""
     title: str
@@ -1941,6 +1952,27 @@ def create_app() -> FastAPI:
             policy.audit({"event": "service_update", "service": sid,
                           **{k: v for k, v in (("status", body.status), ("bases", body.bases)) if v is not None}})
             return {"service": rec}
+        return _svc_call(request, run)
+
+    # ---- 서비스 대장 S3: 등록 신청 → 사장님 승인(폰/2FA) → claim 으로 토큰 1회. 신청·claim 은 이 PC 의 세션만 ----
+    from session_manager import servicereg as _sreg
+
+    @app.post("/api/services/requests")
+    def service_request(body: ServiceRequestReq, request: Request):
+        return _svc_call(request, lambda: _sreg.request(body.id, body.name, body.folder, body.bases, body.purpose,
+                                                        body.limits, body.requested_by))
+
+    @app.get("/api/services/requests/{rid}")
+    def service_request_view(rid: str, request: Request):
+        return _svc_call(request, lambda: _sreg.view(rid))
+
+    @app.post("/api/services/requests/{rid}/claim")
+    def service_request_claim(rid: str, request: Request, body: dict = Body(...)):
+        def run():
+            r = _sreg.claim(rid, str(body.get("claim") or ""))
+            policy.audit({"event": "service_create", "service": r["service"]["id"], "bases": r["service"]["bases"],
+                          "via": "request", "request": rid})
+            return r
         return _svc_call(request, run)
 
     @app.post("/api/owner/services/{sid}/rotate")
