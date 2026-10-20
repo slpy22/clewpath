@@ -364,3 +364,143 @@ def test_local_http_keepalive_expires_before_host_server_closes():
     c = _conn()
     expiry = c.http._transport._pool._keepalive_expiry
     assert expiry is not None and expiry <= server_keepalive - 2, (expiry, server_keepalive)
+
+
+# ---- 검토 4회차: 따로 도는 요청의 답 — 봉투로 받은 요청은 봉투로만, 받은 뒤 그 기기가 끝났으면(떠남·해제·릴레이 재접속) 보내지 않는다 ----
+# 받을 때 정하지 않고 보낼 때 정하면, 그 사이 릴레이가 위조한 client_offline(enc_cids 에서 뺌) + 평문 ping(떠남 표시를 풂) 두 프레임만으로
+# 봉투로 받은 요청의 답(대화·목록·2차 인증 유예 토큰)이 평문으로 나갔다. E2EE 가 막아야 할 상대가 바로 릴레이다.
+
+def _env(key, cid, inner):
+    from session_manager import e2ee
+    return json.dumps({"v": 1, "e": "a1", "cid": cid, "p": e2ee.seal_payload(key, inner)})
+
+
+def _opened(key, wire):
+    """선에 나간 프레임 — 봉투면 열어서(sealed 표시와 함께)."""
+    from session_manager import e2ee
+    return [({**e2ee.unwrap_frame(key, f), "sealed": True} if f.get("e") else {**f, "sealed": False}) for f in wire]
+
+
+async def _e2ee_phone(monkeypatch, *, cid="cidA"):
+    """진짜 기기 인증(enforced 그대로)으로 붙은 E2EE 폰 하나 + Host 에서 기다리는 GET(gate)·바로 끝나는 POST."""
+    import os
+
+    from session_manager import devices
+    key = os.urandom(32)
+    c = _conn()
+    c.ws = _RelayWS()
+    c.e2ee_key = key
+    gate, hits = asyncio.Event(), []
+
+    async def _get(url, params=None, headers=None):
+        hits.append(("GET", url, dict(headers or {})))
+        await gate.wait()
+        return _Resp({"transcript": "SECRET-" + url.rsplit("/", 2)[-2]})
+
+    async def _post(url, params=None, json=None, headers=None, **kw):
+        hits.append(("POST", url, dict(headers or {})))
+        return _Resp({"ok": True})
+    monkeypatch.setattr(c.http, "get", _get)
+    monkeypatch.setattr(c.http, "post", _post)
+    dev = devices.add_device("phone")
+    await c._on_frame(_env(key, cid, {"v": 1, "type": "req", "id": "c1", "method": "auth", "params": {"token": dev["token"], "pv": 2}}))
+    assert cid in c.authed and cid in c.enc_cids
+    return c, key, gate, hits, dev
+
+
+def _answers(key, c, rid):
+    return [f for f in _opened(key, c.ws.wire) if f.get("type") == "res" and f.get("id") == rid]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("require", [False, True])
+async def test_forged_offline_and_plaintext_ping_never_release_a_sealed_answer(fake_claude_home, monkeypatch, require):
+    """릴레이가 위조할 수 있는 두 프레임(client_offline + 평문 ping — ping 은 [e2ee] require 에도 막히지 않는다)이 봉투로 받은 요청의
+    답을 평문으로 내보냈다. 받은 뒤 그 기기가 떠났으면(위조라도) 그 답은 보내지 않는다."""
+    from session_manager import appconfig
+    orig = appconfig.get_bool
+    monkeypatch.setattr(appconfig, "get_bool", lambda s, k, d: True if (s, k) == ("e2ee", "require") and require else orig(s, k, d))
+    c, key, gate, hits, _ = await _e2ee_phone(monkeypatch)
+    await c._on_frame(_env(key, "cidA", {"v": 1, "type": "req", "id": "c2", "method": "api",
+                                         "params": {"verb": "GET", "path": "/api/sessions/S1/messages"}}))
+    await _ticks()
+    assert hits, "요청이 Host 에서 기다리는 중"
+    await c._on_frame(json.dumps({"v": 1, "type": "peer", "event": "client_offline", "cid": "cidA"}))
+    await c._on_frame(json.dumps({"v": 1, "type": "ping", "id": "x", "cid": "cidA"}))
+    gate.set()
+    await _drain(c)
+    assert _answers(key, c, "c2") == [], "떠난(위조라도) 뒤의 답은 평문으로도 봉투로도 나가지 않는다"
+    assert not any("SECRET" in json.dumps(f) for f in c.ws.wire)
+
+
+@pytest.mark.asyncio
+async def test_answer_from_previous_relay_connection_is_not_sent_on_the_new_one(fake_claude_home, monkeypatch):
+    """커넥터만 릴레이에 다시 붙고(같은 cid 의 폰은 그대로) 그 cid 로 평문 ping 이 오면, 이전 연결에서 받은 요청의 답이 새 연결로 평문으로
+    나갔다. 이전 연결에서 받은 요청의 답은 보내지 않는다 — 폰은 PC 가 떠난 것으로 보고 그 대기를 이미 끝냈다(agent_offline)."""
+    c, key, gate, hits, dev = await _e2ee_phone(monkeypatch)
+    await c._on_frame(_env(key, "cidA", {"v": 1, "type": "req", "id": "c2", "method": "api",
+                                         "params": {"verb": "GET", "path": "/api/sessions/S1/messages"}}))
+    await _ticks()
+    c._on_connected()                                     # 릴레이 재접속(run() 이 부르는 것)
+    await c._on_frame(json.dumps({"v": 1, "type": "ping", "id": "x2", "cid": "cidA"}))
+    # 진짜 폰은 agent_online 에 봉투로 다시 인증한다 — 그 답은 봉투로 간다
+    await c._on_frame(_env(key, "cidA", {"v": 1, "type": "req", "id": "c3", "method": "auth", "params": {"token": dev["token"], "pv": 2}}))
+    gate.set()
+    await _drain(c)
+    assert _answers(key, c, "c2") == []
+    a = _answers(key, c, "c3")
+    assert len(a) == 1 and a[0]["sealed"] and a[0]["ok"] is True
+    assert all(f.get("e") for f in c.ws.wire), "봉투로 말한 기기 앞 프레임은 모두 봉투"
+
+
+@pytest.mark.asyncio
+async def test_relay_injected_plaintext_request_under_an_e2ee_device_is_answered_sealed_or_not_at_all(fake_claude_home, monkeypatch):
+    """[e2ee] require 가 꺼져 있으면(기본) 릴레이가 E2EE 폰의 cid 로 평문 요청을 넣을 수 있다 — 그 답은 봉투로만 간다(평문 ✗).
+    위조한 client_offline + 평문 ping 을 이어 보내도 평문으로 나가지 않는다."""
+    c, key, gate, hits, _ = await _e2ee_phone(monkeypatch)
+    gate.set()
+    await c._on_frame(_req("cidA", "c2", "api", {"verb": "GET", "path": "/api/sessions/S2/messages"}))
+    await _drain(c)
+    a = _answers(key, c, "c2")
+    assert len(a) == 1 and a[0]["sealed"], a
+    gate.clear()
+    await c._on_frame(_req("cidA", "c3", "api", {"verb": "GET", "path": "/api/sessions/S3/messages"}))
+    await _ticks()
+    await c._on_frame(json.dumps({"v": 1, "type": "peer", "event": "client_offline", "cid": "cidA"}))
+    await c._on_frame(json.dumps({"v": 1, "type": "ping", "id": "x", "cid": "cidA"}))
+    gate.set()
+    await _drain(c)
+    assert _answers(key, c, "c3") == []
+    assert not any(f.get("type") == "res" and not f.get("e") for f in c.ws.wire), "평문 답은 하나도 없다"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("follow_up", ["sealed", "plain"])
+async def test_revoked_device_gets_no_late_answer_even_if_it_keeps_talking(fake_claude_home, monkeypatch, follow_up):
+    """PC 에서 기기를 해제하면(drop_device) 그 기기가 프레임을 하나 더 보내도 해제 전에 받은 요청의 답은 가지 않는다 — 1eb2b26 의
+    '해제한 기기 앞 늦은 응답은 보내지 않는다'가 새 프레임 하나로 풀렸다(봉투면 봉투로, 평문이면 평문으로 나갔다)."""
+    from session_manager import devices
+    c, key, gate, hits, dev = await _e2ee_phone(monkeypatch)
+    await c._on_frame(_env(key, "cidA", {"v": 1, "type": "req", "id": "c2", "method": "api",
+                                         "params": {"verb": "GET", "path": "/api/sessions/S1/messages"}}))
+    await _ticks()
+    devices.revoke(dev["id"])
+    assert await c.drop_device(dev["id"], notice="device_removed") == 1      # /api/owner/devices/{id}/revoke 가 하는 것
+    ping = {"v": 1, "type": "req", "id": "c3", "method": "ping", "params": {}}
+    await c._on_frame(_env(key, "cidA", ping) if follow_up == "sealed" else _req("cidA", "c3", "ping", {}))
+    gate.set()
+    await _drain(c)
+    assert _answers(key, c, "c2") == []
+
+
+@pytest.mark.asyncio
+async def test_sealed_request_without_cid_is_answered_sealed(fake_claude_home, monkeypatch):
+    """cid 를 싣지 않은 봉투(옛 릴레이 — 또는 cid 를 지운 릴레이)의 답도 봉투로 — 전엔 cid 가 없으면 평문으로 답했다."""
+    import os
+    key = os.urandom(32)
+    c = _conn()
+    c.ws = _RelayWS()
+    c.e2ee_key = key
+    await c._on_frame(json.dumps({"v": 1, "e": "a1", "p": __import__("session_manager.e2ee", fromlist=["x"]).seal_payload(
+        key, {"v": 1, "type": "req", "id": "c1", "method": "ping", "params": {}})}))
+    assert len(c.ws.wire) == 1 and c.ws.wire[0].get("e") == "a1", c.ws.wire
