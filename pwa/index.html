@@ -1379,10 +1379,34 @@ let SELECTED_ID=null;
 const paneList=()=>$('#paneList'), paneDetail=()=>$('#paneDetail');
 function showListPane(){ $('#app').setAttribute('data-view','list'); }
 function showDetailPane(){ $('#app').setAttribute('data-view','detail'); }
-function detailPlaceholder(txt){ const p=paneDetail(); closeInlineMonitor(); p.classList.remove('term-mode','fb-mode','mon-mode'); p.innerHTML='';
+function detailPlaceholder(txt){ paneEnter('empty'); const p=paneDetail(); closeInlineMonitor(); p.classList.remove('term-mode','fb-mode','mon-mode'); p.innerHTML='';
   p.appendChild(el('div','detail-empty',txt||'왼쪽에서 세션을 선택하세요')); }
 function highlightSelected(){ document.querySelectorAll('.srow').forEach(r=>
   r.classList.toggle('sel', r.dataset.sid===SELECTED_ID)); }
+// ---- 화면 진입 기록(quick-switch §8 2단계) ----
+// 상세 칸 화면을 열 때마다 칸을 비우는 줄(closeInlineMonitor·classList.remove) '바로 앞'에서 부른다 — 클래스를 지운 뒤에는
+// 떠나는 화면이 터미널·편집기였는지 알 수 없다. 모자란 정리만 하고, 여러 번 불려도 안전하다(이미 한 정리는 다시 해도 무해).
+// PANE_NOW = 지금 상세 칸 화면 {kind, sid, key, gid, code, gen}(저장 안 함). gen 은 들어올 때마다 하나씩 — 응답을 기다리던
+// 옛 화면이 늦게 그리거나 실시간 연결을 열지 않게(뷰어 T5). 폰 관제 덮개는 상세 칸 밖이라 여기 들지 않는다.
+let PANE_NOW={kind:'empty', gen:0};
+function paneEnter(kind, ref){
+  const p=paneDetail(), r=ref||{};
+  if(kind!=='terminal'&&(p.classList.contains('term-mode')||termView.main)) leaveTerminalView();   // 연결·탭 배지를 닫는다 — 재연결·화면 복귀가 떠난 터미널로 끌고 가지 않게(T2)
+  if(kind!=='terminal') CURRENT_TERM_SID=null;                  // 그 세션 알림이 무시되지 않게(T3)
+  if(kind!=='viewer') closeLiveViewer();
+  if(kind!=='files'&&p.classList.contains('fb-mode')) fbKeepView();   // 편집기가 아직 붙어 있을 때 스크롤 위치를 둔다(T9)
+  closeLiveResume();                                            // 웹 재개를 떠나면 끝낸다 — 응답 중이면 그 응답이 끝난 뒤(결정 7)
+  PANE_NOW={kind, gen:PANE_NOW.gen+1, sid:r.session_id||null, key:(kind==='terminal'&&r.session_id)?tabKey(r):null,
+    gid:kind==='monitor'?(r.gid||null):null, code:kind==='ledger'?(r.code||null):null};
+  if(r.session_id&&(kind==='viewer'||kind==='detail'||kind==='resume'))   // 웹 재개는 그 세션 대화로 기억한다(§4-3)
+    paneMemSet('viewer', {sid:r.session_id, kind:kind==='detail'?'detail':'viewer', name:sessLabel(r), at:Date.now()});
+}
+// 화면 기억(§6-1) sm_pane_<PC> = {viewer:{sid, kind:'viewer'|'detail', name, at}, monitor:{team, gid, name, at}}. 기기·PC 마다 따로(§6-2).
+// PC 키는 로컬 화면 = local, 릴레이 = 그 PC 의 방 이름(sm_e2ee_<room> 과 같은 방식, hostVerKey 와 같은 구분) — 릴레이로 PC 를
+// 바꿔 써도 기억이 섞이지 않게. 3단계에서 sm_tabs·sm_fb_state2 도 이 키로 옮긴다. 저장이 막혀도(사생활 보호 창 등) 화면은 그대로 돈다.
+function paneKey(base){ return base+'_'+hostVerKey(); }
+function paneMem(){ const m=lsJson(paneKey('sm_pane'),{}); return (m&&typeof m==='object'&&!Array.isArray(m))?m:{}; }
+function paneMemSet(part, val){ const m=paneMem(); if(val) m[part]=val; else delete m[part]; lsSet(paneKey('sm_pane'), m); }
 
 // ---- UI helpers ----
 function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('show');
@@ -2386,6 +2410,7 @@ async function loadDetail(s){
   closeLiveViewer();                       // 뷰어 실시간 스트림 정리(있으면)
   SELECTED_ID=s.session_id; highlightSelected();
   CURRENT_TERM_SID=null;                   // 터미널 화면에서 벗어남
+  paneEnter('detail', s);                  // 칸을 비우기 바로 앞 — 떠나는 터미널·편집기 정리, 뷰어 칸 기억(quick-switch 2단계)
   const main=paneDetail(); closeInlineMonitor(); main.classList.remove('term-mode','fb-mode','mon-mode'); main.innerHTML=''; $('#head').textContent='세션 상세';
   main.appendChild(backbar('목록',()=>showListPane(),'tolist'));
   showDetailPane();
@@ -2593,6 +2618,7 @@ const termView={
     const wrap=el('div','term-wrap'); main.appendChild(wrap); this.wrap=wrap;
     if(MODE==='local') return;
     await loadXterm();
+    if(this.wrap!==wrap) return;   // 받는 사이 해체됐다(다른 화면으로 감) — 화면 꺼짐 방지·크기 감시를 새로 걸지 않는다
     // 터미널 표시 중 화면꺼짐 방지(§5) — 뷰당 1개. 실패해도 무해(iOS<16.4 등).
     if(navigator.wakeLock&&navigator.wakeLock.request){
       navigator.wakeLock.request('screen').then(l=>{this.wl=l;}).catch(()=>{}); }
@@ -3104,7 +3130,6 @@ function termComposer(o){
   return api;
 }
 async function loadTerminal(s, safe){
-  closeLiveViewer();                       // 뷰어 실시간 스트림 정리(있으면)
   let cred={};
   if(MODE==='relay'){ cred=await ensurePriv(); if(cred===null) return; }   // 외부 터미널 → grace/2차 인증
   if(safe) cred={...cred, safe:true};      // 권한확인 유지 - 프롬프트가 뜨고 원격 승인 가능
@@ -3119,6 +3144,9 @@ async function loadTerminal(s, safe){
   if(shouldConfirmTakeover(s,t0)){
     if(!confirm('다른 기기(화면)에서 이 세션을 보고 있습니다.\n여기로 가져오면 그쪽 화면은 입력이 막히고 "다른 기기에서 보는 중" 으로 바뀝니다.\n\n가져올까요?')) return;
   }
+  // 관문(2차 인증·인계 확인)을 지난 뒤에만 보던 화면을 정리한다 — 취소하면 보던 뷰어 실시간 연결이 그대로(T11)
+  closeLiveViewer();                       // 뷰어 실시간 스트림 정리(있으면)
+  paneEnter('terminal', s);                // 빠른 전환·칸 비우기 앞 — 떠나는 편집기 스크롤·웹 재개 정리(quick-switch 2단계)
   if(t0){ t0.s=s; t0.safe=!!safe; t0.dead=false; t0.act=false; t0.actN=0; t0.last=null; t0.taken=false; }   // 보는 순간 배지 소거
   else TABS.list.push({key, s, safe:!!safe, dead:false, act:false});
   TABS.active=key;
@@ -3162,6 +3190,8 @@ async function loadTerminal(s, safe){
   try{ await termView.mount(main); }catch(e){
     closeInlineMonitor(); main.classList.remove('term-mode','fb-mode','mon-mode'); main.innerHTML='';
     main.appendChild(el('div','term-note','xterm 로드 실패: '+e.message)); return; }
+  // xterm 을 처음 받는 사이 다른 화면으로 갔다(paneEnter 가 해체) — 늦게 붙어 보이지 않는 터미널에 연결이 남지 않게
+  if(termView.main!==main) return;
   termView.strip=strip;
   termView.attach(s, cred, safe, wasDead, wasTaken);
   renderTabBar(); saveTabs();
@@ -3169,9 +3199,13 @@ async function loadTerminal(s, safe){
 
 let _liveViewer=null;
 function closeLiveViewer(){ if(_liveViewer){ try{_liveViewer.close();}catch(e){} _liveViewer=null; } }
+// 웹 재개(claude -p) 닫기 손잡이 — 상세 칸을 떠날 때(paneEnter)와 폰 '‹ 목록'에서 부른다. 응답 중이면 그 응답이 끝난 뒤 닫는다(결정 7)
+let _liveResume=null;
+function closeLiveResume(){ const r=_liveResume; _liveResume=null; if(r){ try{ r.close(); }catch(e){} } }
 
 async function loadViewer(s){
   closeLiveViewer();
+  paneEnter('viewer', s); const gen=PANE_NOW.gen;   // 칸을 비우기 바로 앞. gen: 응답을 기다리는 사이 다른 화면으로 가면 늦게 그리지 않게(T5)
   const main=paneDetail(); closeInlineMonitor(); main.classList.remove('term-mode','fb-mode','mon-mode'); main.innerHTML=''; $('#head').textContent='뷰어';
   const bar=listBack();
   const badge=el('div','vlive off'); badge.appendChild(el('span','vdot'));
@@ -3182,12 +3216,13 @@ async function loadViewer(s){
   const pend={}; let lastTs='';
   try{
     const msgs=await fetchRecentMessages(s.session_id,300);
+    if(gen!==PANE_NOW.gen) return;   // 그사이 다른 화면으로 갔다 — 그리기·스크롤·실시간 연결 모두 하지 않는다(관제 뷰어 selGen 방식)
     wrap.innerHTML='';
     if(!msgs.length){ wrap.appendChild(el('div','empty','표시할 대화 없음')); }
     for(const m of msgs){ renderHistoryMsg(wrap,m,pend);
       if(m.timestamp&&m.timestamp>lastTs) lastTs=m.timestamp; }
     main.scrollTop=main.scrollHeight;
-  }catch(e){ wrap.innerHTML=''; wrap.appendChild(el('div','empty','뷰어 실패: '+e.message)); return; }
+  }catch(e){ if(gen!==PANE_NOW.gen) return; wrap.innerHTML=''; wrap.appendChild(el('div','empty','뷰어 실패: '+e.message)); return; }
   // 실시간 tail: 단일 세션 monitor 스트림을 붙여 새 메시지를 같은 카드로 append
   const setBadge=(on,txt)=>{ badge.className='vlive '+(on?'on':'off'); bt.textContent=txt; };
   const nearBot=()=> main.scrollHeight-main.scrollTop-main.clientHeight < 120;
@@ -3275,9 +3310,10 @@ async function loadResume(s, inplace, safe){
   let cred={};
   if(isIn){ cred=await ensurePriv(); if(cred===null) return; }   // 외부 in-place → grace/2차 인증
   if(safe) cred={...cred, safe:true};   // 일반 모드: 도구 자동허용 없이(웹은 물을 수 없어 거부됨)
+  paneEnter('resume', s);   // 2차 인증 뒤, 칸을 비우기 바로 앞 — 보던 뷰어 실시간·터미널·옛 재개 정리(quick-switch 2단계)
   const main=paneDetail(); closeInlineMonitor(); main.classList.remove('term-mode','fb-mode','mon-mode'); main.innerHTML='';
   $('#head').textContent='재개'+(safe?' (일반)':'');
-  main.appendChild(listBack(()=>{ sess&&sess.close(); }));
+  main.appendChild(listBack(()=>closeLiveResume()));   // 폰 '‹ 목록'도 화면을 떠나는 것 — 응답 중이면 그 응답이 끝난 뒤 닫는다(결정 7)
   showDetailPane();
   const stream=el('div','stream'); main.appendChild(stream);
   stream.appendChild(el('div','result', isIn
@@ -3294,6 +3330,10 @@ async function loadResume(s, inplace, safe){
   comp.appendChild(ta); comp.appendChild(send);
   main.appendChild(comp);
   let sess=null, busy=false, busyEl=null;
+  // 이 화면을 떠나면 재개(claude -p)를 끝낸다(결정 7) — 응답 중이면 끊지 않고 그 응답이 끝난 뒤(result·eof) 닫고 알린다.
+  // 떠난 뒤엔 칸(이제 다른 화면)의 스크롤을 건드리지 않고, 닫은 뒤엔 보내기를 막는다(창을 넓혀 다시 보여도 닫힌 재개로 보내지 않게).
+  let leaving=false, shut=false;
+  const toEnd=()=>{ if(!leaving) main.scrollTop=main.scrollHeight; };
   const cleanup=()=>{ comp.remove(); };
   // back 시 composer 제거
   const obs=new MutationObserver(()=>{ if(!document.contains(stream)){cleanup();obs.disconnect();} });
@@ -3301,14 +3341,18 @@ async function loadResume(s, inplace, safe){
   // busyEl 이 있으면 그 위에 삽입(진행표시기는 항상 맨 아래 유지)
   const push=(cls,txt)=>{ const d=el('div',cls); if(txt!=null)d.textContent=txt;
     if(busyEl) stream.insertBefore(d,busyEl); else stream.appendChild(d);
-    main.scrollTop=main.scrollHeight; return d; };
-  const setBusy=(on)=>{ busy=on; send.disabled=on;
+    toEnd(); return d; };
+  const setBusy=(on)=>{ busy=on; send.disabled=on||shut;
     send.classList.toggle('working',on); send.textContent=on?'…':'↑';
     if(on){ if(!busyEl){ busyEl=el('div','busy');
       busyEl.innerHTML='<span class="bdot"></span><span class="bdot"></span><span class="bdot"></span>'
         +'<span style="margin-left:6px">작업 중…</span>';
-      stream.appendChild(busyEl); main.scrollTop=main.scrollHeight; } }
+      stream.appendChild(busyEl); toEnd(); } }
     else if(busyEl){ busyEl.remove(); busyEl=null; } };
+  const shutNow=()=>{ if(shut) return; shut=true; try{ sess&&sess.close(); }catch(e){}
+    send.disabled=true; ta.disabled=true; push('result','— 화면을 떠나 재개를 닫았습니다 —'); };
+  const closeAfterTurn=(unsent)=>{ shutNow(); toast('응답이 끝나 떠난 웹 재개를 닫았습니다'+(unsent?' — 보내지 않은 메시지 '+unsent+'개':'')); };
+  _liveResume={ close(){ if(leaving) return; leaving=true; if(!busy) shutNow(); } };   // 닫기 손잡이 — 쓰는 함수가 다 생긴 뒤, 첫 await 전에 건다
   // 과거 이력 먼저 표시(끝부분)
   const loading=push('msg sys','과거 대화 불러오는 중…');
   try{ const hist=await fetchRecentMessages(s.session_id,120); loading.remove();
@@ -3316,17 +3360,20 @@ async function loadResume(s, inplace, safe){
     for(const m of hist) renderHistoryMsg(stream,m,hpend);
     if(hist.length) stream.appendChild(el('div','result','── 여기서 이어서 대화 ──'));
   }catch(e){ loading.textContent='(과거 이력 로드 실패)'; }
+  if(leaving) return;   // 이력을 받는 사이 화면을 떠났다 — 재개(claude -p)를 띄우지 않는다(결정 7)
   main.scrollTop=main.scrollHeight;
   // 카드 버튼이 답을 보낼 때 쓰는 헬퍼(사용자 말풍선 + 전송). busy 여도 보낸다 -
   // 도구 실패 직후 턴이 아직 도는 중일 수 있고, stream-json 입력은 큐잉된다.
-  const sendText=(t)=>{ push('msg user',t); setBusy(true); try{ sess.input(t); }catch(e){} };
+  const sendText=(t)=>{ if(shut) return; push('msg user',t); setBusy(true); try{ sess.input(t); }catch(e){} };
   const toolPend={};   // tool_use id -> 결과 핸들러 (구조화 카드 짝맞춤)
   sess=T.resume(s.session_id,(f)=>{
-    if(f.eof){ setBusy(false);
+    if(f.eof){ const unsent=pend.length; setBusy(false);
       if(f.error==='2fa_invalid'||f.error==='2fa_required') clearGrace();  // 만료 → 재인증
       while(pend.length){ const it=pend.shift();                            // 대기분은 못 보냄
         it.chip.textContent='✖ 전송되지 않음 - 세션이 종료됨'; it.chip.classList.add('fail'); }
-      push('result', f.error?('종료: '+otpErrMsg(f.error)):'— 세션 종료 —'); return; }
+      push('result', f.error?('종료: '+otpErrMsg(f.error)):'— 세션 종료 —');
+      if(leaving&&!shut) closeAfterTurn(unsent);   // 떠난 뒤 끝났다 — 손잡이를 정리하고 알린다(결정 7)
+      return; }
     const ev=f.data||{};
     if(ev.type==='system'){ if(ev.subtype==='init')push('msg sys','● 세션 시작'); return; }
     if(ev.type==='assistant'){ const c=ev.message&&ev.message.content;
@@ -3337,12 +3384,13 @@ async function loadResume(s, inplace, safe){
           if(x.name==='AskUserQuestion' && renderAskCard(stream,x.input,sendText)){}
           else if(x.name==='ExitPlanMode' && renderPlanCard(stream,x.input,sendText,()=>ta.focus())){}
           else renderToolUse(stream,{id:x.id,name:x.name,input:x.input},toolPend);
-          main.scrollTop=main.scrollHeight;
+          toEnd();
         }
       } return; }
     if(ev.type==='result'){ setBusy(false);
       const cost=ev.total_cost_usd!=null?(' · $'+ev.total_cost_usd):'';
       push('result','완료'+cost);
+      if(leaving){ if(!shut) closeAfterTurn(pend.length); return; }   // 떠난 화면 — 대기 메시지는 보내지 않고 닫는다(결정 7)
       drainPend();                       // 대기 중이던 메시지를 이어서 전송
       return; }
     if(ev.type==='user'){            // tool_result 를 카드에 짝 맞춰 채운다
@@ -3690,9 +3738,17 @@ function monSessName(s){ return s.title||s.label_name||s.slug||s.session_id.slic
 // 그룹은 Host 의 monitor_groups.json 에 산다. 알림 소스는 훅(관리 Stop/하위 Stop/하위 시작),
 // 발송은 Host 의 웹푸시. 알림 클릭 → #monitor=<gid> → 그 그룹 오버레이.
 async function fetchMonGroups(){ try{ const r=await T.api('GET','/api/owner/monitor/groups'); return (r&&r.groups)||[]; }catch(e){ return []; } }
+// 관제 기억(quick-switch §4-4) — 팀 코드를 먼저 적는다(팀을 보관했다 풀면 관제 id 가 새로 생김). 팀 목록을 아직 못 받았으면
+// (관제 알림 진입 등) 같은 관제의 옛 팀 코드를 이어 쓴다. teamAsGroup 반환 모양은 그대로 둔다(team.test 단언).
+function paneMemMonitor(g){
+  if(!g||!g.id) return;
+  const t=(TEAMS||[]).find(x=>x.monitor_group_id===g.id), old=paneMem().monitor;
+  paneMemSet('monitor', {team:t?t.code:((old&&old.gid===g.id&&old.team)||null), gid:g.id, name:g.name||(t&&t.name)||'', at:Date.now()});
+}
 function openMonitorGroup(g, o){
   const ids=[g.manager].concat((g.subs||[]).filter(s=>s!==g.manager));
   const inline=(o&&o.inline!==undefined)?o.inline:monInlineWanted();
+  paneMemMonitor(g);   // 상세 칸·폰 덮개·관제 알림 어느 길이든 마지막 관제로 기억(sm_mon_last 는 아래 그대로)
   // 이미 보고 있음 — 같은 팀이 살아 있을 때만 그대로. 끊겼으면(연결 종료) 아래에서 다시 연다(1-5)
   if(inline){ if(MON_INLINE&&MON_INLINE.gid===g.id&&!MON_INLINE.dead()&&paneDetail().classList.contains('mon-mode')){ showDetailPane(); return; }
     try{ LS.setItem('sm_mon_last',g.id); }catch(e){} }
@@ -3977,6 +4033,7 @@ function fbShowEditor(){
     if(main.classList.contains('term-mode')) leaveTerminalView();
     closeLiveViewer(); CURRENT_TERM_SID=null;
     if(FB.ed){ try{ FB.ed.dispose(); }catch(e){} FB.ed=null; }   // 다른 화면이 DOM 을 지웠다 — 편집기는 새로(모델은 탭이 보유)
+    paneEnter('files');                    // 칸을 비우기 바로 앞 — 웹 재개 등 떠나는 화면 정리(quick-switch 2단계)
     closeInlineMonitor(); main.classList.remove('term-mode','fb-mode','mon-mode'); main.innerHTML=''; main.classList.add('fb-mode');
     main.appendChild(backbar('탐색기',()=>showListPane(),'tolist'));
     FB.tabsEl=el('div','fbtabs'); FB.crumbEl=el('div','fbcrumb');
@@ -4308,6 +4365,7 @@ function teamNotifySheet(t){
 let LEDGER=null;   // {code, el}
 function openLedger(t){
   closeLiveViewer(); SELECTED_ID=null; highlightSelected(); CURRENT_TERM_SID=null;
+  paneEnter('ledger', t);                  // 칸을 비우기 바로 앞 — 떠나는 터미널·편집기·웹 재개 정리(quick-switch 2단계)
   const main=paneDetail(); closeInlineMonitor(); main.classList.remove('term-mode','fb-mode','mon-mode'); main.innerHTML='';
   $('#head').textContent='작업 장부';
   main.appendChild(listBack());
@@ -4695,6 +4753,7 @@ function openMonitor(ids, manager, labels, opts){
     const main=paneDetail();
     if(main.classList.contains('term-mode')) leaveTerminalView();
     closeLiveViewer(); CURRENT_TERM_SID=null;
+    paneEnter('monitor', {gid:opts.gid||null});   // 칸을 비우기 바로 앞 — 떠나는 편집기 스크롤·웹 재개 정리(quick-switch 2단계)
     closeInlineMonitor(); main.classList.remove('term-mode','fb-mode'); main.innerHTML=''; main.classList.add('mon-mode');
     main.appendChild(ov); $('#head').textContent='관제'; showDetailPane();
   } else {

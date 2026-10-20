@@ -2,6 +2,7 @@
 // 바로가기가 생기면 화면을 오가는 횟수가 늘어 기존 결함(§2-4)을 자주 밟는다. 고치기 전에 '고친 뒤의 동작'을 먼저
 // 고정한다 — 그래서 1·2단계 전에는 실패하는 게 정상이다(T6=1-1, T8=1-2, T1=1-3, T10=1-4, T7=1-5, 나머지=2단계).
 // 경로가 여럿인 검사는 경로마다 새로 부팅해 결과를 한 객체로 모아 비교한다 — 실패 한 번에 어긋난 경로가 다 보이게.
+// T12~ 는 2단계에서 더한 검사(화면 진입 기록 PANE_NOW · 화면 기억 sm_pane_<PC> · 웹 재개 닫기 결정 7 · 늦은 응답).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { load, ev, stubEl } from "./harness.mjs";
@@ -276,4 +277,178 @@ test("T11 터미널 관문(2차 인증 취소·인계 확인 거절)에서 멈�
              termConns: ev(ctx, "__tc.length"), termMode: pd.classList.contains("term-mode") };
   });
   assert.deepEqual(got, all(paths, { viewerLive: true, viewerClosed: 0, termConns: 0, termMode: false }));
+});
+
+// ---------------------------------------------------------------- 2단계 보강: 화면 진입 기록·화면 기억
+const paneNow = (ctx) => JSON.parse(ev(ctx, "JSON.stringify(PANE_NOW)"));
+
+test("T12 PANE_NOW: 상세 칸 화면을 열 때마다 종류·대상·세대(gen)를 적는다 — 폰 관제 덮개는 상세 칸 밖이라 그대로", async () => {
+  const { ctx } = await boot();
+  const steps = [
+    ["loadViewer(SESSIONS[1])", { kind: "viewer", sid: B }],
+    ["loadDetail(SESSIONS[0])", { kind: "detail", sid: A }],
+    ["loadResume(SESSIONS[1], true, false)", { kind: "resume", sid: B }],
+    ["loadTerminal(SESSIONS[0], false)", { kind: "terminal", sid: A, key: A }],
+    ["fbShowEditor()", { kind: "files" }],
+    ["openLedger({ code: 'T1', name: '팀' })", { kind: "ledger", code: "T1" }],
+    ["openMonitorGroup({ id: 'g1', name: '팀1', manager: 'm1', subs: [] })", { kind: "monitor", gid: "g1" }],
+    ["detailPlaceholder()", { kind: "empty" }],
+  ];
+  const got = [], gens = [];
+  for (const [code] of steps) {
+    await ev(ctx, code); await tick(code.startsWith("loadTerminal") ? RENDER : 0);
+    const { gen, ...rest } = paneNow(ctx); gens.push(gen);
+    got.push(Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== null)));
+  }
+  assert.deepEqual(got, steps.map(([, want]) => want));
+  assert.ok(gens.every((g, i) => i === 0 || g > gens[i - 1]), "세대는 들어올 때마다 커진다: " + gens);
+  ev(ctx, "innerWidth = 390");
+  const before = paneNow(ctx);
+  ev(ctx, "openMonitorGroup({ id: 'g2', name: '팀2', manager: 'm2', subs: [] })");   // 폰: 화면 전체 덮개
+  assert.deepEqual(paneNow(ctx), before);
+});
+
+test("T13 화면 기억(sm_pane_<PC>): 뷰어·상세·웹 재개는 뷰어 칸에, 관제는 상세 칸·폰 덮개·관제 알림 모두 팀 코드와 함께 — sm_mon_last 는 그대로", async () => {
+  const { ctx } = await boot({ setup: (sb) => sb.localStorage.setItem("sm_room", "room1") });
+  const raw = () => ctx.localStorage.getItem("sm_pane_room1");
+  const mem = (part) => { const v = JSON.parse(raw() || "{}")[part]; return v && { ...v, at: typeof v.at }; };   // 시각은 숫자인지만
+  ev(ctx, `TEAMS = [{ code: 'T1', name: '팀1', monitor_group_id: 'g1', members: [] }, { code: 'T2', name: '팀2', monitor_group_id: 'g2', members: [] }];
+    fetchMonGroups = async () => [{ id: 'g2', name: '팀2', manager: 'm2', subs: [] }, { id: 'g9', name: '새 팀', manager: 'm9', subs: [] }];`);
+  const got = {};
+  await ev(ctx, "loadViewer(SESSIONS[1])"); got.viewer = mem("viewer");
+  await ev(ctx, "loadDetail(SESSIONS[0])"); got.detail = mem("viewer");
+  await ev(ctx, "loadResume(SESSIONS[1], true, false)"); got.resume = mem("viewer");   // 웹 재개는 그 세션 대화로
+  const keep = raw();
+  await ev(ctx, "loadTerminal(SESSIONS[0], false)"); await tick(RENDER);
+  ev(ctx, "fbShowEditor(); openLedger({ code: 'T1', name: '팀1' }); detailPlaceholder()");
+  got.untouched = raw() === keep;                                // 터미널·파일·장부·빈 안내는 이 기억을 바꾸지 않는다
+  ev(ctx, "openMonitorGroup({ id: 'g1', name: '팀1', manager: 'm1', subs: ['w1'] })");   // PC 상세 칸
+  got.inline = mem("monitor"); got.lastInline = ctx.localStorage.getItem("sm_mon_last");
+  ev(ctx, "innerWidth = 390; openMonitorGroup({ id: 'g2', name: '팀2', manager: 'm2', subs: [] })");   // 폰 덮개
+  got.overlay = mem("monitor"); got.lastOverlay = ctx.localStorage.getItem("sm_mon_last");
+  ev(ctx, "TEAMS = null");                                       // 팀 목록을 아직 못 받음(관제 알림으로 콜드 스타트 등)
+  await ctx.openMonitorGroupById("g2"); got.notifySame = mem("monitor");   // 같은 관제 → 옛 팀 코드를 이어 쓴다
+  await ctx.openMonitorGroupById("g9"); got.notifyNew = mem("monitor");    // 처음 보는 관제 → 팀 코드는 모른다
+  got.viewerKept = mem("viewer").sid;                            // 관제 기억이 뷰어 기억을 지우지 않는다
+  assert.deepEqual(got, {
+    viewer: { sid: B, kind: "viewer", name: "B", at: "number" },
+    detail: { sid: A, kind: "detail", name: "A", at: "number" },
+    resume: { sid: B, kind: "viewer", name: "B", at: "number" },
+    untouched: true,
+    inline: { team: "T1", gid: "g1", name: "팀1", at: "number" }, lastInline: "g1",
+    overlay: { team: "T2", gid: "g2", name: "팀2", at: "number" }, lastOverlay: "g1",
+    notifySame: { team: "T2", gid: "g2", name: "팀2", at: "number" },
+    notifyNew: { team: null, gid: "g9", name: "새 팀", at: "number" },
+    viewerKept: B,
+  });
+});
+
+test("T14 기억 키는 PC 별(로컬 화면 = local, 릴레이 = 그 PC 방 이름) — 깨진 값·저장 막힘에도 화면은 그대로 뜬다", async () => {
+  const L = await boot({ local: true });
+  await ev(L.ctx, "loadViewer(SESSIONS[0])");
+  const R = await boot({ setup: (sb) => { sb.localStorage.setItem("sm_room", "roomA"); sb.localStorage.setItem("sm_pane_roomA", "{깨진 값"); } });
+  await ev(R.ctx, "loadViewer(SESSIONS[0])");                    // 깨진 값은 버리고 새로 적는다
+  R.ctx.localStorage.setItem("sm_room", "roomB");                // 릴레이로 다른 PC 를 쓰는 중
+  R.ctx.localStorage.setItem("sm_pane_roomB", "[1,2]");          // 객체가 아닌 값
+  await ev(R.ctx, "loadDetail(SESSIONS[1])"); await tick();
+  const a = JSON.parse(R.ctx.localStorage.getItem("sm_pane_roomA")), b = JSON.parse(R.ctx.localStorage.getItem("sm_pane_roomB"));
+  R.ctx.localStorage.setItem = () => { throw new Error("QuotaExceededError"); };   // 저장이 막힘(용량 초과·사생활 보호 창 등)
+  let threw = null, viewerLive = null;
+  try { await ev(R.ctx, "loadViewer(SESSIONS[1])"); viewerLive = ev(R.ctx, "_liveViewer !== null");
+        ev(R.ctx, "openMonitorGroup({ id: 'g1', name: '팀1', manager: 'm1', subs: [] })"); }
+  catch (e) { threw = String((e && e.message) || e); }
+  assert.deepEqual({
+    local: (JSON.parse(L.ctx.localStorage.getItem("sm_pane_local") || "{}").viewer || {}).sid || null,
+    localNoRelayKey: L.ctx.localStorage.getItem("sm_pane_relay"),
+    roomA: [a.viewer.sid, a.viewer.kind], roomB: [b.viewer.sid, b.viewer.kind],
+    threw, viewerLive, monMode: R.pd.classList.contains("mon-mode"),
+  }, { local: A, localNoRelayKey: null, roomA: [A, "viewer"], roomB: [B, "detail"], threw: null, viewerLive: true, monMode: true });
+});
+
+// ---------------------------------------------------------------- 2단계 보강: 웹 재개를 떠나면 끝낸다(결정 7)
+const composer = (pd) => pd.children.find((c) => String(c.className) === "composer").children;   // [입력칸, 보내기]
+
+test("T15 결정 7: 응답 중에 웹 재개를 떠나면 끊지 않고 그 응답이 끝난 뒤 닫고 알린다(대기 메시지는 보내지 않음) — 폰 '‹ 목록'도 같고, 응답 중이 아니면 바로 닫는다", async () => {
+  const paths = ["다른 화면(상세)", "폰 '‹ 목록'", "응답 중 아님"];
+  const got = await each(paths, async (p) => {
+    const { ctx, pd } = await boot({ width: p === "다른 화면(상세)" ? 1400 : 390 });
+    ev(ctx, `globalThis.__toasts = []; toast = (m) => __toasts.push(m);
+      T.resume = (id, cb) => { const h = { id, cb, closed: 0, sent: [], input(t) { h.sent.push(t); }, close() { h.closed++; } }; __res.push(h); return h; };`);
+    await ev(ctx, "loadResume(SESSIONS[1], true, false)");
+    const [ta, send] = composer(pd);
+    if (p !== "응답 중 아님") {
+      ta.value = "첫 질문"; send.onclick();                        // 응답 중(busy)
+      ta.value = "다음 질문"; send.onclick();                      // 응답 중이라 대기 칩으로
+    }
+    if (p === "다른 화면(상세)") { await ev(ctx, "loadDetail(SESSIONS[0])"); await tick(); }
+    else backBtn(pd).onclick();
+    const r = ev(ctx, "__res[0]"), afterLeave = r.closed;
+    pd.scrollTop = 7;                                            // 지금 칸(이제 다른 화면이거나 숨은 칸)의 스크롤
+    if (p !== "응답 중 아님") {
+      r.cb({ data: { type: "assistant", message: { content: [{ type: "text", text: "마무리 중" }] } } });
+      r.cb({ data: { type: "result", total_cost_usd: 0.01 } });  // 그 응답이 끝남
+    } else r.cb({ eof: true });                                   // 닫은 소켓의 끝 알림(로컬 WebSocket 은 닫으면 onclose → eof) — 알림·보내기 되살림 없음
+    await ev(ctx, "detailPlaceholder()");                        // 또 떠나도 두 번 닫지 않는다
+    return { afterLeave, closed: r.closed, sent: r.sent.join("|"), toasts: ev(ctx, "__toasts.join('|')"),
+             scroll: pd.scrollTop, sendOff: send.disabled === true };
+  });
+  const done = "응답이 끝나 떠난 웹 재개를 닫았습니다 — 보내지 않은 메시지 1개";
+  assert.deepEqual(got, {
+    "다른 화면(상세)": { afterLeave: 0, closed: 1, sent: "첫 질문", toasts: done, scroll: 7, sendOff: true },
+    "폰 '‹ 목록'": { afterLeave: 0, closed: 1, sent: "첫 질문", toasts: done, scroll: 7, sendOff: true },
+    "응답 중 아님": { afterLeave: 1, closed: 1, sent: "", toasts: "", scroll: 7, sendOff: true },
+  });
+});
+
+test("T16 결정 7: 응답 중에 떠난 재개가 끊겨도(eof) 정리·알림, 이력을 받는 사이 떠나면 claude -p 를 띄우지 않고, 2차 인증을 취소하면 보던 뷰어 그대로", async () => {
+  const e = await boot({ width: 390 });                          // 폰: 응답 중 '‹ 목록' 뒤 릴레이가 끊김
+  ev(e.ctx, "globalThis.__toasts = []; toast = (m) => __toasts.push(m);");
+  await ev(e.ctx, "loadResume(SESSIONS[1], true, false)");
+  const [ta, send] = composer(e.pd);
+  ta.value = "질문"; send.onclick(); backBtn(e.pd).onclick();
+  const er = ev(e.ctx, "__res[0]"), eofBefore = er.closed;
+  er.cb({ eof: true });
+  const a = await boot();
+  ev(a.ctx, "globalThis.__hist = null; fetchRecentMessages = () => new Promise((r) => { globalThis.__hist = r; });");
+  const pr = ev(a.ctx, "loadResume(SESSIONS[1], true, false)");
+  for (let i = 0; i < 5 && !ev(a.ctx, "__hist"); i++) await tick();
+  if (!ev(a.ctx, "__hist")) throw new Error("이력 요청까지 가지 못함");
+  ev(a.ctx, "fetchRecentMessages = async () => []");
+  await ev(a.ctx, "loadDetail(SESSIONS[0])");                    // 이력을 기다리는 사이 다른 화면으로
+  ev(a.ctx, "__hist([])"); await pr; await tick();
+  const b = await boot();
+  await ev(b.ctx, "loadViewer(SESSIONS[0])");
+  b.ctx.ensurePriv = async () => null;                           // 2차 인증 창에서 취소
+  await ev(b.ctx, "loadResume(SESSIONS[1], true, false)");
+  assert.deepEqual({
+    eof: [eofBefore, er.closed, ev(e.ctx, "__toasts.join('|')")],
+    spawned: ev(a.ctx, "__res.length"), shown: ev(a.ctx, "PANE_NOW.kind"),
+    viewerLive: ev(b.ctx, "_liveViewer !== null"), viewerClosed: ev(b.ctx, "__mon[0].closed"), resumes: ev(b.ctx, "__res.length"), stay: ev(b.ctx, "PANE_NOW.kind"),
+  }, { eof: [0, 1, "응답이 끝나 떠난 웹 재개를 닫았습니다"], spawned: 0, shown: "detail",
+       viewerLive: true, viewerClosed: 0, resumes: 0, stay: "viewer" });
+});
+
+// ---------------------------------------------------------------- 2단계 보강: 늦은 응답·늦은 구축
+test("T17 뷰어를 연달아 누르면 마지막 누름만 그린다 — 먼저 누른 뷰어의 늦은 응답은 실시간 연결을 열지 않는다", async () => {
+  const { ctx } = await boot();
+  ev(ctx, "globalThis.__late = {}; fetchRecentMessages = (sid) => new Promise((r) => { __late[sid] = r; });");
+  const p1 = ev(ctx, "loadViewer(SESSIONS[0])"), p2 = ev(ctx, "loadViewer(SESSIONS[1])");
+  ev(ctx, `__late['${B}']([])`); await p2;                         // 나중에 누른 B 가 먼저 도착
+  ev(ctx, `__late['${A}']([])`); await p1; await tick();         // 먼저 누른 A 는 늦게 도착
+  assert.deepEqual({ a: ev(ctx, `__mon.filter((h) => h.mgr === '${A}').length`), b: ev(ctx, `__mon.filter((h) => h.mgr === '${B}').length`),
+                     live: ev(ctx, `_liveViewer === __mon.find((h) => h.mgr === '${B}')`), sid: ev(ctx, "PANE_NOW.sid") },
+                   { a: 0, b: 1, live: true, sid: B });
+});
+
+test("T18 터미널을 짓는 사이(xterm 첫 로드) 다른 화면으로 가면 늦게 붙지 않는다 — 터미널 연결·크기 감시가 남지 않는다", async () => {
+  const { ctx, pd } = await boot();
+  ev(ctx, "globalThis.__xr = null; loadXterm = () => new Promise((r) => { globalThis.__xr = r; });");
+  const pt = ctx.loadTerminal(ev(ctx, "SESSIONS[0]"), false);
+  for (let i = 0; i < 5 && !ev(ctx, "__xr"); i++) await tick();
+  if (!ev(ctx, "__xr")) throw new Error("xterm 로드까지 가지 못함");
+  await ev(ctx, "loadViewer(SESSIONS[1])");                       // 그사이 대화 보기로
+  ev(ctx, "__xr()"); await pt; await tick(RENDER);
+  assert.deepEqual({ termConns: ev(ctx, "__tc.length"), main: ev(ctx, "termView.main"), onWin: ev(ctx, "termView.onWin"), ro: ev(ctx, "termView.ro"),
+                     termMode: pd.classList.contains("term-mode"), viewerLive: ev(ctx, "_liveViewer !== null"), kind: ev(ctx, "PANE_NOW.kind") },
+                   { termConns: 0, main: null, onWin: null, ro: null, termMode: false, viewerLive: true, kind: "viewer" });
 });
