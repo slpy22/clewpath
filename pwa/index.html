@@ -3693,7 +3693,8 @@ async function fetchMonGroups(){ try{ const r=await T.api('GET','/api/owner/moni
 function openMonitorGroup(g, o){
   const ids=[g.manager].concat((g.subs||[]).filter(s=>s!==g.manager));
   const inline=(o&&o.inline!==undefined)?o.inline:monInlineWanted();
-  if(inline){ if(MON_INLINE&&MON_INLINE.gid===g.id&&paneDetail().classList.contains('mon-mode')) return;   // 이미 보고 있음
+  // 이미 보고 있음 — 같은 팀이 살아 있을 때만 그대로. 끊겼으면(연결 종료) 아래에서 다시 연다(1-5)
+  if(inline){ if(MON_INLINE&&MON_INLINE.gid===g.id&&!MON_INLINE.dead()&&paneDetail().classList.contains('mon-mode')){ showDetailPane(); return; }
     try{ LS.setItem('sm_mon_last',g.id); }catch(e){} }
   openMonitor(ids, g.manager, Object.assign({}, g.labels||{}), {gid:g.id, name:g.name, inline});   // 저장 그룹 → 💾 는 갱신 모드
 }
@@ -3702,7 +3703,10 @@ async function openMonitorGroupById(gid){
   if(!gid) return;
   const g=(await fetchMonGroups()).find(x=>x.id===gid);
   if(!g){ toast('그 팀의 관제를 찾을 수 없습니다(보관됐거나 관리 세션이 없음)'); return; }
-  if(document.getElementById('mon-ov')) return;   // 이미 관제 중이면 갈아엎지 않는다
+  // 이미 관제 중: 같은 팀이 살아 있으면 갈아엎지 않고, 끊겼거나 다른 팀이면 알림의 팀으로 바꾼다(1-5).
+  // 폰 덮개(_mon)는 여기서 닫고 새로 연다. PC 상세 칸 관제는 openMonitorGroup 이 같은 팀·살아 있음을 가린다.
+  const ov=document.getElementById('mon-ov'), m=ov&&ov._mon;
+  if(m){ if(m.gid===gid&&!m.dead()) return; m.close(); }
   openMonitorGroup(g);
 }
 function consumePendingMonitor(){
@@ -4660,7 +4664,7 @@ function newTeamForm(){
 
 // opts.gid/name: 팀의 관제로 열었을 때 — 서버가 팀 구성원 변경을 밀어 준다(gid).
 // 데스크톱 그룹 보기: 왼쪽 = 그룹 목록, 오른쪽(상세 칸) = 그 그룹 관제(2026-10-12 사장님). 폰은 전체 화면 오버레이 그대로.
-let MON_INLINE=null;   // {gid, close}
+let MON_INLINE=null;   // {gid, close, dead}
 function closeInlineMonitor(){ const m=MON_INLINE; MON_INLINE=null; if(m){ try{ m.close(); }catch(e){} } }
 function monInlineWanted(){ return innerWidth>=880; }
 function openMonitor(ids, manager, labels, opts){
@@ -4780,7 +4784,7 @@ function openMonitor(ids, manager, labels, opts){
     }
   }
 
-  let handle=null;
+  let handle=null, monDead=false;   // monDead: 끊김(eof)·연결 실패 — 같은 팀을 다시 열 때 다시 붙는 근거(1-5)
   // ---- 타임라인 필터: 종류 단일 선택 + 세션별 숨김. 행은 렌더 시 data-sid·종류 클래스를 갖고,
   //      필터는 .fhid 토글만 한다(재렌더 없음). 우측 뷰어·자동 추적·활동점은 필터와 무관(표시만 거름).
   let fKind='all'; const fHide=new Set(); let fTotal=0, fShown=0;
@@ -4884,7 +4888,7 @@ function openMonitor(ids, manager, labels, opts){
   }
 
   function onMsg(dataStr, eof, error){
-    if(eof){ setLive(false, error?('종료: '+error):'연결 종료'); return; }
+    if(eof){ monDead=true; setLive(false, error?('종료: '+error):'연결 종료'); return; }
     let m; try{ m=JSON.parse(dataStr); }catch(e){ return; }
     if(m.type==='heartbeat'){ setLive(true,'● live'); return; }
     if(m.type==='error'){ setLive(false,'오류: '+(m.error||'')); toast('관제 오류: '+(m.error||'')); return; }
@@ -4911,15 +4915,17 @@ function openMonitor(ids, manager, labels, opts){
   }
 
   try{ handle=T.monitor(ids.join(','), manager, onMsg, opts.gid||null); }
-  catch(e){ setLive(false,'연결 실패'); toast('관제 연결 실패: '+e.message); }
+  catch(e){ monDead=true; setLive(false,'연결 실패'); toast('관제 연결 실패: '+e.message); }
   const shut=()=>{ try{ handle&&handle.close(); }catch(e){} };
   if(inline){
-    MON_INLINE={gid:opts.gid||null, close:shut};
+    MON_INLINE={gid:opts.gid||null, close:shut, dead:()=>monDead};
     x.title='관제 닫기';
     x.onclick=()=>{ closeInlineMonitor(); paneDetail().classList.remove('mon-mode'); detailPlaceholder('왼쪽에서 팀을 고르세요');
       highlightGroup(null); };
     highlightGroup(opts.gid||null);
-  } else x.onclick=()=>{ shut(); ov.remove(); };
+  } else { const closeOv=()=>{ shut(); ov.remove(); };
+    ov._mon={gid:opts.gid||null, close:closeOv, dead:()=>monDead};   // 폰 덮개 — 관제 알림이 같은 팀·살아 있음을 가린다(1-5)
+    x.onclick=closeOv; }
 }
 
 // 관전 중 추가할 세션 고르기(현재 그룹에 없는 세션만)

@@ -52,7 +52,7 @@ test("#monitor=<gid> 콜드 스타트 → consumePendingMonitor 가 1회만 그�
   assert.equal(ev(ctx, "PENDING_OPEN_GID"), "");
 });
 
-test("openMonitorGroupById: 저장 그룹 조회 → openMonitor(ids=관리+하위, gid 갱신 모드) / 없으면 toast / 이미 관제 중이면 무시", async () => {
+test("openMonitorGroupById: 저장 그룹 조회 → openMonitor(ids=관리+하위, gid 갱신 모드) / 없으면 toast / 같은 팀이 살아 있으면 그대로, 끊겼거나 다른 팀이면 교체", async () => {
   const ctx = await load();
   ev(ctx, "globalThis.__toasts = []; toast = (m) => globalThis.__toasts.push(m);"
         + "globalThis.__opens = []; openMonitor = (ids, mgr, labels, opts) => globalThis.__opens.push({ ids, mgr, labels, opts });"
@@ -64,11 +64,38 @@ test("openMonitorGroupById: 저장 그룹 조회 → openMonitor(ids=관리+하�
   assert.equal(JSON.stringify(o.opts), JSON.stringify({ gid: "g1", name: "팀", inline: true }), "데스크톱 폭이면 오른쪽 칸에");
   await ctx.openMonitorGroupById("nope");
   assert.ok(ev(ctx, "globalThis.__toasts").at(-1).includes("찾을 수 없습니다"));
-  ctx.document._register("mon-ov", stubEl("div"));                  // 이미 관제 오버레이가 떠 있음
+  // 이미 관제 덮개(폰)가 떠 있음: 같은 팀이 살아 있으면 갈아엎지 않고, 끊겼거나 다른 팀이면 닫고 알림의 팀으로 바꾼다(quick-switch 1-5)
+  const ov = stubEl("div"); let dead = false, closed = 0;
+  ov._mon = { gid: "g1", dead: () => dead, close: () => { closed++; } };
+  ctx.document._register("mon-ov", ov);
   await ctx.openMonitorGroupById("g1");
-  assert.equal(ev(ctx, "globalThis.__opens.length"), 1, "갈아엎지 않는다");
+  assert.equal(ev(ctx, "globalThis.__opens.length"), 1, "같은 팀이 살아 있으면 갈아엎지 않는다");
+  dead = true;                                                       // 관제 스트림이 끊김(연결 종료)
+  await ctx.openMonitorGroupById("g1");
+  assert.deepEqual([ev(ctx, "globalThis.__opens.length"), closed], [2, 1], "끊긴 덮개는 닫고 다시 연다");
+  dead = false; ov._mon.gid = "g0";                                  // 다른 팀 관제가 떠 있음
+  await ctx.openMonitorGroupById("g1");
+  assert.deepEqual([ev(ctx, "globalThis.__opens.length"), closed], [3, 2], "다른 팀이면 알림의 팀으로 바꾼다");
   await ctx.openMonitorGroupById("");
-  assert.equal(ev(ctx, "globalThis.__opens.length"), 1);
+  assert.equal(ev(ctx, "globalThis.__opens.length"), 3);
+});
+
+test("폰 관제 덮개 + 관제 알림: 진짜 덮개가 _mon(팀·끊김·닫기)을 달고, 끊기면(eof) 알림이 덮개를 닫고 새로 연다(quick-switch 1-5)", async () => {
+  const ctx = await load();
+  ev(ctx, `innerWidth = 390; globalThis.__mon = [];
+    T.monitor = (ids, mgr, cb, gid) => { const h = { gid, cb, closed: 0, close() { h.closed++; }, add() {}, remove() {} }; __mon.push(h); return h; };
+    fetchMonGroups = async () => [{ id: 'g1', name: '팀', manager: 'm1', subs: ['w1'] }];`);
+  await ctx.openMonitorGroupById("g1");
+  const ov = ctx.document.body.children.at(-1);
+  assert.equal(String(ov.className), "mon-ov", "폰은 전체 화면 덮개");
+  assert.equal(ov._mon.gid, "g1");
+  ctx.document._register("mon-ov", ov);                              // 하네스 getElementById 는 등록한 것만 찾는다
+  await ctx.openMonitorGroupById("g1");
+  assert.equal(ev(ctx, "__mon.length"), 1, "살아 있는 같은 팀은 그대로");
+  ev(ctx, "__mon[0].cb(null, true)");                                // 관제 스트림 끊김(연결 종료)
+  assert.equal(ov._mon.dead(), true);
+  await ctx.openMonitorGroupById("g1");
+  assert.deepEqual([ev(ctx, "__mon.length"), ev(ctx, "__mon[0].closed")], [2, 1], "끊긴 덮개는 닫고 새로 연다");
 });
 
 test("#open=<sid> 콜드 스타트 → consumePendingOpen 이 목록에서 접두 일치로 찾아 jumpToSession, 없으면 버린다", async () => {
