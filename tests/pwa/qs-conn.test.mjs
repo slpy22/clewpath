@@ -418,3 +418,99 @@ test("T64 끊긴 뒤 재접속이 4426(앱/커넥터 버전 낮음)·4403(room �
     v1006: { rounds: [1, 1, 1], sockets: 4, notices: 0 },
   });
 });
+
+// ---------------------------------------------------------------- 결함 3·6: 자동 '보던 터미널 다시 붙이기'가 사용자의 누름을 밀어냄
+// 자동 다시 붙이기(재접속 성공·화면 복귀·PC 재기동 뒤)도 loadTerminal 의 누름 순번(navTicket)을 올려, 끊긴 사이·재연결 순간에 누른 다른
+// 세션이 2차 인증·목록을 기다린 뒤 조용히 버려졌다. 2차 인증 유예가 끝났으면 예상 못 한 두 번째 코드 창까지 떴다.
+const SA = "aaaaaaaa-1111-2222-3333-444444444444";
+const SB = "bbbbbbbb-1111-2222-3333-444444444444";
+async function bootTerm() {
+  const pd = stubEl("div"), app = stubEl("div");
+  const ctx = await load({ setup: (sb) => {
+    sb.localStorage.setItem("sm_devtoken", "devX"); sb.localStorage.setItem("sm_room", "room1");
+    for (const [id, e] of [["paneDetail", pd], ["app", app], ["head", stubEl("span")], ["paneList", stubEl("div")], ["p-err", stubEl("div")], ["p-go", stubEl("button")]]) sb.document._register(id, e);
+  } });
+  app.setAttribute("data-view", "list");
+  const timers = holdTimers(ctx);
+  const sockets = browserWs(ctx);
+  ev(ctx, `innerWidth = 1400; conn.devToken = 'devX'; globalThis.__toasts = []; toast = (m) => __toasts.push(String(m));
+    fetchRecentMessages = async () => []; globalThis.MutationObserver = class { observe() {} disconnect() {} };
+    loadList = async () => {}; refreshVer = async () => {}; showVer = () => {};
+    globalThis.__prompts = 0; globalThis.__codes = []; prompt = () => { __prompts++; return __codes.shift() ?? null; };
+    SESSIONS = [{ session_id: '${SA}', title: 'A', live_terminal: true, cwd: 'E:/p' }, { session_id: '${SB}', title: 'B', live_terminal: true, cwd: 'E:/q' }];`);
+  ctx.confirm = () => true;
+  const pending = (ws, pred) => ws.sent.filter((f) => f.type === "req" && !(ws._ans ||= new Set()).has(f.id) && pred(f));
+  const answer = async (ws, pred, data, ok = true) => { for (const f of pending(ws, pred)) { ws._ans.add(f.id); ws.push({ type: "res", id: f.id, cid: ws._cid, ok, data }); await settle(); return f; } return null; };
+  const isStatus = (f) => f.method === "api" && f.params.path === "/api/owner/2fa/status";
+  return { ctx, timers, sockets, pending, answer, isStatus };
+}
+// 연결 → 터미널 A(2차 인증 유효) → 망 끊김(1006) → 재접속 소켓의 hello 까지(기기 인증 응답 전 — 상태 점은 이미 켜졌다)
+async function dropAndHello(env, { required }) {
+  const { ctx, timers, sockets, answer, isStatus } = env;
+  const p = ev(ctx, "conn.connect('room1', 'tok')");
+  await until(() => sockets.length === 1);
+  const ws1 = sockets[0]; ws1._cid = "c1"; ws1.open(); ws1.push({ type: "hello", peer_present: true, cid: "c1" });
+  await until(() => ws1.sent.some((f) => f.method === "auth")); await answer(ws1, (f) => f.method === "auth", { id: "d", name: "n" }); await p;
+  if (required) ev(ctx, "LS.setItem('sm_grace', JSON.stringify({ grace: 'g0', exp: Math.floor(Date.now()/1000) + 3600 }))");
+  const pt = ctx.loadTerminal(ev(ctx, "SESSIONS[0]"), false);
+  await until(() => ws1.sent.some(isStatus)); await answer(ws1, isStatus, { status: 200, json: { required } }); await pt; await tick(350);
+  const firstTerm = ws1.sent.filter((f) => f.method === "terminal").map((f) => f.params.session_id.slice(0, 1));
+  if (required) ev(ctx, "LS.removeItem('sm_grace')");                     // 몇 시간 뒤 — 유예가 끝났다
+  ws1.drop(1006); await settle();
+  const disc = ev(ctx, "termView.disconnected");
+  const rt = reconnectTimers(timers); timers.splice(timers.indexOf(rt[0]), 1); rt[0].f();
+  await until(() => sockets.length === 2);
+  const ws2 = sockets[1]; ws2._cid = "c2"; ws2.open(); ws2.push({ type: "hello", peer_present: true, cid: "c2" });
+  await until(() => ws2.sent.some((f) => f.method === "auth"));
+  return { ws2, firstTerm, disc };
+}
+test("T65 재연결되는 순간(상태 점은 켜졌고 기기 인증 응답 전) 다른 세션 줄을 누르면 그 누름이 화면을 정한다 — 재접속 흐름의 자동 다시 붙이기가 그 누름을 버리지 않는다", async () => {
+  const env = await bootTerm();
+  const { ctx, answer, isStatus } = env;
+  const { ws2, firstTerm, disc } = await dropAndHello(env, { required: false });
+  const pj = ctx.jumpToSession(ev(ctx, "SESSIONS[1]"));                     // 그 순간 세션 줄 B
+  await settle();
+  await answer(ws2, (f) => f.method === "auth", { id: "d", name: "n" });   // 재접속 완료 → 목록·자동 다시 붙이기
+  await settle(); await tick(20);
+  for (let i = 0; i < 3; i++) await answer(ws2, isStatus, { status: 200, json: { required: false } });   // 2차 인증 상태(먼저 보낸 B 의 것부터)
+  await pj; await tick(400);
+  assert.deepEqual(plain({ firstTerm, disc, terminalsOnWs2: ws2.sent.filter((f) => f.method === "terminal").map((f) => f.params.session_id.slice(0, 1)),
+                           active: (ev(ctx, "(findTab(TABS.active)||{s:{}}).s.session_id") || "").slice(0, 1), now: ev(ctx, "PANE_NOW.kind + ':' + (PANE_NOW.sid||'').slice(0,1)") }),
+                   { firstTerm: ["a"], disc: true, terminalsOnWs2: ["b"], active: "b", now: "terminal:b" });
+});
+
+test("T65b 2차 인증 유예가 끝난 채 재연결되는 순간 다른 터미널(B)을 눌러 코드를 넣으면 B 가 열린다 — 자동 다시 붙이기가 두 번째 코드 창을 띄우거나 B 를 밀어내지 않는다", async () => {
+  const env = await bootTerm();
+  const { ctx, answer, isStatus } = env;
+  const { ws2 } = await dropAndHello(env, { required: true });
+  ev(ctx, "__codes = ['123456', null]");                                   // 사용자는 B 를 위해 코드를 넣는다(두 번째 창이 뜨면 취소)
+  const pj = ctx.jumpToSession(ev(ctx, "SESSIONS[1]"));
+  await settle();
+  await answer(ws2, (f) => f.method === "auth", { id: "d", name: "n" });
+  await settle(); await tick(20);
+  for (let i = 0; i < 3; i++) await answer(ws2, isStatus, { status: 200, json: { required: true } });
+  await answer(ws2, (f) => f.method === "grant", { grace: "g1", exp: Math.floor(Date.now() / 1000) + 3600 });
+  await answer(ws2, (f) => f.method === "grant", { grace: "g2", exp: Math.floor(Date.now() / 1000) + 3600 });
+  await pj; await tick(400);
+  assert.deepEqual(plain({ prompts: ev(ctx, "__prompts"), terminalsOnWs2: ws2.sent.filter((f) => f.method === "terminal").map((f) => f.params.session_id.slice(0, 1)),
+                           now: ev(ctx, "PANE_NOW.kind + ':' + (PANE_NOW.sid||'').slice(0,1)"), disconnected: ev(ctx, "termView.disconnected") }),
+                   { prompts: 1, terminalsOnWs2: ["b"], now: "terminal:b", disconnected: false });
+});
+
+test("T65c 아무것도 누르지 않았으면 재연결 뒤 보던 터미널을 지금처럼 다시 붙이고, 다시 붙이는 사이(2차 인증 확인 중) 누른 다른 세션이 이긴다", async () => {
+  const run = async (press) => {
+    const env = await bootTerm();
+    const { ctx, answer, isStatus } = env;
+    const { ws2 } = await dropAndHello(env, { required: false });
+    await answer(ws2, (f) => f.method === "auth", { id: "d", name: "n" });   // 재접속 완료 → 자동 다시 붙이기(A)가 2차 인증 상태를 묻는다
+    await settle(); await tick(20);
+    let pj = null;
+    if (press) { pj = ctx.jumpToSession(ev(ctx, "SESSIONS[1]")); await settle(); }   // 그 사이 세션 줄 B
+    for (let i = 0; i < 3; i++) await answer(ws2, isStatus, { status: 200, json: { required: false } });
+    if (pj) await pj; await tick(400);
+    return { terminalsOnWs2: ws2.sent.filter((f) => f.method === "terminal").map((f) => f.params.session_id.slice(0, 1)),
+             now: ev(ctx, "PANE_NOW.kind + ':' + (PANE_NOW.sid||'').slice(0,1)") };
+  };
+  assert.deepEqual(plain({ idle: await run(false), pressed: await run(true) }),
+                   { idle: { terminalsOnWs2: ["a"], now: "terminal:a" }, pressed: { terminalsOnWs2: ["b"], now: "terminal:b" } });
+});
