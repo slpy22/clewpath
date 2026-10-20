@@ -6555,15 +6555,31 @@ function leaveAddPc(){
   const back=$('#p-back'); if(back) back.hidden=true;
   $('#pair').classList.add('hidden'); $('#app').classList.remove('hidden');
   // 새 PC 를 페어링해 보느라 지금 PC 연결을 내려놓았는데(다른 PC 를 페어링하면 먼저 내려놓는다) 실패했다 — 원래 PC 로 다시 붙는다.
-  // 화면만 돌리면 연결 없는 빈 앱('PC 에 연결하는 중…')에 갇혔다(검토 3회차). 페어링이 아직 진행 중이면 그쪽이 화면을 맡는다
+  // 화면만 돌리면 연결 없는 빈 앱('PC 에 연결하는 중…')에 갇혔다(검토 3회차). 페어링이 아직 진행 중이면 그쪽이 화면을 맡는다(실패하면 pairFailedBehind)
   if(MODE!=='relay'||conn._pairing) return;
+  reconnectCurrentPc();
+}
+// 지금 PC(sm_room)로 다시 붙는다(새 PC 페어링 뒤 돌아왔을 때). 이미 붙어 있으면 그대로. 붙을 수 없으면(⛔/🔄 PC — 새 QR 로만, 자격 없음) false
+function reconnectCurrentPc(){
   const room=LS.getItem('sm_room'), pc=room?pcsLoad().find(x=>x.room===room):null;
-  if(!room||(pc&&pc.state)) return;                                         // ⛔/🔄 PC 는 새 QR 로만
-  if(conn.ws&&conn.ws.readyState<=1&&!conn._stopped) return;               // 연결은 그대로다
-  if(!(LS.getItem('sm_cs')&&LS.getItem('sm_cp'))&&!LS.getItem('sm_token')) return;
+  if(!room||(pc&&pc.state)) return false;                                   // ⛔/🔄 PC 는 새 QR 로만
+  if(conn.ws&&conn.ws.readyState<=1&&!conn._stopped) return true;          // 연결은 그대로다
+  if(!(LS.getItem('sm_cs')&&LS.getItem('sm_cp'))&&!LS.getItem('sm_token')) return false;
   conn._stopped=false; conn._retry=0;
   conn.connect(room, LS.getItem('sm_token')||'').then(r=>{ if(authLostRes(r)) return; T=relayT; enterApp(); })
     .catch(e=>{ if(e&&e.superseded) return; toast('연결 실패: '+e.message); });
+  return true;
+}
+// '＋ 새 PC 추가'의 새 PC 페어링이 실패했는데 사용자는 그 전에 '← 돌아가기'로 앱에 돌아가 있다(페어링 화면이 숨음) — 숨은 화면의 오류 줄만 고치고
+// 끝나면 앱이 연결 없이 'PC 에 연결하는 중…'에 갇혔다(재접속·오류 안내 없음, 머리 줄의 같은 PC 고르기는 무시, 검토 4회차). 실패를 알리고 되살린
+// 지금 PC 로 다시 붙는다. 다시 붙을 수 없으면 페어링 화면(오류 줄·저장된 PC)을 다시 보인다. 페어링 화면이 보이면 거기 오류가 보인다(그대로)
+function pairFailedBehind(msg){
+  const pair=$('#pair'); if(!pair||!pair.classList.contains('hidden')) return;
+  toast('새 PC 연결 실패: '+msg);
+  if(reconnectCurrentPc()) return;
+  const app=$('#app'); if(app) app.classList.add('hidden');
+  pair.classList.remove('hidden');
+  try{ renderPairPcs(); }catch(e){}
 }
 // connect() 결과가 '이 기기의 자격이 PC 에서 무효'인가(해제·재발급) — 자격 상실 안내·로그아웃은 onauth 가 맡고 부른 쪽은 앱에 들어가지 않는다
 function authLostRes(r){ const a=r&&r.auth; return !!(a&&!a.ok&&(a.error==='auth_invalid'||a.error==='auth_required')); }
@@ -6642,6 +6658,7 @@ function doPair(){
         ? '이 QR 은 더 이상 유효하지 않습니다 — PC 의 📱 기기 목록에서 새 QR 을 만드세요'
         : 'PC 인증 실패: '+((a&&a.error)||'unknown');
       $('#p-go').textContent='연결';
+      pairFailedBehind($('#p-err').textContent);   // 그 전에 '← 돌아가기'로 앱에 돌아갔으면 — 알리고 지금 PC 로 다시 붙는다
       return;
     }
     LS.setItem('sm_room',room);
@@ -6653,7 +6670,8 @@ function doPair(){
     // 연결 자체가 실패했다(CP 가 자격 거부 → 4401 등) — 인증 실패와 같게 되돌린다. 전엔 새 자격이 지금 PC 방 이름과 섞인 채 남고
     // 재접속이 거부된 새 PC 로 끝없이 돌았다(검토 3회차)
     conn._pairing=false; pairRollback(room, prevRoom, hadRk);
-    $('#p-err').textContent=e.message; $('#p-go').textContent='연결'; });
+    $('#p-err').textContent=e.message; $('#p-go').textContent='연결';
+    pairFailedBehind(e.message); });
 }
 
 // ---- 버전 표기 -------------------------------------------------------------

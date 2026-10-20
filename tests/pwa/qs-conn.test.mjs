@@ -664,3 +664,44 @@ test("T68 저장된 다른 PC(B)의 새 QR 이 실패하면(auth_invalid·CP 401
              pcs: [["roomA", "cpA", null], ["roomB", "cpB1", null]], reconnects: 0, err: true },
     reopened: ["roomB", "jwt-cpB1"] });
 });
+
+// 결함 D3(기존, e1981d3 이 '실패한 뒤 돌아가기'만 고침): '＋ 새 PC 추가'에서 새 PC 페어링이 끝나기 전에 '← 돌아가기'를 누르고 그 페어링이 실패하면
+// doPair 의 실패 길은 숨은 페어링 화면의 오류 줄만 고쳤다 — 앱은 연결 없이 'PC 에 연결하는 중…'에 갇혔다(재접속·오류 안내 없음, 머리 줄의 같은
+// PC 고르기는 무시됨). CP 조회에 시간 제한이 없어 망이 느리면 '연결 중…'이 길어져 돌아가기를 누르기 쉽다.
+async function backDuringPairing(how) {
+  let els;
+  const ctx = await load({ setup: (sb) => {
+    sb.localStorage.setItem("sm_pcs", JSON.stringify([PC_A]));
+    els = regIds(sb); sb.fetch = cpFetch(sb, how === "4401" ? ["cpB"] : []);
+  } });
+  const timers = holdTimers(ctx);
+  const sockets = browserWs(ctx);
+  ev(ctx, "globalThis.__toasts = []; toast = (m) => __toasts.push(String(m)); globalThis.__entered = 0; enterApp = () => { __entered++; }; openModal = () => {}; loadList = async () => {};");
+  const p = ev(ctx, "pcsActivate('roomA'); conn._stopped=false; conn.connect('roomA', '')");
+  await until(() => sockets.length === 1);
+  await helloAuth(sockets[0], "cA"); await p;
+  ev(ctx, "LS.setItem('sm_room','roomA'); T = relayT; enterApp();");
+  ev(ctx, "openAddPc()");
+  els["p-link"].value = "https://relay.test/relay/app#room=roomB&cs=csB&cp=cpB&dev=devB";
+  ev(ctx, "doPair()");
+  await until(() => sockets.length === 2);
+  const wsB = sockets[1];
+  ev(ctx, "leaveAddPc()");                                                 // 결과 전에 '← 돌아가기'
+  await settle();
+  if (how === "4401") { wsB.open(); wsB.drop(4401); }
+  else await helloAuth(wsB, "cB", { ok: false, error: "auth_invalid" });
+  await settle(); await tick(30);
+  for (const t of reconnectTimers(timers)) { timers.splice(timers.indexOf(t), 1); t.f(); }
+  await until(() => sockets.length === 3, 30);
+  const back = sockets.length === 3 ? sockets[2] : null;
+  if (back) await helloAuth(back, "cA2");
+  await settle();
+  return { failToast: ev(ctx, "__toasts.some((m) => m.startsWith('새 PC 연결 실패'))"), appShown: !els.app.classList.contains("hidden"),
+           back: back && [roomOf(back), new URL(back.url).searchParams.get("jwt")], current: !!back && ev(ctx, "conn.ws") === back,
+           stopped: ev(ctx, "!!conn._stopped"), entered: ev(ctx, "__entered"), keys: activeKeys(ctx), pcs: pcsOf(ctx) };
+}
+test("T69 '＋ 새 PC 추가'에서 새 PC 페어링 중 '← 돌아가기'를 눌렀고 그 페어링이 실패하면(CP 401·auth_invalid) 실패를 알리고 지금 PC 로 다시 붙는다", async () => {
+  const want = { failToast: true, appShown: true, back: ["roomA", "jwt-cpA"], current: true, stopped: false, entered: 2,
+                 keys: { sm_room: "roomA", sm_cs: "csA", sm_cp: "cpA", sm_devtoken: "devA" }, pcs: [["roomA", null]] };
+  assert.deepEqual(plain({ cp401: await backDuringPairing("4401"), authInvalid: await backDuringPairing("auth_invalid") }), { cp401: want, authInvalid: want });
+});
