@@ -349,3 +349,18 @@ async def test_auth_and_stream_start_keep_their_order(wired, monkeypatch):
     assert c.stream_in[("cidA", "t1")].qsize() == 1          # 시작이 끝난 뒤 입력 — 큐가 이미 있다
     c.streams[("cidA", "t1")].cancel()
     await _ticks()
+
+
+def test_local_http_keepalive_expires_before_host_server_closes():
+    """커넥터 → 로컬 Host(uvicorn) 호출의 연결 재사용 기한은 Host 의 keep-alive 보다 넉넉히 짧아야 한다(검토 3회차).
+
+    httpx 기본 재사용 기한(5초)이 uvicorn 기본 keep-alive(5초)와 같아, 직전 호출 뒤 5초 언저리에 온 요청이 서버가 막 닫은 연결을
+    다시 써 'ReadError' 로 실패했다(실제 릴레이 e2e 의 reqAfter, 따로 잰 4.98초 3/10·5.00초 1/10). Host 는 uvicorn 기본값으로 뜬다.
+    """
+    import inspect
+
+    import uvicorn
+    server_keepalive = inspect.signature(uvicorn.Config).parameters["timeout_keep_alive"].default
+    c = _conn()
+    expiry = c.http._transport._pool._keepalive_expiry
+    assert expiry is not None and expiry <= server_keepalive - 2, (expiry, server_keepalive)

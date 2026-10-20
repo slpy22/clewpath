@@ -35,6 +35,11 @@ from websockets.asyncio.client import connect
 DEFAULT_LOCAL_BASE = os.environ.get(
     "SM_LOCAL_BASE", "http://127.0.0.1:5100").rstrip("/")
 
+# 로컬 Host(uvicorn) 호출의 연결 재사용 기한(초). Host 의 uvicorn keep-alive(기본 5초 — server.main 은 따로 정하지 않는다)보다 넉넉히
+# 짧아야 한다. httpx 기본값이 같은 5초라, 직전 호출 뒤 5초 언저리에 온 요청이 서버가 막 닫은 연결을 다시 써 ReadError 로 실패했다
+# (검토 3회차 실측: 4.98초 3/10, 5.00초 1/10). 2초면 서버가 닫기 전에 이쪽이 먼저 버린다.
+LOCAL_KEEPALIVE_S = 2.0
+
 # 릴레이 프레임 프로토콜 버전. 서버(릴레이)가 최소 지원 버전을 강제할 때 쓴다.
 # 프레임 형식이 호환 불가하게 바뀌면 올린다. (정본은 아래 두 번째 정의 — 같은 값으로 유지)
 PROTOCOL_VERSION = 2
@@ -235,7 +240,8 @@ class Connector:
         self.token = token
         self.local_base = (local_base or DEFAULT_LOCAL_BASE).rstrip("/")
         self.ws = None                       # 릴레이 연결
-        self.http = httpx.AsyncClient(timeout=310)
+        self.http = httpx.AsyncClient(timeout=310, limits=httpx.Limits(
+            max_connections=100, max_keepalive_connections=20, keepalive_expiry=LOCAL_KEEPALIVE_S))
         # 키(rid): 릴레이를 거친 요청은 (cid, 기기가 붙인 id) 튜플 — 기기마다 id 를 1 부터 세어 겹치므로(0.29.0, _on_frame).
         self.streams: dict = {}              # rid -> resume·터미널·관제 파이프 태스크
         self.stream_in: dict = {}            # rid -> client 입력 큐
