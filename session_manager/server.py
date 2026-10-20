@@ -1762,7 +1762,9 @@ def create_app() -> FastAPI:
             bg = bgtasks.counts(s, peer_of.get(s.session_id))
             # claude -p 단발 기록(자동 실행)은 목록에 싣지 않는다(2026-10-12 사장님: claude --resume 에도 안 나오는
             # 것이라 ClewPath 에서도 볼 필요 없음). 지금 살아 돌고 있는 것만 예외로 보인다.
-            if s.headless and not include_headless and not (
+            # 라벨로 찾을 때도 예외(0.24.1): 서빙 원본은 -p 로 만들어야 첫 턴부터 가드레일이 걸린다(NKBOT-7 실측) —
+            # 외부 서비스는 라벨로 원본을 찾는다.
+            if s.headless and not include_headless and not label and not (
                     live_term or peer_of.get(s.session_id) or occupancy.get(s.session_id)):
                 continue
             out.append({

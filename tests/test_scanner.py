@@ -139,6 +139,12 @@ def test_v1_list_hides_finished_headless(fake_claude_home, monkeypatch):
         assert b["cleanup_at"] == int(b["mtime"] + 30 * 86400), "claude 가 지울 즈음 = 마지막 수정 + 기본 30일"
         ids2 = {s["session_id"] for s in c.get("/api/v1/sessions?include_headless=true", headers=H).json()["sessions"]}
         assert "aaaa1111" in ids2
+        # 라벨로 찾으면 끝난 -p 기록도 보인다(0.24.1 — 서빙 원본은 -p 로 만든다)
+        from session_manager import labels
+        labels.set_record("aaaa1111", name="서빙", labels=["서빙 원본"])
+        hit = c.get("/api/v1/sessions?label=서빙 원본&limit=1", headers=H).json()["sessions"]
+        assert [s["session_id"] for s in hit] == ["aaaa1111"]
+        assert "aaaa1111" not in {s["session_id"] for s in c.get("/api/v1/sessions", headers=H).json()["sessions"]}
         local = [s["session_id"] for p in c.get("/api/sessions", headers=H).json()["projects"] for s in p["sessions"]]
         assert "aaaa1111" not in local and "bbbb1111" in local
 
