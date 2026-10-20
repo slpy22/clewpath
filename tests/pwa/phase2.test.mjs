@@ -102,7 +102,8 @@ test("openMonitorGroupById: 저장 그룹 조회 → openMonitor(ids=관리+하�
   // 이미 관제 덮개(폰)가 떠 있음: 같은 팀이 살아 있으면 갈아엎지 않고, 끊겼거나 다른 팀이면 닫고 알림의 팀으로 바꾼다(quick-switch 1-5)
   const ov = stubEl("div"); let dead = false, closed = 0;
   ov._mon = { gid: "g1", dead: () => dead, close: () => { closed++; } };
-  ctx.document._register("mon-ov", ov);
+  // 떠 있는 폰 덮개는 MON_OV 로 든다 — 같은 id 의 상세 칸 관제(창을 좁히기 전에 연 것)와 헷갈리지 않게(quick-switch 검토)
+  ctx.__fakeMon = ov._mon; ev(ctx, "MON_OV = globalThis.__fakeMon");
   await ctx.openMonitorGroupById("g1");
   assert.equal(ev(ctx, "globalThis.__opens.length"), 1, "같은 팀이 살아 있으면 갈아엎지 않는다");
   dead = true;                                                       // 관제 스트림이 끊김(연결 종료)

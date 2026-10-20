@@ -1313,8 +1313,10 @@ class Conn{
     this._retryTimer=setTimeout(async()=>{
       this._retryTimer=null;
       if(code===4402) await clientJwt(true);        // 만료 추정 → JWT 강제 갱신
-      try{ await this.connect(this._room,this._token); this._retry=0; toast('다시 연결됨'); loadList();
-        reattachForegroundTab(); }              // 보고 있던 터미널 탭을 persist PTY 에 다시 붙인다
+      try{ await this.connect(this._room,this._token); this._retry=0; toast('다시 연결됨');
+        const hid=detailHiddenOnPhone();        // loadList 가 목록 칸으로 돌리기 전에 — 폰에서 숨겨 둔 터미널인가
+        loadList();
+        reattachForegroundTab(hid); }           // 보고 있던 터미널 탭을 persist PTY 에 다시 붙인다
       catch(e){ this._scheduleReconnect(); }
     },wait);
   }
@@ -1511,6 +1513,7 @@ const LIST_VIEWS=['sessions','groups','files'];
 let LIST_VIEW=(()=>{ try{ const v=LS.getItem('sm_list_view'); return LIST_VIEWS.includes(v)?v:'sessions'; }catch(e){ return 'sessions'; } })();
 function setListView(v){ LIST_VIEW=LIST_VIEWS.includes(v)?v:'sessions'; try{ LS.setItem('sm_list_view',LIST_VIEW); }catch(e){} }
 let LIST_READY=false;   // 지금 PC 의 첫 목록을 받았나(PC 전환 때 false) — SESSIONS 가 이 PC 것이라 믿고 기억을 걸러도 되는가(quick-switch 3단계)
+let LIST_AT=0;          // 지금 SESSIONS 를 서버에 청한 시각(ms) — 그 뒤에 이 페이지가 본 것(방금 띄운 터미널)은 목록이 아직 모른다(tabSeenLive)
 async function loadList(q){
   const main=paneList(); $('#head').textContent='세션';
   main.innerHTML=''; syncTabbar();
@@ -1542,13 +1545,13 @@ async function loadList(q){
   // 갈아엎으면 전경 터미널이 발밑에서 사라진다(relay e2e 실측 2026-09-10).
   // 탭 막대 전환(2026-10-14 사장님): 오른쪽 칸은 그대로 — 비어 있을 때만 안내를 그린다(보던 상세·관제·파일·뷰어 유지)
   if(!paneDetail().children.length) detailPlaceholder();
-  const pc=hostVerKey();           // 이 목록을 청한 PC
+  const pc=hostVerKey(), at=Date.now();   // 이 목록을 청한 PC·시각
   try{
     const data=await T.list({limit:0});
     // 받는 사이 릴레이로 PC 를 바꿨다 — 늦게 온 옛 PC 목록은 버린다(새 PC 의 loadList 가 따로 돈다). 옛 목록으로 새 PC 의
     // 탭 기억을 복원하면 하나도 맞지 않아 빈 탭 목록이 새 PC 키에 덮어써진다(3단계)
     if(pc!==hostVerKey()) return;
-    SESSIONS=data.sessions||[]; LIST_READY=true;
+    SESSIONS=data.sessions||[]; LIST_READY=true; LIST_AT=at;
     if(typeof data.now==='number') CLOCK_SKEW=data.now-Date.now()/1000;
     rerender();
     fbRetryAfterList();            // 목록 전에 연 파일 탭의 '세션을 찾지 못했습니다'를 굳히지 않는다(quick-switch §4-2)
@@ -1568,8 +1571,8 @@ setInterval(async()=>{
   if(document.hidden||!LIST_CTX) return;
   if($('#app').classList.contains('hidden')) return;
   try{
-    const d=await T.list({limit:0});
-    SESSIONS=d.sessions||[];
+    const at=Date.now(), d=await T.list({limit:0});
+    SESSIONS=d.sessions||[]; LIST_AT=at;
     if(typeof d.now==='number') CLOCK_SKEW=d.now-Date.now()/1000;
     let skipList=false;
     if(LIST_VIEW==='groups'){
@@ -1619,31 +1622,62 @@ function dropGoneTab(t){
   removeTab(t.key); saveTabs();
   if(onView) leaveTerminalView();
 }
-function jumpToSession(s){
-  const t=TABS.list.find(x=>x.s.session_id===s.session_id);
+// 떠나기 직전까지 이 페이지가 살아 있음을 본 탭인데 그 뒤 목록을 아직 받지 않았다 — 목록의 live_terminal=false 는 아직 모르는
+// 것(방금 띄운 터미널). ⋯ 메뉴 표시용(정리한 터미널은 tabGone 이 늘 꺼짐으로 본다) — 누르면 jumpToSession 이 목록을 새로 받아 판정한다
+function tabSeenLive(t){ return !!(t.seenLiveAt&&t.seenLiveAt>=LIST_AT); }
+// 목록을 한 번 새로 받아 SESSIONS 를 바꾸고 그 세션의 지금 정보를 돌려준다(못 받으면 null). 20초 목록이 옛값일 수 있는 판정
+// (꺼진 터미널·화면 인계) 바로 앞에서 쓴다 — openSessionById 와 같은 방식. 받는 사이 PC 를 바꿨으면 버린다.
+async function freshSess(sid){
+  const pc=hostVerKey(), at=Date.now();
+  try{ const d=await T.list({limit:0});
+    if(!d||!d.sessions||pc!==hostVerKey()) return null;
+    SESSIONS=d.sessions; LIST_AT=at; if(typeof d.now==='number') CLOCK_SKEW=d.now-Date.now()/1000;
+  }catch(e){ return null; }
+  return SESSIONS.find(x=>x.session_id===sid)||null;
+}
+// 이 PC 의 탭 기억에 적힌 그 세션 탭의 '권한확인' — 탭 기억을 되살리기 전(알림으로 새로고침·앱 다시 열기)에 그 탭을 먼저 열 때. 모르면 undefined
+function savedTabSafe(s){
+  if(_tabsRestored) return undefined;
+  const v=pcMemLoad('sm_tabs').v, it=v&&Array.isArray(v.list)&&v.list.find(x=>x&&x.sid===s.session_id);
+  return it?!!it.safe:undefined;
+}
+// fresh: 부르는 쪽이 방금 목록을 받았다(알림 진입) — 다시 받지 않는다
+async function jumpToSession(s, fresh){
+  let t=TABS.list.find(x=>x.s.session_id===s.session_id);
+  // 목록(20초)이 꺼졌다고 해도 판정 전에 한 번 새로 받는다 — 방금 띄운 터미널을 떠났다 돌아올 때 탭을 버리지 않게(§4-1)
+  if(t&&!fresh&&tabGone(t,s)){
+    const pc=hostVerKey(), f=await freshSess(s.session_id);
+    if(pc!==hostVerKey()) return;                                 // 받는 사이 PC 를 바꿨다
+    if(f) s=f;
+    t=TABS.list.find(x=>x.s.session_id===s.session_id);           // 기다리는 사이 탭이 닫혔을 수 있다
+  }
   if(t&&!tabGone(t,s)){ switchTab(t.key); return; }
   if(t) dropGoneTab(t);
-  if(s.live_terminal){ loadTerminal(s); return; }
+  if(s.live_terminal){ loadTerminal(s, savedTabSafe(s)); return; }
   loadDetail(s);
 }
 const _findSess=(sid)=>(SESSIONS||[]).find(x=>x.session_id===sid || (x.session_id||'').startsWith(sid));
 async function openSessionById(sid){
   if(!sid) return;
-  // 이미 그 세션 터미널을 보는 중 - 화면 갈아엎지 않음. 폰에서 '‹ 목록'으로 숨겨 둔 것이면 다시 보여 주기만(1-3)
-  if(CURRENT_TERM_SID===sid){ if(paneDetail().classList.contains('term-mode')) showDetailPane(); return; }
+  // 이미 그 세션 터미널을 보는 중 - 화면 갈아엎지 않음. 폰에서 '‹ 목록'으로 숨겨 둔 것이면 다시 보여 주기만(1-3).
+  // 끊겼거나 다른 기기가 가져간 화면이면 아래 탭 규칙(switchTab — 같은 탭에 다시 붙기·인계 확인)으로 — 죽은 화면만 보이지 않게
+  if(CURRENT_TERM_SID===sid){ const cur=findTab(TABS.active);
+    if(!termView.disconnected&&!(cur&&cur.taken)){ if(paneDetail().classList.contains('term-mode')) showDetailPane(); return; } }
   // 배경 탭으로 열려 있는 세션이면 새 화면을 만들지 않고 그 탭으로 전환한다
   const t=TABS.list.find(x=>x.s.session_id===sid || (x.s.session_id||'').startsWith(sid));
   if(t){ switchTab(t.key); return; }
   // 목록은 20초 폴링이라 live_terminal 이 stale 일 수 있다 → 판단 전에 새로 받는다(실패 시 캐시)
-  try{ const d=await T.list({limit:0}); if(d&&d.sessions){ SESSIONS=d.sessions; if(typeof d.now==='number') CLOCK_SKEW=d.now-Date.now()/1000; } }catch(e){}
+  const pc=hostVerKey(), at=Date.now();
+  try{ const d=await T.list({limit:0}); if(d&&d.sessions&&pc===hostVerKey()){ SESSIONS=d.sessions; LIST_AT=at; if(typeof d.now==='number') CLOCK_SKEW=d.now-Date.now()/1000; } }catch(e){}
+  if(pc!==hostVerKey()) return;   // 받는 사이 PC 를 바꿨다 — 이전 PC 의 세션을 새 PC 에서 열지 않는다
   const s=_findSess(sid);
-  if(s){ jumpToSession(s); } else { PENDING_OPEN_SID=sid; }
+  if(s){ jumpToSession(s, true); } else { PENDING_OPEN_SID=sid; }
 }
 function consumePendingOpen(){
   if(!PENDING_OPEN_SID) return;
   const sid=PENDING_OPEN_SID; PENDING_OPEN_SID='';
   const s=_findSess(sid);
-  if(s) jumpToSession(s);   // 콜드 스타트(#open=)도 같은 규칙 — 목록은 방금 받은 것
+  if(s) jumpToSession(s, true);   // 콜드 스타트(#open=)도 같은 규칙 — 목록은 방금 받은 것
 }
 if('serviceWorker' in navigator){
   navigator.serviceWorker.addEventListener('message',(e)=>{
@@ -2662,8 +2696,9 @@ const termView={
     await loadXterm();
     if(this.wrap!==wrap) return;   // 받는 사이 해체됐다(다른 화면으로 감) — 화면 꺼짐 방지·크기 감시를 새로 걸지 않는다
     // 터미널 표시 중 화면꺼짐 방지(§5) — 뷰당 1개. 실패해도 무해(iOS<16.4 등).
+    // 응답 전에 해체됐으면(다른 화면으로 감) 늦게 온 잠금을 바로 놓는다 — 해체 때는 아직 놓을 잠금이 없었다
     if(navigator.wakeLock&&navigator.wakeLock.request){
-      navigator.wakeLock.request('screen').then(l=>{this.wl=l;}).catch(()=>{}); }
+      navigator.wakeLock.request('screen').then(l=>{ if(this.wrap!==wrap){ try{l.release();}catch(e){} return; } this.wl=l; }).catch(()=>{}); }
     this.onWin=()=>this.resize(); window.addEventListener('resize',this.onWin);
     // wrap 이 실제 크기를 얻거나 바뀔 때마다 전경 탭을 채운다 — 초기 레이아웃/창 리사이즈 모두.
     if(window.ResizeObserver){ this.ro=new ResizeObserver(()=>this.resize()); this.ro.observe(wrap); }
@@ -2770,6 +2805,8 @@ const termView={
   // 탭 하나의 인스턴스 해체(탭 닫기). 로컬 iframe 은 about:blank 로 WS 를 닫게 한다.
   closeTabInstance(key){ const t=this.tabs[key]; if(!t) return;
     releaseScreen(t.screenId);             // 버리는 화면 id — 목록이 옛값이어도 가짜 인계 확인창이 안 뜨게(1-1)
+    // 떠나기 직전까지 살아 있던 전경 화면 — 20초 목록이 아직 모르는 동안(방금 띄움) ⋯ 메뉴가 '재개'를 내밀지 않게(tabSeenLive)
+    const rec=findTab(key); if(rec) rec.seenLiveAt=(this.active===key&&!this.disconnected&&!t.ended)?Date.now():0;
     if(t.tc){ try{t.tc.close();}catch(e){} t.tc=null; }
     if(t.ux){ try{t.ux.dispose();}catch(e){} if(t.ux.bar) t.ux.bar.remove(); }
     if(t.term){ try{t.term.dispose();}catch(e){} }
@@ -2805,6 +2842,9 @@ function shouldConfirmTakeover(s, t0){
   const mine=t0&&termView.tabs&&termView.tabs[t0.key]&&termView.tabs[t0.key].screenId;
   return !(mine&&sc.screen_id===mine);                            // 붙은 화면이 내 것이면 그냥 재접속
 }
+// 목록의 screen 이 이 페이지가 놓은 옛 화면이라 위 판정이 묻지 않을 참인가 — 그 목록은 놓기 전 값일 수 있어 loadTerminal 이 새로 받아 본다
+function releasedOnList(s, t0){ const sc=s&&s.screen;
+  return MODE!=='local'&&!(t0&&t0.taken)&&!!sc&&!!sc.attached&&RELEASED_SCREENS.indexOf(sc.screen_id)>=0; }
 // 세션 색: 모니터 색은 서버(webmonitor)가 주지만 터미널엔 없다 → 클라에서 결정적 hash→hsl.
 function tabColor(sid){ let h=0; for(const c of String(sid)) h=(h*31+c.charCodeAt(0))>>>0; return `hsl(${h%360},62%,58%)`; }
 // 기억 키는 PC 별(sm_tabs_<PC>, 3단계·결정 9) — 릴레이로 PC 를 바꿔 써도 다른 PC 의 탭과 섞이거나 지워지지 않게.
@@ -2978,14 +3018,20 @@ function openTabPicker(){
     loadTerminal(s);
   }, {title:'➕ 터미널 탭 추가', hint:'터미널로 열어 탭에 추가할 세션을 고르세요. 이미 열린 탭은 목록에 없습니다.'});
 }
+// 폰에서 상세 칸을 숨기고 목록 칸을 보는 중인가('‹ 목록') — PC 폭은 두 칸이 함께 보여 해당 없음
+function detailHiddenOnPhone(){ return innerWidth<880&&$('#app').getAttribute('data-view')!=='detail'; }
 // 릴레이 재연결·화면 복귀 시: 전경 탭이 끊겨 있으면 persist PTY 에 다시 붙인다(서버가 tail 리플레이).
-function reattachForegroundTab(){
+// hidden: 폰에서 '‹ 목록'으로 숨겨 둔 터미널이면 저절로 다시 띄우지 않는다 — 목록을 보던 사람에게 화면을 바꾸거나 2차 인증을
+// 묻지 않게(§6-2). 같은 탭·세션 줄·알림으로 다시 보여 줄 때(switchTab) 다시 붙는다. 재연결 흐름은 loadList 가 목록 칸으로
+// 돌리기 전에 잰 값을 넘긴다(그 뒤엔 보던 터미널도 숨은 것처럼 보인다).
+function reattachForegroundTab(hidden){
   // disconnected && active = "사용자가 보고 있던 전경 터미널이 발밑에서 죽었다"는 뜻이다
   // (사용자가 스스로 떠났으면 leaveTerminalView→dispose 가 disconnected 를 지운다).
   // 뷰가 아직 떠 있으면 loadTerminal 의 fast-path(attach 만), 재연결 흐름(loadList 등)이
   // pane 을 갈아엎었으면 전체 재구축 — 어느 쪽이든 복원한다. relay e2e 실측(2026-09-10):
   // mounted() 를 요구하면 재연결 뒤 목록 화면에 갇힌 채 아무것도 복원되지 않았다.
   if(MODE!=='relay'||!termView.disconnected||!TABS.active) return;
+  if(hidden===undefined?detailHiddenOnPhone():hidden) return;
   const t=findTab(TABS.active); if(!t||t.taken) return;   // 빼앗긴 탭은 자동으로 되찾지 않는다(핑퐁 차단)
   const inst=termView.tabs&&termView.tabs[t.key]; if(inst&&inst.ended) return;   // claude 자체가 끝난 탭은 자동으로 새로 띄우지 않는다
   switchTab(t.key);
@@ -3187,16 +3233,23 @@ async function loadTerminal(s, safe){
   if(MODE==='relay'){ cred=await ensurePriv(); if(cred===null) return; }   // 외부 터미널 → grace/2차 인증
   // 2차 인증 확인을 기다리는 사이 릴레이로 PC 를 바꿨다 — 이전 PC 세션을 새 PC 로 열거나 새 PC 탭 기억에 적지 않는다
   if(pc!==hostVerKey()) return;
+  // 권한확인을 정하지 않은 길(목록 줄·알림·비서 등)은 그 탭의 설정을 이어 쓴다 — 탭별 권한확인 그대로(§7, 알림 콜드 스타트가 끄던 것)
+  if(safe===undefined){ const tt=findTab(tabKey(s)); if(tt) safe=!!tt.safe; }
   if(safe) cred={...cred, safe:true};      // 권한확인 유지 - 프롬프트가 뜨고 원격 승인 가능
   // 탭 등록(dedupe: key 가 같으면 기존 탭을 최신 세션 객체로 갱신) + 전경 지정
   const key=tabKey(s);
-  const t0=findTab(key);
+  let t0=findTab(key);
+  // 목록의 screen 이 '내가 놓은 옛 화면'이라 묻지 않을 참이다 — 떠나 있는 사이(20초 목록·앱을 내렸다 올림) 다른 기기가 가져갔을 수
+  // 있다(떠날 때 연결을 닫아 인계 통지는 못 받는다). 목록을 한 번 새로 받아 그 screen 으로 판단한다(§9 화면 탈취 착각)
+  let chk=s;
+  if(releasedOnList(s,t0)){ const f=await freshSess(s.session_id); if(pc!==hostVerKey()) return;
+    if(f) chk={...s, screen:f.screen}; t0=findTab(key); }
   // wasDead: 복원 시점에 PTY 가 없던 탭(다시 열면 새 스폰). attach 가 보유 xterm 을 비울지 정하는
   // 근거 — 20초 폴링의 SESSIONS.live_terminal 은 stale 해서(e2e 실측: 살아난 뒤에도 false) 못 쓴다.
   const wasDead=!!(t0&&t0.dead);
   const wasTaken=!!(t0&&t0.taken);           // 로컬 iframe 은 되찾을 때 리로드가 필요(스트림이 이미 끊김)
   // 화면 소유권 인계(v0.9.4, 로컬은 0.9.6): 다른 기기가 보고 있으면 가져가기 전에 묻는다 — 그쪽은 통지를 받고 입력이 막힌다
-  if(shouldConfirmTakeover(s,t0)){
+  if(shouldConfirmTakeover(chk,t0)){
     if(!confirm('다른 기기(화면)에서 이 세션을 보고 있습니다.\n여기로 가져오면 그쪽 화면은 입력이 막히고 "다른 기기에서 보는 중" 으로 바뀝니다.\n\n가져올까요?')) return;
   }
   // 관문(2차 인증·인계 확인)을 지난 뒤에만 보던 화면을 정리한다 — 취소하면 보던 뷰어 실시간 연결이 그대로(T11)
@@ -3244,6 +3297,7 @@ async function loadTerminal(s, safe){
   closeInlineMonitor(); main.classList.remove('fb-mode','mon-mode'); main.classList.add('term-mode');
   // 터미널 영역(wrap)을 만들고 그 안에 탭별 host(xterm 또는 iframe)를 보유한다 — termView.mount.
   try{ await termView.mount(main); }catch(e){
+    if(termView.main!==main) return;   // 받는 사이 다른 화면으로 갔다(해체) — 지금 화면을 지우거나 실패를 그리지 않는다(아래 성공 길과 같게)
     closeInlineMonitor(); main.classList.remove('term-mode','fb-mode','mon-mode'); main.innerHTML='';
     main.appendChild(el('div','term-note','xterm 로드 실패: '+e.message)); return; }
   // xterm 을 처음 받는 사이 다른 화면으로 갔다(paneEnter 가 해체) — 늦게 붙어 보이지 않는 터미널에 연결이 남지 않게
@@ -3826,8 +3880,8 @@ async function openMonitorGroupById(gid){
   const g=(await fetchMonGroups()).find(x=>x.id===gid);
   if(!g){ toast('그 팀의 관제를 찾을 수 없습니다(보관됐거나 관리 세션이 없음)'); return; }
   // 이미 관제 중: 같은 팀이 살아 있으면 갈아엎지 않고, 끊겼거나 다른 팀이면 알림의 팀으로 바꾼다(1-5).
-  // 폰 덮개(_mon)는 여기서 닫고 새로 연다. PC 상세 칸 관제는 openMonitorGroup 이 같은 팀·살아 있음을 가린다.
-  const ov=document.getElementById('mon-ov'), m=ov&&ov._mon;
+  // 폰 덮개(MON_OV)는 여기서 닫고 새로 연다. PC 상세 칸 관제는 openMonitorGroup 이 같은 팀·살아 있음을 가린다.
+  const m=MON_OV;
   if(m){ if(m.gid===gid&&!m.dead()) return; m.close(); }
   openMonitorGroup(g);
 }
@@ -4820,6 +4874,9 @@ function newTeamForm(){
 // opts.gid/name: 팀의 관제로 열었을 때 — 서버가 팀 구성원 변경을 밀어 준다(gid).
 // 데스크톱 그룹 보기: 왼쪽 = 그룹 목록, 오른쪽(상세 칸) = 그 그룹 관제(2026-10-12 사장님). 폰은 전체 화면 오버레이 그대로.
 let MON_INLINE=null;   // {gid, close, dead}
+// 폰 관제 덮개 {gid, close, dead} — 상세 칸 관제와 따로 든다. 둘 다 id 'mon-ov' 라, 창을 좁히면(가로→세로 회전·창 반쪽) 남아 있는
+// 상세 칸 관제를 getElementById 가 먼저 잡아 덮개를 놓치고 덮개를 또 쌓았다(앞 덮개의 관제 연결도 열린 채)
+let MON_OV=null;
 function closeInlineMonitor(){ const m=MON_INLINE; MON_INLINE=null; if(m){ try{ m.close(); }catch(e){} } }
 function monInlineWanted(){ return innerWidth>=880; }
 function openMonitor(ids, manager, labels, opts){
@@ -4855,6 +4912,7 @@ function openMonitor(ids, manager, labels, opts){
     main.appendChild(ov); $('#head').textContent='관제'; showDetailPane();
   } else {
     const old=document.getElementById('mon-ov'); if(old&&old.classList.contains('inline')) closeInlineMonitor();
+    if(MON_OV) MON_OV.close();   // 덮개는 하나만 — 앞 덮개와 그 관제 연결을 닫는다
     document.body.appendChild(ov);
   }
   vtoggle.onclick=()=>{ const hid=viewer.classList.toggle('hide'); rez.classList.toggle('gone',hid); };
@@ -5079,8 +5137,9 @@ function openMonitor(ids, manager, labels, opts){
     x.onclick=()=>{ closeInlineMonitor(); paneDetail().classList.remove('mon-mode'); detailPlaceholder('왼쪽에서 팀을 고르세요');
       highlightGroup(null); };
     highlightGroup(opts.gid||null);
-  } else { const closeOv=()=>{ shut(); ov.remove(); };
-    ov._mon={gid:opts.gid||null, close:closeOv, dead:()=>monDead};   // 폰 덮개 — 관제 알림이 같은 팀·살아 있음을 가린다(1-5)
+  } else { const closeOv=()=>{ shut(); ov.remove(); if(MON_OV===mo) MON_OV=null; };
+    const mo={gid:opts.gid||null, close:closeOv, dead:()=>monDead};
+    ov._mon=MON_OV=mo;   // 폰 덮개 — 관제 알림이 같은 팀·살아 있음을 가린다(1-5)
     x.onclick=closeOv; }
 }
 
@@ -6006,7 +6065,7 @@ function openPop(anchor,content,title){
 function rowMenuItems(s){
   const it=[]; const bd=sessionBadge(s);
   if(bd&&bd.text==='권한 대기') it.push(['✋','원격 승인','claude 가 도구 사용 허락을 기다립니다',()=>showApprove(s),'warn']);
-  if(s.live_terminal||TABS.list.some(x=>x.s.session_id===s.session_id&&!tabGone(x,s))) it.push(['🖥','터미널 열기','실행 중인 화면으로 바로',()=>jumpToSession(s)]);
+  if(s.live_terminal||TABS.list.some(x=>x.s.session_id===s.session_id&&(!tabGone(x,s)||tabSeenLive(x)))) it.push(['🖥','터미널 열기','실행 중인 화면으로 바로',()=>jumpToSession(s)]);
   else if(s.peer) it.push([rowResumeIcon(s),'재개…',peerOriginLabel(s.peer).text+'에서 실행 중 — 방식 선택',()=>showResumeChooser(s)]);
   else it.push(['▶','재개','웹 / 터미널 선택',()=>showResumeChooser(s)]);
   it.push(['💬','대화 보기',null,()=>loadViewer(s)]);
@@ -6093,6 +6152,9 @@ function syncTabbar(){
 }
 function tabbarGo(v){
   if(v==='assist') return openAssistant();
+  // 폰 웹 재개 화면에서 탭 막대로 나가는 것도 '‹ 목록'처럼 화면을 떠나는 것 — 재개(claude -p)를 끝낸다(응답 중이면 그 응답이 끝난 뒤,
+  // 결정 7). 재개는 바로가기로 돌아갈 화면이 아니라 숨겨 두면 다음 상세 칸 화면이 열릴 때까지 돌았다
+  if(PANE_NOW.kind==='resume'&&$('#app').getAttribute('data-view')==='detail') closeLiveResume();
   const changed=LIST_VIEW!==v;
   if(changed) setListView(v);
   const onList=$('#app').getAttribute('data-view')==='list';
