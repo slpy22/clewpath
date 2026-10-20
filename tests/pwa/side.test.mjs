@@ -24,10 +24,12 @@ test("◧ 누르면 접히고 기억되며, 다시 열면 접힌 채로 시작 �
   assert.equal(ev(again, "localStorage.getItem('sm_side_off')"), null);
 });
 
-test("CSS: 접기는 데스크톱 2단에서만, 폭 설정은 보존(그리드 열만 0)", () => {
+test("CSS: 접기는 데스크톱 2단에서만, 상세 칸이 전체 폭", () => {
   const html = readFileSync(new URL("../../pwa/index.html", import.meta.url), "utf-8");
   const wide = html.slice(html.indexOf("@media (min-width:880px){\n    body{background:var(--surface2)}"));
-  assert.ok(wide.includes("#app.side-off #main{grid-template-columns:0 0 1fr}"));
+  // 숨긴 목록·구분선은 격자에서 빠진다 → 열을 하나만 둬야 상세 칸이 첫 열(폭 0)로 밀려 사라지지 않는다(0.27.2 버그)
+  assert.ok(wide.includes("#app.side-off #main{grid-template-columns:minmax(0,1fr)}"));
+  assert.ok(!wide.includes("grid-template-columns:0 0 1fr"));
   assert.ok(wide.includes("#app.side-off[data-view] #paneList,#app.side-off #resizer{display:none!important}"));
   assert.ok(html.includes("#btn-side{display:none}"), "폰에서는 버튼을 숨긴다");
 });

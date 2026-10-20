@@ -864,7 +864,7 @@
     body.col-resizing{cursor:col-resize;user-select:none}
     /* 목록 칸 접기(2026-10-20 사장님): 상세 칸이 화면 전체를 쓴다. 폭 설정(--list-w)은 그대로 두었다가 펼칠 때 복원 */
     #btn-side{display:inline-flex}
-    #app.side-off #main{grid-template-columns:0 0 1fr}
+    #app.side-off #main{grid-template-columns:minmax(0,1fr)}   /* 숨긴 칸은 격자에서 빠지므로 남는 상세 칸 하나만 */
     #app.side-off[data-view] #paneList,#app.side-off #resizer{display:none!important}
     #app.side-off #btn-side{color:var(--accent)}
     .backbar.tolist{display:none}              /* '목록' 뒤로가기 숨김(목록 항상 보임) */
