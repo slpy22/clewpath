@@ -483,7 +483,8 @@ swap_drop() {   # 교체 저널 폴더를 지운다 — 저널 파일부터(지�
 }
 
 commit_swap() {   # 헬스 통과 — 커밋 표식을 먼저(여기서 죽어도 다음 복구가 되돌리지 않게), 그다음 저널을 치운다
-  { : >"$SWAP/committed"; } 2>/dev/null || log "  [WARN] 커밋 표식을 쓰지 못했습니다: $SWAP"
+  # true(일반 명령) — ':'(특수 내장)는 리디렉션이 실패하면 dash·bash --posix 가 스크립트를 통째로 끝낸다
+  { true >"$SWAP/committed"; } 2>/dev/null || log "  [WARN] 커밋 표식을 쓰지 못했습니다: $SWAP"
   swap_drop "$SWAP" || log "  [WARN] 교체 저널을 다 지우지 못했습니다: $SWAP"
   SWAP=
 }

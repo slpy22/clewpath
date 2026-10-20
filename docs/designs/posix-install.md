@@ -201,6 +201,7 @@ installed_at=1760900000
 **셸 문법**
 - `/bin/sh`(POSIX)만 쓴다. [linux]는 dash, [mac]은 bash 3.2의 sh 모드다.
 - 쓰지 않는 문법: `[[ ]]`, 배열, `function` 키워드, `$'..'`, `<<<`, `source`, `[ a == b ]`, `pipefail`, `local`(함수 변수는 접두사로 구분), `echo -e`/`-n`(printf만 쓴다).
+- `:`에 리디렉션을 붙이지 않는다(`: >f` 대신 `true >f`). `:`는 특수 내장이라 리디렉션이 실패하면 dash·`bash --posix`가 `|| …`로 넘어가지 않고 스크립트를 통째로 끝낸다(4단계 실측). 같은 이유로 `exec 3</dev/tty` 같은 특수 내장 리디렉션은 하위 셸 `( … )` 안에서만 시험한다.
 - 쓰지 않는 GNU 전용 옵션: `sed -i`, `readlink -f`, `stat -c`/`-f`, `date -d`, `cp -T`/`mv -T`.
 - [mac]에 없는 도구: `timeout`, `flock`, `setsid`.
 - [linux] slim 이미지에 없는 도구(실측): `ps`, `pgrep`, `pkill`, `curl`, `unzip`. 이것들에 혼자 기대지 않는다.
@@ -551,6 +552,21 @@ curl -fsSL …/get.sh | CLEWPATH_CLIENT_TOKEN=… sh                 # 토큰은
 | :643-695 Start-Process, 20회 폴링, 진단, 로그 꼬리 | 런처 start, `wait-ready`. 이미 떠 있으면 stop 후 start | install.ps1은 재실행해도 옛 Host 유지 |
 | :698-717 안내 | I10 | |
 
+**구현 메모 (4단계, 2026-10-20 — 위 설계와 다른 점과 뒤 단계가 맞출 약속)**
+- uv 해시표: 0.12.1 네 대상(x86_64·aarch64 리눅스 gnu, x86_64·aarch64 맥)을 GitHub 공식 릴리스의 `.sha256`과 직접 내려받아 계산한 값(sha256sum·파이썬 hashlib)이 같은 것을 확인하고 적었다. Windows 고정값도 같은 릴리스의 `.sha256`과 같다.
+- `uv python find`에는 늘 `--system`을 준다. 0.12.1은 작업 폴더의 `.venv`나 `VIRTUAL_ENV`가 있으면 그 파이썬을 먼저 답한다(실측) — 설치 루트에서 재설치하면 자기 venv를 '시스템 파이썬'으로 집는다. `--system`이어도 관리 런타임(`UV_PYTHON_INSTALL_DIR`)은 찾는다(실측). 찾기는 임시 폴더에서 `VIRTUAL_ENV`·`CONDA_PREFIX`·`UV_PYTHON`을 빼고 부른다. 관리 런타임은 이미 받아 둔 것이 있으면 다시 받지 않는다.
+- uv 설정 env(`UV_SYSTEM_CERTS`·`UV_PYTHON_INSTALL_DIR`·`UV_PYTHON_PREFERENCE`·`UV_PROJECT_ENVIRONMENT`)는 uv를 부르는 하위 셸에만 준다. 명세의 `export UV_PYTHON_INSTALL_DIR`처럼 스크립트 전체에 export 하면 기동하는 Host와 그 안의 claude까지 물려받는다(S38). 토큰도 hostctl write-config 에만 env로 넘기고, Host를 띄울 때는 뺀다.
+- `uv venv`는 폴더가 있으면 거부한다(실측). 파이썬이 없는 `.venv`는 가드를 거쳐 지운 뒤 다시 만든다. `--reinstall`은 지우기 전에 Host를 정상 종료한다(돌고 있는 Host의 파이썬을 지우지 않게).
+- `--from-stage`: stage는 이 install.sh가 있는 폴더여야 한다. 최상위 이름 검사는 아무것도 바꾸기 전에 한다(점으로 시작·`start-connector.sh`·제어문자·역슬래시·심볼릭 링크). `--dir`이 비어 있지 않은데 ClewPath 설치본(`.clewpath-install`, 또는 session_manager와 이름이 clewpath-host인 pyproject)이 아니면 거부한다(남의 폴더의 같은 이름 항목을 지우지 않게). `--dry-run`과 함께 쓰면 거부(2). 옮긴 뒤 교체 잔재(`.clewpath-swap.*`)는 버린다 — 받은 파일이 교체 대상을 모두 새로 덮었으므로, 남은 저널을 되돌리면 방금 놓은 파일이 옛 것으로 돌아간다(시험으로 고정). 지우지 못하면 그 자리에서 멈춘다.
+- 교체 잔재가 있는 채로 `sh install.sh`(stage 없이)를 다시 치면 — 런처가 "install.sh 로 복구하세요"라고 안내하는 길 — 표식을 잡기 전에 Host를 멈추고 러너(데이터 폴더 사본 → 설치 루트 → 잔재 안의 것 순)를 임시 사본으로 `-RecoverOnly` 한다. 자기 표식(서막이 잡고 exec 로 이어 온 같은 pid)이 있으면 먼저 내려놓는다 — 러너가 '설치 중'으로 보고 비켜서면(3) 아무도 되돌리지 못한다. 3이면 60초까지 다른 복구가 끝나기를 기다리고, 끝내 남으면 get.sh 재설치를 안내하고 1.
+- 표식은 데이터 폴더가 없고 클로드 `projects`도 없으면 잡지 않는다(그 설치는 [3/6]에서 멈춘다 — 클로드 폴더를 우리가 만들지 않게). 표식의 `at`은 앞자리 0을 받지 않는다(`$(( ))`가 8진수로 읽어 셸이 끝난다).
+- 기존 설정 파일이 있으면 그 파일의 포트(없거나 읽을 수 없으면 Host 기본값 5100)를 런처 렌더·기동 확인·안내에 쓴다. `--port`가 다르면 경고만 한다.
+- 이미 떠 있는 Host는 `running`뿐 아니라 응답 없는 Host(`starting`)도 멈춘다 — status 의 `pid=`(살아 있는 Host 만)로 판단한다. 우리 표식이 있으면 status 는 응답 없는 Host 를 `updating`으로 보이기 때문이다. maintenance.flag 가 있으면 멈추지도 띄우지도 않는다.
+- DryRun 의 컨트롤플레인 도달 확인은 루프백만 프록시를 건너뛴다(`--noproxy 127.0.0.1,localhost,::1`) — 원격 CP 는 사내 프록시가 필요할 수 있다.
+- 인자는 `--opt 값`과 `--opt=값`을 다 받는다. 모르는 위치 인자는 값을 화면에 찍지 않는다(토큰을 잘못 붙였을 수 있다).
+- 시험: `tests/test_install_sh.py`(진짜 install.sh·uninstall.sh·런처·hostctl·Host·브로커, 가짜 uv 하나), `tests/test_hostctl.py`. 리눅스 컨테이너에서 install.sh·uninstall.sh·hostctl 에 버그를 하나씩 넣어(43종) 모두 겨냥한 단정에서 잡히는 것을 확인했다. `bash --posix`(맥 sh 근사)로 stage 없는 설치·제거도 돈다. 진짜 uv(고정 해시 tarball)·오프라인 `uv sync --frozen`으로 설치 → 상태·멈춤·기동 → 재설치 → 제거 → `--purge` 왕복도 컨테이너에서 확인했다.
+- 뒤 단계가 맞출 것: get.sh 는 `--dir`을 절대 경로로, stage 를 `dirname DIR` 아래 `.clewpath-get.*/stage`에 두고 `exec /bin/sh "$tmp/stage/install.sh" --from-stage "$tmp/stage" --dir …`로 넘긴다. 토큰은 env 로만 넘긴다.
+
 ### 3.3 start-connector.template.sh → start-connector.sh (멱등 런처)
 
 **머리**
@@ -844,6 +860,7 @@ PAYLOAD="session_manager pwa pyproject.toml uv.lock install.ps1 install.sh unins
 - 인자 검증: `-BackupDir`는 로그 폴더 바로 아래, `-Version`은 `[0-9][0-9A-Za-z.+-]*`(64자까지 — 파일 이름과 JSON 에 들어간다), 숫자 인자는 앞자리 0 금지(`$(( ))`가 8진수로 읽는다), 경로는 절대 경로이고 제어문자·`.`·`..` 조각이 없어야 한다. rm -rf 는 `BackupDir`·`BackupDir.tmp.*`·`BackupDir-failed-*`·`InstallRoot/.clewpath-swap.*`·`WORK/runner.lock.d`에만 한다.
 - 스크립트 전체를 `main()`에 넣었다. updater.apply 의 `copy2`가 같은 자리에 덮어써도, 돌고 있는 sh 는 이미 다 읽은 함수만 쓴다.
 - 시험: `tests/test_update_runner_sh.py`(R①~R⑮, rename 마다 SIGKILL 17곳, curl 길, uv 찾는 순서, 런처 + 진짜 러너 복구, 업데이트 중 감독자 대기, Host 가 떠 있을 때 복구 보류), `test_update_safety`(러너 사본 실행). 리눅스 컨테이너에서 러너에 버그를 하나씩 넣어 시험이 잡는지 확인했다.
+- (4단계에서 고침) 커밋 표식은 `true >"$SWAP/committed"`로 쓴다. `: >…`(특수 내장)는 쓰기가 실패하면 dash·`bash --posix`가 러너를 정리 없이 끝냈다(잠금·표식·apply.lock 이 남음). `test_posix_scripts`가 `:` 리디렉션을 금지한다.
 - 뒤 단계가 맞출 것: install.sh 는 `.clewpath-install`에 `uv=`·`python_pref=`·`python_install_dir=`를 쓴다(러너가 읽는다). install.sh 의 표식은 `by=install`이고 명령줄에 `install.sh`가 있어야 러너가 산 것으로 본다(그동안 러너는 종료코드 3). uninstall.sh 는 살아 있는 러너 표식(`by=runner`)이 있으면 끝나기를 기다리거나 거부하는 편이 안전하다(러너가 끝에 Host 를 다시 띄운다 — 5단계에서 정할 것).
 
 ### 3.5 uninstall.sh (설치 루트)
@@ -887,6 +904,15 @@ PAYLOAD="session_manager pwa pyproject.toml uv.lock install.ps1 install.sh unins
 | `~/.claude/projects` 유지 | 같음 | |
 | 없음 | 표식, watch·Host·브로커 정지 | README에는 정지 단계가 없다 |
 | 없음 | 훅 안내(읽기만) | 불가침 원칙 |
+
+**구현 메모 (5단계, 2026-10-20)**
+- 결정 Q6 대로 훅은 지우지 않는다. 데이터 폴더의 부모(= Host 가 훅을 적은 클로드 폴더)의 `settings.json`에서 `/api/hooks/event`가 든 줄 수를 세어 남은 개수·지우는 법·`settings.json.bak-clewpath`(참고용, 통째로 되돌리지 말 것)를 안내한다.
+- 업데이트·설치가 진행 중이면(러너 잠금, 또는 by=runner·by=install 의 살아 있는 표식) 확인을 묻기 전에 거부한다(1) — 러너는 끝에 Host 를 다시 띄우고, 설치는 파일을 놓는 중이다(3단계 메모의 열린 질문).
+- 설치 루트는 session_manager 와 이름이 `clewpath-host`인 pyproject 가 있어야 한다(`--root`로 남의 폴더를 가리켜도 지우지 않게).
+- `--purge-uv`는 폴더째 지우지 않는다: `bin`에서는 `uv`·`uvx`만 지우고 비면 rmdir, `python`은 uv 관리 런타임 모양(`cpython-*`·uv 의 잠금·임시)만 있을 때 통째로 — `CLEWPATH_HOME`을 남과 같이 쓰는 폴더로 정했어도 남의 파일을 지우지 않는다. 끊긴 get.sh 의 `.clewpath-get.*`도 이때 치운다. uv 캐시는 안내만.
+- 남은 프로세스 확인은 후보(`/proc/*/cmdline` grep)를 다 모은 뒤 하나씩 다시 본다 — 찾는 grep 자신이 그 글자를 인자로 가져 '남은 프로세스'로 잡히던 경합(시험에서 느린 grep 으로 늘 재현)을 막는다. 명령줄이 나와 똑같은 프로세스(내 하위 셸 — 하위 셸 안에서도 `$$`는 본 셸의 pid)도 뺀다. 설치 폴더 안의 uninstall.sh 를 `--root`로 직접 부르면 스크립트 경로에 설치 폴더가 들어 있어 제 하위 셸을 남은 것으로 보던 문제(`bash --posix` 시험에서 발견).
+- 확인 질문은 `/dev/tty`가 열릴 때만(하위 셸에서 시험), 표준 입력이 파이프여도 사람에게 묻는다. `y`·`yes` 외에는 취소(1).
+- 남은 것이 없으면 0, 프로세스·설치 폴더·(purge 때) 데이터·uv 가 남으면 1.
 
 ## 4. 파이썬 쪽 변경
 
@@ -962,6 +988,7 @@ def port_free(host: str, port: int) -> bool:
 
 - 맨 위 import는 표준 라이브러리만 쓴다. 나머지는 명령 안에서 늦게 import 한다.
 - 런처와 러너는 hostctl을 쓰지 않는다. 버전 어긋남과 교체 중 상태를 피하기 위해서다.
+- 구현 메모(4단계): `paths`는 Host 가 기동할 때와 같은 순서로 구한다 — 설정 파일 자리(`appconfig.config_path()`, 런처가 `CLEWPATH_CONFIG`로 고정할 값)를 먼저 정하고, 그 파일을 `apply_env()`로 펼친 뒤(`[claude] config_dir`) 데이터 폴더를 정한다. 같은 프로세스에서 부르는 시험이 물려받지 않게 env 는 끝나면 통째로 되돌린다. 상대 경로·제어문자가 든 경로는 거부한다(1). `write-config`는 설정 파일 자리만 보며 `port=`(유지면 그 파일의 포트)를 함께 낸다. `secure-data-dir`·`wait-ready`는 `--data-dir`, `write-config`는 `--conf-file`을 선택 인자로 받는다(install.sh 는 `paths` 결과를 넘긴다). `provision`은 `reason=`을 낸다(`provision_rate_limited` 등). 발급 로그(room 포함)는 버리고 connector id 만 보여 준다. key=value 값은 파일 시스템 바이트 그대로(`os.fsencode`) 낸다.
 
 ### 4.4 그 밖의 파이썬
 

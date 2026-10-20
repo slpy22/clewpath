@@ -7,7 +7,8 @@ hostctl.py·tests/posix_e2e 는 명세 1.4 의 차례로 하나씩 생긴다. �
 
 스크립트가 지킬 약속(새 스크립트를 쓰는 사람이 볼 곳):
 - 형식: LF, BOM 없음, 1행 `#!/bin/sh`. 런처 템플릿 2행에 `clewpath-launcher v2`. 실행 비트에 기대지 않는다.
-- POSIX sh 만(_BASHISMS), 금지 명령(_FORBIDDEN — 맥에 없는 도구·GNU 전용 옵션·set -x·env 덤프·trap '' 신호 무시).
+- POSIX sh 만(_BASHISMS), 금지 명령(_FORBIDDEN — 맥에 없는 도구·GNU 전용 옵션·set -x·env 덤프·trap '' 신호 무시·
+  `:` 에 리디렉션 — 특수 내장이라 리디렉션이 실패하면 dash·bash --posix 가 스크립트를 통째로 끝낸다. `true >f` 를 쓴다).
   `umask` 는 하위 셸 `( umask 077; … )` 꼴만(S38: Host 를 띄우는 경로는 사용자의 umask 를 바꾸지 않는다).
 - 인라인 파이썬은 맨 앞 칸의 `NAME_PY='` 한 줄로 열고 `'` 한 줄로 닫는 셸 변수에 둔다. 안에 작은따옴표 금지,
   그대로 컴파일돼야 한다. 런처의 PROBE_PY·SPAWN_PY 는 session_manager 를 import 하지 않는다(롤백 뒤 버전 어긋남).
@@ -15,7 +16,9 @@ hostctl.py·tests/posix_e2e 는 명세 1.4 의 차례로 하나씩 생긴다. �
 - 공통 경로 블록(HOME_BLOCK)은 get.sh·install.sh·uninstall.sh·update_runner.sh 에 글자까지 같게(고른 들여쓰기만 허용).
 - update_runner.sh: `PAYLOAD="…"`(test_updater.test_payload_lists_agree), 롤백 정지 대상에서 session_manager.ptyd 제외.
 - install.sh: `UV_DEFAULT="x.y.z"`(install.ps1 $UvDefault 와 같게), `uv_pinned_sha256` 표에 그 버전의 대상 4개(64자 hex).
-- hostctl.py: 토큰은 env 로만(argparse 에 *token* 인자 없음, S17).
+  `uv python find` 는 늘 `--system`(설치 루트의 .venv·VIRTUAL_ENV 가 답을 가로채지 않게), 관리 런타임은 `--no-bin`.
+- install.sh·uninstall.sh: claude 의 settings.json 은 읽기만(쓰기·지우기·옮기기 없음), projects 는 지우지 않는다(S36·S37).
+- hostctl.py: 토큰은 env 로만(argparse 에 *token* 인자 없음, S17). 맨 위 import 는 표준 라이브러리만.
 - tests/posix_e2e: release-keys·keygen·pyongso.com 금지(S19·S44) — 거부 단정문 줄은 끝에 `e2e-guard` 표시
   (파이썬·셸은 `# e2e-guard`, 마크다운은 `<!-- e2e-guard -->`).
 """
@@ -51,8 +54,6 @@ HOME_SCRIPTS = ("get.sh", "install.sh", "uninstall.sh", "update_runner.sh")
 
 # 아직 만들지 않은 것(명세 1.4 의 단계). 만들면 여기서 뺀다.
 PENDING = {
-    "install.sh", "hostctl.py",         # 4단계
-    "uninstall.sh",                     # 5단계
     "get.sh",                           # 6단계
     "posix_e2e",                        # 8단계
 }
@@ -268,6 +269,9 @@ _FORBIDDEN = [
     # 무시('')한 신호는 exec 로 자식에게 물려간다 — 재기동한 Host·브로커·claude 가 HUP 를 못 받으면 브로커가 죽어도
     # claude 가 끝나지 않는다. 막기만 하려면 빈 처리(trap ':' HUP)를 쓴다
     ("trap '' 신호 무시(자식에게 물려간다)", _C + r"trap\s+(?:''|\"\")\s"),
+    # ':' 는 특수 내장 — 리디렉션이 실패하면(쓸 수 없는 자리) dash·bash --posix 는 `|| …` 로 넘어가지 않고 스크립트를
+    # 끝낸다(test_colon_redirect_failure_ends_the_script). 파일을 비우거나 만들 땐 일반 명령 `true >f` 를 쓴다
+    (": 에 리디렉션(특수 내장 — 실패하면 셸이 끝난다)", _C + r":[ \t]*[0-9]*[<>]"),
 ]
 _UMASK = re.compile(_C + r"umask\b")
 _UMASK_OK = re.compile(r"umask\s+0?077\s*(?:;|&&)")
@@ -342,6 +346,7 @@ case "$p" in *[[:cntrl:]]*) printf '%s\n' "bad" ;; esac
 x=$(printf '%s' "$msg" | tr -d '[:space:]')
 n=$((1 + 2)); [ "$n" -eq 3 ] && [ "$a" = "b" ] && printf '%s %s %s\n' "${x:-d}" "${#x}" "${x%/*}"
 ( umask 077; printf 'pid=%s\n' "$$" > "$DATA_DIR/update.inprogress" )
+{ true >"$SWAP/committed"; } 2>/dev/null || printf '%s\n' "쓰지 못함"
 trap ':' HUP INT
 trap 'STOP_REQ=1' TERM
 cat <<'EOF'
@@ -362,7 +367,7 @@ _BAD = [
     "trap 'cleanup' ERR", "set -x", "set -eux", "printenv", "env", "export -p", "sed -i 's/a/b/' f",
     "sed -n -i.bak 's/a/b/' f", "readlink -f .", "stat -c %Y f", "date -d yesterday", "cp -T a b", "flock f cmd",
     "setsid cmd", "x=$(timeout 5 cmd)", "umask 077", "( umask 022; : )", "cmd |& tee f",
-    "trap '' HUP INT", 'trap "" TERM',
+    "trap '' HUP INT", 'trap "" TERM', ': >"$f"', '{ : >"$SWAP/committed"; } 2>/dev/null || log x', ": 2>/dev/null",
 ]
 
 
@@ -556,6 +561,53 @@ def test_hostctl_takes_tokens_from_env_only():
     t = _text("hostctl.py")
     assert not re.search(r"add_argument\(\s*['\"]--[\w-]*token", t, re.I), "토큰 인자 금지(ps 에 보인다, S17)"
     assert "CLEWPATH_CLIENT_TOKEN" in t and "CLEWPATH_AGENT_TOKEN" in t
+
+
+def test_hostctl_top_level_imports_are_stdlib():
+    """맨 위 import 는 표준 라이브러리만 — 의존성 하나가 깨져도 paths 같은 기본 명령은 돈다(명세 4.3)."""
+    import sys
+    tree = ast.parse(_text("hostctl.py"))
+    top = set()
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            top |= {a.name.split(".")[0] for a in node.names}
+        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            top.add(node.module.split(".")[0])
+    assert top - {"__future__"} <= set(sys.stdlib_module_names), sorted(top - set(sys.stdlib_module_names))
+
+
+@with_shells
+def test_colon_redirect_failure_ends_the_script(shell):
+    """_FORBIDDEN 의 ':' 규칙의 근거 — 특수 내장(:)의 리디렉션이 실패하면 dash·bash --posix 는 `|| …` 로 넘어가지 않고
+    스크립트를 끝낸다(러너가 커밋 표식을 못 쓰면 정리 없이 죽던 자리). 일반 명령(true)은 실패만 돌려준다."""
+    bad = subprocess.run([*shell, "-c", '{ : >/nonexistent-dir/x; } 2>/dev/null || printf survived; printf end'],
+                         capture_output=True, timeout=30)
+    assert b"survived" not in bad.stdout and b"end" not in bad.stdout and bad.returncode != 0
+    good = subprocess.run([*shell, "-c", '{ true >/nonexistent-dir/x; } 2>/dev/null || printf survived; printf end'],
+                          capture_output=True, timeout=30)
+    assert good.stdout == b"survivedend" and good.returncode == 0
+
+
+def test_install_finds_python_outside_virtualenvs():
+    """`uv python find` 는 cwd 의 .venv·VIRTUAL_ENV 를 먼저 답한다(0.12.1 실측) — 설치 루트에서 재설치하면 자기 venv 를
+    '시스템 파이썬'으로 집는다. 늘 --system. 관리 런타임은 --no-bin(사용자 ~/.local/bin 을 건드리지 않게)."""
+    view = _code_view(_text("install.sh"))
+    finds = re.findall(r"python find[^\n]*", view)
+    assert finds and all("--system" in f for f in finds), finds
+    t = _text("install.sh")
+    assert "--no-bin" in t and "UV_PYTHON_INSTALL_DIR" in t
+
+
+@pytest.mark.parametrize("name", ["install.sh", "uninstall.sh"])
+def test_scripts_leave_claude_files_alone(name):
+    """claude 의 settings.json 은 읽기만 하고(훅 제거는 안내만 — 결정 Q6), projects 는 어떤 경우에도 지우지 않는다(S36·S37)."""
+    for i, line in enumerate(_text(name).splitlines(), 1):
+        code = line.split("#", 1)[0] if line.lstrip().startswith("#") else line
+        if "settings.json" in code:
+            assert not re.search(r"(?:^|[\s;&|(])(?:rm|mv|cp|sed|tee|truncate)\s|>\s*\"?[^\"]*settings\.json", code), \
+                f"{name}:{i}: settings.json 에 쓰거나 지운다: {line.strip()}"
+        if re.search(r"(?:^|[\s;&|(])rm\s", code):
+            assert "projects" not in code, f"{name}:{i}: projects 를 지운다: {line.strip()}"
 
 
 def test_e2e_harness_never_touches_release_keys_or_production():
