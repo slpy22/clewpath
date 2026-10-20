@@ -14,6 +14,8 @@
 | 3 | 맥 | launchd·키체인·`install.sh`·`update_runner.sh`·CP `/get.sh`, 실제 claude 로 시험 | 맥 추가 |
 
 브랜치: 1단계는 main 에서 배포. 2·3단계는 `macos` 브랜치에서 하고 합친다(그동안 Windows 핫픽스 가능).
+2단계는 2026-10-20 main 에 합쳐 0.28.0 으로 배포(재검증: 리눅스 컨테이너 612 통과·Windows 620 통과). 터미널 관리 프로세스(ptyd) 코드가 바뀌어
+각 PC 에서 브로커 교체가 한 번 필요하다 — 열린 터미널이 없으면 자동, 있으면 설정의 확인창(D2).
 
 ## 1. OS 경계: `session_manager/osdep/`
 
