@@ -1734,6 +1734,7 @@ async function jumpToSession(s, fresh){
 const _findSess=(sid)=>(SESSIONS||[]).find(x=>x.session_id===sid || (x.session_id||'').startsWith(sid));
 async function openSessionById(sid){
   if(!sid) return;
+  const live=navTicket();         // 이 알림 누름 — 바로 끝나도(보던 터미널) 마지막 누름이다. 목록을 받던 앞 누름이 늦게 덮지 않게
   // 이미 그 세션 터미널을 보는 중 - 화면 갈아엎지 않음. 폰에서 '‹ 목록'으로 숨겨 둔 것이면 다시 보여 주기만(1-3).
   // 끊겼거나 다른 기기가 가져간 화면이면 아래 탭 규칙(switchTab — 같은 탭에 다시 붙기·인계 확인)으로 — 죽은 화면만 보이지 않게
   if(CURRENT_TERM_SID===sid){ const cur=findTab(TABS.active);
@@ -1742,7 +1743,7 @@ async function openSessionById(sid){
   const t=TABS.list.find(x=>x.s.session_id===sid || (x.s.session_id||'').startsWith(sid));
   if(t){ switchTab(t.key); return; }
   // 목록은 20초 폴링이라 live_terminal 이 stale 일 수 있다 → 판단 전에 새로 받는다(실패 시 캐시)
-  const live=navTicket(), pc=pcNow(), at=Date.now();
+  const pc=pcNow(), at=Date.now();
   try{ const d=await T.list({limit:0}); if(d&&d.sessions&&pc===pcNow()){ SESSIONS=d.sessions; LIST_AT=at; if(typeof d.now==='number') CLOCK_SKEW=d.now-Date.now()/1000; } }catch(e){}
   // 받는 사이 다른 화면을 눌렀거나 PC 를 바꿨다 — 마지막 누름을 덮거나 이전 PC 의 세션을 새 PC 에서 열지 않는다
   if(!live()) return;
@@ -3042,7 +3043,8 @@ function switchTab(key, opt){
   // 이미 전경 — 단 터미널 화면이 실제로 떠 있을 때만(상세/목록으로 나간 뒤엔 탭이 '활성'이어도
   // 화면이 없다 → 다시 구축해야 한다. 알림→탭 점프 e2e 에서 발견)
   // 폰에서 '‹ 목록'으로 숨겨 둔 것이면 다시 보여 주기만 한다(재접속 없음, 1-3)
-  if(key===TABS.active&&termView.sid===t.s.session_id&&!termView.disconnected&&!t.taken&&paneDetail().classList.contains('term-mode')){ showDetailPane(); return; }
+  // 바로 끝나는 누름도 마지막 누름으로 센다(navTicket) — 목록을 받던 앞 누름이 늦게 이 화면을 덮지 않게
+  if(key===TABS.active&&termView.sid===t.s.session_id&&!termView.disconnected&&!t.taken&&paneDetail().classList.contains('term-mode')){ navTicket(); showDetailPane(); return; }
   // 목록의 최신 세션 객체로 갱신(제목·live_terminal 변동 반영)
   const fresh=(SESSIONS||[]).find(s=>s.session_id===t.s.session_id); if(fresh) t.s=fresh;
   loadTerminal(t.s, t.safe, opt);   // 뷰가 떠 있으면 fast-path(attach 만), 아니면 구축

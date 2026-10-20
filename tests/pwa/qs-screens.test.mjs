@@ -340,3 +340,22 @@ test("T52 폰: 터미널을 보다 떠나 앱을 몇 시간 내려 둔 뒤(20초
     "목록 옴(꺼짐)": { polledWhileHidden: 0, menu: "터미널 열기", now: "detail:a", terminalRequests: 0, tabs: 0 },
   });
 });
+
+test("T48c 바로 끝나는 누름도 마지막 누름이다 — 떠났던 터미널 줄(A)이 목록을 받는 사이 지금 보는 터미널(B)의 탭 칩·알림을 누르면 늦게 끝난 A 가 B 를 덮지 않는다", async () => {
+  const paths = ["탭 칩", "알림"];
+  const got = await each(paths, async (p) => {
+    const { ctx } = await boot();
+    ev(ctx, "SESSIONS.forEach((s) => { s.live_terminal = false; }); globalThis.__lr = []; T.list = async () => ({ sessions: SESSIONS.map((s) => ({ ...s })) });");
+    await ctx.loadTerminal(ev(ctx, "SESSIONS[0]"), false); await tick(RENDER);   // 터미널 A(방금 띄움)
+    await ev(ctx, "loadViewer(SESSIONS[1])"); await tick(15);                     // 떠남(A 를 살아 있게 봄)
+    await ctx.loadTerminal(ev(ctx, "SESSIONS[1]"), false); await tick(RENDER);   // 터미널 B 를 보는 중(A 는 탭 줄에)
+    ev(ctx, "T.list = () => new Promise((r) => __lr.push(r));");
+    const pA = ctx.jumpToSession(ev(ctx, "SESSIONS[0]")); await tick(50);        // 목록 줄 A — 목록을 새로 받는 중
+    if (p === "탭 칩") ev(ctx, `switchTab('${B}')`); else await ctx.openSessionById(B);   // 보던 B 를 그대로 — 바로 끝남
+    await tick(50);
+    ev(ctx, `__lr[0]({ sessions: SESSIONS.map((s) => ({ ...s, live_terminal: true })) })`);
+    await pA; await tick(RENDER);
+    return { now: nowAt(ctx), active: ev(ctx, "termView.active") === B };
+  });
+  assert.deepEqual(got, all(paths, { now: "terminal:b", active: true }));
+});
