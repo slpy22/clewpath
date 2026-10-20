@@ -3411,6 +3411,63 @@ async function showTrash(){
   });
 }
 
+// ---- 🔌 외부 서비스(서비스 대장 S4) — PC 로컬 전용. 토큰 원문은 재발급 때 이 화면에 한 번만 ----
+const SVC_STATUS={active:'✅ 사용 중', suspended:'⏸ 정지', revoked:'⛔ 폐기'};
+function svcUsageText(s){
+  const t=s.today||{}, l=s.limits||{};
+  return '오늘 '+(t.calls|0)+'/'+(l.daily_calls??'?')+'회 · $'+(+t.usd||0).toFixed(2)+'/'+(l.daily_usd??'?');
+}
+function svcBasesText(b){ return Object.entries(b||{}).map(([p,id])=>p+' '+String(id).slice(0,8)).join(' · '); }
+function showServiceToken(svc, token){
+  const body=el('div');
+  body.appendChild(el('div','sheet-main', svc.name+' ('+svc.id+') 새 토큰'));
+  body.appendChild(el('div','cwd','지금 한 번만 보입니다. 서비스 설정(env)에 넣고 이 창을 닫으세요. 옛 토큰은 이미 막혔습니다.'));
+  const pre=el('pre','tl-full',token); pre.style.whiteSpace='pre-wrap'; pre.style.wordBreak='break-all'; body.appendChild(pre);
+  const copy=el('button','btn','복사');
+  copy.onclick=async()=>{ try{ await navigator.clipboard.writeText(token); toast('복사했습니다'); }catch(e){ toast('복사 실패 — 직접 선택하세요'); } };
+  openModal('🔑 새 토큰', body, [copy]);
+}
+async function showServices(){
+  const body=el('div');
+  const status=el('p',null,'불러오는 중…'); body.appendChild(status);
+  openModal('🔌 외부 서비스', body, []);
+  if(MODE!=='local'){ status.textContent='외부 서비스 관리는 이 PC 화면에서만 합니다.'; return; }
+  let d; try{ d=await T.api('GET','/api/owner/services'); }catch(e){ status.textContent='불러오기 실패: '+e.message; return; }
+  const list=(d&&d.services)||[];
+  status.remove();
+  body.appendChild(el('div','cwd','ClewPath 원본을 답변 엔진으로 쓰는 서비스입니다. 서비스 토큰은 자기 원본의 사본 질의만 됩니다. '
+    +'새 서비스는 서비스를 만드는 세션이 신청하고(✅ 승인 요청으로 옵니다) 여기서는 정지·재발급·폐기를 합니다.'));
+  if(!list.length){ body.appendChild(el('div','cwd','등록된 서비스가 없습니다.')); return; }
+  list.forEach(s=>{
+    const row=el('div','devrow'+(s.status!=='active'?' off':'')); const info=el('div');
+    info.appendChild(el('div','devname','🔌 '+s.name+' ('+s.id+') · '+(SVC_STATUS[s.status]||s.status)));
+    info.appendChild(el('div','devmeta','원본 '+svcBasesText(s.bases)+(s.folder?' · '+s.folder:'')));
+    info.appendChild(el('div','devmeta',svcUsageText(s)+' · '+(s.token_hint||'')));
+    row.appendChild(info);
+    const post=async(path,b)=>{ const r=await T.api('POST','/api/owner/services/'+encodeURIComponent(s.id)+path,b?{body:b}:undefined);
+      if(r&&r.error) throw new Error(r.message||r.error); return r; };
+    if(s.status!=='revoked'){
+      const pause=el('button','btn ghost sm', s.status==='active'?'정지':'다시 켜기');
+      pause.onclick=async()=>{ try{ await post('',{status:s.status==='active'?'suspended':'active'});
+        toast(s.status==='active'?'정지했습니다 — 토큰이 바로 막힙니다':'다시 켰습니다'); closeModal(); showServices(); }
+        catch(e){ toast('실패: '+e.message); } };
+      const rot=el('button','btn ghost sm','재발급');
+      rot.onclick=async()=>{ let r=null;
+        const ok=await confirmSheet({title:'토큰 재발급', main:'"'+s.name+'" 의 토큰을 새로 만들까요?',
+          sub:'옛 토큰은 지금 바로 막힙니다. 서비스 설정(env)을 새 토큰으로 바꿔야 다시 동작합니다.', action:'재발급',
+          run:async()=>{ r=await post('/rotate'); }});
+        if(ok&&r&&r.token) showServiceToken(r.service||s, r.token); };
+      const rev=el('button','btn ghost sm danger','폐기');
+      rev.onclick=async()=>{ const ok=await confirmSheet({title:'서비스 폐기', main:'"'+s.name+'" 을(를) 폐기할까요?', danger:true,
+          sub:'토큰이 영구히 막히고 되돌릴 수 없습니다(다시 쓰려면 새로 신청). 원본 세션은 지우지 않습니다.', action:'폐기',
+          run:async()=>{ await post('',{status:'revoked'}); }});
+        if(ok){ toast('폐기했습니다'); showServices(); } };
+      row.appendChild(pause); row.appendChild(rot); row.appendChild(rev);
+    }
+    body.appendChild(row);
+  });
+}
+
 // ---- export / import ----
 function b64toBlob(b64,type){ const bin=atob(b64); const n=bin.length; const arr=new Uint8Array(n);
   for(let i=0;i<n;i++)arr[i]=bin.charCodeAt(i); return new Blob([arr],{type:type||'application/zip'}); }
@@ -5505,6 +5562,10 @@ const setStat={
     return !st.installed?{t:'설치 안 됨 — 눌러서 설치'}:st.up_to_date?{t:'설치됨 · 최신'}:{t:'새 내용 있음 — 눌러서 갱신', warn:true}; },
   names: async()=>{ const n=((await T.api('GET','/api/owner/names/agent-mismatch')).sessions||[]).length;
     return n?{t:n+'개 세션의 통신 이름이 화면 이름과 다름 — 눌러서 맞추기', warn:true}:{t:'모두 같음'}; },
+  services: async()=>{ const l=((await T.api('GET','/api/owner/services')).services||[]).filter(s=>s.status!=='revoked');
+    if(!l.length) return {t:'등록된 서비스 없음'};
+    const usd=l.reduce((a,s)=>a+(+((s.today||{}).usd)||0),0), off=l.filter(s=>s.status!=='active').length;
+    return {t:l.length+'개'+(off?' (정지 '+off+')':'')+' · 오늘 $'+usd.toFixed(2)}; },
   ptyd: async()=>{ const st=await T.api('GET','/api/owner/ptyd');
     return !st||!st.enabled?{t:'꺼짐 — Host 업데이트 때 터미널 종료'}:!st.running?{t:'대기 — 터미널을 열면 시작'}
       :{t:'실행 중 · 터미널 '+(st.sessions||0)+'개'+(st.update_pending?' · ⬆ 업데이트 대기':''), warn:!!st.update_pending}; },
@@ -5559,6 +5620,7 @@ function showSettings(){
   row('🏷','통신 이름 맞추기','다른 세션이 부르는 이름을 화면 이름과 같게',showNameSync,{local:true,status:setStat.names});
   row('📥','세션 가져오기','내보낸 세션 zip 불러오기',importSession);
   row('📈','API 사용량','토큰 · 환산 비용 통계',showUsage);
+  row('🔌','외부 서비스','서비스 토큰 · 원본 · 오늘 사용량 · 정지/재발급/폐기',showServices,{local:true,status:setStat.services});
 
   sec('스킬 (이 PC 의 claude 에 설치)');
   row('📦','워커 스킬','여러 세션이 한 팀으로 일하는 규칙 · /clewpath-workers',installWorkersSkill,{local:true,status:setStat.skill('workers')});
@@ -5642,6 +5704,24 @@ function showApprovalSheet(a, opts){
     body.appendChild(el('div','cwd','받는 세션: '+(sx?sessLabel(sx)+' · '+baseName(sx.cwd||''):String((a.args||{}).session_id||'').slice(0,8))
       +(sx&&sessionIsLive(sx)?' (실행 중)':' (꺼져 있으면 자동 허용 모드로 띄운 뒤 전달)')));
     const q=el('pre','tl-full',String((a.args||{}).message||'')); q.style.whiteSpace='pre-wrap'; body.appendChild(q);
+  } else if(a.kind==='service_register'){   // 외부 서비스 등록(S3): 폴더 검사 경고·원본 가드레일을 읽을 수 있게
+    const g=a.args||{};
+    body.appendChild(el('div','cwd','서비스: '+(g.name||'')+' ('+(g.service||'')+')'+(g.purpose?' — '+g.purpose:'')));
+    body.appendChild(el('div','cwd','폴더: '+(g.folder||'')));
+    const lim=g.limits||{};
+    body.appendChild(el('div','cwd','한도: 하루 '+(lim.daily_calls??'?')+'회 · $'+(lim.daily_usd??'?')+' · 1회 $'+(lim.max_call_usd??'?')));
+    Object.entries(g.bases||{}).forEach(([p,spec])=>{
+      if(spec&&spec.adopt){ body.appendChild(el('div','cwd','원본 '+p+': 기존 세션 입양 '+String(spec.adopt).slice(0,8))); return; }
+      const pr=(spec&&spec.new)||{};
+      body.appendChild(el('div','cwd','원본 '+p+': 새로 만들기 · 권한 '+(pr.permission_mode||'-')+' · 허용 도구 '
+        +((pr.allowed_tools||[]).join(', ')||'(목록 없음)')+(pr.denied_tools&&pr.denied_tools.length?' · 차단 '+pr.denied_tools.join(', '):'')));
+      const sp=el('pre','tl-full',String(pr.system_prompt||'')); sp.style.whiteSpace='pre-wrap'; sp.style.maxHeight='10em'; sp.style.overflow='auto';
+      body.appendChild(sp);
+    });
+    const ws=g.warnings||[];
+    body.appendChild(el('div','setsec', ws.length?'⚠ 검사 경고 '+ws.length+'개':'폴더 검사: 경고 없음'));
+    ws.forEach(w=>body.appendChild(el('div','cwd warn','⚠ '+w)));
+    body.appendChild(el('div','diag','승인하면 신청한 세션이 토큰을 받아 갈 때 원본을 만듭니다(30분 안).'));
   } else { const pre=el('pre','tl-full', JSON.stringify(a.args||{}, null, 2)); pre.style.whiteSpace='pre-wrap'; body.appendChild(pre); }
   body.appendChild(el('div','diag','요청 '+tsText(a.created)+(a.requested_by==='owner'?' · 사장님 화면':a.requested_by?' · 세션 '+String(a.requested_by).slice(0,8):'')
     +' · 만료 '+tsText(a.expires)+' · 상태 '+a.status));
