@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import contextvars
 import re
 import json
@@ -149,6 +150,19 @@ def _is_privileged_api(path: str) -> bool:
 # 떠난 기기 앞 응답이 방 전체로 broadcast 됐다(검토 3회차). 기기 인증·스트림 시작·ping·bye_device 는 그 자리에서 — 순서가 뜻을 가진다
 # (인증 뒤의 요청은 인증된 상태를 보고, 스트림 시작 뒤의 입력은 그 스트림의 입력 큐로 간다).
 _SPAWN_METHODS = frozenset({"list_sessions", "get_stats", "ask", "api", "export", "import", "grant"})
+# 따로 도는 요청도 기기마다 받은 순서대로 하나씩 돈다(_spawn_req) — 순서·상한 없이 돌리자 한 기기가 연달아 보낸 쓰기 둘(팀 알림 체크 두 개)이
+# Host 에서 겹쳐, 잠금 없이 같은 .tmp 이름으로 쓰는 저장소가 깨지고(관제 그룹 사라짐) 몰린 요청이 Host 의 스레드(anyio 40)를 다 써 PC 자신의
+# /api/health 가 5초를 넘겼다(검토 4회차). 그래서 전체 동시 실행에도 상한을 두고, Host 상태를 바꾸는 요청(_is_write)은 기기가 달라도 한 번에
+# 하나 — main 처럼 릴레이로 온 쓰기는 서로 겹치지 않는다. 다른 기기의 읽기·기기 인증·client_offline 은 여전히 기다리지 않는다.
+_REQ_CONCURRENCY = 4
+_WRITE_METHODS = frozenset({"import", "grant", "ask", "bye_device"})
+
+
+def _is_write(method, params) -> bool:
+    """Host 상태를 바꿀 수 있는 요청인가 — GET 이 아닌 api, 가져오기·2FA 유예 발급·ask·bye_device."""
+    if method == "api":
+        return str((params or {}).get("verb") or "GET").upper() != "GET"
+    return method in _WRITE_METHODS
 
 
 class _Presence:
@@ -284,6 +298,9 @@ class Connector:
         self.gone_cids: dict = {}
         self._live: dict = {}                # cid -> _Presence(지금 이 연결에서 있는 기기) — 요청이 받을 때 쥔다(_Req.live)
         self._req_tasks: set = set()         # 따로 도는 느린 요청(_SPAWN_METHODS) — 끝날 때까지 참조를 쥔다(GC 방지)
+        self._req_tail: dict = {}            # cid -> 그 기기가 마지막으로 줄 세운 요청 태스크(다음 요청은 그것이 끝난 뒤 시작)
+        self._req_sem = asyncio.Semaphore(_REQ_CONCURRENCY)   # 따로 도는 요청 전체의 동시 실행 상한
+        self._write_lock = asyncio.Lock()    # Host 상태를 바꾸는 요청은 기기가 달라도 한 번에 하나(_is_write)
 
     # ---- 릴레이 송신 ----
     async def send(self, obj: dict) -> None:
@@ -898,17 +915,32 @@ class Connector:
         # 그 외(hello 등)는 무시
 
     def _spawn_req(self, frame: dict, rq: _Req | None = None) -> None:
-        task = asyncio.create_task(self._run_req(frame, rq))
+        """따로 돌린다 — 다만 그 기기(cid)의 앞 요청이 끝난 뒤에 시작한다(기기마다 받은 순서대로 하나씩, 위 _REQ_CONCURRENCY)."""
+        cid = frame.get("cid")
+        prev = self._req_tail.get(cid)
+        task = asyncio.create_task(self._run_req(frame, rq, prev))
+        self._req_tail[cid] = task
         self._req_tasks.add(task)
-        task.add_done_callback(self._req_tasks.discard)
 
-    async def _run_req(self, frame: dict, rq: _Req | None = None) -> None:
+        def _done(t, cid=cid):
+            self._req_tasks.discard(t)
+            if self._req_tail.get(cid) is t:
+                del self._req_tail[cid]
+        task.add_done_callback(_done)
+
+    async def _run_req(self, frame: dict, rq: _Req | None = None, prev: asyncio.Task | None = None) -> None:
         """따로 도는 요청. _handle_req 는 실패를 응답으로 돌려주지만, 그 응답을 보내다 릴레이가 끊기는 등의 예외는 여기서 거둔다
-        (받는 길은 이미 다음 프레임을 처리 중이라 그 예외로 재접속할 이유가 없다 — 끊김은 run() 의 수신이 안다)."""
+        (받는 길은 이미 다음 프레임을 처리 중이라 그 예외로 재접속할 이유가 없다 — 끊김은 run() 의 수신이 안다).
+        순서: 그 기기의 앞 요청이 끝나기를 기다린 뒤 → (쓰기면) 쓰기 차례 → 전체 상한 자리. 기다리는 동안은 자리를 쥐지 않는다."""
         if rq is not None:
             _REQ.set(rq)                    # 이 태스크의 컨텍스트에만(받을 때 정한 것 — send)
         try:
-            await self._handle_req(frame)
+            if prev is not None and not prev.done():
+                await asyncio.wait((prev,))     # 앞 요청이 실패·취소로 끝나도 다음은 돈다
+            write = _is_write(frame.get("method"), frame.get("params"))
+            async with (self._write_lock if write else contextlib.nullcontext()):
+                async with self._req_sem:
+                    await self._handle_req(frame)
         except asyncio.CancelledError:
             raise
         except Exception as e:  # noqa: BLE001

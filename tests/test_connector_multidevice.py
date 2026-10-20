@@ -504,3 +504,105 @@ async def test_sealed_request_without_cid_is_answered_sealed(fake_claude_home, m
     await c._on_frame(json.dumps({"v": 1, "e": "a1", "p": __import__("session_manager.e2ee", fromlist=["x"]).seal_payload(
         key, {"v": 1, "type": "req", "id": "c1", "method": "ping", "params": {}})}))
     assert len(c.ws.wire) == 1 and c.ws.wire[0].get("e") == "a1", c.ws.wire
+
+
+# ---- 검토 4회차: 따로 도는 요청에 순서·상한이 없었다 — 한 기기의 두 쓰기가 Host 에서 겹쳐 저장소가 깨지고(관제 그룹 사라짐), 몰린 요청이
+# Host 의 스레드(40)를 다 써 PC 자신의 /api/health 가 3초를 넘겼다. 기기마다 받은 순서대로 하나씩, 전체 동시 실행은 상한, 쓰기는 한 번에 하나.
+
+class _Host:
+    """Host 대역: 경로마다 문(gate)을 두고 지금 몇 개가 동시에 도는지 잰다."""
+
+    def __init__(self):
+        self.gates, self.log, self.cur, self.max = {}, [], 0, 0
+
+    def gate(self, key):
+        return self.gates.setdefault(key, asyncio.Event())
+
+    async def _run(self, verb, url):
+        key = url.rsplit("/", 1)[-1]
+        self.cur += 1
+        self.max = max(self.max, self.cur)
+        self.log.append(("start", verb, key))
+        try:
+            await self.gate(key).wait()
+        finally:
+            self.cur -= 1
+            self.log.append(("end", verb, key))
+        return _Resp({"done": key})
+
+    def install(self, monkeypatch, c):
+        async def _get(url, params=None, headers=None):
+            return await self._run("GET", url)
+
+        async def _post(url, params=None, json=None, headers=None, **kw):
+            return await self._run("POST", url)
+        monkeypatch.setattr(c.http, "get", _get)
+        monkeypatch.setattr(c.http, "post", _post)
+
+    def started(self, key):
+        return ("start", "GET", key) in self.log or ("start", "POST", key) in self.log
+
+
+def _api(cid, rid, verb, key):
+    return _req(cid, rid, "api", {"verb": verb, "path": f"/api/x/{key}"})
+
+
+@pytest.mark.asyncio
+async def test_one_devices_requests_run_one_at_a_time_in_the_order_received(conn, monkeypatch):
+    """팀 알림 체크 두 개를 연달아 누르면 POST 둘이 한꺼번에 온다 — Host 에서 겹치면 관제 그룹 저장(같은 .tmp 이름)이 깨졌다(실제 Host:
+    k=2 12회 중 18건 오류, 그룹 사라짐). 한 기기의 요청은 받은 순서대로 앞 요청이 끝난 뒤 시작한다(main·f1dcf7b 와 같은 순서)."""
+    h = _Host()
+    h.install(monkeypatch, conn)
+    await conn._on_frame(_api("cidA", "c1", "POST", "n1"))
+    await conn._on_frame(_api("cidA", "c2", "POST", "n2"))
+    await conn._on_frame(_api("cidA", "c3", "GET", "g3"))
+    await _ticks(10)
+    assert h.started("n1") and not h.started("n2") and not h.started("g3"), h.log
+    h.gate("n1").set()
+    await _ticks(10)
+    assert h.started("n2") and not h.started("g3"), h.log
+    h.gate("n2").set(); h.gate("g3").set()
+    await _drain(conn)
+    assert [k for ev, _, k in h.log if ev == "start"] == ["n1", "n2", "g3"] and h.max == 1
+    assert [f["id"] for f in conn.sent if f.get("type") == "res"] == ["c1", "c2", "c3"]
+
+
+@pytest.mark.asyncio
+async def test_another_devices_read_is_not_held_up_but_writes_never_overlap(conn, monkeypatch):
+    """다른 기기의 읽기는 기다리지 않는다(3회차 고침 유지) — 쓰기는 기기가 달라도 한 번에 하나(main 처럼 릴레이로 온 쓰기는 겹치지 않는다)."""
+    h = _Host()
+    h.install(monkeypatch, conn)
+    await conn._on_frame(_api("cidA", "c1", "POST", "a1"))     # 폰 A 의 느린 쓰기
+    await conn._on_frame(_api("cidB", "c1", "GET", "b1"))      # 태블릿 B 의 읽기 — 바로
+    await conn._on_frame(_api("cidB", "c2", "POST", "b2"))     # B 의 쓰기 — A 의 쓰기가 끝난 뒤
+    await _ticks(10)
+    assert h.started("a1") and h.started("b1") and not h.started("b2"), h.log
+    h.gate("b1").set()
+    await _ticks(10)
+    assert not h.started("b2"), "쓰기는 기기가 달라도 겹치지 않는다"
+    assert [f["cid"] for f in conn.sent if f.get("type") == "res"] == ["cidB"]
+    h.gate("a1").set()
+    await _ticks(10)
+    assert h.started("b2")
+    h.gate("b2").set()
+    await _drain(conn)
+    assert h.log.index(("start", "POST", "b2")) > h.log.index(("end", "POST", "a1"))
+    assert [k for ev, _, k in h.log if ev == "start"] == ["a1", "b1", "b2"]
+
+
+@pytest.mark.asyncio
+async def test_requests_from_many_devices_are_capped(conn, monkeypatch):
+    """몰린 요청이 Host 의 스레드를 다 쓰지 않게 전체 동시 실행에 상한(_REQ_CONCURRENCY) — 실측: 120건이 Host 에서 40개씩 돌아 PC 의
+    /api/health 가 5초(런처 3초 제한 초과)."""
+    from session_manager import connector
+    h = _Host()
+    h.install(monkeypatch, conn)
+    n = connector._REQ_CONCURRENCY + 6
+    for i in range(n):
+        await conn._on_frame(_api(f"cid{i}", "c1", "GET", f"r{i}"))
+    await _ticks(20)
+    assert h.cur == connector._REQ_CONCURRENCY and h.max == connector._REQ_CONCURRENCY
+    for i in range(n):
+        h.gate(f"r{i}").set()
+    await _drain(conn)
+    assert len([f for f in conn.sent if f.get("type") == "res"]) == n and h.max == connector._REQ_CONCURRENCY
