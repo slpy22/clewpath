@@ -3,6 +3,7 @@
 // 고정한다 — 그래서 1·2단계 전에는 실패하는 게 정상이다(T6=1-1, T8=1-2, T1=1-3, T10=1-4, T7=1-5, 나머지=2단계).
 // 경로가 여럿인 검사는 경로마다 새로 부팅해 결과를 한 객체로 모아 비교한다 — 실패 한 번에 어긋난 경로가 다 보이게.
 // T12~ 는 2단계에서 더한 검사(화면 진입 기록 PANE_NOW · 화면 기억 sm_pane_<PC> · 웹 재개 닫기 결정 7 · 늦은 응답).
+// T20~ 는 3단계(PC 별 기억 — 터미널 탭·파일 기억 키, 옛 키 옮기기, 최근 본 순서, 릴레이 PC 전환 정리).
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { load, ev, stubEl } from "./harness.mjs";
@@ -465,4 +466,55 @@ test("T19 파일: 목록이 와도 그 폴더를 쓰는 세션이 없으면 오�
   await ev(ctx, "loadList()"); await tick(RENDER);
   await ev(ctx, "loadList()"); await tick(RENDER);               // 이미 받은 탭은 다시 받지 않는다
   assert.deepEqual({ still, after: now() }, { still: { err: "no_session", fetched: 0 }, after: { err: null, fetched: 1 } });
+});
+
+// ---------------------------------------------------------------- 3단계: PC 별 기억(결정 9)
+// 기억 키 = <키>_<PC>(로컬 화면 local · 릴레이 그 PC 방 이름). 옛 키(PC 구분 없음)는 이 PC 목록으로 걸러 1회 옮긴다.
+
+test("T20 최근 본 순서(mru): 터미널을 볼 때마다 맨 앞, 탭을 닫으면 빠지고 PC 키에 저장 — 새로고침 뒤 알림으로 먼저 본 탭이 저장 순서보다 앞", async () => {
+  const { ctx } = await boot({ setup: (sb) => sb.localStorage.setItem("sm_room", "room1") });
+  const mru = (c) => ev(c, "TABS.mru.join(',')");
+  await ctx.loadTerminal(ev(ctx, "SESSIONS[0]"), false); await tick(RENDER);
+  await ctx.loadTerminal(ev(ctx, "SESSIONS[1]"), false); await tick(RENDER);   // 탭 전환(빠른 길)
+  const seen = [mru(ctx)];
+  ctx.switchTab(A); await tick(RENDER); seen.push(mru(ctx));
+  const saved = JSON.parse(ctx.localStorage.getItem("sm_tabs_room1")).mru.join(",");
+  ev(ctx, `removeTab('${A}'); saveTabs()`); seen.push(mru(ctx));
+  // 새로고침: 저장된 마지막 탭은 B(최근 순 B, A)인데 알림(#open=A)으로 시작 — 로컬(알림이 먼저 탭을 잡음)·릴레이 둘 다
+  const cold = await each(["local", "relay"], async (mode) => {
+    const key = mode === "local" ? "sm_tabs_local" : "sm_tabs_relay";
+    const b = await boot({ local: mode === "local", hash: "#open=" + A.slice(0, 8),
+      setup: (sb) => sb.localStorage.setItem(key, JSON.stringify({ active: B, list: [{ key: A, sid: A }, { key: B, sid: B }], mru: [B, A] })) });
+    ev(b.ctx, "T.list = async () => ({ sessions: SESSIONS.slice() })");
+    await ev(b.ctx, "loadList()"); await tick(RENDER);
+    return { mru: mru(b.ctx), saved: JSON.parse(b.ctx.localStorage.getItem(key)).mru.join(",") };
+  });
+  assert.deepEqual({ seen, saved, cold }, { seen: [`${B},${A}`, `${A},${B}`, B], saved: `${A},${B}`,
+                                           cold: all(["local", "relay"], { mru: `${A},${B}`, saved: `${A},${B}` }) });
+});
+
+test("T21 파일 기억은 PC 별(sm_fb_state2_<PC>): 마지막 파일이 21번째 이후여도 다시 열면 그 파일 — 옛 키는 이 PC 목록에 있는 폴더만 새 키로 1회 옮김(목록 전엔 옮기지 않음)", async () => {
+  const { ctx } = await boot({ setup: (sb) => sb.localStorage.setItem("sm_room", "room1") });
+  ev(ctx, `FB.restored = true; FB.open = new Set(); FB.tabs = [];
+    for (let i = 0; i < 25; i++) FB.tabs.push(fbNewTab('e:/p', 'f' + i + '.txt', true));
+    FB.active = FB.tabs[23].id; fbSaveState();`);
+  const saved = JSON.parse(ctx.localStorage.getItem("sm_fb_state2_room1"));
+  ev(ctx, "FB.restored = false; fbRestoreState()");              // 새로고침 뒤(복원 상한 20개)
+  const reopened = { n: ev(ctx, "FB.tabs.length"), active: ev(ctx, "FB.active") };
+  // 옛 키(PC 구분 없음): 이 PC 폴더(e:/p)와 다른 PC 폴더(g:/x)가 섞여 있다. 이 PC(room2)의 새 키는 아직 없다
+  const OLD = JSON.stringify({ open: ["e:/p|", "e:/p|src", "g:/x|"], sort: "mtime",
+    tabs: [{ root: "g:/x", path: "other.md", pinned: true }, { root: "e:/p", path: "mine.py", pinned: true }], active: "g:/x|other.md" });
+  ctx.localStorage.setItem("sm_fb_state2", OLD); ctx.localStorage.setItem("sm_room", "room2");
+  ev(ctx, "LIST_READY = false; FB.restored = false; fbRestoreState()");   // 이 PC 목록 전 — 거르지도 적지도 않는다
+  const early = { tabs: ev(ctx, "FB.tabs.map((t) => t.id).join(',')"), wrote: ctx.localStorage.getItem("sm_fb_state2_room2") };
+  ev(ctx, "SESSIONS = [{ session_id: 's1', title: 'P', cwd: 'E:/p', mtime: 1 }]; LIST_READY = true; FB.restored = false; fbRestoreState()");
+  const moved = { tabs: ev(ctx, "FB.tabs.map((t) => t.id).join(',')"), active: ev(ctx, "FB.active"), open: ev(ctx, "[...FB.open].join(',')"),
+                  wrote: JSON.parse(ctx.localStorage.getItem("sm_fb_state2_room2") || "null") };
+  assert.deepEqual({ savedN: saved.tabs.length, savedActiveAt: saved.tabs.findIndex((t) => "e:/p|" + t.path === saved.active), reopened, early, moved,
+                     oldKept: ctx.localStorage.getItem("sm_fb_state2") === OLD }, {
+    savedN: 25, savedActiveAt: 19, reopened: { n: 20, active: "e:/p|f23.txt" },
+    early: { tabs: "g:/x|other.md,e:/p|mine.py", wrote: null },
+    moved: { tabs: "e:/p|mine.py", active: "e:/p|mine.py", open: "e:/p|,e:/p|src",
+             wrote: { open: ["e:/p|", "e:/p|src"], sort: "mtime", tabs: [{ root: "e:/p", path: "mine.py", pinned: true }], active: "e:/p|mine.py" } },
+    oldKept: true });
 });

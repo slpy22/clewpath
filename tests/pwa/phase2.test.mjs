@@ -12,33 +12,68 @@ const C = "cccccccc-1111-2222-3333-444444444444";
 const D = "dddddddd-1111-2222-3333-444444444444";
 
 // ---------------------------------------------------------------- 탭 워킹셋 저장/복원
-test("saveTabs/restoreTabsOnce: 저장 형태, 목록에 없는 세션 버림, PTY 없으면 dead, 1회만, 깨진 저장은 무시", async () => {
-  const ctx = await load();
+// 기억 키는 PC 별(quick-switch 3단계·결정 9): 로컬 화면 = sm_tabs_local, 릴레이 = sm_tabs_<그 PC 방 이름>. 최근 본 순서(mru)도 함께.
+test("saveTabs/restoreTabsOnce: 저장 형태(PC 별 키·최근 본 순서), 목록에 없는 세션 버림, PTY 없으면 dead, 1회만, 깨진 저장은 무시", async () => {
+  const ctx = await load({ setup: (sb) => sb.localStorage.setItem("sm_room", "rm1") });
+  const K = "sm_tabs_rm1";
   ev(ctx, "globalThis.__toasts = []; toast = (m) => globalThis.__toasts.push(m)");
   ev(ctx, `TABS.list = [{key:${JSON.stringify(A)}, s:{session_id:${JSON.stringify(A)}}, safe:true, dead:false},
-                        {key:${JSON.stringify(B)}, s:{session_id:${JSON.stringify(B)}}, safe:false, dead:false}]; TABS.active = ${JSON.stringify(B)}`);
+                        {key:${JSON.stringify(B)}, s:{session_id:${JSON.stringify(B)}}, safe:false, dead:false}]; TABS.active = ${JSON.stringify(B)};
+           TABS.mru = [${JSON.stringify(B)}, 'closed-tab', ${JSON.stringify(A)}]`);
   ctx.saveTabs();
-  const saved = JSON.parse(ctx.localStorage.getItem("sm_tabs"));
-  assert.equal(JSON.stringify(saved), JSON.stringify({ active: B, list: [{ key: A, sid: A, safe: true }, { key: B, sid: B, safe: false }] }));
+  const saved = JSON.parse(ctx.localStorage.getItem(K));
+  assert.equal(JSON.stringify(saved), JSON.stringify({ active: B, list: [{ key: A, sid: A, safe: true }, { key: B, sid: B, safe: false }], mru: [B, A] }),
+    "최근 본 순서는 열린 탭만");
+  assert.equal(ctx.localStorage.getItem("sm_tabs"), null, "옛 키(PC 구분 없음)에는 쓰지 않는다");
   // 부팅 상황 재현: 탭 비움, 목록엔 A(PTY 살아있음)·C(PTY 없음) 만 있고 B 는 삭제됨
-  ev(ctx, "TABS.list = []; TABS.active = null; _tabsRestored = false");
-  ctx.localStorage.setItem("sm_tabs", JSON.stringify({ active: B, list: [{ key: A, sid: A, safe: true }, { key: B, sid: B }, { key: C, sid: C }] }));
+  ev(ctx, "TABS.list = []; TABS.active = null; TABS.mru = []; _tabsRestored = false");
+  ctx.localStorage.setItem(K, JSON.stringify({ active: B, list: [{ key: A, sid: A, safe: true }, { key: B, sid: B }, { key: C, sid: C }], mru: [B, C, A] }));
   ev(ctx, `SESSIONS = [{session_id:${JSON.stringify(A)}, live_terminal:true}, {session_id:${JSON.stringify(C)}, live_terminal:false}]`);
   ctx.restoreTabsOnce();
   const tabs = ev(ctx, "TABS.list");
   same(tabs.map((t) => [t.key, t.safe, t.dead]), [[A, true, false], [C, false, true]]);
   assert.equal(ev(ctx, "TABS.active"), null, "저장된 활성 탭(B)이 사라졌으면 활성 없음");
+  same(ev(ctx, "TABS.mru"), [C, A], "최근 본 순서도 되살린다(사라진 B 는 뺀다)");
   assert.ok(ev(ctx, "globalThis.__toasts").at(-1).includes("2개 복원"));
-  assert.equal(JSON.parse(ctx.localStorage.getItem("sm_tabs")).list.length, 2, "정리된 워킹셋을 다시 저장");
+  assert.equal(JSON.parse(ctx.localStorage.getItem(K)).list.length, 2, "정리된 워킹셋을 다시 저장");
   // 두 번째 호출은 무동작(목록 갱신마다 불리지만 1회 가드)
   ev(ctx, "TABS.list = []");
   ctx.restoreTabsOnce();
   assert.equal(ev(ctx, "TABS.list.length"), 0);
-  // 깨진 저장값 → 예외 없이 무시
+  // 깨진 저장값 → 예외 없이 무시. 새 키가 있으면(깨졌어도) 옛 키로 돌아가지 않는다
   ev(ctx, "_tabsRestored = false");
-  ctx.localStorage.setItem("sm_tabs", "{not json");
+  ctx.localStorage.setItem(K, "{not json");
+  ctx.localStorage.setItem("sm_tabs", JSON.stringify({ active: A, list: [{ key: A, sid: A }] }));
   ctx.restoreTabsOnce();
   assert.equal(ev(ctx, "TABS.list.length"), 0);
+});
+
+test("탭 기억 옛 키(sm_tabs) 옮기기: 이 PC 새 키가 없을 때만 읽고 목록으로 걸러 새 키에 1회 — 옛 키는 그대로, 다른 PC 는 제 목록으로, 로컬은 sm_tabs_local", async () => {
+  // 0.28 까지는 PC 구분 없이 sm_tabs 하나 — 릴레이로 두 PC 를 오가면 A·C 처럼 다른 PC 탭이 섞여 있을 수 있다
+  const OLD = JSON.stringify({ active: C, list: [{ key: A, sid: A, safe: true }, { key: C, sid: C }] });
+  const ctx = await load({ setup: (sb) => { sb.localStorage.setItem("sm_room", "rmA"); sb.localStorage.setItem("sm_tabs", OLD); } });
+  ev(ctx, "toast = () => {}");
+  const restore = (sessions) => { ev(ctx, `TABS.list = []; TABS.active = null; TABS.mru = []; _tabsRestored = false; SESSIONS = ${JSON.stringify(sessions)}`); ctx.restoreTabsOnce(); };
+  const got = {};
+  restore([{ session_id: A, live_terminal: true }]);              // PC A 의 첫 복원(이 PC 목록엔 A 만)
+  got.a = { tabs: ev(ctx, "TABS.list.map((t) => t.key).join(',')"), saved: JSON.parse(ctx.localStorage.getItem("sm_tabs_rmA")).list.map((t) => t.key).join(',') };
+  ctx.localStorage.setItem("sm_tabs", JSON.stringify({ active: D, list: [{ key: D, sid: D }] }));   // 옛 버전 창이 옛 키를 또 고쳐도
+  restore([{ session_id: A, live_terminal: true }, { session_id: D, live_terminal: true }]);
+  got.again = ev(ctx, "TABS.list.map((t) => t.key).join(',')");  // 이제 새 키만 본다(1회)
+  ctx.localStorage.setItem("sm_tabs", OLD);
+  ctx.localStorage.setItem("sm_room", "rmB");                     // 릴레이로 PC B 를 쓰는 중 — B 의 새 키는 아직 없다
+  restore([{ session_id: C, live_terminal: false }]);
+  got.b = { tabs: ev(ctx, "TABS.list.map((t) => t.key).join(',')"), active: ev(ctx, "TABS.active"), saved: JSON.parse(ctx.localStorage.getItem("sm_tabs_rmB")).list.length };
+  got.oldKept = ctx.localStorage.getItem("sm_tabs") === OLD;
+  const L = await load({ location: { pathname: "/app" }, setup: (sb) => sb.localStorage.setItem("sm_tabs", OLD) });
+  ev(L, "RELAY_APP_URL = ''; toast = () => {}");               // 로컬 부팅의 릴레이 PC 목록 동기화(15초 타이머) 끔
+  ev(L, `SESSIONS = [{ session_id: ${JSON.stringify(A)}, live_terminal: true }]`); L.restoreTabsOnce();
+  got.local = { tabs: ev(L, "TABS.list.map((t) => t.key).join(',')"), key: !!L.localStorage.getItem("sm_tabs_local"), relayKey: L.localStorage.getItem("sm_tabs_relay") };
+  assert.deepEqual(got, {
+    a: { tabs: A, saved: A }, again: A,
+    b: { tabs: C, active: C, saved: 1 }, oldKept: true,
+    local: { tabs: A, key: true, relayKey: null },
+  });
 });
 
 // ---------------------------------------------------------------- 알림 진입 소비

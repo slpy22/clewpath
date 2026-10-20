@@ -1403,10 +1403,19 @@ function paneEnter(kind, ref){
 }
 // 화면 기억(§6-1) sm_pane_<PC> = {viewer:{sid, kind:'viewer'|'detail', name, at}, monitor:{team, gid, name, at}}. 기기·PC 마다 따로(§6-2).
 // PC 키는 로컬 화면 = local, 릴레이 = 그 PC 의 방 이름(sm_e2ee_<room> 과 같은 방식, hostVerKey 와 같은 구분) — 릴레이로 PC 를
-// 바꿔 써도 기억이 섞이지 않게. 3단계에서 sm_tabs·sm_fb_state2 도 이 키로 옮긴다. 저장이 막혀도(사생활 보호 창 등) 화면은 그대로 돈다.
+// 바꿔 써도 기억이 섞이지 않게. 터미널 탭(sm_tabs)·파일(sm_fb_state2)도 이 키를 쓴다(3단계). 저장이 막혀도(사생활 보호 창 등) 화면은 그대로 돈다.
 function paneKey(base){ return base+'_'+hostVerKey(); }
 function paneMem(){ const m=lsJson(paneKey('sm_pane'),{}); return (m&&typeof m==='object'&&!Array.isArray(m))?m:{}; }
 function paneMemSet(part, val){ const m=paneMem(); if(val) m[part]=val; else delete m[part]; lsSet(paneKey('sm_pane'), m); }
+// PC 별 기억 읽기(3단계) — 이 PC 의 새 키가 아직 없으면 옛 키(PC 구분이 없던 0.28 까지의 sm_tabs·sm_fb_state2)를 읽고 old:true 로
+// 알린다. 옛 키엔 다른 PC 의 탭이 섞였을 수 있어 부르는 쪽이 이 PC 목록으로 걸러 새 키에 한 번 옮긴다. 옛 버전으로 되돌려도
+// 깨지지 않게 옛 키는 지우지 않는다. 새 키가 깨졌으면 옛 키로 돌아가지 않고 빈 기억으로 본다.
+function pcMemLoad(base){
+  let raw=null, old=false;
+  try{ raw=LS.getItem(paneKey(base)); if(raw==null){ raw=LS.getItem(base); old=(raw!=null); } }catch(e){}
+  let v=null; try{ v=JSON.parse(raw||'null'); }catch(e){}
+  return {v:(v&&typeof v==='object'&&!Array.isArray(v))?v:null, old};
+}
 
 // ---- UI helpers ----
 function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('show');
@@ -1475,6 +1484,7 @@ let ACTIVE_LABEL='';  // 선택된 라벨 필터('' = 전체)
 const LIST_VIEWS=['sessions','groups','files'];
 let LIST_VIEW=(()=>{ try{ const v=LS.getItem('sm_list_view'); return LIST_VIEWS.includes(v)?v:'sessions'; }catch(e){ return 'sessions'; } })();
 function setListView(v){ LIST_VIEW=LIST_VIEWS.includes(v)?v:'sessions'; try{ LS.setItem('sm_list_view',LIST_VIEW); }catch(e){} }
+let LIST_READY=false;   // 지금 PC 의 첫 목록을 받았나(PC 전환 때 false) — SESSIONS 가 이 PC 것이라 믿고 기억을 걸러도 되는가(quick-switch 3단계)
 async function loadList(q){
   const main=paneList(); $('#head').textContent='세션';
   main.innerHTML=''; syncTabbar();
@@ -1508,7 +1518,7 @@ async function loadList(q){
   if(!paneDetail().children.length) detailPlaceholder();
   try{
     const data=await T.list({limit:0});
-    SESSIONS=data.sessions||[];
+    SESSIONS=data.sessions||[]; LIST_READY=true;
     if(typeof data.now==='number') CLOCK_SKEW=data.now-Date.now()/1000;
     rerender();
     fbRetryAfterList();            // 목록 전에 연 파일 탭의 '세션을 찾지 못했습니다'를 굳히지 않는다(quick-switch §4-2)
@@ -2583,9 +2593,10 @@ async function loadDetail(s){
 // 살아있다(설계 문서 docs/2026-09-10-multi-terminal-tabs-design.md §9).
 // 이전엔 이 전부가 loadTerminal 클로저 지역변수 + 전역 _term={close} 였다 — "화면"과
 // "어느 세션에 붙었나"를 분리해 객체로 들어야 탭 전환이 가능하다.
-const TABS={ list:[], active:null };
+const TABS={ list:[], active:null, mru:[] };   // mru = 최근 본 순서(key, 맨 앞이 마지막으로 본 탭) — 바로가기가 돌아갈 탭(quick-switch 3단계)
 const tabKey=(s)=>(s.fork_id||s.session_id);
 const findTab=(key)=>TABS.list.find(t=>t.key===key)||null;
+function tabSeen(key){ TABS.mru=[key, ...TABS.mru.filter(k=>k!==key)]; }
 // 이 페이지가 스스로 놓은 화면 id(탭 인스턴스 해체·새로 띄우기). 20초 목록의 screen 이 아직 이 값이면 내 옛 화면이지
 // 다른 기기가 아니다 — 정리한 터미널로 금방 돌아올 때 가짜 인계 확인창을 막는다(quick-switch 1-1). 오래된 것부터 버림.
 const RELEASED_SCREENS=[];
@@ -2746,6 +2757,7 @@ const termView={
 // 터미널 뷰를 떠날 때(상세/이력/종료/포크) 화면 전부 해체. 탭 목록은 유지(배경 PTY 살아있음).
 function leaveTerminalView(){ termView.dispose(); }
 function removeTab(key){ TABS.list=TABS.list.filter(t=>t.key!==key); if(TABS.active===key) TABS.active=null;
+  TABS.mru=TABS.mru.filter(k=>k!==key);
   termView.closeTabInstance(key); }   // 보유하던 xterm/iframe 해제
 
 // ---- 멀티탭 동작: 탭 스트립·전환·닫기·추가·저장/복원·재접속 ----
@@ -2765,9 +2777,11 @@ function shouldConfirmTakeover(s, t0){
 }
 // 세션 색: 모니터 색은 서버(webmonitor)가 주지만 터미널엔 없다 → 클라에서 결정적 hash→hsl.
 function tabColor(sid){ let h=0; for(const c of String(sid)) h=(h*31+c.charCodeAt(0))>>>0; return `hsl(${h%360},62%,58%)`; }
+// 기억 키는 PC 별(sm_tabs_<PC>, 3단계·결정 9) — 릴레이로 PC 를 바꿔 써도 다른 PC 의 탭과 섞이거나 지워지지 않게.
 function saveTabs(){
-  try{ LS.setItem('sm_tabs',JSON.stringify({active:TABS.active,
-    list:TABS.list.map(t=>({key:t.key,sid:t.s.session_id,safe:!!t.safe}))})); }catch(e){}
+  try{ LS.setItem(paneKey('sm_tabs'),JSON.stringify({active:TABS.active,
+    list:TABS.list.map(t=>({key:t.key,sid:t.s.session_id,safe:!!t.safe})),
+    mru:TABS.mru.filter(k=>findTab(k))})); }catch(e){}
 }
 // 부팅 후 SESSIONS 가 준비된 시점에 1회. 탭 '목록'만 복원하고 터미널은 열지 않는다 — 자동으로
 // 붙이면 다른 기기가 쥔 화면을 탈취한다(세션당 화면 1개, webterm 점유 규칙). live_terminal 이
@@ -2775,7 +2789,8 @@ function saveTabs(){
 let _tabsRestored=false;
 function restoreTabsOnce(){
   if(_tabsRestored) return; _tabsRestored=true;
-  let saved=null; try{ saved=JSON.parse(LS.getItem('sm_tabs')||'null'); }catch(e){}
+  // 이 PC 의 탭 기억. 아직 없으면 옛 키(PC 구분 없던 값)를 읽어 아래 목록 거르기를 거친 것만 새 키에 옮긴다(saveTabs, 1회)
+  const saved=pcMemLoad('sm_tabs').v;
   if(!saved||!Array.isArray(saved.list)||!saved.list.length) return;
   const byId=new Map((SESSIONS||[]).map(s=>[s.session_id,s]));
   let n=0;
@@ -2785,6 +2800,8 @@ function restoreTabsOnce(){
   }
   // 알림 진입(#open=) 등으로 이미 정해진 마지막 탭은 덮지 않는다 — 로컬은 그 터미널이 먼저 동기로 잡혀 화면·기억이 어긋났다(1-4)
   if(!TABS.active&&saved.active&&findTab(saved.active)) TABS.active=saved.active;
+  // 최근 본 순서: 이 페이지에서 이미 본 탭(알림 진입 등)이 앞, 그 뒤로 저장된 순서. 순서가 없던 옛 저장은 마지막 탭 하나로
+  for(const k of [...(Array.isArray(saved.mru)?saved.mru:[]), saved.active]) if(findTab(k)&&TABS.mru.indexOf(k)<0) TABS.mru.push(k);
   if(n) toast(`터미널 탭 ${n}개 복원됨 (터미널을 열면 탭 스트립에 보입니다)`);
   saveTabs();
 }
@@ -3151,6 +3168,7 @@ async function loadTerminal(s, safe){
   if(t0){ t0.s=s; t0.safe=!!safe; t0.dead=false; t0.act=false; t0.actN=0; t0.last=null; t0.taken=false; }   // 보는 순간 배지 소거
   else TABS.list.push({key, s, safe:!!safe, dead:false, act:false});
   TABS.active=key;
+  tabSeen(key);                            // 최근 본 순서 맨 앞으로(바로가기·탭 기억, 3단계)
   CURRENT_TERM_SID=s.session_id;           // 알림 클릭이 이 화면을 갈아엎지 않게 표시
   const main=paneDetail();
   $('#head').textContent='터미널 재개'+(safe?' (권한확인)':'');
@@ -3832,15 +3850,23 @@ function fbRootSid(rk){ const r=fbRoot(rk); return r?r.sid:null; }
 function fbRootMatches(r,q){ if(!q) return true; q=q.toLowerCase();
   return r.cwd.toLowerCase().includes(q) || r.sessions.some(s=>sessLabel(s).toLowerCase().includes(q)); }
 function fbParentLabel(cwd){ const parts=String(cwd||'').split(/[\\/]/).filter(Boolean); parts.pop(); return parts.slice(-2).join('\\'); }
-const FB_STATE='sm_fb_state2';
+const FB_STATE='sm_fb_state2', FB_KEEP=20;   // 기억 키는 PC 별(sm_fb_state2_<PC>, 3단계). FB_KEEP = 새로고침 뒤 되살리는 파일 탭 상한
 function fbNewTab(rk,path,pinned){ return {id:fbId(rk,path), root:rk, path, name:baseName(path), pinned:!!pinned}; }
-function fbSaveState(){ try{ LS.setItem(FB_STATE, JSON.stringify({open:[...FB.open], sort:FB.sort,
-  tabs:FB.tabs.map(t=>({root:t.root,path:t.path,pinned:!!t.pinned})), active:FB.active})); }catch(e){} }
+// 마지막 파일이 복원 상한(앞 20개) 밖이면 20번째 자리로 당겨 적는다 — 새로고침 뒤 마지막 파일 대신 첫 탭이 뜨지 않게(3단계)
+function fbSaveState(){ try{ const tabs=FB.tabs.slice(), i=tabs.findIndex(t=>t.id===FB.active);
+  if(i>=FB_KEEP) tabs.splice(FB_KEEP-1, 0, tabs.splice(i,1)[0]);
+  LS.setItem(paneKey(FB_STATE), JSON.stringify({open:[...FB.open], sort:FB.sort,
+  tabs:tabs.map(t=>({root:t.root,path:t.path,pinned:!!t.pinned})), active:FB.active})); }catch(e){} }
 function fbRestoreState(){ if(FB.restored) return; FB.restored=true;
-  let st=null; try{ st=JSON.parse(LS.getItem(FB_STATE)||'null'); }catch(e){}
-  FB.open=new Set((st&&st.open)||[]); FB.sort=(st&&st.sort)==='mtime'?'mtime':'name';
-  FB.tabs=((st&&st.tabs)||[]).slice(0,20).filter(t=>t&&t.root&&t.path).map(t=>fbNewTab(t.root,t.path,t.pinned));
-  FB.active=(st&&st.active&&FB.tabs.some(t=>t.id===st.active))?st.active:(FB.tabs[0]?FB.tabs[0].id:null); }
+  const m=pcMemLoad(FB_STATE), st=m.v;
+  // 옛 키(PC 구분 없던 값)를 처음 옮겨 올 때는 다른 PC 의 폴더가 섞였을 수 있다 — 이 PC 목록에 있는 폴더의 탭·펼침만 남겨 새 키에
+  // 적는다(§9 '목록으로 걸러 버림'). 이 PC 목록을 아직 못 받았으면(LIST_READY 전) 거르지도 적지도 않고 다음 복원 때 다시 옮긴다.
+  const move=m.old&&LIST_READY; if(move) fbRoots();
+  const mine=(rk)=>!move||FB.rootMap.has(rk);
+  FB.open=new Set((st&&Array.isArray(st.open)?st.open:[]).filter(id=>mine(fbSplit(id)[0]))); FB.sort=(st&&st.sort)==='mtime'?'mtime':'name';
+  FB.tabs=((st&&Array.isArray(st.tabs))?st.tabs:[]).filter(t=>t&&t.root&&t.path&&mine(t.root)).slice(0,FB_KEEP).map(t=>fbNewTab(t.root,t.path,t.pinned));
+  FB.active=(st&&st.active&&FB.tabs.some(t=>t.id===st.active))?st.active:(FB.tabs[0]?FB.tabs[0].id:null);
+  if(move) fbSaveState(); }
 // 목록을 받기 전에 연 탭은 뿌리(세션)를 못 찾아 '세션을 찾지 못했습니다'로 남는다 — 목록이 오면 뿌리를 새로 셈해, 이제 찾을 수 있는
 // 탭만 오류를 지우고 한 번 다시 받는다(굳지 않게, quick-switch §4-2). 여전히 그 폴더 세션이 없으면 오류 그대로(다시 받지 않음).
 function fbRetryAfterList(){

@@ -75,7 +75,7 @@ test("폴더 펼치기: 그 폴더의 가장 최근 세션으로 지연 로딩, 
   assert.deepEqual(paths().slice(2, 5), [id("docs"), id("docs/a.md"), id("docs/b.txt")]);
   assert.equal(ev(ctx, "JSON.stringify(__calls.map(c => [c[1], c[2].query.path]))"),
     JSON.stringify([["/api/sessions/s1/files", ""], ["/api/sessions/s1/files", "docs"]]), "s1(가장 최근)으로 읽는다");
-  const saved = JSON.parse(ev(ctx, "LS.getItem('sm_fb_state2')"));
+  const saved = JSON.parse(ev(ctx, "LS.getItem(paneKey(FB_STATE))"));   // 기억 키는 PC 별(sm_fb_state2_<PC>, quick-switch 3단계)
   assert.deepEqual(saved.open.sort(), [id(""), id("docs")].sort());
   const byPath = Object.fromEntries(rowsOf(ctx).map((r) => [r.dataset.path, r]));
   assert.ok(String(byPath[id("node_modules")].className).includes("heavy"));
