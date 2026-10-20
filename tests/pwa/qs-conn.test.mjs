@@ -617,3 +617,50 @@ test("T67 폰에서 터미널을 보던 중 다시 붙었는데 PC 가 아직 �
     pcPresent: { before: "detail", view: "detail", terminalReqs: ["a"], disconnected: false },
   });
 });
+
+// 결함 D1(기존, e1981d3 이 연결 실패로 넓힘): PC A 를 쓰는 중 저장돼 있지만 지금 쓰지 않는 PC B 의 새 QR 을 앱 QR 스캔·링크 열기(부트 해시)로
+// 넣었는데 실패하면 hashPairRollback 이 B(옛 자격)를 활성으로 만들었다 — 다음 실행에 B 로 자동 접속하고, B 가 ⛔ 였으면 자동 접속이 아예 없었다.
+// E-D16 '잘못된·만료된 QR 은 아무것도 바꾸지 않는다': B 의 옛 기록은 되살리되 활성 PC 는 이 해시 전에 쓰던 A 그대로.
+async function hashRescan(how, { bState = null, boot = "roomA", hashRoom = "roomB" } = {}) {
+  const PC_B = { room: "roomB", cs: "csB1", cp: "cpB1", dev: "devB1", name: "B", ...(bState ? { state: bState } : {}) };
+  let els;
+  const ctx = await load({ hash: `#room=${hashRoom}&cs=csN&cp=cpN&dev=devN`, setup: (sb) => {
+    const act = boot === "roomA" ? PC_A : boot === "roomB" ? PC_B : null;
+    if (act) for (const [k, v] of [["sm_room", act.room], ["sm_cs", act.cs], ["sm_cp", act.cp], ["sm_devtoken", act.dev]]) sb.localStorage.setItem(k, v);
+    sb.localStorage.setItem("sm_pcs", JSON.stringify([PC_A, PC_B]));
+    els = regIds(sb); sb.fetch = cpFetch(sb, how === "4401" ? ["cpN"] : []);
+    sb.__all = browserWs(sb);
+  } });
+  const timers = holdTimers(ctx);
+  ev(ctx, "enterApp = () => {}; openModal = () => {}; loadList = async () => {};");
+  const sockets = ctx.__all;
+  await until(() => sockets.length === 1);
+  const ws = sockets[0];
+  if (how === "4401") { ws.open(); ws.drop(4401); }
+  else if (how === "1006") ws.drop(1006);                                 // 망이 잠깐 끊겨 연결 자체가 실패
+  else await helloAuth(ws, "c1", { ok: false, error: "auth_invalid" });
+  await settle(); await tick(30);
+  const after = { tried: roomOf(ws), keys: activeKeys(ctx), pcs: JSON.parse(ctx.localStorage.getItem("sm_pcs")).map((x) => [x.room, x.cp, x.state || null]),
+                  reconnects: reconnectTimers(timers).length, err: !!els["p-err"].textContent };
+  const ls = ctx.localStorage;
+  const ctx2 = await load({ setup: (sb) => {
+    for (let i = 0; i < ls.length; i++) { const k = ls.key(i); sb.localStorage.setItem(k, ls.getItem(k)); }
+    regIds(sb); sb.fetch = cpFetch(sb, []); sb.__s2 = browserWs(sb);
+  } });
+  await settle(); await tick(30);
+  const s2 = ctx2.__s2;
+  return { after, reopened: s2.length ? [roomOf(s2[0]), new URL(s2[0].url).searchParams.get("jwt")] : null };
+}
+test("T68 저장된 다른 PC(B)의 새 QR 이 실패하면(auth_invalid·CP 401·일시 단절) B 의 옛 기록만 되살리고 지금 쓰던 PC(A)가 활성으로 남는다 — 다시 열면 A 로 자동 접속", async () => {
+  const A_KEYS = { sm_room: "roomA", sm_cs: "csA", sm_cp: "cpA", sm_devtoken: "devA" };
+  const want = (bState = null) => ({ after: { tried: "roomB", keys: A_KEYS, pcs: [["roomA", "cpA", null], ["roomB", "cpB1", bState]], reconnects: 0, err: true },
+                                      reopened: ["roomA", "jwt-cpA"] });
+  assert.deepEqual(plain({ authInvalid: await hashRescan("auth_invalid"), cp401: await hashRescan("4401"), blip: await hashRescan("1006"),
+                           blipBWasChanged: await hashRescan("1006", { bState: "changed" }) }),
+                   { authInvalid: want(), cp401: want(), blip: want(), blipBWasChanged: want("changed") });
+  // 회귀 가드: 지금 쓰는 PC(B) 자신의 새 QR 이 실패하면 지금처럼 B 의 옛 자격으로 남는다
+  assert.deepEqual(plain(await hashRescan("auth_invalid", { boot: "roomB" })), {
+    after: { tried: "roomB", keys: { sm_room: "roomB", sm_cs: "csB1", sm_cp: "cpB1", sm_devtoken: "devB1" },
+             pcs: [["roomA", "cpA", null], ["roomB", "cpB1", null]], reconnects: 0, err: true },
+    reopened: ["roomB", "jwt-cpB1"] });
+});
