@@ -116,7 +116,7 @@ test("T29 폰: '‹ 목록'으로 숨긴 터미널은 화면 복귀·릴레이 �
     const { ctx, pd, app } = await boot({ width: 390 });
     const timers = [], realT = ctx.setTimeout;
     ctx.setTimeout = (f, ms) => (ms >= 1000 ? (timers.push(f), 0) : realT(f, ms));   // 재연결 백오프 타이머만 붙잡는다
-    ev(ctx, "toast = () => {}; conn.connect = async () => ({}); T.list = async () => ({ sessions: SESSIONS.slice() });");
+    ev(ctx, "toast = () => {}; conn.connect = async () => { conn.peer = true; return {}; }; T.list = async () => ({ sessions: SESSIONS.slice() });");
     await ctx.loadTerminal(ev(ctx, "SESSIONS[0]"), false); await tick(RENDER);
     if (hide) backBtn(pd).onclick();
     let prompts = 0; ctx.ensurePriv = async () => { prompts++; return {}; };

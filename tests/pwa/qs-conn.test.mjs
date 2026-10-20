@@ -8,6 +8,7 @@ const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
 const settle = async (n = 12) => { for (let i = 0; i < n; i++) await tick(); };
 const until = async (f, n = 150) => { for (let i = 0; i < n && !f(); i++) await tick(20); return f(); };
 const flatEl = (n) => [n, ...(n.children || []).flatMap(flatEl)];
+const plain = (v) => JSON.parse(JSON.stringify(v));   // vm 쪽 배열·객체를 이쪽 값으로(엄격 비교는 프로토타입까지 본다)
 
 // 브라우저와 같은 규칙: CONNECTING 에서 send 는 예외, CLOSING·CLOSED 에서 send 는 버린다. close() 뒤 onclose 는 바로(deferClose:false)
 function browserWs(ctx, { deferClose = false } = {}) {
@@ -156,4 +157,185 @@ test("T60c 저장된 지금 PC 의 자격을 CP 가 거부(401)하면 그 PC 만
   await p; await settle();
   assert.deepEqual({ pcs: pcsOf(ctx), toast: ev(ctx, "__toasts.filter((m) => m.includes('페어링이 바뀌었')).length"), reconnects: reconnectTimers(timers).length },
                    { pcs: [["roomA", "changed"], ["roomC", null]], toast: 1, reconnects: 0 });
+});
+
+// ---------------------------------------------------------------- 결함 2·7·8·10: PC(커넥터)가 내려갔다 다시 붙을 때
+// 새 커넥터는 이 연결의 기기 인증을 모른다(새 프로세스·_on_connected 가 비움). 다시 인증하지 않으면 첫 요청이 auth_required 를 받아
+// 멀쩡한 PC 가 '⛔ 페어링 바뀜'으로 저장되고 새로고침해도 자동 접속하지 않았다. E2EE 면 PC 가 없는 동안의 요청이 영원히 기다렸다.
+const rk = (seed) => { const raw = new Uint8Array(32); for (let i = 0; i < 32; i++) raw[i] = (i * 7 + seed) & 255;
+  return Buffer.from(raw).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); };
+const roomConn = (ctx, room) => ev(ctx, `(async () => { const c = new Conn(); c.e2eeKey = await crypto.subtle.importKey('raw',
+  b64uToU8(LS.getItem('sm_e2ee_${room}')), 'AES-GCM', false, ['encrypt','decrypt']); return c; })()`);
+// PC 가 없는 방의 릴레이처럼 답한다(relay.py): 폰이 보낸 프레임마다 agent_offline — 봉투(E2EE)는 본문을 못 읽어 id 가 null
+function relayNoAgent(ws) {
+  ws._done ||= 0;
+  for (const f of ws.sent.slice(ws._done)) ws.push({ v: 1, type: "res", id: f.e === "a1" ? null : (f.id ?? null), ok: false, error: "agent_offline" });
+  ws._done = ws.sent.length;
+}
+async function bootPc({ e2ee = false } = {}) {
+  const ctx = await load({ setup: (sb) => {
+    sb.localStorage.setItem("sm_room", "room1"); sb.localStorage.setItem("sm_devtoken", "dev-1");
+    sb.localStorage.setItem("sm_pcs", JSON.stringify([{ room: "room1", dev: "dev-1", name: "PC1" }]));
+    if (e2ee) sb.localStorage.setItem("sm_e2ee_room1", rk(3));
+    regIds(sb);
+  } });
+  const timers = holdTimers(ctx);
+  const sockets = browserWs(ctx);
+  ev(ctx, `conn.devToken = 'dev-1'; innerWidth = 1400;
+    globalThis.__toasts = []; toast = (m) => __toasts.push(String(m));
+    globalThis.__lost = []; showAuthLost = (e) => { __lost.push(String(e)); };
+    globalThis.__ll = 0; loadList = async () => { __ll++; }; globalThis.__lt = 0; listTick = async () => { __lt++; };
+    globalThis.__rt = []; reattachForegroundTab = (h) => { __rt.push(h === undefined ? 'measure' : h); };
+    refreshVer = async () => {}; showVer = () => {}; enterApp = () => {};`);
+  const pc = e2ee ? await roomConn(ctx, "room1") : null;
+  // 선에 실린 프레임(E2EE 면 열어서) · PC 가 보낸 것처럼 답하기(E2EE 면 봉인 — 겉에는 릴레이가 붙인 cid)
+  const frames = async (ws) => { const out = []; for (const f of ws.sent) out.push(f.e === "a1" ? await pc._openEnv(f) : f); return out; };
+  const reply = async (ws, m) => ws.push(e2ee ? { ...(await pc._seal(m)), cid: m.cid } : m);
+  return { ctx, timers, sockets, frames, reply };
+}
+async function connectAuthed(env, cid = "c1") {
+  const { ctx, sockets, frames, reply } = env;
+  const n = sockets.length;
+  const p = ev(ctx, "conn.connect('room1', 'tok')");
+  await until(() => sockets.length > n);
+  const ws = sockets.at(-1); ws.open(); ws.push({ type: "hello", peer_present: true, cid });
+  await until(() => ws.sent.length >= 1);
+  await settle();
+  const a = (await frames(ws)).find((f) => f.method === "auth");
+  await reply(ws, { type: "res", id: a.id, cid, ok: true, data: { id: "d", name: "n", ver: "0.29.0", pv: 2 } });
+  await p; await settle();
+  return ws;
+}
+
+test("T61 PC 가 재기동·업데이트되면(agent_offline → agent_online) 다시 인증한다 — 대기 요청·스트림은 끝나고, PC 가 없는 동안엔 보내지 않으며, 돌아오면 목록·보던 터미널을 이어 주고 '⛔ 페어링 바뀜'이 되지 않는다(평문·E2EE)", async () => {
+  for (const e2ee of [false, true]) {
+    const env = await bootPc({ e2ee });
+    const { ctx, timers, frames, reply } = env;
+    const ws = await connectAuthed(env);
+    // PC 가 내려가기 직전: 응답을 기다리는 요청 하나 + 관제 스트림 하나
+    ev(ctx, "globalThis.__pend = 'pending'; conn.req('list_sessions', {}).then((r) => { __pend = r; });"
+          + "globalThis.__mon = []; conn.startMonitor('x', 'x', (d, eof) => __mon.push(eof ? 'eof' : d));");
+    await settle();
+    ws.push({ type: "peer", event: "agent_offline" }); await settle();
+    const nSent = ws.sent.length;
+    ev(ctx, "globalThis.__off = 'pending'; conn.req('ping', {}).then((r) => { __off = r; }); globalThis.__t = [];"
+          + "conn.startTerminal('s1', (d, eof) => __t.push(eof ? 'eof' : d), {});");
+    await settle();
+    const whileOff = { pend: ev(ctx, "__pend.error || __pend"), mon: ev(ctx, "__mon.slice()"), off: ev(ctx, "__off.error || __off"),
+                       term: ev(ctx, "__t.slice()"), sentWhileOff: ws.sent.length - nSent, authed: ev(ctx, "conn.authed"), peer: ev(ctx, "conn.peer") };
+    // PC 가 돌아옴 → 곧바로 다시 인증
+    ws.push({ type: "peer", event: "agent_online" }); await settle();
+    const re = (await frames(ws)).slice(nSent).filter((f) => f.method === "auth");
+    if (re.length) await reply(ws, { type: "res", id: re[0].id, cid: "c1", ok: true, data: { id: "d", name: "n" } });
+    await settle();
+    for (const t of timers.filter((t) => t.ms <= 1500)) t.f();             // PC 가 준비될 틈(1.5초) 뒤 목록·터미널
+    await settle();
+    // 다시 인증보다 먼저 나간 요청이 auth_required 를 받으면 — 다시 인증하고 한 번 더 보낸다(조용히 성공)
+    ev(ctx, "globalThis.__late = 'pending'; conn.req('list_sessions', { q: 'x' }).then((r) => { __late = r; });"); await settle();
+    const before = ws.sent.length;
+    const lr = (await frames(ws)).filter((f) => f.method === "list_sessions").at(-1);
+    await reply(ws, { type: "res", id: lr.id, cid: "c1", ok: false, error: "auth_required" }); await settle();
+    const ra = (await frames(ws)).slice(before).find((f) => f.method === "auth");
+    if (ra) await reply(ws, { type: "res", id: ra.id, cid: "c1", ok: true, data: { id: "d", name: "n" } });
+    await settle();
+    const retry = (await frames(ws)).slice(before).find((f) => f.method === "list_sessions");
+    if (retry) await reply(ws, { type: "res", id: retry.id, cid: "c1", ok: true, data: { sessions: ["ok"] } });
+    await settle();
+    const got = { whileOff, reauth: re.length, reauthToken: re[0] && re[0].params.token, authedAfter: ev(ctx, "conn.authed"),
+                  back: { toast: ev(ctx, "__toasts.includes('PC 다시 연결됨')"), lists: ev(ctx, "__ll + __lt"), reattach: ev(ctx, "__rt.length") },
+                  late: { reauth: !!ra, retried: !!retry, ok: ev(ctx, "__late.ok"), data: ev(ctx, "JSON.stringify(__late.data)") },
+                  lost: ev(ctx, "__lost.slice()"), state: ev(ctx, "(pcsLoad()[0] || {}).state || null") };
+    assert.deepEqual(plain(got), {
+      whileOff: { pend: "agent_offline", mon: ["eof"], off: "agent_offline", term: ["eof"], sentWhileOff: 0, authed: false, peer: false },
+      reauth: 1, reauthToken: "dev-1", authedAfter: true,
+      back: { toast: true, lists: 1, reattach: 1 },
+      late: { reauth: true, retried: true, ok: true, data: JSON.stringify({ sessions: ["ok"] }) },
+      lost: [], state: null,
+    }, e2ee ? "E2EE" : "평문");
+  }
+});
+
+test("T61b PC 가 돌아와 다시 인증했는데 자격이 정말 무효(PC 에서 기기 삭제·재발급)면 지금처럼 '⛔ 페어링 바뀜'과 자격 상실 안내", async () => {
+  const env = await bootPc();
+  const { ctx, timers } = env;
+  const ws = await connectAuthed(env);
+  ws.push({ type: "peer", event: "agent_offline" }); ws.push({ type: "peer", event: "agent_online" }); await settle();
+  const a = ws.sent.filter((f) => f.method === "auth").at(-1);
+  ws.push({ type: "res", id: a.id, cid: "c1", ok: false, error: "auth_invalid" }); await settle();
+  for (const t of timers.filter((t) => t.ms <= 1500)) t.f();
+  await settle();
+  assert.deepEqual(plain({ reauth: ws.sent.filter((f) => f.method === "auth").length, lost: ev(ctx, "__lost.slice()"), state: ev(ctx, "pcsLoad()[0].state || null"),
+                     back: ev(ctx, "__toasts.includes('PC 다시 연결됨')"), reattach: ev(ctx, "__rt.length") }),
+                   { reauth: 2, lost: ["auth_invalid"], state: "changed", back: false, reattach: 0 });
+});
+
+test("T62 E2EE: PC 가 없을 때 릴레이가 돌려주는 agent_offline(봉투라 id 가 없다)이 대기 요청을 끝낸다 · PC 가 꺼진 채 연결하면 인증을 보내지 않고 바로 끝난다", async () => {
+  const env = await bootPc({ e2ee: true });
+  const { ctx, sockets } = env;
+  const ws = await connectAuthed(env);
+  ev(ctx, "globalThis.__pend = 'pending'; conn.req('list_sessions', {}).then((r) => { __pend = r; });"); await settle();
+  ws.push({ v: 1, type: "res", id: null, ok: false, error: "agent_offline" });   // 릴레이: 그사이 PC 가 떠나 이 봉투를 보낼 곳이 없다
+  await settle();
+  const pend = ev(ctx, "__pend.error || __pend"), peer = ev(ctx, "conn.peer");
+  // PC 가 꺼진 채(peer_present:false) 새로 연결 — 인증을 보내지 않고 connect 가 바로 끝난다(전엔 '연결 중…'에 멈췄다)
+  ev(ctx, "globalThis.__c = 'pending'; conn.connect('room1', 'tok').then((r) => { __c = r.auth; });");
+  await until(() => sockets.length === 2);
+  const ws2 = sockets[1]; ws2.open(); ws2.push({ type: "hello", peer_present: false, cid: "c2" });
+  await settle();
+  assert.deepEqual(plain({ pend, peer, connect: ev(ctx, "JSON.stringify(__c)"), sent: ws2.sent.length, authed: ev(ctx, "conn.authed") }),
+                   { pend: "agent_offline", peer: false, connect: JSON.stringify({ ok: false, error: "agent_offline", data: null }), sent: 0, authed: false });
+});
+
+test("T62b 다시 연결됐는데 PC 가 꺼져 있으면 '다시 연결됨'이라 하지 않는다 — PC 가 꺼져 있다고 알리고 터미널은 PC 가 돌아올 때 붙인다(평문·E2EE)", async () => {
+  for (const e2ee of [false, true]) {
+    const env = await bootPc({ e2ee });
+    const { ctx, timers, sockets } = env;
+    await connectAuthed(env);
+    sockets[0].drop(1006); await settle();                                 // 릴레이 재기동 — 폰이 먼저 다시 붙는다
+    const rt = reconnectTimers(timers); if (rt.length !== 1) throw new Error("재접속 예약 없음");
+    timers.splice(timers.indexOf(rt[0]), 1); rt[0].f();
+    await until(() => sockets.length === 2);
+    const ws2 = sockets[1]; ws2.open(); ws2.push({ type: "hello", peer_present: false, cid: "c2" });
+    await settle(); relayNoAgent(ws2); await settle();                     // 보낸 것이 있으면 릴레이처럼 agent_offline
+    assert.deepEqual(plain({ toasts: ev(ctx, "__toasts.slice()"), lists: ev(ctx, "__ll"), reattach: ev(ctx, "__rt.length"), sent: ws2.sent.length, lost: ev(ctx, "__lost.slice()") }),
+                     { toasts: ["연결은 됐지만 PC 가 꺼져 있습니다 — 켜지면 자동으로 이어집니다"], lists: 1, reattach: 0, sent: 0, lost: [] }, e2ee ? "E2EE" : "평문");
+  }
+});
+
+test("T62c PC 가 꺼진 채 앱을 열면 앱에 들어가 'PC 가 꺼져 있습니다'를 보이고, PC 가 켜지면 인증해 목록을 받는다 — '⛔ 페어링 바뀜'이 되지 않는다", async () => {
+  let els;
+  const ctx = await load({ setup: (sb) => {
+    for (const [k, v] of [["sm_room", "room1"], ["sm_token", "tok"], ["sm_devtoken", "dev-1"], ["sm_pcs", JSON.stringify([{ room: "room1", dev: "dev-1", name: "PC1" }])]]) sb.localStorage.setItem(k, v);
+    els = regIds(sb);
+    sb.__all = browserWs(sb);
+  } });
+  const timers = holdTimers(ctx);
+  ev(ctx, "globalThis.__lost = []; showAuthLost = (e) => { __lost.push(String(e)); }; refreshVer = async () => {}; showVer = () => {}; maybeShowIosHint = () => {}; refreshPushBtn = () => {};");
+  const sockets = ctx.__all;
+  await until(() => sockets.length === 1);
+  const ws = sockets[0]; ws.open(); ws.push({ type: "hello", peer_present: false, cid: "c1" });
+  await settle(); relayNoAgent(ws); await settle(); await tick(30);         // 보낸 것이 있으면 릴레이처럼 agent_offline
+  const LF = "typeof LIST_FAIL === 'undefined' ? 'none' : LIST_FAIL";
+  const offline = { entered: !els.app.classList.contains("hidden") && els.pair.classList.contains("hidden"),
+                    listFail: ev(ctx, LF), sent: ws.sent.length };
+  ws.push({ type: "peer", event: "agent_online" }); await settle();
+  const a = ws.sent.slice(ws._done).find((f) => f.method === "auth");
+  if (a) ws.push({ type: "res", id: a.id, cid: "c1", ok: true, data: { id: "d", name: "n" } });
+  await settle();
+  for (const t of timers.filter((t) => t.ms <= 1500)) t.f();
+  await settle();
+  const lr = ws.sent.slice(ws._done).find((f) => f.method === "list_sessions");
+  if (lr) ws.push({ type: "res", id: lr.id, cid: "c1", ok: true, data: { sessions: [{ session_id: "s1", title: "S1", cwd: "E:/p" }] } });
+  await settle();
+  assert.deepEqual(plain({ offline, auth: !!a, listed: !!lr, sessions: ev(ctx, "SESSIONS.length"), listFail: ev(ctx, LF), lost: ev(ctx, "__lost.slice()"),
+                     state: ev(ctx, "pcsLoad()[0].state || null") }),
+                   { offline: { entered: true, listFail: true, sent: 0 }, auth: true, listed: true, sessions: 1, listFail: false, lost: [], state: null });
+});
+
+test("T62d 예전 결함이 남긴 ⛔(멀쩡한 PC 를 '페어링 바뀜'으로 적음)는 그 PC 에 인증이 되면 지운다", async () => {
+  const env = await bootPc();
+  const { ctx } = env;
+  ev(ctx, "pcMarkState('room1', 'changed')");
+  await connectAuthed(env);
+  assert.equal(ev(ctx, "pcsLoad()[0].state || null"), null);
 });

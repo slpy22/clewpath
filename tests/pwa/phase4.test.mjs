@@ -105,7 +105,7 @@ test("Conn: 터미널/모니터 스트림 라우팅, close 는 stream_close, 소
   same(ev(ctx, "globalThis.__sched"), [4402]);
 });
 
-test("Conn: 기기 인증 — devToken 있으면 hello 직후 auth, 성공 시 ver 표시·pv 경고 1회, auth_required 는 onauth(false)", async () => {
+test("Conn: 기기 인증 — devToken 있으면 hello 직후 auth, 성공 시 ver 표시·pv 경고 1회, auth_required 는 다시 인증해 무효면 onauth(false)", async () => {
   const ctx = await load();
   ctx.localStorage.setItem("sm_devtoken", "dev-1");
   ev(ctx, "conn.devToken = 'dev-1'; globalThis.__auth = []; conn.onauth = (ok, err) => globalThis.__auth.push([ok, err]);"
@@ -125,11 +125,16 @@ test("Conn: 기기 인증 — devToken 있으면 hello 직후 auth, 성공 시 v
   assert.equal(ev(ctx, "conn.authed"), true); assert.equal(ev(ctx, "globalThis.__ver"), "0.9.5");
   same(ev(ctx, "globalThis.__auth"), [[true, undefined]]);
   assert.ok(ev(ctx, "globalThis.__toasts")[0].includes("더 새 통신 규약"), "Host pv 가 높으면 업데이트 안내");
-  // 이후 아무 응답이 auth_required 면(폐기 기기) onauth(false)
+  // 이후 응답이 auth_required 면 기기 토큰으로 다시 인증한다(PC 가 다시 떠 인증이 비었을 수 있다 — 검토 3회차). 폐기 기기면
+  // 다시 인증이 auth_invalid 를 받아 onauth(false) — 원래 요청은 auth_required 그대로 끝난다
   const q = ev(ctx, "conn.req('list_sessions')"); await tick();
   ws.push({ type: "res", id: ws.sent.at(-1).id, ok: false, error: "auth_required" });
-  await q;
-  same(ev(ctx, "globalThis.__auth").at(-1), [false, "auth_required"]);
+  await tick(); await tick();
+  const ra = ws.sent.at(-1);
+  assert.equal(ra.method, "auth"); assert.equal(ra.params.token, "dev-1");
+  ws.push({ type: "res", id: ra.id, ok: false, error: "auth_invalid" });
+  same((await q).error, "auth_required");
+  same(ev(ctx, "globalThis.__auth").at(-1), [false, "auth_invalid"]);
   ev(ctx, "conn._stopped = true"); ws.close();
 });
 
@@ -157,7 +162,7 @@ test("Conn: 재연결 백오프(1s→2s→…→30s, 6회 상한)·타이머 중
   }
   same(waits, [1000, 2000, 4000, 8000, 16000, 30000, 30000]);
   // 타이머 콜백: 4402(자격 만료 추정) 는 JWT 강제 갱신 → connect 성공 → 카운터 리셋·목록·전경 탭
-  ev(ctx, "conn._retry = 3; conn.connect = async () => {}");
+  ev(ctx, "conn._retry = 3; conn.connect = async () => { conn.peer = true; }");   // PC 도 붙어 있는 재연결(PC 가 꺼져 있으면 '다시 연결됨'이 아니다 — qs-conn)
   ev(ctx, "conn._scheduleReconnect(4402)");
   await timers.at(-1).f(); await tick();
   assert.equal(ev(ctx, "globalThis.__jwt"), 1); assert.equal(ev(ctx, "conn._retry"), 0);
