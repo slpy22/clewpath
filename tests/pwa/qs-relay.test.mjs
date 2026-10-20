@@ -318,3 +318,38 @@ test("T45 릴레이: 다른 기기(cid) 앞으로 온 프레임은 같은 번호
   assert.deepEqual(got, all(["평문", "E2EE"], { foreign: { got: [], res: "pending", notice: [] },
                                                mine: { got: ["내 관제", "cid 없음"], res: { sessions: [] } } }));
 });
+
+test("T47 릴레이(실제 연결): 새 PC 페어링이 이전 PC 의 2차 인증 상태 요청(응답 없음)을 끊어도 이전 PC 세션의 터미널을 열지 않는다 — 새 PC 가 연결된 뒤 화면·탭 기억에 남지 않는다", async () => {
+  const X = "xxxxxxxx-1111-2222-3333-444444444444";
+  const ctx = await load({ setup: (sb) => sb.localStorage.setItem("sm_room", "roomA") });
+  const pd = stubEl("div"), app = stubEl("div");
+  for (const [id, e] of [["paneDetail", pd], ["app", app], ["head", stubEl("span")], ["paneList", stubEl("div")], ["p-err", stubEl("div")], ["p-go", stubEl("button")]]) ctx.document._register(id, e);
+  app.setAttribute("data-view", "list");
+  const sockets = browserWs(ctx);
+  ev(ctx, `innerWidth = 1400; toast = () => {}; maybeShowIosHint = () => {}; refreshPushBtn = () => {}; fetchRecentMessages = async () => [];
+      globalThis.MutationObserver = class { observe() {} disconnect() {} };
+      ${TWO_PCS}
+      SESSIONS = [{ session_id: '${A}', title: 'A', live_terminal: true, cwd: 'E:/p' }, { session_id: '${B}', title: 'B', live_terminal: true, cwd: 'E:/q' }];`);
+  const wsA = await connectWs(ctx, sockets, "roomA");
+  const pt = ctx.loadTerminal(ev(ctx, "SESSIONS[0]"), false);           // 목록 줄 A → 2차 인증 상태를 PC A 에 묻는다 — 답이 없다
+  await until(() => wsA.sent.some((f) => f.method === "api"));
+  const asked = wsA.sent.filter((f) => f.method === "api").map((f) => f.params.path);
+  const li = stubEl("input"); li.value = "https://relay.test/relay/app#room=roomB&token=tok"; ctx.document._register("p-link", li);
+  ev(ctx, "doPair()");                                                    // 기다리다 '＋ 새 PC 추가'에서 PC B 링크로
+  await pt; await tick(RENDER);
+  const mid = { room: ctx.localStorage.getItem("sm_room"), tabs: ev(ctx, "TABS.list.length"), now: ev(ctx, "PANE_NOW.kind"), termMode: pd.classList.contains("term-mode"),
+                streams: ev(ctx, "conn.streams.size") };
+  await until(() => sockets.length === 2);
+  const wsB = sockets.at(-1); wsB.open(); wsB.push({ type: "hello", peer_present: true, cid: "cB" });
+  await until(() => wsB.sent.some((f) => f.method === "list_sessions"));
+  const lr = wsB.sent.find((f) => f.method === "list_sessions");
+  wsB.push({ type: "res", id: lr.id, ok: true, data: { sessions: [{ session_id: X, title: "X", live_terminal: true, cwd: "F:/x" }] } });
+  await tick(RENDER);
+  const after = { room: ctx.localStorage.getItem("sm_room"), tabsB: ctx.localStorage.getItem("sm_tabs_roomB"), now: ev(ctx, "PANE_NOW.kind"),
+                  termMode: pd.classList.contains("term-mode"), terminalOnB: wsB.sent.filter((f) => f.method === "terminal").length };
+  assert.deepEqual({ asked, mid, after }, {
+    asked: ["/api/owner/2fa/status"],
+    mid: { room: "roomA", tabs: 0, now: "empty", termMode: false, streams: 0 },
+    after: { room: "roomB", tabsB: null, now: "empty", termMode: false, terminalOnB: 0 },
+  });
+});

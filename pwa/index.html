@@ -1451,6 +1451,11 @@ function highlightSelected(){ document.querySelectorAll('.srow').forEach(r=>
 // PANE_NOW = 지금 상세 칸 화면 {kind, sid, key, gid, code, gen}(저장 안 함). gen 은 들어올 때마다 하나씩 — 응답을 기다리던
 // 옛 화면이 늦게 그리거나 실시간 연결을 열지 않게(뷰어 T5). 폰 관제 덮개는 상세 칸 밖이라 여기 들지 않는다.
 let PANE_NOW={kind:'empty', gen:0};
+// PC 전환 세대 — pcSwitchReset 이 하나씩 올린다. 기다리던 동작(2차 인증 확인·목록 받기)이 깨어나 'PC 가 바뀌었나'를 볼 때 쓴다(pcNow).
+// 방 이름(sm_room)만 보면 '＋ 새 PC 추가'의 새 PC 페어링(doPair)에선 연결이 선 뒤에야 방이 바뀌어, 그사이 깨어난 이전 PC 의
+// 터미널·웹 재개가 이어 달려 이전 PC 세션이 새 PC 화면·탭 기억에 남았다(검토 2회차)
+let PC_GEN=0;
+function pcNow(){ return hostVerKey()+'#'+PC_GEN; }
 function paneEnter(kind, ref){
   const p=paneDetail(), r=ref||{};
   if(kind!=='terminal'&&(p.classList.contains('term-mode')||termView.main)) leaveTerminalView();   // 연결·탭 배지를 닫는다 — 재연결·화면 복귀가 떠난 터미널로 끌고 가지 않게(T2)
@@ -1579,12 +1584,12 @@ async function loadList(q){
   // 갈아엎으면 전경 터미널이 발밑에서 사라진다(relay e2e 실측 2026-09-10).
   // 탭 막대 전환(2026-10-14 사장님): 오른쪽 칸은 그대로 — 비어 있을 때만 안내를 그린다(보던 상세·관제·파일·뷰어 유지)
   if(!paneDetail().children.length) detailPlaceholder();
-  const pc=hostVerKey(), at=Date.now();   // 이 목록을 청한 PC·시각
+  const pc=pcNow(), at=Date.now();        // 이 목록을 청한 PC·시각
   try{
     const data=await T.list({limit:0});
     // 받는 사이 릴레이로 PC 를 바꿨다 — 늦게 온 옛 PC 목록은 버린다(새 PC 의 loadList 가 따로 돈다). 옛 목록으로 새 PC 의
     // 탭 기억을 복원하면 하나도 맞지 않아 빈 탭 목록이 새 PC 키에 덮어써진다(3단계)
-    if(pc!==hostVerKey()) return;
+    if(pc!==pcNow()) return;
     SESSIONS=data.sessions||[]; LIST_READY=true; LIST_AT=at;
     if(typeof data.now==='number') CLOCK_SKEW=data.now-Date.now()/1000;
     rerender();
@@ -1605,7 +1610,8 @@ setInterval(async()=>{
   if(document.hidden||!LIST_CTX) return;
   if($('#app').classList.contains('hidden')) return;
   try{
-    const at=Date.now(), d=await T.list({limit:0});
+    const pc=pcNow(), at=Date.now(), d=await T.list({limit:0});
+    if(pc!==pcNow()) return;       // 받는 사이 PC 를 바꿨다 — 이전 PC 목록으로 새 PC 의 SESSIONS 를 덮지 않는다(새 PC 첫 목록이 다시 그린다)
     SESSIONS=d.sessions||[]; LIST_AT=at;
     if(typeof d.now==='number') CLOCK_SKEW=d.now-Date.now()/1000;
     let skipList=false;
@@ -1662,12 +1668,12 @@ function tabSeenLive(t){ return !!(t.seenLiveAt&&t.seenLiveAt>=LIST_AT); }
 // 목록을 한 번 새로 받아 SESSIONS 를 바꾸고 그 세션의 지금 정보를 돌려준다 — 목록에 없으면 null, 받지 못하면(끊김·3초 넘김·받는
 // 사이 PC 전환) undefined. 20초 목록이 옛값일 수 있는 판정(꺼진 터미널·화면 인계) 바로 앞에서 쓴다(openSessionById 와 같은 방식).
 async function freshSess(sid){
-  const pc=hostVerKey(), at=Date.now();
+  const pc=pcNow(), at=Date.now();
   let d=null, timer=null;
   try{ d=await Promise.race([T.list({limit:0}), new Promise(r=>{ timer=setTimeout(()=>r(null),3000); })]); }
   catch(e){ d=null; }
   finally{ clearTimeout(timer); }
-  if(!d||!d.sessions||pc!==hostVerKey()) return undefined;
+  if(!d||!d.sessions||pc!==pcNow()) return undefined;
   SESSIONS=d.sessions; LIST_AT=at; if(typeof d.now==='number') CLOCK_SKEW=d.now-Date.now()/1000;
   return SESSIONS.find(x=>x.session_id===sid)||null;
 }
@@ -1682,8 +1688,8 @@ async function jumpToSession(s, fresh){
   let t=TABS.list.find(x=>x.s.session_id===s.session_id);
   // 목록(20초)이 꺼졌다고 해도 판정 전에 한 번 새로 받는다 — 방금 띄운 터미널을 떠났다 돌아올 때 탭을 버리지 않게(§4-1)
   if(t&&!fresh&&tabGone(t,s)){
-    const seen=tabSeenLive(t), pc=hostVerKey(), f=await freshSess(s.session_id);
-    if(pc!==hostVerKey()) return;                                 // 받는 사이 PC 를 바꿨다
+    const seen=tabSeenLive(t), pc=pcNow(), f=await freshSess(s.session_id);
+    if(pc!==pcNow()) return;                                      // 받는 사이 PC 를 바꿨다
     t=TABS.list.find(x=>x.s.session_id===s.session_id);           // 기다리는 사이 탭이 닫혔을 수 있다
     if(f) s=f;
     // 목록을 받지 못했다(끊김·늦음) — 떠나기 직전까지 살아 있음을 본 탭이면 그 탭으로(떠나도 터미널을 정리하지 않던 때와 같게)
@@ -1705,9 +1711,9 @@ async function openSessionById(sid){
   const t=TABS.list.find(x=>x.s.session_id===sid || (x.s.session_id||'').startsWith(sid));
   if(t){ switchTab(t.key); return; }
   // 목록은 20초 폴링이라 live_terminal 이 stale 일 수 있다 → 판단 전에 새로 받는다(실패 시 캐시)
-  const pc=hostVerKey(), at=Date.now();
-  try{ const d=await T.list({limit:0}); if(d&&d.sessions&&pc===hostVerKey()){ SESSIONS=d.sessions; LIST_AT=at; if(typeof d.now==='number') CLOCK_SKEW=d.now-Date.now()/1000; } }catch(e){}
-  if(pc!==hostVerKey()) return;   // 받는 사이 PC 를 바꿨다 — 이전 PC 의 세션을 새 PC 에서 열지 않는다
+  const pc=pcNow(), at=Date.now();
+  try{ const d=await T.list({limit:0}); if(d&&d.sessions&&pc===pcNow()){ SESSIONS=d.sessions; LIST_AT=at; if(typeof d.now==='number') CLOCK_SKEW=d.now-Date.now()/1000; } }catch(e){}
+  if(pc!==pcNow()) return;        // 받는 사이 PC 를 바꿨다 — 이전 PC 의 세션을 새 PC 에서 열지 않는다
   const s=_findSess(sid);
   if(s){ jumpToSession(s, true); } else { PENDING_OPEN_SID=sid; }
 }
@@ -3266,11 +3272,11 @@ function termComposer(o){
   return api;
 }
 async function loadTerminal(s, safe){
-  const pc=hostVerKey();                   // 이 터미널을 연 PC
+  const pc=pcNow();                        // 이 터미널을 연 PC
   let cred={};
   if(MODE==='relay'){ cred=await ensurePriv(); if(cred===null) return; }   // 외부 터미널 → grace/2차 인증
-  // 2차 인증 확인을 기다리는 사이 릴레이로 PC 를 바꿨다 — 이전 PC 세션을 새 PC 로 열거나 새 PC 탭 기억에 적지 않는다
-  if(pc!==hostVerKey()) return;
+  // 2차 인증 확인을 기다리는 사이 릴레이로 PC 를 바꿨다(새 PC 페어링 포함) — 이전 PC 세션을 새 PC 로 열거나 새 PC 탭 기억에 적지 않는다
+  if(pc!==pcNow()) return;
   // 권한확인을 정하지 않은 길(목록 줄·알림·비서 등)은 그 탭의 설정을 이어 쓴다 — 탭별 권한확인 그대로(§7, 알림 콜드 스타트가 끄던 것)
   if(safe===undefined){ const tt=findTab(tabKey(s)); if(tt) safe=!!tt.safe; }
   if(safe) cred={...cred, safe:true};      // 권한확인 유지 - 프롬프트가 뜨고 원격 승인 가능
@@ -3280,7 +3286,7 @@ async function loadTerminal(s, safe){
   // 목록의 screen 이 '내가 놓은 옛 화면'이라 묻지 않을 참이다 — 떠나 있는 사이(20초 목록·앱을 내렸다 올림) 다른 기기가 가져갔을 수
   // 있다(떠날 때 연결을 닫아 인계 통지는 못 받는다). 목록을 한 번 새로 받아 그 screen 으로 판단한다(§9 화면 탈취 착각)
   let chk=s;
-  if(releasedOnList(s,t0)){ const f=await freshSess(s.session_id); if(pc!==hostVerKey()) return;
+  if(releasedOnList(s,t0)){ const f=await freshSess(s.session_id); if(pc!==pcNow()) return;
     if(f) chk={...s, screen:f.screen}; t0=findTab(key); }
   // wasDead: 복원 시점에 PTY 가 없던 탭(다시 열면 새 스폰). attach 가 보유 xterm 을 비울지 정하는
   // 근거 — 20초 폴링의 SESSIONS.live_terminal 은 stale 해서(e2e 실측: 살아난 뒤에도 false) 못 쓴다.
@@ -3459,10 +3465,10 @@ function mdToHtml(src){
 // ---- 재개(스트리밍 + 입력) ----
 async function loadResume(s, inplace, safe){
   const isIn = inplace!==false;   // 기본 in-place(실제 세션)
-  const pc=hostVerKey();          // 이 재개를 연 PC
+  const pc=pcNow();               // 이 재개를 연 PC
   let cred={};
   if(isIn){ cred=await ensurePriv(); if(cred===null) return; }   // 외부 in-place → grace/2차 인증
-  if(pc!==hostVerKey()) return;   // 2차 인증을 기다리는 사이 PC 를 바꿨다 — 이전 PC 세션의 claude -p 를 새 PC 에 띄우지 않는다
+  if(pc!==pcNow()) return;        // 2차 인증을 기다리는 사이 PC 를 바꿨다(새 PC 페어링 포함) — 이전 PC 세션의 claude -p 를 새 PC 에 띄우지 않는다
   if(safe) cred={...cred, safe:true};   // 일반 모드: 도구 자동허용 없이(웹은 물을 수 없어 거부됨)
   paneEnter('resume', s);   // 2차 인증 뒤, 칸을 비우기 바로 앞 — 보던 뷰어 실시간·터미널·옛 재개 정리(quick-switch 2단계)
   const main=paneDetail(); closeInlineMonitor(); main.classList.remove('term-mode','fb-mode','mon-mode'); main.innerHTML='';
@@ -6586,6 +6592,7 @@ function onLocalTermMessage(ev){
 // 새 PC 로 가면 커넥터는 rid 만 보고 다른 기기의 같은 번호 파이프를 끊을 수 있다. 저장은 하지 않는다 — 이전 PC 기억은 바뀔 때마다
 // 이미 적혀 있고, 새 PC 기억은 첫 목록 뒤 다시 읽는다(restoreTabsOnce·fbRestoreState). 여러 번 불려도 안전하다.
 function pcSwitchReset(){
+  PC_GEN++;                                    // 기다리던 이전 PC 동작(2차 인증 확인·목록)이 깨어나도 이어 달리지 않게(pcNow) — 방은 늦게 바뀔 수 있다
   closeLiveResume(true);                       // 응답 중인 웹 재개도 지금 닫는다 — 연결째 바뀌어 그 응답을 받을 수 없다
   paneEnter('empty');                          // 터미널(연결·탭 배지)·뷰어 실시간·편집기 스크롤 정리
   TABS.list=[]; TABS.active=null; TABS.mru=[]; _tabsRestored=false; _tabsOwn=false;

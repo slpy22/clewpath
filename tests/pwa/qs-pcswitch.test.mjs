@@ -148,3 +148,49 @@ test("T39 '이 기기 초기화'·PC 페어링 해제(⛔ PC 의 '지우기' 포
   assert.deepEqual({ unpair: await run("unpairPc('rmA')"), remove: await run("지우기"), reset: await run("resetDevice()") },
                    { unpair: KEEP_B, remove: KEEP_B, reset: "sm_list_view" });
 });
+
+// ---------------------------------------------------------------- 검토 2회차: 새 PC 페어링(doPair)의 PC 전환 틈
+test("T46 '＋ 새 PC 추가'로 새 PC 를 페어링하는 사이 이전 PC 의 2차 인증 확인이 늦게 끝나도 그 터미널·웹 재개는 열지 않는다 — 방(sm_room)이 연결 뒤에야 바뀌어도, 새 PC 탭 기억에도 적지 않는다(머리 줄 전환과 같게)", async () => {
+  const X = "xxxxxxxx-1111-2222-3333-444444444444";
+  const paths = [];
+  for (const how of ["새 PC 페어링", "머리 줄"]) for (const kind of ["터미널", "웹 재개"]) paths.push(how + "|" + kind);
+  const got = await each(paths, async (p) => {
+    const [how, kind] = p.split("|");
+    const { ctx, pd } = await boot({ setup: (sb) => sb.localStorage.setItem("sm_room", "roomA") });
+    for (const id of ["p-err", "p-go"]) ctx.document._register(id, stubEl(id === "p-go" ? "button" : "div"));
+    ev(ctx, TWO_PCS + QUIET + "T.list = async () => ({ sessions: SESSIONS.slice() });");
+    await ev(ctx, "loadList()"); await tick();                          // PC A 첫 목록(A, B)
+    let release = null; ctx.ensurePriv = () => new Promise((r) => { release = r; });
+    const pt = kind === "터미널" ? ctx.loadTerminal(ev(ctx, "SESSIONS[0]"), false) : ev(ctx, "loadResume(SESSIONS[0], true, false)");
+    for (let i = 0; i < 5 && !release; i++) await tick();
+    if (!release) throw new Error("2차 인증 확인까지 가지 못함");
+    ev(ctx, "conn.connect = () => new Promise((r) => { globalThis.__cn = r; });");   // 새 PC 연결은 잠시 걸린다(손으로 풀어 줌)
+    if (how === "새 PC 페어링") {
+      const li = stubEl("input"); li.value = "https://relay.test/relay/app#room=roomB&token=tok"; ctx.document._register("p-link", li);
+      ev(ctx, "doPair()");
+    } else ev(ctx, "switchToPc({ room: 'roomB', name: 'B' })");
+    await tick();
+    const roomDuring = ctx.localStorage.getItem("sm_room");
+    release({}); await pt; await tick(RENDER);                          // 이전 PC 의 확인이 늦게 끝남(페어링의 logout 이 그 요청을 끊은 것과 같다)
+    const mid = { terms: ev(ctx, "__tc.length"), resumes: ev(ctx, "__res.length"), tabs: ev(ctx, "TABS.list.length"), now: ev(ctx, "PANE_NOW.kind") };
+    ev(ctx, `T.list = async () => ({ sessions: [{ session_id: '${X}', title: 'X', live_terminal: true, cwd: 'F:/x' }] });`);
+    ev(ctx, "__cn({ auth: null })"); await tick(RENDER);               // 새 PC 연결 → 첫 목록(X) → 탭 기억 복원
+    return { roomDuring, mid, room: ctx.localStorage.getItem("sm_room"), tabsB: ctx.localStorage.getItem("sm_tabs_roomB"),
+             now: ev(ctx, "PANE_NOW.kind"), termMode: pd.classList.contains("term-mode") };
+  });
+  const want = (how) => ({ roomDuring: how === "머리 줄" ? "roomB" : "roomA", mid: { terms: 0, resumes: 0, tabs: 0, now: "empty" },
+                           room: "roomB", tabsB: null, now: "empty", termMode: false });
+  assert.deepEqual(got, Object.fromEntries(paths.map((p) => [p, want(p.split("|")[0])])));
+});
+
+test("T46b PC 를 바꾸기 전에 청한 20초 목록이 늦게 와도 새 PC 의 세션 목록(SESSIONS)을 이전 PC 것으로 덮지 않는다", async () => {
+  const { ctx } = await boot({ setup: (sb) => sb.localStorage.setItem("sm_room", "roomA") });
+  ev(ctx, TWO_PCS + QUIET + "T.list = async () => ({ sessions: SESSIONS.slice() }); conn.connect = () => new Promise(() => {});");
+  await ev(ctx, "loadList()"); await tick();                            // PC A 목록 → 20초 갱신이 돈다(LIST_CTX)
+  ev(ctx, "globalThis.__lr = []; T.list = () => new Promise((r) => __lr.push(r));");
+  const poll = ev(ctx, "__intervals.find((i) => i.ms === 20000).f");
+  const pp = poll(); await tick();                                       // 20초 갱신이 목록을 청함(PC A)
+  ev(ctx, "switchToPc({ room: 'roomB', name: 'B' })"); await tick();      // 그사이 PC B 로 — 연결을 기다리는 중
+  ev(ctx, "__lr[0]({ sessions: SESSIONS.length ? SESSIONS : [{ session_id: 'old-a', title: 'A 의 세션' }] })"); await pp; await tick();
+  assert.deepEqual({ sessions: ev(ctx, "SESSIONS.length"), listReady: ev(ctx, "LIST_READY") }, { sessions: 0, listReady: false });
+});
