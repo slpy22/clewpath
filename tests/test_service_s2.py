@@ -201,3 +201,20 @@ def test_usage_summary_handles_service_keys(env, monkeypatch):
     client.post(f"/api/v1/sessions/{BASE}/ask", json={"prompt": "q"}, headers=_h(tok))
     rows = policy.usage_summary()["today_by_token"]
     assert any(r["token"] == "svc:nklaw" and r["calls"] == 1 for r in rows)
+
+
+def test_legacy_token_switch_off_in_config(env, monkeypatch):
+    """S5: clewpath.toml [server] legacy_api_token = false → 공용 토큰은 꺼지고 서비스 토큰은 그대로."""
+    from session_manager import appconfig
+    client, _ = env
+    tok = _create(client, monkeypatch).json()["token"]
+    p = appconfig.config_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("[server]\nlegacy_api_token = false\n", encoding="utf-8")
+    appconfig.load(refresh=True)
+    try:
+        assert client.get("/api/v1/labels", headers=_h(LEGACY)).status_code == 503
+        assert client.post(f"/api/v1/sessions/{BASE}/ask", json={"prompt": "q"}, headers=_h(tok)).status_code == 200
+    finally:
+        p.unlink()
+        appconfig.load(refresh=True)

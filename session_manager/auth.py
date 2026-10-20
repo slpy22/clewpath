@@ -45,8 +45,21 @@ def check_password(pw: str) -> bool:
 
 # ---- 외부 API 토큰 (웹 로그인 비밀번호와 별개) ----
 
+def legacy_api_enabled() -> bool:
+    """공용 토큰(SM_API_TOKEN(S)) 사용 여부. clewpath.toml [server] legacy_api_token = false 면 끈다.
+
+    서비스 대장 S5(2026-10-20): 외부 서비스는 서비스 토큰(cps_…)으로 옮겼다. 환경변수는 업데이트 재기동을 거치며
+    옛 셸의 값이 계속 이어지므로(설정 파일에 없어도 살아 있음) 끄는 스위치를 설정 파일에 둔다.
+    """
+    from session_manager import appconfig
+    v = (appconfig.load().get("server") or {}).get("legacy_api_token", True)
+    return not (v is False or str(v).strip().lower() in ("false", "off", "0", "no"))
+
+
 def api_tokens() -> set[str]:
     """SM_API_TOKEN / SM_API_TOKENS(쉼표구분) 환경변수에서 허용 토큰 집합을 만든다."""
+    if not legacy_api_enabled():
+        return set()
     raw = (os.environ.get("SM_API_TOKEN", "") + "," +
            os.environ.get("SM_API_TOKENS", ""))
     return {t.strip() for t in raw.split(",") if t.strip()}
