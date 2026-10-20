@@ -1206,6 +1206,10 @@ class Conn{
       setTimeout(()=>{
         if(gen!==this._gen||!this.peer) return;
         let hid; try{ hid=pcBack(); }catch(e){}
+        // PC 없이 다시 붙을 때(_scheduleReconnect) 재 둔 값이 있으면 그것 — 그 뒤의 목록 칸은 사용자가 아니라 재접속 흐름이 돌린 것이다.
+        // 그 사이 사용자가 다른 화면을 눌렀으면 reattachForegroundTab 이 누름 순번(discSeq)을 보고 그만둔다
+        const k=this._hidAtBack; this._hidAtBack=null;
+        if(k&&k.gen===gen) hid=k.hid;
         // 릴레이 연결은 살아 있고 PC 만 다시 뜬 경우: 끊긴 전경 터미널을 다시 붙인다(전엔 화면 복귀·재접속 때만 → 오래 끊김, 2026-10-12)
         try{ reattachForegroundTab(hid); }catch(e){}
       }, Math.max(0,1500-(Date.now()-t0)));
@@ -1451,7 +1455,10 @@ class Conn{
       const hid=detailHiddenOnPhone();          // loadList 가 목록 칸으로 돌리기 전에 — 폰에서 숨겨 둔 터미널인가
       if(!this.peer){
         // 릴레이에는 붙었지만 PC 가 꺼져 있다(릴레이 재기동 때 폰이 먼저 붙는 경우 등) — '다시 연결됨'이라 하지 않고 터미널도 지금 붙이지
-        // 않는다. PC 가 붙으면 인증하고 목록·터미널을 이어 준다(_onAgentOnline). 목록 칸은 PC 가 꺼져 있다고 알린다
+        // 않는다. PC 가 붙으면 인증하고 목록·터미널을 이어 준다(_onAgentOnline). 목록 칸은 PC 가 꺼져 있다고 알린다.
+        // 그때 쓸 '보던 터미널이 보였나'는 지금 재 둔다 — 아래 loadList 가 폰을 목록 칸으로 돌려, PC 가 붙은 뒤에 재면 보던 터미널도 숨긴 것처럼
+        // 보여 다시 붙이지 않았다(검토 4회차: 폰만 목록에 남았다)
+        this._hidAtBack={gen:mine, hid};
         toast('연결은 됐지만 PC 가 꺼져 있습니다 — 켜지면 자동으로 이어집니다'); loadList(); return; }
       toast('다시 연결됨');
       loadList();

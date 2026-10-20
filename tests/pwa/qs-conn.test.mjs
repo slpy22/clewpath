@@ -552,3 +552,68 @@ test("T66 E2EE: 응답 봉투 바로 뒤에 온 agent_offline 이 그 응답을 
   assert.deepEqual({ req: { ok: req.ok, json: req.data && req.data.json }, pair },
                    { req: { ok: true, json: { stopped: true } }, pair: { entered: 1, pcs: ["roomB"], dev: "devB", err: "", current: true } });
 });
+
+// 결함 D2: 폰(좁은 화면)에서 터미널을 보던 중 폰 연결이 끊기고(릴레이 재기동·망 끊김) 다시 붙었는데 PC(커넥터)가 아직 없으면
+// (peer_present:false — 릴레이 재기동 때 폰이 먼저 붙는 흔한 경우), 재접속 흐름이 목록 칸을 그리며(loadList → showListPane) 미리 잰 '보던 터미널이
+// 보였나'를 버렸다. PC 가 붙으면 pcBack 이 그때 다시 재는데 이미 목록 칸이라 '숨겨 둔 터미널'로 보고 다시 붙이지 않았다 —
+// '켜지면 자동으로 이어집니다' 안내와 달리 폰만 목록에 남았다(PC 폭은 두 칸이 함께 보여 괜찮았다).
+async function bootPhoneTerm(width) {
+  const pd = stubEl("div"), app = stubEl("div");
+  const ctx = await load({ setup: (sb) => {
+    sb.localStorage.setItem("sm_devtoken", "devX"); sb.localStorage.setItem("sm_room", "room1");
+    for (const [id, e] of [["paneDetail", pd], ["app", app], ["head", stubEl("span")], ["paneList", stubEl("div")], ["p-err", stubEl("div")], ["p-go", stubEl("button")]]) sb.document._register(id, e);
+  } });
+  app.setAttribute("data-view", "list");
+  const timers = holdTimers(ctx);
+  const sockets = browserWs(ctx);
+  ev(ctx, `innerWidth = ${width}; conn.devToken = 'devX'; globalThis.__toasts = []; toast = (m) => __toasts.push(String(m));
+    fetchRecentMessages = async () => []; globalThis.MutationObserver = class { observe() {} disconnect() {} };
+    refreshVer = async () => {}; showVer = () => {};
+    T.list = async () => { if (!conn.peer) throw new Error('agent_offline'); return { sessions: SESSIONS.slice() }; };
+    SESSIONS = [{ session_id: '${SA}', title: 'A', live_terminal: true, cwd: 'E:/p' }, { session_id: '${SB}', title: 'B', live_terminal: true, cwd: 'E:/q' }];`);
+  ctx.confirm = () => true;
+  const pending = (ws, pred) => ws.sent.filter((f) => f.type === "req" && !(ws._ans ||= new Set()).has(f.id) && pred(f));
+  const answer = async (ws, pred, data, ok = true) => { let n = 0; for (const f of pending(ws, pred)) { ws._ans.add(f.id); ws.push({ type: "res", id: f.id, cid: ws._cid, ok, data }); n++; await settle(); } return n; };
+  const isStatus = (f) => f.method === "api" && f.params.path === "/api/owner/2fa/status";
+  return { ctx, timers, sockets, answer, isStatus, app };
+}
+async function phonePcLate(width, { hideFirst = false, pcPresent = false } = {}) {
+  const { ctx, timers, sockets, answer, isStatus, app } = await bootPhoneTerm(width);
+  const p = ev(ctx, "conn.connect('room1', 'tok')");
+  await until(() => sockets.length === 1);
+  const ws1 = sockets[0]; ws1._cid = "c1"; ws1.open(); ws1.push({ type: "hello", peer_present: true, cid: "c1" });
+  await until(() => ws1.sent.some((f) => f.method === "auth")); await answer(ws1, (f) => f.method === "auth", { id: "d", name: "n" }); await p;
+  ev(ctx, "T = relayT; enterApp();"); await settle();
+  const pt = ctx.loadTerminal(ev(ctx, "SESSIONS[0]"), false);
+  await until(() => ws1.sent.some(isStatus)); await answer(ws1, isStatus, { status: 200, json: { required: false } }); await pt; await tick(350);
+  if (hideFirst) ev(ctx, "showListPane()");                                // 폰 '‹ 목록'으로 터미널을 숨겨 두었다
+  const before = app.getAttribute("data-view");
+  ws1.drop(1006); await settle();                                          // 릴레이 재기동 — 폰이 먼저 다시 붙는다
+  const rt = reconnectTimers(timers); timers.splice(timers.indexOf(rt[0]), 1); rt[0].f();
+  await until(() => sockets.length === 2);
+  const ws2 = sockets[1]; ws2._cid = "c2"; ws2.open();
+  if (pcPresent) {
+    ws2.push({ type: "hello", peer_present: true, cid: "c2" });
+    await until(() => ws2.sent.some((f) => f.method === "auth")); await answer(ws2, (f) => f.method === "auth", { id: "d", name: "n" });
+  } else {
+    ws2.push({ type: "hello", peer_present: false, cid: "c2" });          // PC(커넥터)는 아직 다시 붙지 않았다
+    await settle(); await tick(30);
+    ws2.push({ type: "peer", event: "agent_online" }); await settle();     // PC 가 붙는다 → 다시 인증 → 1.5초 뒤 pcBack·다시 붙이기
+    await until(() => ws2.sent.some((f) => f.method === "auth")); await answer(ws2, (f) => f.method === "auth", { id: "d", name: "n" });
+    for (const t of timers.filter((t) => t.ms <= 1500 && !String(t.f).includes("_retryTimer"))) { timers.splice(timers.indexOf(t), 1); t.f(); }
+  }
+  await settle(); await tick(30);
+  for (let i = 0; i < 3; i++) await answer(ws2, isStatus, { status: 200, json: { required: false } });
+  await tick(400);
+  return { before, view: app.getAttribute("data-view"), terminalReqs: ws2.sent.filter((f) => f.method === "terminal").map((f) => f.params.session_id.slice(0, 1)),
+           disconnected: ev(ctx, "termView.disconnected") };
+}
+test("T67 폰에서 터미널을 보던 중 다시 붙었는데 PC 가 아직 없으면, PC 가 돌아올 때 보던 터미널을 다시 붙인다 — 숨겨 둔 터미널은 그대로 숨김", async () => {
+  assert.deepEqual(plain({ phone: await phonePcLate(390), wide: await phonePcLate(1400), hidden: await phonePcLate(390, { hideFirst: true }),
+                           pcPresent: await phonePcLate(390, { pcPresent: true }) }), {
+    phone: { before: "detail", view: "detail", terminalReqs: ["a"], disconnected: false },
+    wide: { before: "detail", view: "detail", terminalReqs: ["a"], disconnected: false },
+    hidden: { before: "list", view: "list", terminalReqs: [], disconnected: true },
+    pcPresent: { before: "detail", view: "detail", terminalReqs: ["a"], disconnected: false },
+  });
+});
