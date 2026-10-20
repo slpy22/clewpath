@@ -1560,6 +1560,7 @@ function highlightSelected(){ document.querySelectorAll('.srow').forEach(r=>
 // 떠나는 화면이 터미널·편집기였는지 알 수 없다. 모자란 정리만 하고, 여러 번 불려도 안전하다(이미 한 정리는 다시 해도 무해).
 // PANE_NOW = 지금 상세 칸 화면 {kind, sid, key, gid, code, gen}(저장 안 함). gen 은 들어올 때마다 하나씩 — 응답을 기다리던
 // 옛 화면이 늦게 그리거나 실시간 연결을 열지 않게(뷰어 T5). 폰 관제 덮개는 상세 칸 밖이라 여기 들지 않는다.
+// dead 는 뷰어가 대화·실시간 연결을 잃었을 때만 붙는다 — 바로가기로 같은 뷰어를 다시 누르면 다시 연다(4단계)
 let PANE_NOW={kind:'empty', gen:0};
 // PC 전환 세대 — pcSwitchReset 이 하나씩 올린다. 기다리던 동작(2차 인증 확인·목록 받기)이 깨어나 'PC 가 바뀌었나'를 볼 때 쓴다(pcNow).
 // 방 이름(sm_room)만 보면 '＋ 새 PC 추가'의 새 PC 페어링(doPair)에선 연결이 선 뒤에야 방이 바뀌어, 그사이 깨어난 이전 PC 의
@@ -3543,12 +3544,13 @@ async function loadViewer(s){
     for(const m of msgs){ renderHistoryMsg(wrap,m,pend);
       if(m.timestamp&&m.timestamp>lastTs) lastTs=m.timestamp; }
     main.scrollTop=main.scrollHeight;
-  }catch(e){ if(gen!==PANE_NOW.gen) return; wrap.innerHTML=''; wrap.appendChild(el('div','empty','뷰어 실패: '+e.message)); return; }
+  }catch(e){ if(gen!==PANE_NOW.gen) return; PANE_NOW.dead=true; wrap.innerHTML=''; wrap.appendChild(el('div','empty','뷰어 실패: '+e.message)); return; }
   // 실시간 tail: 단일 세션 monitor 스트림을 붙여 새 메시지를 같은 카드로 append
+  // PANE_NOW.dead: 이 뷰어의 대화·실시간이 끊겼다 — 바로가기로 같은 뷰어를 다시 누르면 다시 연다(quick-switch §4-3, 폰에서 숨겨 둔 뷰어 등)
   const setBadge=(on,txt)=>{ badge.className='vlive '+(on?'on':'off'); bt.textContent=txt; };
   const nearBot=()=> main.scrollHeight-main.scrollTop-main.clientHeight < 120;
   function onMsg(dataStr,eof){
-    if(eof){ setBadge(false,'연결 끊김'); return; }
+    if(eof){ if(gen===PANE_NOW.gen) PANE_NOW.dead=true; setBadge(false,'연결 끊김'); return; }
     let m; try{ m=JSON.parse(dataStr); }catch(e){ return; }
     if(m.type==='heartbeat'){ setBadge(true,'● 실시간'); return; }
     if(m.type==='snapshot'||m.type==='events'){
@@ -3564,7 +3566,7 @@ async function loadViewer(s){
     }
   }
   try{ _liveViewer=T.monitor(s.session_id, s.session_id, onMsg); }
-  catch(e){ setBadge(false,'실시간 불가'); }
+  catch(e){ PANE_NOW.dead=true; setBadge(false,'실시간 불가'); }
 }
 
 // 서버가 깔끔한 대화만(메타/도구인자/thinking 제외) 최근 limit개 준다.
@@ -4561,7 +4563,8 @@ function lsJson(k,d){ try{ const v=JSON.parse(LS.getItem(k)||'null'); return v==
 function lsSet(k,v){ try{ LS.setItem(k,JSON.stringify(v)); }catch(e){} }
 let TEAM_OPEN=new Set(lsJson('sm_team_open',[]));   // 펼친 팀(기기에 기억)
 function tui(code){ return TEAM_UI[code]||(TEAM_UI[code]={filter:'open', add:{}}); }
-async function fetchTeams(){ try{ const r=await T.api('GET','/api/owner/teams',{query:{archived:1}}); return (r&&r.teams)||[]; }catch(e){ return TEAMS||[]; } }
+// 받지 못하면 받아 둔 목록(TEAMS). strict: 받지 못하면 null — 바로가기가 통신 실패와 '팀 없음'을 가른다(quick-switch §4-4)
+async function fetchTeams(strict){ try{ const r=await T.api('GET','/api/owner/teams',{query:{archived:1}}); return (r&&r.teams)||[]; }catch(e){ return strict?null:(TEAMS||[]); } }
 async function refreshTeamDetail(code){
   const u=tui(code); u.loading=true;
   try{ TEAM_DET[code]=await T.api('GET','/api/owner/teams/'+encodeURIComponent(code)); }
@@ -6378,6 +6381,212 @@ function tabbarGo(v){
   if(changed||!LIST_CTX) return loadList();
   if(onList){ const pl=paneList(); if(pl) pl.scrollTop=0; }   // 보던 탭을 또 누르면 맨 위로
   syncTabbar();
+}
+
+// ---- 상세 칸 화면 바로가기(quick-switch §8 4단계 — 화면 없이 함수만) ----
+// 네 화면(🖥 터미널 · 📄 파일 · 💬 뷰어/ℹ 상세 · 🎬 팀 관제)을 목록 칸에서 다시 고르지 않고 마지막 상태로 오간다(명세 §4).
+// 돌아가기 전용: 새 터미널 탭·새 claude 를 만들지 않고, 2차 인증·화면 인계 확인은 각 화면을 여는 기존 함수가 그대로 맡는다
+// (취소하면 지금 화면 그대로). 5단계(머리 줄 단추 · 폰 제목 ▾ 시트 · 단축키)는 quickTargets() 를 그리고 quickGo(kind) 를 부른다.
+const QUICK_KINDS=['terminal','files','viewer','monitor'];
+const QUICK_META={terminal:['🖥','터미널'], files:['📄','파일'], viewer:['💬','뷰어'], monitor:['🎬','팀 관제']};
+// 기억이 없을 때(결정 5): 안내 + 고를 곳인 목록 칸의 보기
+const QUICK_NONE={terminal:['열어 둔 터미널이 없습니다 — 세션 줄의 🖥/▶ 로 여세요','sessions'],
+  files:['열어 둔 파일이 없습니다 — 파일을 고르세요','files'], viewer:['최근에 본 대화가 없습니다 — 세션 ⋯ → 💬 대화 보기','sessions']};
+// 바로가기가 돌아갈 터미널 탭(§4-1): 떠 있는 화면 → 마지막 탭 → 최근 본 순서 → 남은 탭. ok 로 거를 수 있다(목록에 있는 것만 등)
+function quickTermTab(ok){
+  for(const k of [termView.active, TABS.active, ...TABS.mru, ...TABS.list.map(t=>t.key)]){
+    const t=k?findTab(k):null; if(t&&(!ok||ok(t))) return t; }
+  return null;
+}
+// 👀 다른 기기가 그 터미널을 보는 중인가 — 인계 통지와 20초 목록만으로(새 연결 없이). 지금 이 기기가 붙어 보고 있으면 아니다
+// (목록이 아직 앞 기기 화면을 보여도 — 가져온 직후)
+function quickTermTaken(t, s){
+  if(t.taken) return true;
+  const inst=termView.tabs&&termView.tabs[t.key];
+  if(termView.active===t.key&&termView.sid===t.s.session_id&&!termView.disconnected&&!(inst&&inst.ended)) return false;
+  return shouldConfirmTakeover(s, t);
+}
+// 꺼짐처럼 보이나 — 목록 줄 판정(tabGone)에 더해, 다른 기기가 가져간 탭은 화면이 떠 있어도 이 기기가 붙어 있지 않으니 목록대로 본다.
+// 가져간 뒤 claude 가 끝났는데 인계 확인을 거쳐 다시 붙으면 새 claude 가 뜬다
+function quickTabGone(t, s){ return tabGone(t,s)||(!!t.taken&&!s.live_terminal); }
+// 파일 기억 엿보기 — 이 페이지가 아직 읽지 않았으면(FB.restored 전) 저장값을 읽기만 한다. fbRestoreState 를 부르지 않는 까닭: PC 를
+// 바꾸는 사이(방 이름이 바뀌기 전) 불리면 이전 PC 기억을 읽어 들여 새 PC 키에 적게 된다. 옛 키는 이 PC 목록의 폴더만(fbRestoreState 와 같게)
+function quickFbPeek(){
+  if(FB.restored) return {tabs:FB.tabs.map(t=>({root:t.root, path:t.path})), active:FB.active};
+  const m=pcMemLoad(FB_STATE), st=m.v||{};
+  const mine=(m.old&&LIST_READY)?new Set((SESSIONS||[]).filter(s=>s.cwd&&!s.headless).map(s=>s.cwd.toLowerCase())):null;
+  const tabs=(Array.isArray(st.tabs)?st.tabs:[]).filter(t=>t&&t.root&&t.path&&(!mine||mine.has(t.root))).slice(0,FB_KEEP);
+  return {tabs, active:st.active};
+}
+// 관제 기억(§4-4·§6-1) → {mem:{team, gid, name}, team(teams 에서 찾은 지금 팀 또는 null), old}. 팀 코드를 먼저 본다(팀을 보관했다
+// 풀면 관제 id 가 새로 생김). 이 PC 의 새 기억이 없으면 옛 sm_mon_last(관제 id, PC 구분 없음)를 한 번 참고하되 이 PC 팀 목록에서
+// 찾을 때만 쓴다(old) — 다른 PC 의 관제 id 일 수 있다
+function quickMonMem(teams){
+  const find=(mem)=>teams?((mem.team&&teams.find(x=>x.code===mem.team))||(mem.gid&&teams.find(x=>x.monitor_group_id===mem.gid))||null):null;
+  const m=paneMem().monitor;
+  if(m&&(m.team||m.gid)) return {mem:m, team:find(m), old:false};
+  let last=null; try{ last=LS.getItem('sm_mon_last'); }catch(e){}
+  const t=(last&&teams)?teams.find(x=>x.monitor_group_id===last):null;
+  return t?{mem:{team:t.code, gid:last, name:t.name||''}, team:t, old:true}:null;
+}
+// 네 칸의 지금 모습 — [{kind, icon, label, has(돌아갈 기억), name, sub(보조 글), dim(흐림), taken(👀), wait(첫 목록 전 — 준비 중),
+// cur(지금 보이는 상세 칸 화면), back(숨겨 둔 화면 — 폰 '‹ 목록'·관제 덮개 밑)}]. 20초 목록·받아 둔 팀 목록·기억만 본다 — 새 연결
+// 없이(목록 끝·20초 갱신마다 그려도 된다). 검증·정리는 누를 때(quickGo).
+function quickTargets(){
+  const ready=LIST_READY, find=(sid)=>(SESSIONS||[]).find(x=>x.session_id===sid)||null;
+  const ov=!!MON_OV, hid=detailHiddenOnPhone(), pk=PANE_NOW.kind;
+  return QUICK_KINDS.map(kind=>{
+    const [icon,label]=QUICK_META[kind];
+    const o={kind, icon, label, has:false, name:'', sub:'', dim:false, taken:false, wait:!ready, cur:false, back:false};
+    const here=kind==='viewer'?(pk==='viewer'||pk==='detail'):pk===kind;
+    if(kind==='monitor'){ o.cur=ov||(here&&!hid); o.back=!ov&&here&&hid; }   // 폰 관제는 화면 전체 덮개
+    else { o.cur=here&&!ov&&!hid; o.back=here&&(ov||hid); }
+    if(kind==='terminal'){
+      const ok=(t)=>!ready||!!find(t.s.session_id), t=quickTermTab(ok), n=TABS.list.filter(ok).length;   // 목록에서 빠진 탭은 누르면 내린다
+      if(t){ const s=find(t.s.session_id)||t.s, inst=termView.tabs&&termView.tabs[t.key];
+        const off=!!(inst&&inst.ended)||(quickTabGone(t,s)&&!tabSeenLive(t)), bd=off?null:sessionBadge(s);
+        o.has=true; o.name=sessLabel(s); o.sub=[off?'꺼짐':(bd?bd.text:''), n>1?'탭 '+n+'개':''].filter(Boolean).join(' · ');
+        o.taken=!off&&quickTermTaken(t,s); }
+      else o.sub='열어 둔 터미널 없음';
+    } else if(kind==='files'){
+      const st=quickFbPeek();
+      if(st.tabs.length){ const a=st.tabs.find(t=>fbId(t.root,t.path)===st.active)||st.tabs[0];
+        o.has=true; o.name=baseName(a.path); o.sub=st.tabs.length>1?'파일 '+st.tabs.length+'개':''; }
+      else o.sub='열어 둔 파일 없음';
+    } else if(kind==='viewer'){
+      const m=paneMem().viewer;
+      if(m&&m.sid){ const det=m.kind==='detail', s=find(m.sid), tgt=s?continuedTarget(s):null, gone=ready&&!s;
+        if(det){ o.icon='ℹ'; o.label='상세'; }                     // 결정 1: 마지막에 본 종류를 따라 단추 이름이 바뀐다
+        o.has=true; o.name=tgt?sessLabel(tgt):(m.name||String(m.sid).slice(0,8));
+        o.sub=[gone?'목록에 없음':'', tgt&&tgt!==s?'이어받음':'', (typeof m.at==='number'&&m.at>0)?relTs(m.at/1000):''].filter(Boolean).join(' · ');
+        if(gone) o.dim=true; }
+      else o.sub='최근에 본 대화 없음';
+    } else {
+      const r=quickMonMem(TEAMS);
+      if(r){ o.has=true; o.name=(r.team&&r.team.name)||r.mem.name||'';
+        if(r.team&&(r.team.archived||!teamAsGroup(r.team))){ o.sub='열 수 없음'; o.dim=true; } }   // 팀 목록에 없으면 누를 때 관제 목록으로 한 번 더 본다
+      else o.sub='최근에 연 관제 없음';
+    }
+    if(!o.has||!ready) o.dim=true;
+    return o;
+  });
+}
+// 기억이 없을 때(결정 5): 고를 곳인 목록 칸을 그 보기로 — PC 는 접혀 있으면 펼친다. 폰은 아래 탭 막대와 같은 길로 목록 칸에
+// (PC 에서 tabbarGo 를 쓰지 않는 까닭: 웹 재개가 그대로 보이는데도 재개를 끝낸다)
+function quickPickIn(view){
+  if(innerWidth<880) return tabbarGo(view);
+  if($('#app').classList.contains('side-off')) setSideOff(false);
+  if(LIST_VIEW!==view||!LIST_CTX){ setListView(view); return loadList(); }
+}
+function quickNone(kind){ const [msg,view]=QUICK_NONE[kind]; toast(msg); return quickPickIn(view); }
+// 이미 그 화면이면 다시 짓지 않고 커서만 옮긴다(§4 공통) — 터미널(xterm · 로컬 터미널 창)·편집기
+function quickFocus(kind){
+  try{
+    if(kind==='terminal'){ const c=termView.cur(); if(!c) return;
+      if(c.term) c.term.focus();
+      else if(c.frame){ c.frame.focus(); const w=c.frame.contentWindow; if(w&&typeof w.focus==='function') w.focus(); } }
+    else if(kind==='files'&&FB.ed) FB.ed.focus();
+  }catch(e){}
+}
+// 바로가기 누름(§4) — 그 화면의 마지막 상태로. 첫 목록 전(새로고침·PC 전환 직후)엔 기억을 지금 목록으로 확인할 수 없어 받지 않는다 —
+// 누름 순번도 올리지 않아 기다리던 알림 진입을 끊지 않는다. 그 뒤로는 바로 끝나는 누름도 마지막 누름이다(navTicket): 목록·팀 목록을
+// 받거나 2차 인증을 기다리던 앞 누름은 늦게 끝나도 화면을 바꾸지 않는다(§4 공통 '연달아 누르면 마지막 누름만')
+async function quickGo(kind){
+  if(!QUICK_META[kind]) return;
+  if(!LIST_READY){ toast('목록을 받는 중입니다'); return; }
+  if(kind!=='monitor'&&MON_OV) MON_OV.close();   // 폰 관제 덮개에서 다른 화면을 고르면 덮개(와 관제 연결)를 닫고 간다 — 알림은 닫은 뒤에(§5-3)
+  const live=navTicket();
+  if(kind==='terminal') return quickGoTerminal(live);
+  if(kind==='files') return quickGoFiles();
+  if(kind==='viewer') return quickGoViewer();
+  return quickGoMonitor(live);
+}
+// 🖥 터미널(§4-1, 결정 4): 목록 줄을 누른 것과 같은 규칙(jumpToSession)을 '그 탭'에. 꺼짐처럼 보이면 판정 전에 목록을 한 번 새로 받는다 —
+// 20초 목록은 방금 띄운 터미널을 꺼진 것으로 볼 수 있다. 그래도 꺼졌으면 다시 띄우지 않고 그 탭을 닫고 상세로
+async function quickGoTerminal(live){
+  let listed=false, left=false;
+  const ended=(t)=>{ const i=termView.tabs&&termView.tabs[t.key]; return !!(i&&i.ended); };   // claude 가 끝났다고 들었다(다시 붙으면 새로 뜬다)
+  for(let n=TABS.list.length+1; n>0; n--){
+    const t=quickTermTab(); if(!t) break;
+    let s=(SESSIONS||[]).find(x=>x.session_id===t.s.session_id);
+    if(!s){ left=quickDropTab(t)||left; continue; }              // 지워짐·이사 — 그 탭을 조용히 내리고 다음 최근 탭으로
+    // 이미 그 화면 — 다시 짓지 않고 커서만. 폰에서 '‹ 목록'으로 숨겼으면 다시 보여 주기만(재접속 없음, §5-2)
+    if(termView.mounted(paneDetail())&&termView.active===t.key&&!termView.disconnected&&!t.taken&&!ended(t)){ showDetailPane(); quickFocus('terminal'); return; }
+    if(!listed&&(ended(t)||quickTabGone(t,s))){
+      const recent=tabSeenRecently(t)&&!ended(t);
+      const f=await freshSessShown(s.session_id);
+      if(!live()) return;                                         // 기다리는 사이 다른 누름·다른 화면·PC 전환 — 이 누름은 화면을 바꾸지 않는다
+      listed=true;                                                // 이번에 받은 목록으로 다음 탭도 판정한다(다시 기다리지 않게)
+      if(!findTab(t.key)) continue;                               // 기다리는 사이 그 탭이 닫혔다
+      if(f===null){ left=quickDropTab(t)||left; continue; }
+      if(f===undefined){                                          // 목록을 받지 못했다(끊김·3초 넘김) — 목록 줄과 같게
+        if(recent){ switchTab(t.key,{listed}); return; }          // 막 살아 있음을 본 탭 — 그 탭으로(끊겼으면 '연결 종료'로 열려 다시 연결될 때 붙는다)
+        loadDetail(s); toast('터미널 상태를 확인하지 못해 상세로 열었습니다'); return;   // 그사이 꺼졌을 수 있다 — 새 claude 를 띄우지 않게. 탭은 그대로
+      }
+      s=f;
+    }
+    if((ended(t)&&!s.live_terminal)||quickTabGone(t,s)){         // 꺼짐 — 그 탭을 닫고 그 세션 상세(▶ 재개)로, 새 claude 는 띄우지 않는다
+      dropGoneTab(t); loadDetail(s); toast('꺼진 터미널이라 상세로 열었습니다 — ▶ 재개로 다시 띄울 수 있어요'); return; }
+    switchTab(t.key, listed?{listed}:undefined); return;          // 2차 인증·다른 기기 인계 확인은 loadTerminal 이 — 끊긴 탭은 같은 탭에 다시 붙는다
+  }
+  if(left) detailPlaceholder();                                   // 보던 터미널의 세션이 목록에서 사라졌다 — 빈 터미널 틀을 남기지 않는다
+  return quickNone('terminal');
+}
+function quickDropTab(t){ const onView=termView.active===t.key; dropGoneTab(t); return onView; }
+// 📄 파일(§4-2): 열어 둔 파일 탭들 그대로 편집기로. 내용이 메모리에 있으면 받지 않고, 새로고침 뒤엔 마지막 파일 하나만 받는다.
+// 목록 칸 보기는 바꾸지 않는다(거울 원칙) — 기억이 없을 때만 고를 곳인 📁 탐색기로
+function quickGoFiles(){
+  fbRestoreState();                                               // 새로고침 뒤 처음이면 이 PC 기억을 읽는다(첫 목록 뒤라 옛 키도 이 PC 폴더로 걸러진다)
+  if(!FB.tabs.length) return quickNone('files');
+  if(paneDetail().classList.contains('fb-mode')){ showDetailPane(); quickFocus('files'); return; }   // 이미 그 화면(폰에서 숨겼으면 보여 주기만)
+  fbRoots();                                                      // 폴더 → 세션을 지금 목록으로 다시 센다
+  for(const t of FB.tabs) if(t.err&&(t.err.error==='no_session'||t.err.error==='no_cwd')) t.err=null;   // 일시 오류는 지우고 다시 받는다(굳지 않게)
+  return fbShowEditor();
+}
+// 💬 뷰어 · ℹ 상세(§4-3, 결정 1): 마지막에 본 종류로, 목록의 최신 세션 정보로 다시 그린다. 이어받았으면 이어받은 세션으로
+function quickGoViewer(){
+  const m=paneMem().viewer;
+  if(!m||!m.sid) return quickNone('viewer');
+  const det=m.kind==='detail';
+  // 이미 그 화면 — 그대로(폰에서 숨겼으면 보여 주기만). 대화 보기의 대화·실시간이 끊겼으면 다시 연다
+  if(PANE_NOW.kind===(det?'detail':'viewer')&&PANE_NOW.sid===m.sid&&!(!det&&PANE_NOW.dead)){ showDetailPane(); return; }
+  const s=(SESSIONS||[]).find(x=>x.session_id===m.sid);
+  if(!s){ paneMemSet('viewer',null); toast('그 세션은 목록에 없습니다'); return; }   // 지워짐·이사·자동 실행(-p) — 그 기억만 지운다
+  const tgt=continuedTarget(s);
+  if(det) loadDetail(tgt); else loadViewer(tgt);
+  if(tgt!==s) toast('이어받은 세션으로 열었습니다');
+}
+// 🎬 팀 관제(§4-4): 팀 목록을 받아 그 팀의 지금 구성원으로(PC 상세 칸 · 폰 화면 전체 덮개). 통신 실패와 '그 팀 없음'을 가른다 —
+// 실패면 기억을 두고 알리고, 팀이 지워졌거나 보관·관리 세션 없음이면 그 기억만 지운다
+async function quickGoMonitor(live){
+  const m0=quickMonMem(null), gid0=m0&&m0.mem.gid;
+  // 이미 떠 있고 연결이 살아 있으면 그대로. 끊겼으면 아래에서 다시 연다(1-5)
+  const inl=MON_INLINE;
+  if(inl&&!inl.dead()&&paneDetail().classList.contains('mon-mode')&&(!gid0||inl.gid===gid0)){ showDetailPane(); return; }
+  if(MON_OV&&!MON_OV.dead()&&(!gid0||MON_OV.gid===gid0)) return;
+  // 다시 열지 못하고 알릴 때 — 폰의 끊긴 관제 덮개가 남아 있으면 먼저 닫는다(덮개가 알림·목록 칸을 가린다, §5-3)
+  const say=(msg)=>{ if(MON_OV) MON_OV.close(); toast(msg); };
+  const teams=await fetchTeams(true);
+  if(!live()) return;                                             // 받는 사이 다른 누름·화면·PC 전환
+  if(teams===null) return say('팀 목록을 받지 못했습니다 — 연결을 확인하세요');
+  TEAMS=teams;
+  const r=quickMonMem(teams);
+  if(r){
+    let g=r.team?(r.team.archived?null:teamAsGroup(r.team)):null;
+    if(!r.team&&r.mem.gid){                                       // 팀 목록에 없다 — 관제 그룹 목록의 id 로 한 번 더(팀이 아닌 옛 관제 등)
+      let gs=null; try{ const x=await T.api('GET','/api/owner/monitor/groups'); gs=(x&&x.groups)||[]; }catch(e){}
+      if(!live()) return;
+      if(gs===null) return say('관제 목록을 받지 못했습니다 — 연결을 확인하세요');
+      g=gs.find(x=>x.id===r.mem.gid)||null;
+    }
+    if(g){ openMonitorGroup(g); return; }
+    if(!r.old){ paneMemSet('monitor',null); return say('그 팀 관제를 열 수 없습니다'); }
+  }
+  // 기억 없음(결정 5): 관제할 수 있는 팀이 1개면 바로 연다(읽기 전용이라 안전), 여럿이면 👥 팀 보기로, 없으면 알린다
+  const can=teams.filter(t=>t.kind!=='portfolio'&&!t.archived&&teamAsGroup(t));
+  if(can.length===1){ openMonitorGroup(teamAsGroup(can[0])); return; }
+  if(!can.length) return say('관제할 팀이 없습니다');
+  say('관제할 팀을 고르세요 — 팀 ⋯ → 🎬 관제 열기'); return quickPickIn('groups');
 }
 
 // ---- 🧑‍💼 개인 비서(단계 3, A-7) — 헤더 버튼: PC·폰 어디서든 비서 세션 터미널 ----
