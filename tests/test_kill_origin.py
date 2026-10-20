@@ -54,7 +54,7 @@ def test_peer_map_carries_origin(fake_claude_home, monkeypatch):
 
 
 def test_kill_session_stops_pty_and_kills_claude_pids_only(fake_claude_home, monkeypatch):
-    import json, subprocess
+    import json
     d = fake_claude_home / "sessions"; d.mkdir()
     (d / "10.json").write_text(json.dumps({"pid": 10, "sessionId": "s1", "name": "a"}), encoding="utf-8")
     (d / "11.json").write_text(json.dumps({"pid": 11, "sessionId": "s1", "name": "b"}), encoding="utf-8")   # pid 재사용(다른 프로그램)
@@ -66,13 +66,13 @@ def test_kill_session_stops_pty_and_kills_claude_pids_only(fake_claude_home, mon
     stopped = []
     monkeypatch.setattr(webterm, "stop_terminal", lambda sid: stopped.append(sid) or True)
     ran = []
-    monkeypatch.setattr(subprocess, "run", lambda args, **k: ran.append(args))
-    monkeypatch.setattr(lifecycle.sys, "platform", "win32", raising=False) if hasattr(lifecycle, "sys") else None
+    from session_manager import osdep
+    monkeypatch.setattr(osdep, "kill_tree", lambda pid: ran.append(["kill_tree", str(pid)]))
     r = lifecycle.kill_session("s1")
     assert stopped == ["s1"]
     assert [k["how"] for k in r["killed"]] == ["clewpath", "process"] and r["killed"][1]["pid"] == 10
     assert r["errors"] == [{"pid": 11, "reason": "gone_or_not_claude"}], "claude 가 아닌 pid 는 절대 안 죽인다"
-    assert any(a[:2] == ["taskkill", "/PID"] and a[2] == "10" and "/T" in a for a in ran)
+    assert ran == [["kill_tree", "10"]], "자식(MCP·도구)까지 — Windows 는 taskkill /T /F(test_osdep)"
     assert not any("12" in a for a in ran), "다른 세션의 pid 는 무접촉"
 
 

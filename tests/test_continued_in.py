@@ -107,11 +107,11 @@ def test_spawn_refuses_continued_session(fake_claude_home, monkeypatch, tmp_path
     with pytest.raises(webterm.TermStartError) as ei:
         webterm._spawn(A)
     assert ei.value.code == "continued" and B[:8] in str(ei.value)
-    # 포크는 원본 무접촉이라 통과해야 한다 → 스폰 직전(PtyProcess)까지 간다
+    # 포크는 원본 무접촉이라 통과해야 한다 → 스폰 직전(osdep.spawn_pty)까지 간다
     monkeypatch.setattr(webterm, "_claude_argv", lambda *a, **k: ["nope"])
-    import winpty
+    from session_manager import osdep
     def _boom(*a, **k): raise RuntimeError("spawn reached")
-    monkeypatch.setattr(winpty.PtyProcess, "spawn", _boom)
+    monkeypatch.setattr(osdep, "spawn_pty", _boom)
     with pytest.raises(webterm.TermStartError) as ei:
         webterm._spawn(A, fork_id="ffffffff-1111-2222-3333-444444444444")
     assert ei.value.code == "spawn_failed"

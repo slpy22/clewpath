@@ -39,9 +39,22 @@ osdep/_posix.py     맥·리눅스. 1단계는 이식이 쉬운 것만(psutil·o
 | `hidden_dirs()` / `temp_claude_dir()` | AppData, LOCALAPPDATA\Temp\claude | ~/Library, $TMPDIR/claude | filebrowser, teamlog |
 | `update_runner()` | `update_runner.ps1` + pwsh | `update_runner.sh` + /bin/sh | updater |
 
+## 2단계 결과 (2026-10-15, `macos` 브랜치)
+
+- 터미널: `ptyprocess.PtyProcessUnicode`(pywinpty 와 같은 계열 — read→str·write·setwinsize·isalive·terminate·pid), UTF-8 깨짐은 replace.
+- 자식 동반 종료: pty 자식은 새 세션의 리더라 주인(브로커)이 죽어 master 가 닫히면 커널이 SIGHUP → 끝남(Job 대신).
+  웹 재개(`-p` 파이프 자식)는 Host 가 죽으면 stdin EOF 로 끝나고, 남은 것은 기동 청소가 줍는다 — 고아 판정에서
+  init(pid 1)이 입양한 프로세스는 '부모 없음'(`osdep.ADOPTER_PIDS`). pid_alive 는 좀비를 죽은 것으로 본다.
+- 브로커: `ptyd.FAMILY` = AF_UNIX, `data_dir/ptyd.sock`(0600, 100바이트 넘으면 임시 폴더), 죽은 브로커의 소켓은 기동 때 지움.
+  POSIX 도 브로커 기본 켜짐. **ptyd.py 가 바뀌었으므로 main 에 합쳐 배포하면 Windows PC 들도 '브로커 업데이트 대기'(D2)를 한 번 거친다.**
+- 범위 감시(teamlog): 맥·리눅스에선 `/…`·`~/…` 절대 경로도 파괴적 Bash·리다이렉트 대상으로 본다(Windows 는 그대로).
+- 검증: 리눅스 컨테이너(`python:3.11-slim`, `--init`, 일반 사용자) 전체 pytest 571 통과·14 건너뜀(Windows 전용·3단계),
+  브로커 통합 확인(실제 소켓·pty, Host 분리 후 재접속, 브로커 kill -9 → 자식 종료, 재기동). Windows 579 통과.
+- 테스트 의존성에 pytest-asyncio 를 명시(이 PC 엔 깔려 있었지만 선언이 없었다).
+
 원칙
 - 기존 테스트의 바꿔치기 지점(`peers._proc_info`, `ptyd._pty_spawn`, `e2ee._dpapi`, `winpty.PtyProcess.spawn`, `subprocess.run`)은 유지한다.
-- `ptyd.py` 는 1단계에서 건드리지 않는다. 바꾸면 해시가 달라져 모든 PC 에 '브로커 업데이트 대기' 가 뜬다. 2단계에서 POSIX pty 를 넣을 때 한 번에 바꾼다.
+- `ptyd.py` 는 1단계에서 건드리지 않았다(해시가 바뀌면 모든 PC 에 '브로커 업데이트 대기'). 2단계에서 POSIX pty 와 함께 한 번에 바꿨다.
 - `jobguard.py`·`peers._cim_query` 처럼 이미 Windows 전용으로 갈라진 모듈은 그대로 두고 `_win` 이 부른다.
 
 ## 2. 설치·자동 기동·업데이트 (OS 별)

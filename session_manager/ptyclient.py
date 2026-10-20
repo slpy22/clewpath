@@ -29,8 +29,6 @@ class BrokerDown(Exception):
 
 
 def enabled() -> bool:
-    if not osdep.IS_WIN and not os.environ.get("SM_PTY_BROKER"):
-        return False
     v = os.environ.get("SM_PTY_BROKER")
     if v is None:
         try:
@@ -46,7 +44,7 @@ def _connect():
     key = ptyd.authkey(create=False)
     if key is None:
         raise BrokerDown("no_key")
-    return Client(ptyd.pipe_address(), family="AF_PIPE", authkey=key)
+    return Client(ptyd.pipe_address(), family=ptyd.FAMILY, authkey=key)
 
 
 def _rpc(conn, req: dict) -> dict:

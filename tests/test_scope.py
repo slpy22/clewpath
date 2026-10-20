@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import sys
 
 import pytest
 
@@ -49,6 +50,10 @@ def _viol():
     return [json.loads(p) for (p,) in c.execute("SELECT payload_json FROM events WHERE kind='scope_violation' ORDER BY id")]
 
 
+_WIN_PATHS = pytest.mark.skipif(sys.platform != "win32", reason="Windows 경로 표기(E:\\…) — POSIX 는 test_posix_paths_in_and_out")
+
+
+@_WIN_PATHS
 def test_write_edit_and_bash_rules_match_bridge(env):
     env["write"]("s-tr", [
         tool("a", "Write", {"file_path": r"E:\019_KoreaPedia\treatise\x.md"}),                 # 안
@@ -72,14 +77,17 @@ def test_write_edit_and_bash_rules_match_bridge(env):
 
 def test_always_allowed_and_no_scope_member(env):
     import os
+
+    from session_manager import osdep
     home = os.path.expanduser("~")
     env["write"]("s-tr", [tool("a", "Write", {"file_path": os.path.join(home, ".gstack", "x.md")}),
-                          tool("b", "Write", {"file_path": os.path.join(os.environ.get("LOCALAPPDATA", home), "Temp", "claude", "s.py")})])
+                          tool("b", "Write", {"file_path": os.path.join(osdep.temp_claude_dir(), "s.py")})])
     env["write"]("s-free", [tool("c", "Write", {"file_path": r"D:\anywhere\x.md"})])
     teamlog.ingest_all()
     assert _viol() == [], "메모리·스크래치·gstack 은 늘 허용, 범위 없는 구성원은 검사 안 함"
 
 
+@_WIN_PATHS
 def test_task_scope_adds_and_glob_suffix(env):
     k = team.create_task("KP", "문서", "논문", write_scope={"논문": ["Research/**"]})
     body = f"결론: x\n[cw] task={k['id']} type=ASK"
@@ -101,3 +109,31 @@ def test_violations_grouped_hourly_and_pushed_once(env):
     teamlog.notify_violations("KP")
     pushes = [a for a in env["sent"] if str(a[0]).startswith("team-violation:v:scope:")]
     assert len(pushes) == 2 and "편집 범위 이탈" in pushes[0][2] and "KoreaEnc" in pushes[0][3]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX 경로 — Windows 는 위 테스트들")
+def test_posix_paths_in_and_out(fake_claude_home, monkeypatch):
+    """맥·리눅스 경로(/Users/…)에서도 같은 규칙: 범위 안·상대 경로·리다이렉트는 통과, 밖 쓰기·파괴적 Bash 는 위반."""
+    root = "/Users/me/019_KoreaPedia"
+    proj = fake_claude_home / "projects" / "-Users-me-019-KoreaPedia"
+    proj.mkdir(parents=True)
+    monkeypatch.setattr(team, "_latest_session", lambda sid, one_hop=False: sid)
+    monkeypatch.setattr(team, "_peer_by_session", lambda: {})
+    from session_manager import peers, push
+    monkeypatch.setattr(peers, "snapshot", lambda *a, **k: [])
+    monkeypatch.setattr(push, "send", lambda *a, **k: 1)
+    t = team.create_team("KoreaPedia", code="KP", root=root, manager_session="s-pm")
+    team.add_member(t["id"], "논문", session_id="s-tr", write_scope=["treatise/", "00_PM/comm/"])
+    import sqlite3
+    c = sqlite3.connect(str(team.db_path())); c.execute("UPDATE agent_sessions SET started=0"); c.commit(); c.close()
+    recs = [tool("a", "Write", {"file_path": f"{root}/treatise/x.md"}, cwd=root),
+            tool("b", "Edit", {"file_path": "treatise/y.md"}, cwd=root),
+            tool("c", "Write", {"file_path": f"{root}/KoreaEnc/steal.md"}, cwd=root),
+            tool("d", "Bash", {"command": f"rm -rf {root}/Samhung/old"}, cwd=root),
+            tool("e", "Bash", {"command": f"echo hi > {root}/treatise/log.txt"}, cwd=root)]
+    with (proj / "s-tr.jsonl").open("w", encoding="utf-8", newline="\n") as f:
+        for r in recs:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    teamlog.ingest_all()
+    bad = sorted((v["tool"], v["path"]) for v in _viol())
+    assert bad == [("Bash", f"{root}/Samhung/old"), ("Write", f"{root}/KoreaEnc/steal.md")]

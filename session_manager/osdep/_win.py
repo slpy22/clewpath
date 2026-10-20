@@ -10,6 +10,7 @@ from pathlib import Path
 NAME = "win"
 NO_WINDOW = 0x08000000                  # CREATE_NO_WINDOW
 _NEW_PROCESS_GROUP = 0x00000200         # CREATE_NEW_PROCESS_GROUP
+ADOPTER_PIDS: frozenset = frozenset()   # Windows 는 고아를 입양하지 않는다(부모 pid 가 그냥 사라짐)
 START_SCRIPT = "start-connector.ps1"
 UPDATE_RUNNER = "update_runner.ps1"
 

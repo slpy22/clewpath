@@ -17,7 +17,6 @@ _ALLOWED = {
     "osdep/_win.py",          # Windows 구현 자체
     "jobguard.py",            # Job 객체 — _win.guard_child 가 부른다
     "peers.py",               # psutil 이 빠진 설치본용 CIM 폴백(os.name 으로 막혀 있음)
-    "ptyd.py",                # 바꾸면 모든 PC 에 브로커 교체 대기가 뜬다 → 2단계에서 POSIX pty 와 함께
 }
 _WIN_ONLY = re.compile(r"from winpty|import winpty|windll|\"powershell\"|'powershell'|\"taskkill\"|Get-CimInstance")
 

@@ -11,6 +11,7 @@ import hashlib
 import json
 import time
 import zipfile
+from pathlib import Path
 
 import pytest
 
@@ -192,7 +193,7 @@ def test_payload_matches_runner_script():
     """updater.py 의 PAYLOAD 와 update_runner.ps1 의 $Payload 가 어긋나면
     교체되는 것과 백업되는 것이 달라져 롤백이 반쪽이 된다."""
     import re
-    txt = updater.runner_script().read_text(encoding="utf-8")
+    txt = (Path(updater.__file__).parent / "update_runner.ps1").read_text(encoding="utf-8")
     m = re.search(r'\$Payload = @\((.*?)\)', txt, re.S)
     assert m, "update_runner.ps1 에서 $Payload 를 못 찾음"
     listed = set(re.findall(r'"([^"]+)"', m.group(1)))

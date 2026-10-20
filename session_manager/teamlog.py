@@ -180,8 +180,10 @@ SCOPE_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit", "Bash")
 _WRITE_TOOLS = ("Write", "Edit", "MultiEdit", "NotebookEdit")
 _DESTRUCTIVE = re.compile(r"^\s*(?:\w+=\S+\s+)*(rm|del|mv|cp|Move-Item|Remove-Item|Copy-Item|"
                           r"git\s+(?:commit|push|reset|checkout)|docker\s+compose\s+(?:down|rm))\b")
-_ABS_PATH = re.compile(r"[A-Za-z]:[\\/][^\s\"'|;&]+")
-_REDIRECT = re.compile(r">{1,2}\s*\"?([A-Za-z]:[\\/][^\s\"'|;&]+)")
+# 절대 경로: Windows 는 드라이브(E:\…), 맥·리눅스는 /… 와 ~/… (Windows 의 Git Bash /tmp 등은 지금처럼 보지 않는다)
+_ABS = r"[A-Za-z]:[\\/][^\s\"'|;&]+" + ("" if osdep.IS_WIN else r"|(?<![\w:/.~-])~?/[^\s\"'|;&]+")
+_ABS_PATH = re.compile(_ABS)
+_REDIRECT = re.compile(r">{1,2}\s*\"?(" + _ABS + ")")
 
 
 def _norm_path(p: str) -> str:
@@ -228,6 +230,8 @@ def scope_breach(w, row, ctx: str | None, tool: str, inp: dict, cwd: str) -> dic
         return None
 
     def inside(path: str) -> bool:
+        if path.startswith("~"):
+            path = os.path.expanduser(path)
         n = _norm_path(path if os.path.isabs(path) or not cwd else os.path.join(cwd, path))
         return any(n == r or n.startswith(r + "/") for r in roots)
 
