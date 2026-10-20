@@ -153,3 +153,37 @@ def test_ensure_launcher_failure_keeps_old_launcher(tmp_path):
     out = _posix.ensure_launcher(root, _D, _C, 5100)
     assert out.startswith("launcher: regenerate failed:")
     assert (root / _posix.START_SCRIPT).read_bytes() == b"#!/bin/sh\n# old\n"
+
+
+def test_write_launcher_reports_what_it_did(tmp_path):
+    """install.sh(hostctl render-launcher)가 쓸 원자 쓰기 — created|updated|unchanged. 지정한 포트를 그대로 쓴다
+    (기존 DEFAULT_PORT 를 지키는 것은 Host 기동 때의 ensure_launcher 몫)."""
+    root = _install_root(tmp_path)
+    target = root / _posix.START_SCRIPT
+    assert _posix.write_launcher(root, data_dir=_D, conf_file=_C, port=5100) == "created"
+    ino = target.stat().st_ino
+    assert _posix.write_launcher(root, data_dir=_D, conf_file=_C, port=5100) == "unchanged"
+    assert target.stat().st_ino == ino
+    assert _posix.write_launcher(root, data_dir=_D, conf_file=_C, port=5123) == "updated"
+    assert b"DEFAULT_PORT=5123\n" in target.read_bytes()
+    if sys.platform != "win32":
+        assert target.stat().st_mode & 0o777 == 0o755
+    assert sorted(p.name for p in root.iterdir()) == ["session_manager", _posix.START_SCRIPT]
+    with pytest.raises(OSError):                                     # 템플릿 없음 — 런처를 만들지 않는다
+        _posix.write_launcher(_install_root(tmp_path / "b", tpl=None), data_dir=_D, conf_file=_C, port=5100)
+    assert not (tmp_path / "b" / "app" / _posix.START_SCRIPT).exists()
+
+
+def test_real_launcher_template_renders_and_keeps_its_port(tmp_path):
+    """진짜 템플릿(session_manager/start-connector.template.sh): 자리표시가 다 채워지고, ensure_launcher 가 기존
+    DEFAULT_PORT 를 다시 읽을 수 있어야 한다 — 그 줄 모양이 바뀌면 폴백 포트(5101)가 설정 포트를 덮어쓴다."""
+    raw = (PKG / _posix.LAUNCHER_TEMPLATE).read_bytes()
+    assert b"\r" not in raw and not raw.startswith(b"\xef\xbb\xbf")
+    out = _posix.render_launcher(raw.decode("utf-8"), data_dir=_D, conf_file=_C, port=5123)
+    assert "{{" not in out and out.split("\n")[1].startswith("# clewpath-launcher v2 (posix)")
+    assert _posix._launcher_port(out) == 5123
+    assert "DATA_DIR='/home/u x/.claude/session_manager'\n" in out
+    root = _install_root(tmp_path, tpl=raw.decode("utf-8"))
+    assert _posix.ensure_launcher(root, _D, _C, 5100) == "launcher: regenerated (posix v2)"
+    assert _posix.ensure_launcher(root, _D, _C, 5101) == "launcher: ok (posix v2)"   # 폴백 포트로 뜬 날
+    assert _posix._launcher_port((root / _posix.START_SCRIPT).read_text(encoding="utf-8")) == 5100

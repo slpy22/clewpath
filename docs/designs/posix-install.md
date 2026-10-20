@@ -661,6 +661,16 @@ cmd_start() {
 | ensure_task:15-31 v2가 아니면 재생성 | `_posix.ensure_launcher`: 렌더 결과가 다르면 재생성 | 템플릿 변경도 전파 |
 | ensure_task:33-52 5분 반복 트리거 | 없음(watch는 사람이 켬) | 다음 단계에서 재생성 성공 뒤에만 |
 
+**구현 메모 (2단계, 2026-10-20 — 뒤 단계가 맞출 약속)**
+- `start`는 띄운 뒤 runtime.json에 새 pid가 적히거나(`up`) 끝날 때까지 최대 15초 잠금을 쥔다. 그 사이 온 다른 `start`가 "runtime.json 없음"을 죽음으로 읽고 겹쳐 띄우지 않게 하려는 것이다. 기동 직후 끝나면 `fail: 기동 직후 종료`를 남기고 종료코드 1.
+- 잠금(`launcher.lock`·`watch.lock.d`·`updates/runner.lock.d`)과 `update.inprogress`의 pid는 명령줄까지 본다. 잠금은 런처 파일 이름, 러너 잠금과 `by=runner` 표식은 `update_runner`, `by=install` 표식은 `install.sh`가 명령줄에 있어야 산 것이다(pid 재사용 방지). `by=`가 없으면 pid만 본다. pid 없는 표식은 1분, pid 없는 잠금은 2분까지 "쓰는 중"으로 본다. 러너·install.sh는 표식을 임시 파일에 쓰고 mv 한다.
+- 교체 잔재가 있고 러너가 살아 있으면 `CLEWPATH_UPDATER=1`(러너 자신의 재기동)만 통과하고 나머지는 보류(0)한다. 러너 사본의 `-RecoverOnly` 종료코드: 0이면 복구(잔재가 남으면 실패로 봄), 3이면 다른 러너가 도는 중이라 보류, 그 밖은 막힘(1).
+- probe는 pid가 좀비이거나, 내 uid가 아니거나, runtime.json의 `started_at`보다 5초 넘게 뒤에 생긴 프로세스면 죽은 것으로 본다(맥 재부팅 뒤 남의 프로세스가 같은 pid를 받는 경우).
+- `watch`의 틱은 `( cmd_start )` 대신 `/bin/sh "$SELF" start` 새 프로세스로 돈다. 잠금 pid가 진짜 pid가 되고, 다시 렌더된 런처를 쓴다. Host가 살아 있으면(ok·busy) start를 부르지 않는다.
+- 출력: `stop`은 `not running` / `stopped (pid N)` / `stopped (pid N, forced)`. `status`는 위 키에 `maintenance=0|1`을 더하고, venv가 없거나 판정이 안 되면 `venv=missing|broken`을 붙인다. 사람용 안내는 터미널일 때만 표준오류로 낸다(실패는 늘 표준오류).
+- 렌더러: `osdep._posix.write_launcher(root, data_dir=, conf_file=, port=)` → `created|updated|unchanged`(원자 교체, 0755). `hostctl render-launcher`(4단계)와 `ensure_launcher`가 함께 쓴다. `DEFAULT_PORT=` 줄은 그 줄만 있어야 `ensure_launcher`가 기존 포트를 다시 읽는다(시험으로 고정).
+- 시험: `tests/test_launcher_sh.py`(L①~L⑪, 판정 세 갈래 psutil·/proc·ps). 리눅스 컨테이너에서 템플릿에 버그를 하나씩 넣어 시험이 잡는지 확인했다(24종 모두 잡힘).
+
 ### 3.4 update_runner.sh (`session_manager/`, 설치 폴더 밖 사본으로 실행)
 
 **호출** (`osdep._posix.update_runner_argv`)

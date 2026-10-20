@@ -51,7 +51,6 @@ HOME_SCRIPTS = ("get.sh", "install.sh", "uninstall.sh", "update_runner.sh")
 
 # 아직 만들지 않은 것(명세 1.4 의 단계). 만들면 여기서 뺀다.
 PENDING = {
-    "start-connector.template.sh",      # 2단계 런처
     "update_runner.sh",                 # 3단계 러너
     "install.sh", "hostctl.py",         # 4단계
     "uninstall.sh",                     # 5단계
@@ -480,8 +479,9 @@ def _parse_targets(name: str, tmp_path) -> Path:
     if name != "start-connector.template.sh":
         return p
     out = tmp_path / "start-connector.sh"
-    out.write_text(_posix.render_launcher(p.read_text(encoding="utf-8"), data_dir=PurePosixPath(AWKWARD),
-                                          conf_file=PurePosixPath(AWKWARD + "/c.toml"), port=5100), encoding="utf-8")
+    # write_bytes — write_text 는 Windows 에서 줄끝을 CRLF 로 바꿔 dash 가 깨진다(설치본은 ensure_launcher 가 LF 로 쓴다)
+    out.write_bytes(_posix.render_launcher(p.read_text(encoding="utf-8"), data_dir=PurePosixPath(AWKWARD),
+                                           conf_file=PurePosixPath(AWKWARD + "/c.toml"), port=5100).encode("utf-8"))
     return out
 
 

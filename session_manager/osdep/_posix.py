@@ -146,33 +146,44 @@ def _launcher_port(text: str) -> int | None:
     return None
 
 
+def write_launcher(root: Path, *, data_dir: os.PathLike | str, conf_file: os.PathLike | str, port: int) -> str:
+    """설치 루트의 템플릿으로 start-connector.sh 를 쓴다 — 렌더 → 비교 → 원자 교체(0755, BOM 없는 UTF-8·LF).
+
+    반환 "created" | "updated" | "unchanged". 템플릿이 없거나 렌더가 안 되면 예외(그때 기존 런처는 그대로다).
+    바꿔치기는 os.replace — 돌고 있는 watch 셸은 옛 inode 를 끝까지 읽는다. install.sh(hostctl)·ensure_launcher 가 쓴다.
+    """
+    tpl = Path(root) / "session_manager" / LAUNCHER_TEMPLATE
+    target = Path(root) / START_SCRIPT
+    new = render_launcher(tpl.read_text(encoding="utf-8"), data_dir=data_dir, conf_file=conf_file,
+                          port=port).encode("utf-8")
+    old = target.read_bytes() if target.is_file() else None
+    if old == new:
+        return "unchanged"
+    tmp = target.with_name(f".{START_SCRIPT}.{os.getpid()}.tmp")
+    try:
+        tmp.write_bytes(new)
+        os.chmod(tmp, 0o755)
+        os.replace(tmp, target)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return "created" if old is None else "updated"
+
+
 def ensure_launcher(root: Path, data_dir: Path, conf_file: Path, port: int) -> str | None:
-    """설치본의 start-connector.sh 를 지금 코드의 템플릿으로 맞춘다(렌더 → 비교 → 원자 교체).
+    """설치본의 start-connector.sh 를 지금 코드의 템플릿으로 맞춘다(write_launcher — 렌더 → 비교 → 원자 교체).
 
     Windows 의 ensure_task.ps1 이 'v2 표식'만 보는 것과 달리 내용 전체를 비교한다 — 템플릿을 고친 업데이트도 전파된다.
     포트는 기존 런처의 DEFAULT_PORT 를 우선한다: 호출자(liveness)가 넘기는 것은 이번에 실제로 연 포트라,
-    폴백 포트(5101)로 뜬 날 설정 포트(5100)를 덮어쓰면 안 된다. 바꿔치기는 os.replace — 돌고 있는 watch 셸은
-    옛 inode 를 끝까지 읽는다. 자동 시작(launchd·systemd) 점검은 다음 단계(그때도 렌더 성공 뒤에만).
+    폴백 포트(5101)로 뜬 날 설정 포트(5100)를 덮어쓰면 안 된다.
+    자동 시작(launchd·systemd) 점검은 다음 단계(그때도 렌더 성공 뒤에만).
     """
     try:
-        tpl = Path(root) / "session_manager" / LAUNCHER_TEMPLATE
-        if not tpl.is_file():
+        if not (Path(root) / "session_manager" / LAUNCHER_TEMPLATE).is_file():
             return "launcher: template missing — skip"
         target = Path(root) / START_SCRIPT
-        old = target.read_bytes() if target.is_file() else None
-        keep = _launcher_port(old.decode("utf-8", "replace")) if old is not None else None
-        new = render_launcher(tpl.read_text(encoding="utf-8"), data_dir=data_dir, conf_file=conf_file,
-                              port=keep or int(port)).encode("utf-8")
-        if old == new:
-            return "launcher: ok (posix v2)"
-        tmp = target.with_name(f".{START_SCRIPT}.{os.getpid()}.tmp")
-        try:
-            tmp.write_bytes(new)
-            os.chmod(tmp, 0o755)
-            os.replace(tmp, target)
-        finally:
-            tmp.unlink(missing_ok=True)
-        return "launcher: regenerated (posix v2)"
+        keep = _launcher_port(target.read_bytes().decode("utf-8", "replace")) if target.is_file() else None
+        res = write_launcher(root, data_dir=data_dir, conf_file=conf_file, port=keep or int(port))
+        return "launcher: ok (posix v2)" if res == "unchanged" else "launcher: regenerated (posix v2)"
     except Exception as e:  # noqa: BLE001
         return f"launcher: regenerate failed: {type(e).__name__}: {e}"
 
