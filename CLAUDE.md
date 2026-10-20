@@ -59,6 +59,11 @@ ClewPath 는 claude 를 **관찰·중계·실행**하는 도구이지, claude �
 - 비서 세션 이름 「개인비서」 고정(2026-10-13 사장님) → 비서 지정(승인) 때 위 이름 변경과 같은 custom-title(+agent-name, 2026-10-15) append
   (이미 그 이름이면 안 씀, 생성 중이면 건너뜀). ClewPath 목록은 지금 비서 세션을 항상 「개인비서」로 표시. 가드: test_approvals.py
 - claude 보관 기간 예고 → `~/.claude/settings.json` 의 `cleanupPeriodDays` **읽기만**(retention.py). 값은 바꾸지 않는다.
+- Claude 훅 자동 등록(2026-10-20 사장님 승인·기록 — 2026-08-10 도입, 이 원칙보다 먼저 생겨 목록에 없던 기존 동작) → Host 기동 때
+  `~/.claude/settings.json` 의 hooks 에 ClewPath 상태 훅(SessionStart·UserPromptSubmit·Notification·Stop·SessionEnd, 로컬 Host 로 curl 한 줄)을
+  **병합만** 한다: 다른 훅·설정 무접촉, 같은 명령이면 쓰지 않음, 포트가 바뀌면 그 명령만 갱신, 첫 수정 전 `settings.json.bak-clewpath` 백업 1회,
+  파일이 깨져 있으면 건너뜀. 모든 OS(Windows·맥·리눅스) 같은 방식. **제거(uninstall) 때는 지우지 않고 남은 훅과 지우는 방법만 안내**(사장님 결정).
+  hooks.py `ensure_registered`, 가드: test_hooks.py
 
 이 목록에 없는 claude 파일 접근을 추가할 때는 위 1·2 를 적용할 것.
 
