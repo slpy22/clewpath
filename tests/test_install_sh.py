@@ -63,9 +63,18 @@ try:                                                  # 이때 설치 표식이 
     marker = Path(os.environ["FAKE_MARKER"]).read_text(encoding="utf-8")
 except (KeyError, OSError):
     marker = None
+parents = []                                          # 부른 쪽(install.sh·하위 셸)의 명령줄 — ps 로 누구나 보는 것
+try:
+    import psutil
+    pr = psutil.Process().parent()
+    while pr is not None and len(parents) < 4:
+        parents.append(pr.cmdline())
+        pr = pr.parent()
+except Exception:
+    pass
 with open(ctl / "calls.jsonl", "a", encoding="utf-8") as f:
     f.write(json.dumps({"args": args, "cwd": os.getcwd(), "env": {k: os.environ.get(k) for k in keep},
-                        "marker": marker}) + "\n")
+                        "marker": marker, "parents": parents}) + "\n")
 fail = set(conf.get("fail", []))
 managed = Path(os.environ.get("UV_PYTHON_INSTALL_DIR") or "/nonexistent") / "cpython-3.11.99-fake" / "bin" / "python3"
 
@@ -447,7 +456,8 @@ def test_fresh_install_lays_out_secures_and_starts(box):
     # 훅: Host 가 첫 기동에 등록 — 맥·리눅스는 curl(curl.exe 아님)
     hooks = json.loads((box.claude / "settings.json").read_text(encoding="utf-8"))["hooks"]
     cmds = [h["command"] for groups in hooks.values() for g in groups for h in g["hooks"]]
-    assert cmds and all(c.startswith("curl -s -m 3 ") and f":{box.port}/api/hooks/event" in c for c in cmds)
+    assert cmds and all(c.startswith("curl -s -m 3 --noproxy 127.0.0.1 ") and f":{box.port}/api/hooks/event" in c
+                        for c in cmds), "루프백은 프록시를 쓰지 않는다(훅 내용이 프록시로 새지 않게)"
     # Host 가 본 경로 = hostctl paths(런처를 다시 렌더할 필요가 없었다)
     assert _wait(lambda: list(box.data.glob("launcher-ensured-*")), 15), box.diag()
     assert box.text(next(box.data.glob("launcher-ensured-*"))) == "launcher: ok (posix v2)"
@@ -528,6 +538,25 @@ def test_token_argument_is_moved_to_env_with_one_warning(box):
     assert "tok-ARGV-9" not in out + r.stderr.decode("utf-8")
     assert tomllib.loads(box.conf.read_text(encoding="utf-8"))["cloud"]["client_token"] == "tok-ARGV-9"
     assert "tok-ARGV-9" not in json.dumps(psutil.Process(box.host_pid()).environ())
+
+
+def test_direct_run_moves_token_arguments_off_the_command_line(box):
+    """sh install.sh --client-token T 로 바로 부르면(서막 없이) 경고하고 토큰을 env 로 옮겨 자기 자신을 다시 실행한다(exec —
+    pid 그대로). 그대로 두면 uv·파이썬·의존성을 까는 내내(수 분) /proc/<pid>/cmdline(누구나 읽음, ps)에 토큰이 보인다(Q19·S17).
+    가짜 uv 가 부를 때마다 부른 쪽 명령줄을 적는다 — 설치하는 동안 토큰이 한 번이라도 보이면 안 된다."""
+    box.unpack()
+    r = box.install("--client-token", "tok-DIRECT-7", "--agent-token=agt-DIRECT-8")
+    out = r.stdout.decode("utf-8")
+    assert r.returncode == 0 and "=== 설치 완료 ===" in out, box.diag(r)
+    assert out.count("같은 PC 의 다른 사용자에게 보입니다(ps)") == 1
+    assert "DIRECT-" not in out + r.stderr.decode("utf-8")
+    calls = box.calls()
+    assert calls and all(c["parents"] for c in calls), "가짜 uv 가 부른 쪽 명령줄을 적었다"
+    seen = json.dumps([c["parents"] for c in calls], ensure_ascii=False)
+    assert "install.sh" in seen and "DIRECT-" not in seen, "설치하는 동안 토큰이 명령줄에 남았다"
+    cloud = tomllib.loads(box.conf.read_text(encoding="utf-8"))["cloud"]
+    assert cloud["client_token"] == "tok-DIRECT-7" and cloud["agent_token"] == "agt-DIRECT-8", "env 로 옮겨 설정에 들어갔다"
+    assert "DIRECT-" not in json.dumps(psutil.Process(box.host_pid()).environ()), "Host 로는 넘기지 않는다"
 
 
 def test_from_stage_refuses_odd_entries_and_foreign_targets(box):
@@ -618,6 +647,59 @@ def test_upgrade_from_stage_replaces_payload_keeps_extras_and_clears_leftovers(b
     assert "잔재를 치웠습니다" in r.stdout.decode("utf-8")
     pid2 = box.host_pid()
     assert pid2 != pid1 and not (box.data / "update.inprogress").exists()
+
+
+# 설치 루트의 session_manager 를 치우는(rm) 또는 옆으로 옮기는(mv) 순간 부른 쪽(install.sh)에 SIGTERM — 한 번만.
+# Ctrl-C·창 닫기(HUP)·kill 이 바로 그 틈에 온 것과 같다. 신호를 보낸 뒤 진짜 명령을 그대로 한다.
+FAKE_INTERRUPT = """#!/bin/sh
+case "${0##*/}" in rm) real=/bin/rm ;; *) real=/bin/mv ;; esac
+for a in "$@"; do
+  if [ "$a" = "$FAKE_TARGET" ] && [ ! -e "$FAKE_FIRED" ]; then
+    printf 'fired by %s\\n' "${0##*/}" >"$FAKE_FIRED"
+    kill -TERM "$PPID"
+    sleep 1
+  fi
+done
+exec "$real" "$@"
+"""
+
+
+def test_signal_while_placing_leaves_a_whole_install_root(box):
+    """받은 파일을 설치 루트로 옮기는 도중 끊기면(신호) 설치 폴더에서 session_manager 가 빠진 채 남았다 — 항목마다 rm -rf 뒤
+    mv 였고, 끝날 때 on_exit 가 아직 안 옮긴 새 항목이 든 임시 stage 까지 지웠다. 그러면 install.sh·uninstall.sh 둘 다 실행을
+    거부하고 안내도 없다. 옮기는 동안은 신호를 미뤘다가 다 옮긴 뒤 끝내고, 항목이 비는 틈은 rename 두 번 사이뿐이다."""
+    box.fresh()
+    tools = box.base / "끊는 도구"
+    tools.mkdir()
+    for name in ("rm", "mv"):
+        (tools / name).write_text(FAKE_INTERRUPT, encoding="utf-8")
+        os.chmod(tools / name, 0o755)
+    fired = box.base / "fired"
+    st = box.stage(readme="NEW README\n")
+    r = box.install_from(st, env=box.env(PATH=f"{tools}:{os.environ['PATH']}", FAKE_FIRED=fired,
+                                         FAKE_TARGET=box.root / "session_manager"))
+    out = r.stdout.decode("utf-8")
+    assert fired.exists() and r.returncode == 1, (fired.exists(), box.diag(r))
+    assert (box.root / "session_manager" / "__init__.py").is_file(), "설치 폴더가 통째로 남는다(" + out[-600:] + ")"
+    assert all((box.root / n).exists() for n in updater.PAYLOAD) and box.text(box.root / "README.md") == "NEW README\n"
+    assert not list(box.root.glob(".clewpath-old.*")) and not list(box.chome.glob(".clewpath-get.*"))
+    assert "같은 명령을 다시" in out
+    assert not (box.data / "update.inprogress").exists()
+    r = box.install()                                         # 안내대로 다시 — 이어서 끝난다
+    assert r.returncode == 0 and "=== 설치 완료 ===" in r.stdout.decode("utf-8"), box.diag(r)
+    box.host_pid()
+
+
+def test_placing_clears_old_copies_left_by_an_earlier_crash(box):
+    """옛 항목은 설치 루트 안 .clewpath-old.<pid> 로 옮겼다가 다 놓은 뒤 지운다 — 그 사이 전원이 꺼져 남은 것은 다음
+    설치가 치운다(받은 파일이 모든 항목을 새로 덮으므로 옛 사본은 필요 없다)."""
+    box.fresh()
+    stale = box.root / ".clewpath-old.4242"
+    (stale / "session_manager").mkdir(parents=True)
+    (stale / "session_manager" / "old.py").write_text("old", encoding="utf-8")
+    r = box.install_from(box.stage())
+    assert r.returncode == 0, box.diag(r)
+    assert not list(box.root.glob(".clewpath-old.*"))
 
 
 def test_reinstall_rebuilds_the_venv_after_stopping_the_host(box):

@@ -382,15 +382,38 @@ check_stage() {   # $1=stage — 최상위 이름을 다시 본다(get.sh 가 �
   return 0
 }
 
-place_stage() {   # $1=stage $2=설치 루트 — 최상위 항목마다 rm → mv(같은 파일 시스템이라 rename). zip 에 없는 기존 항목은 남긴다
+place_stage() {   # $1=stage $2=설치 루트 — 최상위 항목마다 옛 것을 옆(설치 루트 안 .clewpath-old.<pid>)으로 rename 한 뒤 새 것을
+  # 제자리로 rename(같은 파일 시스템). 항목이 비는 틈은 rename 두 번 사이뿐이다(전엔 rm -rf 동안 — 큰 폴더면 몇 초). 옮기는
+  # 동안 INT·TERM·HUP 은 미뤘다가 다 옮긴 뒤 끝낸다 — 도중에 끝나면 설치 폴더에 session_manager 가 빠진 채 남아 install.sh·
+  # uninstall.sh 둘 다 거부하고, 아직 안 옮긴 새 항목은 on_exit 가 임시 폴더째 지운다. zip 에 없는 기존 항목은 남긴다.
+  # 지난번에 전원이 꺼져 남은 옛 사본(.clewpath-old.*)은 먼저 치운다 — 받은 파일이 그 항목을 모두 새로 덮는다
+  for _po in "$2"/.clewpath-old.*; do
+    exists "$_po" || continue
+    rm -rf "$_po" || die "지난 설치가 남긴 옛 사본을 지우지 못했습니다: $_po — 지운 뒤 같은 명령을 다시 실행하세요"
+  done
+  PS_OLD="$2/.clewpath-old.$$"
+  mkdir "$PS_OLD" || die "설치 폴더에 쓸 수 없습니다: $2 — 같은 명령을 다시 실행하세요"
+  PS_SIG=
+  PS_FAIL=
+  trap 'PS_SIG=1' INT TERM HUP
   for _ps in "$1"/*; do
     exists "$_ps" || continue
     _pn=${_ps##*/}
-    if exists "$2/$_pn"; then
-      rm -rf "${2:?}/${_pn:?}" || die "기존 항목을 지우지 못했습니다: $2/$_pn — 같은 명령을 다시 실행하세요"
+    if exists "$2/$_pn" && ! mv "$2/$_pn" "$PS_OLD/$_pn"; then
+      PS_FAIL="기존 항목을 옮기지 못했습니다: $2/$_pn"
+      break
     fi
-    mv "$_ps" "$2/$_pn" || die "옮기지 못했습니다: $_pn — 같은 명령을 다시 실행하세요"
+    if ! mv "$_ps" "$2/$_pn"; then
+      exists "$PS_OLD/$_pn" && mv "$PS_OLD/$_pn" "$2/$_pn"     # 옛 것을 제자리로
+      PS_FAIL="옮기지 못했습니다: $_pn"
+      break
+    fi
   done
+  trap 'exit 1' INT TERM HUP
+  [ -n "$PS_FAIL" ] && die "$PS_FAIL — 같은 명령을 다시 실행하세요"    # 옛 사본은 둔다(되돌리지 못한 것이 있을 수 있다)
+  rm -rf "$PS_OLD" 2>/dev/null || warn "옛 사본을 다 지우지 못했습니다(다음 설치가 치웁니다): $PS_OLD"
+  [ -n "$PS_SIG" ] && die "중단 신호를 받아 멈춥니다 — 받은 파일은 다 옮겼습니다. 같은 명령을 다시 실행하면 이어서 설치합니다"
+  return 0
 }
 
 prelude() {   # --from-stage: 옮긴 뒤 설치 루트의 install.sh 로 이어 간다(exec — pid 가 그대로라 표식도 그대로 유효)
@@ -940,6 +963,26 @@ parse_args() {
   done
 }
 
+tokens_to_env() {   # 토큰 인자를 env 로 옮기고 그 인자만 뺀 채 이 스크립트를 다시 실행한다(exec — pid 그대로, 돌아오지 않는다).
+  # 그대로 두면 uv·파이썬·의존성을 까는 내내(수 분) /proc/<pid>/cmdline(같은 PC 누구나, ps)에 토큰이 남는다(get.sh·서막이
+  # 하는 것과 같다). 스크립트를 파일로 다시 읽을 수 없으면(표준 입력으로 돌림) 그대로 잇는다
+  [ -f "$0" ] || return 0
+  TE_N=$#
+  while [ "$TE_N" -gt 0 ]; do
+    TE_A=$1
+    shift
+    TE_N=$((TE_N - 1))
+    case "$TE_A" in
+      --client-token|--agent-token) shift; TE_N=$((TE_N - 1)); continue ;;   # 값은 parse_args 가 있는 것을 확인했다
+      --client-token=*|--agent-token=*) continue ;;
+    esac
+    set -- ${1+"$@"} "$TE_A"                      # 앞에서 빼고 뒤에 붙인다 — 다 돌면 남긴 인자만 원래 순서로
+  done
+  if [ -n "$CLIENT_TOKEN" ]; then export CLEWPATH_CLIENT_TOKEN="$CLIENT_TOKEN"; fi
+  if [ -n "$AGENT_TOKEN" ]; then export CLEWPATH_AGENT_TOKEN="$AGENT_TOKEN"; fi
+  exec /bin/sh "$0" ${1+"$@"}
+}
+
 check_args() {
   while :; do                                   # 끝의 / 는 반복해서 걷어 낸다(get.ps1 과 같은 정규화)
     case "$CP_URL" in */) CP_URL=${CP_URL%/} ;; *) break ;; esac
@@ -994,6 +1037,11 @@ main() {
   EFF_PORT=''
   parse_args "$@"
   check_args
+  if [ "$TOKEN_ARGV" = 1 ]; then                # 경고는 한 번(다시 실행한 쪽엔 토큰 인자가 없다)
+    warn "--client-token·--agent-token 은 같은 PC 의 다른 사용자에게 보입니다(ps) — 환경변수로 넘기세요:"
+    say "         CLEWPATH_CLIENT_TOKEN=… sh install.sh"
+    tokens_to_env "$@"
+  fi
   EFF_PORT=$PORT
 
   # I0. 사전 점검
@@ -1017,10 +1065,6 @@ main() {
   trap 'on_exit' EXIT
   trap 'exit 1' INT TERM HUP
 
-  if [ "$TOKEN_ARGV" = 1 ]; then               # (서막 뒤에는 토큰이 env 로 넘어가 다시 나오지 않는다)
-    warn "--client-token·--agent-token 은 같은 PC 의 다른 사용자에게 보입니다(ps) — 환경변수로 넘기세요:"
-    say "         CLEWPATH_CLIENT_TOKEN=… sh install.sh"
-  fi
   if [ -n "$FROM_STAGE" ]; then                 # get.sh 경로 — 옮긴 뒤 exec 로 이어 가므로 돌아오지 않는다
     say ""
     say "=== ClewPath Host 설치 준비 — 받은 파일을 설치 폴더로: $DIR ==="
