@@ -228,9 +228,10 @@ class Connector:
         self.local_base = (local_base or DEFAULT_LOCAL_BASE).rstrip("/")
         self.ws = None                       # 릴레이 연결
         self.http = httpx.AsyncClient(timeout=310)
-        self.streams: dict[str, asyncio.Task] = {}   # id -> resume 파이프 태스크
-        self.stream_in: dict[str, asyncio.Queue] = {}  # id -> client 입력 큐
-        self.req_cid: dict[str, str] = {}    # rid -> cid (응답을 요청 기기로 라우팅)
+        # 키(rid): 릴레이를 거친 요청은 (cid, 기기가 붙인 id) 튜플 — 기기마다 id 를 1 부터 세어 겹치므로(0.29.0, _on_frame).
+        self.streams: dict = {}              # rid -> resume·터미널·관제 파이프 태스크
+        self.stream_in: dict = {}            # rid -> client 입력 큐
+        self.req_cid: dict = {}              # rid -> cid (응답을 요청 기기로 라우팅)
         self.authed: dict[str, dict] = {}    # cid -> 인증된 기기{id,name}
         self.e2ee_key: bytes | None = None   # room E2EE 키(접속 시 로드)
         self.enc_cids: set = set()           # 암호화 봉투로 말한 기기들(cid)
@@ -258,9 +259,15 @@ class Connector:
             for k in list(self.req_cid)[:1000]:
                 self.req_cid.pop(k, None)
 
+    def _wire(self, rid):
+        """내부 키 → (프레임에 실을 id, cid). (cid, id) 튜플이면 기기가 보낸 원래 id 로 돌려준다."""
+        if isinstance(rid, tuple):
+            return rid[1], rid[0]
+        return rid, self.req_cid.get(rid)
+
     async def _res(self, rid, ok, data=None, error=None) -> None:
-        msg = {"v": 1, "type": "res", "id": rid, "ok": ok}
-        cid = self.req_cid.get(rid)
+        wid, cid = self._wire(rid)
+        msg = {"v": 1, "type": "res", "id": wid, "ok": ok}
         if cid is not None:
             msg["cid"] = cid   # 릴레이가 이 응답을 요청 기기에게만 전달
         if data is not None:
@@ -271,8 +278,8 @@ class Connector:
 
     async def _stream_send(self, rid, **kw) -> None:
         """stream 프레임 전송(요청 기기로 라우팅되도록 cid 자동 첨부)."""
-        msg = {"v": 1, "type": "stream", "id": rid}
-        cid = self.req_cid.get(rid)
+        wid, cid = self._wire(rid)
+        msg = {"v": 1, "type": "stream", "id": wid}
         if cid is not None:
             msg["cid"] = cid
         msg.update(kw)
@@ -355,7 +362,7 @@ class Connector:
                     return
 
             if method == "ping":
-                await self.send({"v": 1, "type": "pong", "id": rid,
+                await self.send({"v": 1, "type": "pong", "id": self._wire(rid)[0],
                                  **({"cid": cid} if cid is not None else {})})
 
             elif method == "bye_device":
@@ -734,6 +741,11 @@ class Connector:
                                         **({"cid": frame["cid"]} if frame.get("cid") is not None else {})})
                 return
         t = frame.get("type")
+        # 기기(폰·태블릿 등)는 저마다 요청 id 를 1 부터 센다 — 둘이 동시에 붙으면 'c5'·'t3' 가 겹쳐 응답이 다른 기기로 가고
+        # 터미널 출력이 섞이며, 한쪽의 stream_close 가 다른 기기 스트림을 끊었다(0.29.0 발견). 릴레이가 붙인 cid 와 묶어
+        # (cid, id) 를 내부 키로 쓴다. 응답·스트림 프레임에는 _wire 가 원래 id 와 cid 를 그대로 싣는다.
+        if t in ("req", "stream_in", "stream_close") and frame.get("cid") is not None and frame.get("id") is not None:
+            frame = {**frame, "id": (frame["cid"], frame["id"])}
         if t == "req":
             await self._handle_req(frame)
         elif t == "stream_in":
