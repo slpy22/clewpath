@@ -27,7 +27,7 @@ from session_manager import config, team
 
 TTL_S = 30 * 60
 KINDS = ("team_create", "team_import", "team_archive", "team_delete", "team_purge", "assistant_set", "delegate", "task_decide", "profile_decide",
-         "session_send")
+         "session_send", "service_register")
 _ALIAS_ASSISTANT = "비서"
 _PORTFOLIO_CODE = "ASSIST"
 ASSISTANT_TITLE = "개인비서"      # 비서 세션 이름 고정(2026-10-13 사장님)
@@ -59,6 +59,8 @@ def _summary(kind: str, a: dict) -> str:
         return f"[{a.get('team')}] {a.get('task')} " + {"accept": "승인", "reject": "반려", "cancel": "취소"}.get(a.get("action"), "?")
     if kind == "profile_decide":
         return f"사장님 프로필 {a.get('decision')}: {str(a.get('statement') or a.get('id'))[:60]}"
+    if kind == "service_register":
+        return f"외부 서비스 등록: {a.get('name')}({a.get('service')}) · 폴더 {a.get('folder')}"
     if kind == "session_send":
         return f"[{a.get('title') or str(a.get('session_id'))[:8]}] 세션에 전달: {str(a.get('message'))[:120]}"
     return kind
@@ -67,7 +69,7 @@ def _summary(kind: str, a: dict) -> str:
 def _validate(kind: str, a: dict) -> None:
     need = {"team_create": ("name",), "team_import": ("path",), "team_archive": ("team",), "team_delete": ("team",), "team_purge": ("team",), "assistant_set": (),
             "delegate": ("team", "goal"), "task_decide": ("team", "task", "action"), "profile_decide": ("id", "decision"),
-            "session_send": ("session_id", "message")}
+            "session_send": ("session_id", "message"), "service_register": ("request", "service", "folder", "bases")}
     if kind not in KINDS:
         raise team.TeamError("bad_kind")
     for k in need[kind]:
@@ -272,9 +274,17 @@ def _x_session_send(a: dict, aid: str, by: str | None) -> dict:
             "send_to": {"address": addr, "live": bool(addr), "name": (p or {}).get("name")}}
 
 
+
+def _x_service_register(a: dict, aid: str, by: str | None) -> dict:
+    """외부 서비스 등록(서비스 대장 S3) — 신청자의 claim 안에서만 돈다(토큰을 그 응답으로만 건넨다)."""
+    from session_manager import servicereg
+    return servicereg.provision(a, aid)
+
+
 _EXEC = {"team_create": _x_team_create, "team_import": _x_team_import, "team_archive": _x_team_archive, "team_delete": _x_team_delete, "team_purge": _x_team_purge,
          "assistant_set": _x_assistant_set, "delegate": _x_delegate, "task_decide": _x_task_decide,
-         "profile_decide": _x_profile_decide, "session_send": _x_session_send}
+         "profile_decide": _x_profile_decide, "session_send": _x_session_send,
+         "service_register": _x_service_register}
 
 
 # ---------------------------------------------------------------- 비서(A-7)

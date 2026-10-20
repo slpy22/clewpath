@@ -51,6 +51,21 @@ POST /api/owner/services/{id}/rotate → 새 토큰(옛 토큰 즉시 401)
 GET  /api/owner/services            목록 + 오늘 사용량
 ```
 
+#### 서비스가 스스로 등록하기 (0.26.0, 이 PC 의 세션에서)
+
+```
+POST /api/services/requests  {"id":"nklaw","name":"북한법","folder":"E:/…/nklaw_chatbot","purpose":"법령 챗봇",
+                              "bases":{"chat":{"new":{"system_prompt":"…","allowed_tools":["ToolSearch","mcp__nklaw"]}}},
+                              "limits":{"daily_usd":5}}
+     → {"request":{"id":"sr_…","status":"pending","warnings":[…]}, "claim":"…"}   (claim 은 이때 한 번만)
+     폴더 검사에 걸리면 400 folder_rejected (드라이브 루트·홈·~/.claude·다른 세션을 품은 폴더·다른 서비스 폴더·없는 폴더)
+GET  /api/services/requests/{id}            상태 pending|approved|rejected|expired|claimed
+POST /api/services/requests/{id}/claim      {"claim":"…"} → 원본 준비 + {"service":{…},"token":"cps_…"} (1회, 다시 부르면 410)
+```
+
+- 사장님이 폰 알림(또는 PC 2차 인증)으로 승인해야 claim 이 된다. 승인 전 409, 틀린 claim 403. 신청부터 30분 안에 claim.
+- `bases` 의 각 용도는 `{"new": 프로필}`(권장 — 첫 턴부터 가드레일 아래에서 새로 만든다) 또는 `{"adopt": 세션 id}`(같은 폴더·프로필 있는 기존 세션, 대화 기록이 답에 섞일 수 있어 비권장). 새 원본은 권한 모드 기본 `dontAsk`.
+
 ## 세션 목록 조회 (HTTP)
 
 재개할 세션 UUID 를 찾기 위한 목록 API. 같은 API 토큰으로 인증한다.

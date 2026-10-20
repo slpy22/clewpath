@@ -42,14 +42,15 @@ def _file():
 def _load() -> dict:
     f = _file()
     if not f.exists():
-        return {"services": {}}
+        return {"services": {}, "requests": {}}
     try:
         with f.open(encoding="utf-8") as fh:
             d = json.load(fh)
         d.setdefault("services", {})
+        d.setdefault("requests", {})
         return d
     except Exception:  # noqa: BLE001
-        return {"services": {}}
+        return {"services": {}, "requests": {}}
 
 
 def _save(d: dict) -> None:
@@ -117,8 +118,9 @@ def _check_bases(bases: dict, d: dict, sid: str) -> dict:
     return out
 
 
-def create(sid: str, name: str, bases: dict, limits: dict | None = None) -> tuple[dict, str]:
-    """서비스를 등록하고 토큰 원문을 돌려준다(한 번만)."""
+def create(sid: str, name: str, bases: dict, limits: dict | None = None,
+           extra: dict | None = None) -> tuple[dict, str]:
+    """서비스를 등록하고 토큰 원문을 돌려준다(한 번만). extra: folder·purpose·approval 등 기록용."""
     sid = (sid or "").strip()
     if not ID_RE.match(sid):
         raise ServiceError("bad_id", "서비스 id 는 영소문자·숫자·'-' 2~31자입니다.")
@@ -132,7 +134,7 @@ def create(sid: str, name: str, bases: dict, limits: dict | None = None) -> tupl
         rec = {"id": sid, "name": (name or sid).strip()[:60], "bases": clean,
                "token_hash": _hash(token), "token_hint": f"{TOKEN_PREFIX}{sid}_…{token[-4:]}",
                "limits": _clean_limits(limits), "status": "active",
-               "created": now, "updated": now}
+               "created": now, "updated": now, **(extra or {})}
         d["services"][sid] = rec
         _save(d)
     return public(rec), token

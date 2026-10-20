@@ -144,6 +144,8 @@
 
 1·4 는 claude 가 읽는 파일을 쓰는 일이라 **불가침 원칙의 승인 예외로 CLAUDE.md 에 추가**해야 한다(사장님 승인 화면 경유·없을 때만 생성).
 
+> **S3 구현(0.26.0)은 claude 파일을 쓰지 않는다** — 그래서 새 예외가 필요 없다. 1(settings.json)은 검사·경고만, 4 의 이름은 claude 이름(custom-title) 대신 ClewPath 라벨 레코드(`labels.json` 의 name)로 「<name> 원본(<용도>)」. 2 의 새 원본 기록은 claude -p 가 만든다(비서 세션 만들기와 같은 방식). 5(실측 점검)는 S4 이후.
+
 ## 9. 열린 결정 (사장님)
 
 1. **기존 `SM_API_TOKEN` 의 운명** — (A) "소유자 토큰"으로 남기되 위험 동작(in-place·프로필)은 로컬로 이동 (B) 서비스 이행 후 폐기.
@@ -158,7 +160,7 @@
 |---|---|---|
 | S1 차단 ✅ 0.24.0 | 권한표(§5) 중 소유자 토큰 축소: profile/labels/title POST 로컬 전용, in-place 원격 거부 | 지금 구멍의 대부분이 바로 닫힘. nklaw 미사용 확인(004 회신). 가드: test_service_s1.py |
 | S2 대장·토큰 ✅ 0.25.0 | services.json(`bases:{용도:id}`), 서비스 토큰 발급·재발급·정지·폐기(`/api/owner/services`, 로컬 전용 — 신청·claim 은 S3), resume/ask 에서 base 일치 검사(루프백도), 서비스별 한도·감사(`service`), 정지 시 WS 다음 턴 끊김. 가드레일 프로필 없는 원본·다른 서비스 원본은 거부 | 서비스별 격리. 가드: test_service_s2.py |
-| S3 등록 흐름 | 신청 API·폴더 검사·승인 kind·claim·원본 준비 | 새 서비스가 스스로 등록 |
+| S3 등록 흐름 ✅ 0.26.0 | `POST /api/services/requests`(로컬 전용) → 폴더 검사(§7, 거부면 신청 불가) → 승인 kind `service_register`(폰/2FA) → `…/claim` 에서 원본 준비(§8-2 -p 첫 턴)·서비스 등록·토큰 1회. 화면 '실행' 으로는 준비 안 됨(claim_required). 준비 중 실패는 claim 재시도로 이어서(만든 원본 재사용) | 새 서비스가 스스로 등록. 가드: test_service_s3.py |
 | S4 화면 | 설정 「외부 서비스」: 목록·오늘 사용량·재발급·폐기·정지, 승인 시트에 검사 결과 | 사장님 관리 |
 | S5 이행 | 북한법: 1ca057f1 입양(chat) + 생성기 원본 신설(gen) → 승인 → 새 토큰 → `SM_AGENT_SESSION`·`SM_GEN_SESSION` 고정 + 토큰 env 교체(서비스 모니터 의뢰) → 옛 토큰 폐기 | 레거시 토큰 제거 |
 
