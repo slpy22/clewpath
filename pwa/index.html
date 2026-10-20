@@ -2808,7 +2808,11 @@ function shouldConfirmTakeover(s, t0){
 // 세션 색: 모니터 색은 서버(webmonitor)가 주지만 터미널엔 없다 → 클라에서 결정적 hash→hsl.
 function tabColor(sid){ let h=0; for(const c of String(sid)) h=(h*31+c.charCodeAt(0))>>>0; return `hsl(${h%360},62%,58%)`; }
 // 기억 키는 PC 별(sm_tabs_<PC>, 3단계·결정 9) — 릴레이로 PC 를 바꿔 써도 다른 PC 의 탭과 섞이거나 지워지지 않게.
+// 이 PC 의 탭 기억을 아직 읽지 않았으면(첫 목록 전·PC 전환 직후 — 비서·알림으로 먼저 연 터미널) 남아 있는 기억을 덮어쓰지 않는다.
+// 첫 목록 뒤 restoreTabsOnce 가 그 기억과 지금 탭을 합쳐 적는다. 남은 기억이 없었으면 이 페이지가 처음부터 적는다(_tabsOwn).
+let _tabsOwn=false;
 function saveTabs(){
+  if(!_tabsRestored&&!_tabsOwn){ if(pcMemLoad('sm_tabs').v) return; _tabsOwn=true; }
   try{ LS.setItem(paneKey('sm_tabs'),JSON.stringify({active:TABS.active,
     list:TABS.list.map(t=>({key:t.key,sid:t.s.session_id,safe:!!t.safe})),
     mru:TABS.mru.filter(k=>findTab(k))})); }catch(e){}
@@ -2821,7 +2825,7 @@ function restoreTabsOnce(){
   if(_tabsRestored) return; _tabsRestored=true;
   // 이 PC 의 탭 기억. 아직 없으면 옛 키(PC 구분 없던 값)를 읽어 아래 목록 거르기를 거친 것만 새 키에 옮긴다(saveTabs, 1회)
   const saved=pcMemLoad('sm_tabs').v;
-  if(!saved||!Array.isArray(saved.list)||!saved.list.length) return;
+  if(!saved||!Array.isArray(saved.list)||!saved.list.length){ if(TABS.list.length) saveTabs(); return; }   // 목록 전에 연 탭은 이제 적는다
   const byId=new Map((SESSIONS||[]).map(s=>[s.session_id,s]));
   let n=0;
   for(const it of saved.list){
@@ -3178,8 +3182,11 @@ function termComposer(o){
   return api;
 }
 async function loadTerminal(s, safe){
+  const pc=hostVerKey();                   // 이 터미널을 연 PC
   let cred={};
   if(MODE==='relay'){ cred=await ensurePriv(); if(cred===null) return; }   // 외부 터미널 → grace/2차 인증
+  // 2차 인증 확인을 기다리는 사이 릴레이로 PC 를 바꿨다 — 이전 PC 세션을 새 PC 로 열거나 새 PC 탭 기억에 적지 않는다
+  if(pc!==hostVerKey()) return;
   if(safe) cred={...cred, safe:true};      // 권한확인 유지 - 프롬프트가 뜨고 원격 승인 가능
   // 탭 등록(dedupe: key 가 같으면 기존 탭을 최신 세션 객체로 갱신) + 전경 지정
   const key=tabKey(s);
@@ -3360,8 +3367,10 @@ function mdToHtml(src){
 // ---- 재개(스트리밍 + 입력) ----
 async function loadResume(s, inplace, safe){
   const isIn = inplace!==false;   // 기본 in-place(실제 세션)
+  const pc=hostVerKey();          // 이 재개를 연 PC
   let cred={};
   if(isIn){ cred=await ensurePriv(); if(cred===null) return; }   // 외부 in-place → grace/2차 인증
+  if(pc!==hostVerKey()) return;   // 2차 인증을 기다리는 사이 PC 를 바꿨다 — 이전 PC 세션의 claude -p 를 새 PC 에 띄우지 않는다
   if(safe) cred={...cred, safe:true};   // 일반 모드: 도구 자동허용 없이(웹은 물을 수 없어 거부됨)
   paneEnter('resume', s);   // 2차 인증 뒤, 칸을 비우기 바로 앞 — 보던 뷰어 실시간·터미널·옛 재개 정리(quick-switch 2단계)
   const main=paneDetail(); closeInlineMonitor(); main.classList.remove('term-mode','fb-mode','mon-mode'); main.innerHTML='';
@@ -3836,7 +3845,8 @@ const MON_NOTIFY_DEFAULT={manager_stop:true, sub_stop:true, sub_start:false, err
 // 탭 규칙(VS Code): 한 번 누름 = 미리보기 탭(기울임, 다음 파일이 그 자리를 씀), 두 번 누름 = 고정.
 const FB={sort:'name', open:new Set(), kids:{}, errs:{}, ent:{}, sel:'', q:'', tabs:[], active:null, rootMap:null,
   restored:false, reveal:null, treeGen:0, wordWrap:false, ed:null, wrap:null, tree:null, tabsEl:null, crumbEl:null,
-  edHost:null, alt:null, seq:0, autoShow:false};
+  edHost:null, alt:null, seq:0, autoShow:false,
+  migrate:false};   // migrate: 옛 키를 이 PC 첫 목록 전에 읽어 아직 거르지 못함 — 목록 뒤 fbRetryAfterList 가 걸러 한 번 적는다
 const FB_LANG={py:'python',pyw:'python',pyi:'python',js:'javascript',mjs:'javascript',cjs:'javascript',jsx:'javascript',
   ts:'typescript',tsx:'typescript',mts:'typescript',md:'markdown',markdown:'markdown',html:'html',htm:'html',
   css:'css',scss:'scss',less:'less',xml:'xml',svg:'xml',xaml:'xml',csproj:'xml',yaml:'yaml',yml:'yaml',
@@ -3891,15 +3901,20 @@ function fbParentLabel(cwd){ const parts=String(cwd||'').split(/[\\/]/).filter(B
 const FB_STATE='sm_fb_state2', FB_KEEP=20;   // 기억 키는 PC 별(sm_fb_state2_<PC>, 3단계). FB_KEEP = 새로고침 뒤 되살리는 파일 탭 상한
 function fbNewTab(rk,path,pinned){ return {id:fbId(rk,path), root:rk, path, name:baseName(path), pinned:!!pinned}; }
 // 마지막 파일이 복원 상한(앞 20개) 밖이면 20번째 자리로 당겨 적는다 — 새로고침 뒤 마지막 파일 대신 첫 탭이 뜨지 않게(3단계)
-function fbSaveState(){ try{ const tabs=FB.tabs.slice(), i=tabs.findIndex(t=>t.id===FB.active);
+// 이 PC 기억을 아직 읽지 않았거나(PC 전환 직후) 옛 키를 아직 거르지 못했으면(migrate) 적지 않는다 — 읽지 않은 기억을 덮어쓰거나
+// 다른 PC 폴더가 섞인 채로 새 키에 굳지 않게
+function fbSaveState(){ if(!FB.restored||FB.migrate) return;
+  try{ const tabs=FB.tabs.slice(), i=tabs.findIndex(t=>t.id===FB.active);
   if(i>=FB_KEEP) tabs.splice(FB_KEEP-1, 0, tabs.splice(i,1)[0]);
   LS.setItem(paneKey(FB_STATE), JSON.stringify({open:[...FB.open], sort:FB.sort,
   tabs:tabs.map(t=>({root:t.root,path:t.path,pinned:!!t.pinned})), active:FB.active})); }catch(e){} }
 function fbRestoreState(){ if(FB.restored) return; FB.restored=true;
   const m=pcMemLoad(FB_STATE), st=m.v;
   // 옛 키(PC 구분 없던 값)를 처음 옮겨 올 때는 다른 PC 의 폴더가 섞였을 수 있다 — 이 PC 목록에 있는 폴더의 탭·펼침만 남겨 새 키에
-  // 적는다(§9 '목록으로 걸러 버림'). 이 PC 목록을 아직 못 받았으면(LIST_READY 전) 거르지도 적지도 않고 다음 복원 때 다시 옮긴다.
+  // 적는다(§9 '목록으로 걸러 버림'). 이 PC 목록을 아직 못 받았으면(LIST_READY 전) 거르지 못한다 — 옮기기를 목록 뒤로 미루고
+  // (FB.migrate) 그때까지 새 키에 적지 않는다. 목록이 오면 fbRetryAfterList 가 걸러 한 번 적는다(같은 페이지엔 '다음 복원'이 없다).
   const move=m.old&&LIST_READY; if(move) fbRoots();
+  FB.migrate=!!(m.old&&!LIST_READY);
   const mine=(rk)=>!move||FB.rootMap.has(rk);
   FB.open=new Set((st&&Array.isArray(st.open)?st.open:[]).filter(id=>mine(fbSplit(id)[0]))); FB.sort=(st&&st.sort)==='mtime'?'mtime':'name';
   FB.tabs=((st&&Array.isArray(st.tabs))?st.tabs:[]).filter(t=>t&&t.root&&t.path&&mine(t.root)).slice(0,FB_KEEP).map(t=>fbNewTab(t.root,t.path,t.pinned));
@@ -3908,6 +3923,13 @@ function fbRestoreState(){ if(FB.restored) return; FB.restored=true;
 // 목록을 받기 전에 연 탭은 뿌리(세션)를 못 찾아 '세션을 찾지 못했습니다'로 남는다 — 목록이 오면 뿌리를 새로 셈해, 이제 찾을 수 있는
 // 탭만 오류를 지우고 한 번 다시 받는다(굳지 않게, quick-switch §4-2). 여전히 그 폴더 세션이 없으면 오류 그대로(다시 받지 않음).
 function fbRetryAfterList(){
+  // 첫 목록 전에 옛 키를 읽어 두었다(FB.migrate) — 이제 이 PC 목록에 있는 폴더의 탭·펼침만 남기고 새 키에 한 번 적는다(§9)
+  if(FB.migrate){ FB.migrate=false; fbRoots(); const mine=(rk)=>FB.rootMap.has(rk);
+    FB.open=new Set([...FB.open].filter(id=>mine(fbSplit(id)[0])));
+    FB.tabs=FB.tabs.filter(t=>{ if(mine(t.root)) return true; fbDisposeTab(t); return false; });
+    if(!FB.tabs.some(t=>t.id===FB.active)) FB.active=FB.tabs[0]?FB.tabs[0].id:null;
+    fbSaveState();
+    if(paneDetail().classList.contains('fb-mode')){ fbRenderTabs(); fbRenderActive(); } }
   if(!FB.tabs.length) return;
   fbRoots();
   let again=false;
@@ -5480,7 +5502,7 @@ function renderPairPcs(){
       const again=el('button','btn ghost sm','다시 페어링'); again._keep=true;
       again.onclick=()=>{ if(appScanAvailable()) appScanPair(); else { const li=$('#p-link'); if(li&&li.focus) li.focus(); toast('PC 에서 새 QR 을 만들어 스캔하거나 링크를 붙여넣으세요'); } };
       const rm=el('button','btn ghost sm','지우기'); rm._keep=true;
-      rm.onclick=()=>{ pcsRemove(pc.room); renderPairPcs(); applyPairSituation(); };
+      rm.onclick=()=>{ pcsRemove(pc.room); forgetPcMem(pc.room); renderPairPcs(); applyPairSituation(); };   // 그 PC 의 화면 기억도
       wrap.appendChild(pairRow({name:'🖥 '+pcName(pc), chip:PC_STATE_CHIP[pc.state], buttons:[again, rm],
         meta:[pc.last?('최근 '+relTs(Math.floor(pc.last/1000))):null]}));
       return;
@@ -5508,11 +5530,15 @@ function renderPairPcs(){
 //       브라우저에 저장된 '접속 자격'만 지운다.
 const PAIR_KEYS_ACTIVE=['sm_room','sm_token','sm_cs','sm_cp','sm_devtoken','sm_cjwt','sm_grace'];
 const PAIR_KEYS_ALL=PAIR_KEYS_ACTIVE.concat(['sm_pcs','sm_hint_done']);
+// PC 별 화면 기억(quick-switch §6-1: 터미널 탭·파일·화면 = <키>_<PC>) — 그 PC 의 파일 경로·세션 제목·팀 이름이 든다.
+// 페어링 해제는 그 PC 것을, 이 기기 초기화는 모든 PC 것과 PC 구분 없던 옛 키(sm_tabs·sm_fb_state2)까지 지운다.
+const PC_MEM_KEYS=['sm_tabs','sm_fb_state2','sm_pane'];
+function forgetPcMem(room){ if(room) PC_MEM_KEYS.forEach(b=>LS.removeItem(b+'_'+room)); }
 function clearPairing(all){
   (all?PAIR_KEYS_ALL:PAIR_KEYS_ACTIVE).forEach(k=>LS.removeItem(k));
-  if(all){ // E2EE 룸 키도 함께(자격 완전 소거)
+  if(all){ // E2EE 룸 키도 함께(자격 완전 소거). PC 별 화면 기억도 — 기기를 넘겨도 PC 흔적이 남지 않게
     for(let i=LS.length-1;i>=0;i--){ const k=LS.key(i);
-      if(k&&k.indexOf('sm_e2ee_')===0) LS.removeItem(k); } }
+      if(k&&(k.indexOf('sm_e2ee_')===0||PC_MEM_KEYS.some(b=>k===b||k.indexOf(b+'_')===0))) LS.removeItem(k); } }
   try{ conn.devToken=''; }catch(e){}
   setTitle(''); const sel=$('#pcname'); if(sel) sel.classList.add('hidden');   // 헤더 PC 표시 숨김
 }
@@ -5601,7 +5627,7 @@ function unpairPc(room){
       if(cur && full){                                       // ② 연결돼 있으면 PC 에 바로 알림(📵 즉시 반영)
         try{ await Promise.race([conn.req('bye_device',{}), new Promise(r=>setTimeout(r,2000))]); }catch(e){}
       }
-      pcsRemove(room);                                       // ③ 로컬 제거
+      pcsRemove(room); forgetPcMem(room);                    // ③ 로컬 제거(그 PC 의 화면 기억도)
       let fl={done:[]}; try{ fl=await Promise.race([revokeFlush(), new Promise(r=>setTimeout(()=>r({done:[]}),5000))]); }catch(e){}
       const serverDone=full && (fl.done||[]).includes(room);
       pc && (pc._unpairResult=serverDone);
@@ -6460,13 +6486,18 @@ function onLocalTermMessage(ev){
 function pcSwitchReset(){
   closeLiveResume(true);                       // 응답 중인 웹 재개도 지금 닫는다 — 연결째 바뀌어 그 응답을 받을 수 없다
   paneEnter('empty');                          // 터미널(연결·탭 배지)·뷰어 실시간·편집기 스크롤 정리
-  TABS.list=[]; TABS.active=null; TABS.mru=[]; _tabsRestored=false;
+  TABS.list=[]; TABS.active=null; TABS.mru=[]; _tabsRestored=false; _tabsOwn=false;
   if(FB.ed){ try{ FB.ed.dispose(); }catch(e){} FB.ed=null; }
   FB.tabs.forEach(t=>fbDisposeTab(t));         // 파일 내용(Monaco 모델) 해제 — 탐색기·편집기 상태도 모두 처음으로
-  Object.assign(FB,{tabs:[], active:null, sel:'', open:new Set(), kids:{}, errs:{}, ent:{}, rootMap:null, restored:false, reveal:null, q:'', autoShow:false});
+  Object.assign(FB,{tabs:[], active:null, sel:'', open:new Set(), kids:{}, errs:{}, ent:{}, rootMap:null, restored:false, migrate:false, reveal:null, q:'', autoShow:false});
   FB.treeGen++;                                // 받는 중이던 이전 PC 의 폴더 응답은 버린다(파일 응답은 FB.active=null 로 이미 버려진다)
   LIST_READY=false;
+  // 목록 칸의 이전 PC 줄·탐색기도 지운다 — 새 PC 연결을 기다리는 사이 옛 줄·파일을 누르면 이전 PC 세션·파일이 새 PC 기억 키에
+  // 적히고 이전 PC 세션을 새 PC 로 열었다. 새 PC 첫 목록(loadList)이 다시 그리고, 20초 갱신도 그때까지 쉰다(LIST_CTX)
+  SESSIONS=[]; LIST_CTX=null;
+  { const pl=paneList(); if(pl){ pl.innerHTML=''; pl.appendChild(el('div','empty','PC 에 연결하는 중…')); } }
   detailPlaceholder();                         // 빈 안내 — PANE_NOW 도 빈 화면으로(세대는 이어서 센다: 늦은 뷰어 응답 판정)
+  showListPane();                              // 폰: 상세 칸이 빈 안내(폰에선 숨김)뿐이면 막다른 빈 화면 — 연결이 실패해도 목록 칸을 보인다
 }
 async function switchToPc(pc){
   pcSwitchReset();                             // 연결·방을 바꾸기 전에(3단계)

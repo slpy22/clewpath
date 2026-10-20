@@ -210,8 +210,8 @@ const FB_SAVED = JSON.stringify({ open: [fid("")], sort: "name",
 const S1 = "{ session_id: 's1', title: 'A', cwd: 'F:\\\\p\\\\proj', mtime: 10 }";
 
 // 저장된 파일 탭(a.py 고정 · b.md 마지막)과 파일 API·Monaco 스텁(스크롤 위치 = saveViewState {top:42})
-async function bootFiles({ withSessions = true } = {}) {
-  const b = await boot({ setup: (sb) => sb.localStorage.setItem("sm_fb_state2", FB_SAVED) });
+async function bootFiles({ withSessions = true, key = "sm_fb_state2" } = {}) {
+  const b = await boot({ setup: (sb) => sb.localStorage.setItem(key, FB_SAVED) });
   ev(b.ctx, `globalThis.__calls = []; globalThis.__restored = [];
     SESSIONS = ${withSessions ? `[${S1}]` : "[]"};
     T.api = async (v, p, o) => { __calls.push([v, p, (o && o.query) || null]);
@@ -455,7 +455,8 @@ test("T18 터미널을 짓는 사이(xterm 첫 로드) 다른 화면으로 가�
 });
 
 test("T19 파일: 목록이 와도 그 폴더를 쓰는 세션이 없으면 오류 그대로(다시 받지 않음), 생기면 한 번만 다시 받는다", async () => {
-  const { ctx } = await bootFiles({ withSessions: false });
+  // 이 PC 의 기억(새 키, 릴레이 방 이름 없음 = relay). 옛 키(PC 구분 없음)였다면 첫 목록이 이 PC 폴더만 남겨 옮긴다(T21·검토 T34)
+  const { ctx } = await bootFiles({ withSessions: false, key: "sm_fb_state2_relay" });
   ev(ctx, "fbRestoreState(); fbShowEditor()"); await tick(); await tick();
   const now = () => ({ err: ev(ctx, "(FB.tabs.find((t) => t.id === FB.active).err || {}).error || null"),
                        fetched: ev(ctx, "__calls.filter((c) => c[1].endsWith('/file')).length") });
