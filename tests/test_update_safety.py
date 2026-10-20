@@ -10,8 +10,6 @@
 """
 from __future__ import annotations
 
-import sys
-
 import pytest
 
 from tests.conftest import write_session
@@ -46,10 +44,10 @@ def test_diagnostics_does_not_call_scan_all(fake_claude_home, monkeypatch):
         assert j["ok"] is True
 
 
-_WIN_RUNNER = pytest.mark.skipif(sys.platform != "win32", reason="update_runner.sh 는 멀티 OS 3단계")
+# 모든 OS 의 릴리스 — 클레임이 없으면 win 전용이라 맥·리눅스에선 apply 가 먼저 거절한다(updater.supports_this_os)
+_ALL_OS = ["win", "mac", "linux"]
 
 
-@_WIN_RUNNER
 def test_apply_concurrency_lock(fake_claude_home, monkeypatch):
     from session_manager import updater
     # 실제 runner 스폰은 막는다(부작용 없이 잠금 로직만 검증)
@@ -60,7 +58,7 @@ def test_apply_concurrency_lock(fake_claude_home, monkeypatch):
             calls["n"] += 1
     monkeypatch.setattr(updater.subprocess, "Popen", _FakePopen)
 
-    m = {"ver": "9.9.9"}
+    m = {"ver": "9.9.9", "platforms": _ALL_OS}
     staged = fake_claude_home / "stage"
     staged.mkdir()
     # 1회차: 정상 실행(잠금 생성)
@@ -98,12 +96,11 @@ def _apply_port(fake_claude_home, monkeypatch, bound_port, runtime_port):
         lock.unlink()
     staged = fake_claude_home / f"stage-{bound_port}-{runtime_port}"
     staged.mkdir()
-    updater.apply({"ver": "9.9.9"}, staged, restart_cmd="")
+    updater.apply({"ver": "9.9.9", "platforms": _ALL_OS}, staged, restart_cmd="")
     a = captured["args"]
     return a[a.index("-Port") + 1]
 
 
-@_WIN_RUNNER
 def test_apply_prefers_bound_port_over_stale_runtime_json(fake_claude_home, monkeypatch):
     # 실사고(2026-09-10 운영자 PC): 5199 테스트 서버가 남긴 stale runtime.json 때문에
     # runner 가 5199 를 헬스체크해 멀쩡한 0.7.0 을 롤백. 살아있는 서버가 아는 실제
@@ -112,8 +109,29 @@ def test_apply_prefers_bound_port_over_stale_runtime_json(fake_claude_home, monk
     assert _apply_port(fake_claude_home, monkeypatch, bound_port=5100, runtime_port=5199) == "5100"
 
 
-@_WIN_RUNNER
 def test_apply_falls_back_to_runtime_json_without_bound_port(fake_claude_home, monkeypatch):
     # 서버 밖(테스트·CLI)에서는 BOUND_PORT 가 없으니 runtime.json 이 그대로 폴백.
     monkeypatch.delenv("SM_PORT", raising=False)
     assert _apply_port(fake_claude_home, monkeypatch, bound_port=None, runtime_port=5199) == "5199"
+
+
+def test_apply_runs_a_copy_outside_the_install(fake_claude_home, monkeypatch):
+    """러너는 설치 폴더 밖(데이터 폴더 updates/)의 사본으로 돈다 — 교체하는 동안 자기 파일이 옮겨지지 않게(S32).
+    맥·리눅스는 update_runner.sh(실행 비트 없이 /bin/sh 로), Windows 는 update_runner.ps1."""
+    from session_manager import osdep, updater
+    captured = {}
+
+    class _Popen:
+        def __init__(self, args, *a, **k):
+            if any(osdep.UPDATE_RUNNER in str(x) for x in args):    # 앞선 시험 앱의 스레드가 부르는 subprocess 는 빼고
+                captured["args"] = list(args)
+    monkeypatch.setattr(updater.subprocess, "Popen", _Popen)
+    staged = fake_claude_home / "stage"
+    staged.mkdir()
+    updater.apply({"ver": "9.9.9", "platforms": _ALL_OS}, staged, restart_cmd="")
+    copy = updater.work_dir() / osdep.UPDATE_RUNNER
+    assert copy.read_bytes() == updater.runner_script().read_bytes()
+    assert str(copy) in captured["args"]
+    assert updater.install_root() not in copy.resolve().parents
+    if osdep.NAME != "win":
+        assert captured["args"][:2] == ["/bin/sh", str(copy)]

@@ -106,12 +106,18 @@ def hook_command(port: int) -> str:
       처럼 공백 없이(curl 유효 문법)
     - `cmd /c` 래핑 금지: bash(MSYS)가 `/c` 를 `C:\` 경로로 변환해 cmd 가
       대화형으로 떠버린다(실측)
-    - `curl.exe` 명시: PS 의 curl 별칭(Invoke-WebRequest) 회피
+    - 실행 파일 이름은 osdep.CURL: Windows 는 `curl.exe` 명시(PS 의 curl 별칭 Invoke-WebRequest 회피),
+      맥·리눅스는 `curl`(curl.exe 가 없다)
+    - 맥·리눅스는 `--noproxy 127.0.0.1`: 훅은 claude 의 env(사용자 셸)에서 도는데 curl 은 루프백에도
+      http_proxy·ALL_PROXY 를 써서, 훅 내용(프롬프트)이 프록시로 새고 Host 에는 닿지 않는다. Windows 명령은
+      글자 하나 바꾸지 않는다 — 바뀌면 업데이트 때 모든 PC 의 settings.json 을 다시 쓴다.
     실패 무음화(구 `|| exit 0`)는 셸 공통 문법이 없어 포기 - Host 가 꺼져 있으면
     로그 창에 non-blocking 한 줄이 남지만 세션 진행엔 영향 없다.
     -m 3: Host 다운 시에도 Claude 를 3초 이상 붙잡지 않는다.
     """
-    return ("curl.exe -s -m 3 --data-binary \"@-\" "
+    from session_manager import osdep
+    noproxy = "" if osdep.IS_WIN else "--noproxy 127.0.0.1 "
+    return (f"{osdep.CURL} -s -m 3 {noproxy}--data-binary \"@-\" "
             "-H Content-Type:application/json "
             f"http://127.0.0.1:{port}/api/hooks/event")
 
@@ -177,7 +183,11 @@ def ensure_registered(port: int) -> bool:
     bak = sp.with_name(sp.name + ".bak-clewpath")
     try:
         if sp.is_file() and not bak.exists():
-            bak.write_bytes(sp.read_bytes())
+            # 0600 으로 만든다 — settings.json 의 env 비밀(API 토큰 등)이 그대로 든다. umask(022)를 따르면 맥·리눅스에서
+            # 같은 PC 의 다른 사용자가 읽고, 제거 때도 안내만 하고 남긴다(Windows 는 프로필 ACL 을 물려받아 그대로)
+            orig = sp.read_bytes()
+            with open(bak, "xb", opener=lambda p, fl: os.open(p, fl, 0o600)) as f:
+                f.write(orig)
     except Exception:  # noqa: BLE001
         pass
     sp.parent.mkdir(parents=True, exist_ok=True)

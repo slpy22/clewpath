@@ -10,6 +10,14 @@ start-connector.ps1
 .env
 *.env
 
+# 맥·리눅스 설치본의 생성물(install.sh·Host 가 만든다 — 원본은 session_manager/start-connector.template.sh)
+start-connector.sh
+.clewpath-install
+.clewpath-swap.*
+
+# 맥·리눅스가 받는 릴리스의 게이트 기록(컨테이너 왕복 통과 — release.ps1 이 HEAD 와 대조). 트리 깨끗 게이트에 안 걸리게
+ops/logs/posix-e2e-*.json
+
 # 운영자 PC 전용 배포 런처(start-hidden.vbs 등) — 사용자 설치는 install.ps1 이 담당
 ops/deploy/
 

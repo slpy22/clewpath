@@ -25,11 +25,12 @@ package-for-user.ps1 은 스테이지에서 키 파일을 발견하면 패키징
     python ops/tools/sign_release.py keygen
 
     # 2) 릴리스마다 — zip 을 서명해 매니페스트 생성 (--key 생략 시 기본 위치)
+    #    --platforms: 받는 OS(기본 win). 맥 단계가 끝나면 win,mac — 클레임에 없는 OS 는 설치·업데이트를 받지 않는다
     python ops/tools/sign_release.py sign \
         --version 0.4.0 \
         --artifact dist\\clewpath-host-20260804.zip \
         --url https://clewpath.pyongso.com/cp/updates/download/0.4.0 \
-        --out dist\\manifest-0.4.0.jwt
+        --out dist\\manifest-0.4.0.jwt [--platforms win]
 
     # 3) CP 에 올리기
     python ops/tools/sign_release.py publish \
@@ -42,6 +43,7 @@ import argparse
 import base64
 import hashlib
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -59,6 +61,39 @@ DEFAULT_KEY_DIR = REPO_ROOT / "ops" / "release-keys"
 DEFAULT_KEY = DEFAULT_KEY_DIR / "private.pem"
 # 매니페스트 유효기간. 무한이면 오래된(취약한) 버전을 계속 정답처럼 들이밀 수 있다.
 DEFAULT_TTL_DAYS = 120
+# 받는 OS(매니페스트 platforms 클레임, posix-install.md 4.6) — 값은 session_manager.osdep.NAME. 이 순서로 적어
+# 매니페스트 모양을 늘 같게 한다. 클레임이 없는 옛 매니페스트(0.28 까지)는 win 전용으로 읽힌다(updater·get.sh 같은 규칙).
+PLATFORMS = ("win", "mac", "linux")
+# 맥·리눅스는 아직 시험장에서만 — 맥 단계가 끝나면 win,mac. CP 는 최신 한 건만 주므로 빠진 OS 는 그동안 아무것도 못 받는다
+DEFAULT_PLATFORMS = "win"
+
+
+def parse_platforms(text: str) -> list[str]:
+    """'win,mac' → ['win', 'mac'](정해진 순서). 모르는 이름·빈 목록은 거부 — 오타 하나가 그 OS 사용자 전체의 설치·업데이트를 끊는다.
+
+    win 은 늘 들어가야 한다(release.ps1 과 같은 규칙 — 문서의 수동 sign·publish 길도 여기서 막는다). CP 는 최신 한 건만 주므로
+    win 이 빠진 릴리스가 최신인 동안 Windows Host 는 업데이트를 못 받고(PWA 는 '최신'으로 보인다), get.ps1 은 platforms 를
+    보지 않아 그 zip 을 Windows 에 그대로 깐다.
+    """
+    names = [p for p in re.split(r"[\s,]+", (text or "").strip().lower()) if p]
+    bad = sorted(set(names) - set(PLATFORMS))
+    if bad:
+        raise argparse.ArgumentTypeError(f"모르는 플랫폼: {', '.join(bad)} (쓸 수 있는 값: {', '.join(PLATFORMS)})")
+    if not names:
+        raise argparse.ArgumentTypeError("플랫폼이 비었습니다(예: --platforms win)")
+    if "win" not in names:
+        raise argparse.ArgumentTypeError("플랫폼에 win 이 없습니다 — 늘 넣어야 합니다(예: --platforms win,mac)")
+    return [p for p in PLATFORMS if p in names]
+
+
+def platforms_line(claims: dict) -> str | None:
+    """verify 가 찍는 'platforms=…' 한 줄. 모양이 이상하면 None — Host 는 그런 매니페스트를 아무 OS 에서도 받지 않는다."""
+    plats = claims.get("platforms")
+    if plats is None:
+        return "platforms=(클레임 없음 — win 전용으로 읽힌다)"
+    if not (isinstance(plats, list) and plats and all(isinstance(p, str) and p in PLATFORMS for p in plats)):
+        return None
+    return "platforms=" + ",".join(plats)
 
 
 def _b64url(raw: bytes) -> str:
@@ -111,7 +146,6 @@ def cmd_sign(a) -> int:
     #  서명·게시 - 수정이 빠진 릴리스가 나감. 이 게이트가 그 사고를 막는다)
     try:
         import io
-        import re
         import zipfile
         with zipfile.ZipFile(io.BytesIO(data)) as zf:
             m = re.search(r'^version = "([^"]+)"',
@@ -136,6 +170,7 @@ def cmd_sign(a) -> int:
         "size": len(data),
         "filename": art.name,
         "notes": a.notes or "",
+        "platforms": list(a.platforms),
         "iat": now,
         "exp": now + a.ttl_days * 86400,
     }
@@ -145,7 +180,7 @@ def cmd_sign(a) -> int:
     tok = pyjwt.encode(claims, pem, algorithm="EdDSA", headers={"kid": kid})
     Path(a.out).write_text(tok, encoding="utf-8")
     print(f"[OK] 매니페스트 서명: {a.out}")
-    print(f"     ver={a.version}  sha256={digest[:16]}...  size={len(data)}  kid={kid}")
+    print(f"     ver={a.version}  sha256={digest[:16]}...  size={len(data)}  kid={kid}  platforms={','.join(a.platforms)}")
     return 0
 
 
@@ -172,8 +207,19 @@ def cmd_verify(a) -> int:
         print(f"[FAIL] 배포본이 이 매니페스트를 거부합니다: {e}")
         print("       -> updater.RELEASE_KEYS 에 이 kid 의 공개키가 있는지 확인하세요.")
         return 1
+    plats = platforms_line(m)
+    if plats is None:
+        print(f"[FAIL] platforms 클레임 모양이 이상합니다: {m.get('platforms')!r} — 어느 OS 의 Host 도 받지 않습니다")
+        print(f"       -> 쓸 수 있는 값: {', '.join(PLATFORMS)} (sign --platforms win,mac)")
+        return 1
+    if "win" not in m.get("platforms", ["win"]):
+        print(f"[FAIL] platforms 에 win 이 없습니다: {m['platforms']!r} — 게시하면 Windows 는 업데이트를 못 받고 "
+              "get.ps1 은 이 zip 을 그대로 깝니다")
+        print("       -> sign --platforms win,… 로 다시 서명하세요")
+        return 1
     print("[OK] 검증 통과")
     print(json.dumps(m, indent=2, ensure_ascii=False))
+    print(plats)                                   # release.ps1 이 -Platforms 와 대조하는 줄
     return 0
 
 
@@ -194,6 +240,8 @@ def main() -> int:
     p.add_argument("--out", required=True)
     p.add_argument("--notes", default="")
     p.add_argument("--ttl-days", type=int, default=DEFAULT_TTL_DAYS)
+    p.add_argument("--platforms", type=parse_platforms, default=DEFAULT_PLATFORMS,
+                   help=f"받는 OS, 쉼표로(기본 {DEFAULT_PLATFORMS}; 값: {','.join(PLATFORMS)})")
     p.set_defaults(func=cmd_sign)
 
     p = sub.add_parser("publish", help="CP 에 매니페스트+아티팩트 업로드")

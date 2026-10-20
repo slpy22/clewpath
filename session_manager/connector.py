@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import re
 import json
 import os
@@ -34,6 +35,17 @@ from websockets.asyncio.client import connect
 
 DEFAULT_LOCAL_BASE = os.environ.get(
     "SM_LOCAL_BASE", "http://127.0.0.1:5100").rstrip("/")
+
+# 로컬 Host(local_base)로 가는 길은 프록시를 쓰지 않는다 — httpx·websockets(15+)는 http_proxy·ALL_PROXY(맥·Windows 는
+# 시스템 프록시 설정까지)를 루프백에도 써서, 폰·웹의 요청이 프록시로 나가 실패하고 사람 증명 헤더·세션 내용이 프록시로 샌다.
+# Host 는 사용자 env 를 그대로 물려받는다(런처 S38). 릴레이(원격)로 나가는 연결은 사용자의 프록시를 그대로 따른다.
+# websockets 15 전에는 프록시 기능도 인자도 없다.
+_LOCAL_WS_KW = {"proxy": None} if "proxy" in inspect.signature(connect).parameters else {}
+
+
+def _connect_local(uri: str):
+    return connect(uri, max_size=None, **_LOCAL_WS_KW)
+
 
 # 로컬 Host(uvicorn) 호출의 연결 재사용 기한(초). Host 의 uvicorn keep-alive(기본 5초 — server.main 은 따로 정하지 않는다)보다 넉넉히
 # 짧아야 한다. httpx 기본값이 같은 5초라, 직전 호출 뒤 5초 언저리에 온 요청이 서버가 막 닫은 연결을 다시 써 ReadError 로 실패했다
@@ -149,7 +161,7 @@ def _to_ws(base: str) -> str:
     return "ws://" + base[len("http://"):]
 
 
-def relay_config_from_env() -> dict | None:
+def relay_config_from_env(bound_port: int | None = None) -> dict | None:
     """통합(006 내장) 릴레이 모드 설정을 환경변수에서 읽는다.
 
     필수: SM_RELAY_URL + SM_RELAY_AGENT_TOKEN.
@@ -159,7 +171,8 @@ def relay_config_from_env() -> dict | None:
     둘 다 없으면 None(=릴레이 OFF). 즉 SM_CP_URL 만 있으면 room 없이도 켜진다
     (신규 사용자는 room 을 알 수 없으므로 CP 가 발급해 준다).
 
-    로컬 베이스는 SM_LOCAL_BASE 또는 http://127.0.0.1:{SM_PORT} (자기 자신).
+    로컬 베이스는 SM_LOCAL_BASE 또는 http://127.0.0.1:{포트} (자기 자신). 포트는 서버가 실제로 연 포트(bound_port,
+    lifespan 이 넘김)가 먼저다 — 설정 포트가 사용 중이라 옆 포트로 떴으면 SM_PORT 는 틀린 주소다.
     """
     url = os.environ.get("SM_RELAY_URL")
     token = os.environ.get("SM_RELAY_AGENT_TOKEN") or ""
@@ -183,7 +196,7 @@ def relay_config_from_env() -> dict | None:
         except Exception:  # noqa: BLE001
             room = ""
 
-    port = os.environ.get("SM_PORT", "5100")
+    port = bound_port or os.environ.get("SM_PORT", "5100")
     local_base = os.environ.get("SM_LOCAL_BASE") or f"http://127.0.0.1:{port}"
     return {"relay_url": url, "room": room, "token": token,
             "local_base": local_base}
@@ -232,7 +245,8 @@ class Connector:
         self.token = token
         self.local_base = (local_base or DEFAULT_LOCAL_BASE).rstrip("/")
         self.ws = None                       # 릴레이 연결
-        self.http = httpx.AsyncClient(timeout=310, limits=httpx.Limits(
+        # local_base 전용 — 프록시 env 를 따르지 않고(trust_env=False), 연결 재사용 기한은 Host keep-alive 보다 짧게
+        self.http = httpx.AsyncClient(timeout=310, trust_env=False, limits=httpx.Limits(
             max_connections=100, max_keepalive_connections=20, keepalive_expiry=LOCAL_KEEPALIVE_S))
         # 키(rid): 릴레이를 거친 요청은 (cid, 기기가 붙인 id) 튜플 — 기기마다 id 를 1 부터 세어 겹치므로(0.29.0, _on_frame).
         self.streams: dict = {}              # rid -> resume·터미널·관제 파이프 태스크
@@ -528,7 +542,7 @@ class Connector:
 
     async def _pipe_resume(self, rid: str, local_ws: str) -> None:
         try:
-            async with connect(local_ws, max_size=None) as lws:
+            async with _connect_local(local_ws) as lws:
                 async def up():  # client → local
                     q = self.stream_in[rid]
                     while True:
@@ -616,7 +630,7 @@ class Connector:
 
     async def _pipe_terminal(self, rid: str, local_ws: str) -> None:
         try:
-            async with connect(local_ws, max_size=None) as lws:
+            async with _connect_local(local_ws) as lws:
                 async def up():  # client → local (input/resize 제어객체)
                     q = self.stream_in[rid]
                     while True:
@@ -664,7 +678,7 @@ class Connector:
 
     async def _pipe_monitor(self, rid: str, local_ws: str) -> None:
         try:
-            async with connect(local_ws, max_size=None) as lws:
+            async with _connect_local(local_ws) as lws:
                 async def up():  # client → local (그룹 add/remove 제어 객체)
                     q = self.stream_in[rid]
                     while True:

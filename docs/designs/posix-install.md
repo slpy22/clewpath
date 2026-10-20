@@ -1,6 +1,7 @@
 # 맥·리눅스 공통 설치·업데이트 스크립트 구현 명세 (v1, 결정 반영)
 
-> 상태: 검토용 초안, 2026-10-20 작성
+> 상태: 2026-10-20 작성 → 1~9단계 구현·시험 완료(`posix-install` 브랜치, 2026-10-21), main 합침·맥 단계(3b) 대기.
+> 진행 표는 `docs/designs/multi-os.md`, 남은 일은 TODOS 「멀티 OS」·「별건: Windows 기존 결함」
 > 범위: 멀티 OS 계획(`006/docs/designs/multi-os.md`) 가운데 맥·리눅스 공통 설치·업데이트 단계와 리눅스 `*-test` 시험장
 > 근거: 읽기 전용 조사 세 건(설치 부트스트랩, 자동 업데이트, 기동·자기 회복)과 이 문서를 쓰면서 원본을 다시 읽어 확인한 내용. 006·007·nginx·compose 파일은 읽기만 했고 아무것도 바꾸지 않았다. `ops/release-keys/private.pem`은 열지 않았다.
 > 표기:
@@ -115,6 +116,21 @@ sh ROOT/uninstall.sh                   멈춤(watch·Host·브로커는 확인 �
 
 릴리스는 Windows 전체 회귀와 컨테이너 e2e를 통과한 뒤 `platforms=["win"]`로 낸다. Windows 사용자에게도 배포되는 릴리스다.
 
+**구현 메모 (9단계 문서, 2026-10-21)**
+- README: 상세 레퍼런스에 「맥·리눅스 (시험용 — 한 줄 설치는 아직 공개 전)」 절을 두고 사용자 매뉴얼 1절(준비물)에서 가리킨다.
+  번호 절(1~9)은 Windows 그대로라 'README 8절' 같은 참조가 바뀌지 않는다. 공개 주소(`…/get.sh`)는 적지 않았다 — 지금 붙여 넣으면
+  안 되는 명령이라서. 업데이트 교체 목록을 PAYLOAD 와 맞췄다(전엔 LICENSE 도 빠져 있었다).
+- multi-os.md: 단계 표의 3 을 3a(이번, 공통 설치·업데이트)·3b(맥 실기)로 나누고 상태 칸을 더했다. 「3a 결과」 절.
+- TODOS: 멀티 OS 3a 진행(1~9)·합침·후속, 3b, 리눅스 정식 지원(결정 전), 양 OS 별건(Q5·Q15·Q16·R6), 그리고 8.1 R15 의 Windows
+  기존 결함 ①~⑦ 을 별건 절로(건마다 왜·무엇·시작점).
+- CHANGELOG 는 손대지 않았다(1.1-5 와 다름) — 릴리스 때 `release.ps1 -PrepareChangelog` 가 쓴다.
+- 문서와 코드가 어긋나지 않게 `tests/test_docs_multi_os.py`: README 가 보여 주는 명령·옵션·환경변수·저장소 경로가 스크립트에 있는지,
+  사용자가 쓸 런처 하위 명령·제거 옵션이 빠짐없는지, 설치 위치·파이썬 최소 버전·자동 시작 없음·'Windows 전용 릴리스' 말이 코드와
+  같은지, README 에 공개 전 get.sh 주소가 없는지, 교체 목록 = PAYLOAD, 단계 표, TODOS 의 R15 ①~⑦ = 이 문서 8.1.
+  CP `/get.sh` 를 열 때 그 시험('공개 주소 없음')도 함께 바꾼다.
+- (검토 반영) 이 시험은 기본 pytest(= release.ps1 의 게이트)에 들어가므로 문서를 코드와 묶을 뿐 진행 상태(할 일 체크·단계 상태
+  칸·고친 R15 항목 지우기)에는 묶지 않는다 — 그런 편집을 사본에 해 보고 여전히 통과하는지 보는 시험(`*_survives_*`)을 함께 둔다.
+
 ## 2. 파일 목록
 
 ### 2.1 새 파일
@@ -136,6 +152,7 @@ sh ROOT/uninstall.sh                   멈춤(watch·Host·브로커는 확인 �
 | `tests/test_update_runner_sh.py` | 006 | 없음 | 없음 | POSIX 실행 시험 |
 | `tests/posix_e2e/` (`build_fixtures.py`, `fake_cp.py`, `e2e_driver.py`, `Dockerfile`, `warm_cache.sh`, `README.md`) | 006 | 없음 | 없음 | 컨테이너 e2e 재료 |
 | `tests/test_posix_e2e.py` | 006 | 없음 | 없음 | `-m posix_e2e`. 기본 실행에서는 빠진다 |
+| `tests/test_docs_multi_os.py` | 006 | 없음 | 없음 | 문서 계약(9단계) — README 맥·리눅스 절·multi-os 단계 표·TODOS 가 코드·이 문서와 맞는지. 모든 OS |
 
 ### 2.2 바꿀 파일
 
@@ -170,6 +187,7 @@ $CLEWPATH_HOME/
 ├─ app/                          설치 루트(ROOT). get.sh --dir 로 바꿀 수 있다
 │  ├─ session_manager/ pwa/ pyproject.toml uv.lock install.ps1 install.sh uninstall.sh README.md LICENSE   ← PAYLOAD
 │  ├─ .venv/                     uv sync 로 맞춘다(업데이트는 교체하지 않고 sync)
+│  ├─ clewpath_host.egg-info/    uv sync 의 편집 설치(setuptools)가 만든다 — PAYLOAD 밖, sync 가 버전마다 다시 쓴다(8단계 실측)
 │  ├─ start-connector.sh         렌더 결과(0755)
 │  └─ .clewpath-install          설치 기록
 ├─ bin/uv, bin/uvx               고정 버전, 0755
@@ -201,6 +219,7 @@ installed_at=1760900000
 **셸 문법**
 - `/bin/sh`(POSIX)만 쓴다. [linux]는 dash, [mac]은 bash 3.2의 sh 모드다.
 - 쓰지 않는 문법: `[[ ]]`, 배열, `function` 키워드, `$'..'`, `<<<`, `source`, `[ a == b ]`, `pipefail`, `local`(함수 변수는 접두사로 구분), `echo -e`/`-n`(printf만 쓴다).
+- `:`에 리디렉션을 붙이지 않는다(`: >f` 대신 `true >f`). `:`는 특수 내장이라 리디렉션이 실패하면 dash·`bash --posix`가 `|| …`로 넘어가지 않고 스크립트를 통째로 끝낸다(4단계 실측). 같은 이유로 `exec 3</dev/tty` 같은 특수 내장 리디렉션은 하위 셸 `( … )` 안에서만 시험한다.
 - 쓰지 않는 GNU 전용 옵션: `sed -i`, `readlink -f`, `stat -c`/`-f`, `date -d`, `cp -T`/`mv -T`.
 - [mac]에 없는 도구: `timeout`, `flock`, `setsid`.
 - [linux] slim 이미지에 없는 도구(실측): `ps`, `pgrep`, `pkill`, `curl`, `unzip`. 이것들에 혼자 기대지 않는다.
@@ -232,7 +251,7 @@ installed_at=1760900000
 **JSON과 HTTP**
 - jq는 쓰지 않는다. JSON은 venv 파이썬으로 읽는다(`-I`, 표준 라이브러리와 psutil).
 - get.sh만 예외다. 아직 venv가 없으므로 압축된 ASCII JSON을 sed·awk로 읽고 형식을 검증한다.
-- 루프백 HTTP는 프록시를 쓰지 않는다. 파이썬은 `build_opener(ProxyHandler({}))`, curl은 `--noproxy '*'`.
+- 루프백 HTTP는 프록시를 쓰지 않는다. 파이썬은 `build_opener(ProxyHandler({}))`(httpx 는 `trust_env=False`, websockets 는 `proxy=None`), curl은 `--noproxy '*'`(따옴표를 못 쓰는 훅 명령은 `--noproxy 127.0.0.1`).
 
 **공통 경로 블록**
 get.sh·install.sh·uninstall.sh·update_runner.sh에 똑같이 넣는다. 정적 테스트로 네 사본이 같은지 확인한다.
@@ -259,7 +278,9 @@ esac
 - 잠금 폴더(`launcher.lock/`, `watch.lock.d/`, `updates/runner.lock.d/`):
   - `mkdir`로 원자적으로 잡고, 안에 `pid` 파일을 둔다.
   - pid가 죽었으면 시체다. pid 파일이 없고 폴더가 2분 넘게 묵었으면(`find -maxdepth 0 -mmin +2`)도 시체다.
-  - 시체면 지우고 한 번만 다시 잡는다.
+  - 시체면 지우고 한 번만 다시 잡는다. 치우는 것은 옆 폴더 `<잠금>.reclaim`(mkdir)을 쥔 하나만 — 쥔 채 다시 보고 지우고
+    새로 잡은 뒤 놓는다(둘이 같은 시체를 따로 지우면 늦은 쪽이 먼저 잡은 쪽의 새 잠금을 지워 둘 다 잡았다고 믿는다).
+    권리 폴더가 2분 넘게 남았으면 치우다 죽은 것이다(검토 반영).
 
 ### 3.1 get.sh (`007/control_plane/get.sh`, CP가 서빙)
 
@@ -380,6 +401,19 @@ curl -fsSL …/get.sh | CLEWPATH_CLIENT_TOKEN=… sh                 # 토큰은
 | :91-93 `Expand-Archive -Force`(제자리) | 이름·링크 검사, stage에 풀기, install.sh가 최상위 항목별로 교체 | zip-slip, 반쪽 덮어쓰기 감소 |
 | :97-108 install.ps1 실행(종료코드 무시) | `exec /bin/sh …/install.sh --from-stage …` | 종료코드 전달 |
 
+**구현 메모 (6단계, 2026-10-21 — 위 설계와 다른 점과 뒤 단계가 맞출 약속)**
+- 위치: 결정대로 006 의 `ops/get.sh`(라우트가 없으니 서빙되지 않는다). CP 공개 때 007 `control_plane/get.sh`로 옮긴다 — 시험은 env `CLEWPATH_GET_SH`로 그 파일을 가리킬 수 있다.
+- 순서: 받는 것(매니페스트·zip·이름 목록)은 `${TMPDIR:-/tmp}/clewpath-get.XXXXXX`(작업 폴더)에 두고, 설치 루트 옆 `.clewpath-get.XXXXXX/stage`는 zip 해시·크기와 이름 검사를 통과한 뒤에야 만든다. 그래서 거부될 때(S1) 설치 폴더 옆에는 아무것도 생기지 않는다(설계는 G4 임시 폴더를 G2 전에 만들고 zip 도 거기 받았다). 작업 폴더는 exec 직전에 지운다.
+- 받기 전에 설치 폴더를 본다(install.sh 서막과 같은 거절 — 폴더가 아닌 것·개발 체크아웃(.git·ops)·비어 있지 않은 남의 폴더). 받은 뒤 거절하면 헛걸음이고 임시 폴더만 남는다. `--dir`은 절대 경로만(상대·`.`·`..` 조각·`/`·홈은 2). 설치 폴더가 심볼릭 링크면 물리 경로로 넘긴다 — install.sh 가 `pwd -P`로 맞춰 보는 자리 옆에 stage 가 있어야 옮긴 뒤 치울 수 있다.
+- curl 은 `g_curl` 한 곳: `--proto`·`--proto-redir`(`=https`, `--allow-http`일 때만 `=http,https`)·`--tlsv1.2`, 매니페스트 `--max-filesize 65536`·20초, zip `--max-filesize <size>`(넘으면 curl 63 → "크기 불일치")·300초. 프록시는 사용자 설정을 따르고 이 PC(127.0.0.1·localhost·[::1])로 가는 요청만 `--noproxy '*'` — 설계의 `--noproxy '*'`를 늘 주면 사내 프록시가 필요한 PC 에서 CP 에 닿지 못한다.
+- 매니페스트: 64KB 이하, 세 조각, 내용은 한 줄 인쇄 가능 ASCII(`tr -d ' -~'`가 빈 결과)이고 `{…}`. `ver`·`sha256`·`size`·`url`은 값 자리(앞이 `{`·`,`)에 정확히 한 번. `size`는 9자리까지. `url`에 공백·제어문자·따옴표·역슬래시가 있으면 거부(이스케이프를 풀지 않는다). platforms 목록의 이름은 `[a-z0-9_-]`(앞으로의 이름은 그냥 고르지 않을 뿐), 목록이 아니거나 모양이 이상하면 아무 OS 도 받지 않는다(updater 와 같다).
+- zip 이름 규칙에 더한 것(실측 근거): `^`가 든 이름 — unzip 목록은 제어문자를 `^A`·`^J`로 보여 주고 풀 때 그 글자를 지운다(`\001../x`가 `^A../x`로 보이다가 `../x`가 된다). 같은 이름(대소문자 무시 — APFS) — `unzip -o`는 뒤의 것을 조용히 남긴다. 빈 zip. 심볼릭 링크는 `unzip -Z`의 권한 열(`l`), [linux] python 길은 `external_attr`.
+- 푼 뒤 `chmod -R u+rwX stage`(내 권한만, 링크는 따라가지 않는다)를 사후 확인보다 먼저 한다 — zip 에 유닉스 권한이 적혀 있으면 unzip 이 그대로 쓴다(권한 0 폴더면 사후 확인이 그 안을 못 본다). 배포 zip 은 Windows 에서 만들어 권한이 없다(`create_system=0`·`external_attr=0`). 실패 정리도 권한을 채운 뒤 지운다.
+- 없는 도구는 한 번에 모두 알린다(curl·mktemp·tr·sed·awk·wc·find·dirname·sort·uniq, SHA-256 도구, base64 도구, unzip — [linux]만 python3 대역). 리눅스 경고는 get.sh 와 install.sh 가 한 번씩 낸다. `--agent-token` 인자는 없다(env `CLEWPATH_AGENT_TOKEN`은 그대로 넘어간다).
+- install.sh(4단계 파일): 서막이 stage 를 확인하고 설치 폴더를 정한 뒤로는 실패해도 get.sh 의 임시 폴더를 지운다(`GET_TMP` — 이름이 `.clewpath-get.*`이고 설치 루트 옆일 때만). 전에는 성공했을 때만 지워, 업데이트 중 거절 같은 실패마다 받은 payload 가 숨은 폴더로 남았다. 손으로 푼 stage·이름만 닮은 다른 곳의 폴더는 지우지 않는다(시험으로 고정).
+- 알려진 한계: `curl | sh`가 정확히 마지막 줄의 `main` 바로 뒤에서 끊기면 인자 없이(기본값으로) 돈다 — 모든 `curl | sh` 설치기의 공통 한계이고 결과는 기본 설치다. [mac] 셸(bash 3.2 sh 모드)·BSD 도구는 실기 확인 전이다(R1). Git for Windows 의 dash 는 UTF-8 이어지는 바이트(0x80-0x9F)를 `[[:cntrl:]]`로 보지만(시험 하네스 사정) 리눅스 dash·`bash --posix`는 아니다.
+- 시험: `tests/test_get_sh.py` — 함수 시험(마지막 줄을 뺀 사본을 source, sign_release 가 만든 진짜 매니페스트, 모든 OS)과 실행 시험(가짜 CP, zip 안의 install.sh 는 받은 인자·env·pid·표준 입력을 적는 대역, S1 거부 22가지, 끊긴 다운로드, 파이프 실행, 도구 대역으로 [mac]·옛 맥 base64·shasum·openssl·python 길). `tests/test_install_sh.py::test_get_sh_one_liner_installs`가 `curl …/get.sh | sh` → 진짜 install.sh → Host 기동까지 잇는다. 정적 계약(`test_posix_scripts`): 함수 밖에는 주석·`set -u`·값 대입·함수 정의뿐, curl 은 한 곳, 머리말의 신뢰 모델. 리눅스 컨테이너에서 get.sh·install.sh·sign_release 에 버그를 하나씩 넣어(54종) 모두 겨냥한 단정에서 잡히는 것을 확인했다.
+
 ### 3.2 install.sh (zip 루트, install.ps1에 대응)
 
 **인자**
@@ -425,7 +459,7 @@ curl -fsSL …/get.sh | CLEWPATH_CLIENT_TOKEN=… sh                 # 토큰은
 3. `DATA_DIR` 추정: `DIR/start-connector.sh`가 있으면 `sh "$DIR/start-connector.sh" paths`의 `data_dir`, 없으면 셸 규칙.
 4. 표식 획득: `update.inprogress`가 살아 있고 그 pid가 `$$`가 아니면 `[FAIL] 업데이트·설치가 진행 중입니다(pid N)` 후 종료코드 1. 아니면 `pid=$$ by=install`로 쓴다(하위 셸에서 `umask 077`).
 5. 기존 Host 정지: `DIR/start-connector.sh`가 있으면 `CLEWPATH_UPDATER=1 /bin/sh "$DIR/start-connector.sh" stop`(SIGTERM, 브로커 보존). 없으면 `stop_host_fallback`을 쓴다. 이 함수는 `runtime.json`의 pid를 보고, 명령줄에 `"$DIR/.venv/bin/"`와 `session_manager.server`가 둘 다 있을 때만 TERM을 보내고 15초 뒤 KILL 한다. 명령줄은 [linux] `/proc/<pid>/cmdline`, [mac] `ps -p <pid> -o command=`로 읽는다.
-6. 배치: stage 최상위 항목마다 이름을 다시 검사한 뒤 `rm -rf "$DIR/$n" && mv "$STAGE/$n" "$DIR/$n"`. 실패하면 `[FAIL]` 후 종료코드 1이고, 같은 명령을 다시 치라고 안내한다. zip에 없는 기존 항목은 남긴다(Windows `Expand-Archive`와 같음).
+6. 배치: stage 최상위 항목마다 이름을 다시 검사한 뒤 옛 항목을 `"$DIR/.clewpath-old.<pid>/"`로 rename 하고 새 항목을 제자리로 rename 한다(항목이 비는 틈은 rename 두 번 사이뿐). 옮기는 동안 INT·TERM·HUP 은 미뤘다가 다 옮긴 뒤 끝낸다. 다 놓으면 옛 사본을 지운다(지난번에 남은 `.clewpath-old.*`는 먼저 치운다). 실패하면 `[FAIL]` 후 종료코드 1이고, 같은 명령을 다시 치라고 안내한다. zip에 없는 기존 항목은 남긴다(Windows `Expand-Archive`와 같음). (검토 반영 — 전엔 `rm -rf` 뒤 `mv`라 그 사이 신호로 끊기면 session_manager 가 빠진 채 남아 install.sh·uninstall.sh 가 거부했다)
 7. 임시 폴더 정리: `rm -rf "$(dirname "$STAGE")"`. 이름이 `.clewpath-get.*`이고 그 부모가 `dirname "$DIR"`일 때만 지운다.
 8. `exec /bin/sh "$DIR/install.sh" <--from-stage·--dir 를 뺀 인자> </dev/null`. pid가 그대로이므로 표식도 그대로 유효하다.
 
@@ -551,6 +585,24 @@ curl -fsSL …/get.sh | CLEWPATH_CLIENT_TOKEN=… sh                 # 토큰은
 | :643-695 Start-Process, 20회 폴링, 진단, 로그 꼬리 | 런처 start, `wait-ready`. 이미 떠 있으면 stop 후 start | install.ps1은 재실행해도 옛 Host 유지 |
 | :698-717 안내 | I10 | |
 
+**구현 메모 (4단계, 2026-10-20 — 위 설계와 다른 점과 뒤 단계가 맞출 약속)**
+- uv 해시표: 0.12.1 네 대상(x86_64·aarch64 리눅스 gnu, x86_64·aarch64 맥)을 GitHub 공식 릴리스의 `.sha256`과 직접 내려받아 계산한 값(sha256sum·파이썬 hashlib)이 같은 것을 확인하고 적었다. Windows 고정값도 같은 릴리스의 `.sha256`과 같다.
+- `uv python find`에는 늘 `--system`을 준다. 0.12.1은 작업 폴더의 `.venv`나 `VIRTUAL_ENV`가 있으면 그 파이썬을 먼저 답한다(실측) — 설치 루트에서 재설치하면 자기 venv를 '시스템 파이썬'으로 집는다. `--system`이어도 관리 런타임(`UV_PYTHON_INSTALL_DIR`)은 찾는다(실측). 찾기는 임시 폴더에서 `VIRTUAL_ENV`·`CONDA_PREFIX`·`UV_PYTHON`을 빼고 부른다. 관리 런타임은 이미 받아 둔 것이 있으면 다시 받지 않는다.
+- uv 설정 env(`UV_SYSTEM_CERTS`·`UV_PYTHON_INSTALL_DIR`·`UV_PYTHON_PREFERENCE`·`UV_PROJECT_ENVIRONMENT`)는 uv를 부르는 하위 셸에만 준다. 명세의 `export UV_PYTHON_INSTALL_DIR`처럼 스크립트 전체에 export 하면 기동하는 Host와 그 안의 claude까지 물려받는다(S38). 토큰도 hostctl write-config 에만 env로 넘기고, Host를 띄울 때는 뺀다.
+- `uv venv`는 폴더가 있으면 거부한다(실측). 파이썬이 없는 `.venv`는 가드를 거쳐 지운 뒤 다시 만든다. `--reinstall`은 지우기 전에 Host를 정상 종료한다(돌고 있는 Host의 파이썬을 지우지 않게).
+- `--from-stage`: stage는 이 install.sh가 있는 폴더여야 한다. 최상위 이름 검사는 아무것도 바꾸기 전에 한다(점으로 시작·`start-connector.sh`·제어문자·역슬래시·심볼릭 링크). `--dir`이 비어 있지 않은데 ClewPath 설치본(`.clewpath-install`, 또는 session_manager와 이름이 clewpath-host인 pyproject)이 아니면 거부한다(남의 폴더의 같은 이름 항목을 지우지 않게). `--dry-run`과 함께 쓰면 거부(2). 옮긴 뒤 교체 잔재(`.clewpath-swap.*`)는 버린다 — 받은 파일이 교체 대상을 모두 새로 덮었으므로, 남은 저널을 되돌리면 방금 놓은 파일이 옛 것으로 돌아간다(시험으로 고정). 지우지 못하면 그 자리에서 멈춘다.
+- 교체 잔재가 있는 채로 `sh install.sh`(stage 없이)를 다시 치면 — 런처가 "install.sh 로 복구하세요"라고 안내하는 길 — 표식을 잡기 전에 Host를 멈추고 러너(데이터 폴더 사본 → 설치 루트 → 잔재 안의 것 순)를 임시 사본으로 `-RecoverOnly` 한다. 자기 표식(서막이 잡고 exec 로 이어 온 같은 pid)이 있으면 먼저 내려놓는다 — 러너가 '설치 중'으로 보고 비켜서면(3) 아무도 되돌리지 못한다. 3이면 60초까지 다른 복구가 끝나기를 기다리고, 끝내 남으면 get.sh 재설치를 안내하고 1.
+- 표식은 데이터 폴더가 없고 클로드 `projects`도 없으면 잡지 않는다(그 설치는 [3/6]에서 멈춘다 — 클로드 폴더를 우리가 만들지 않게). 표식의 `at`은 앞자리 0을 받지 않는다(`$(( ))`가 8진수로 읽어 셸이 끝난다).
+- 기존 설정 파일이 있으면 그 파일의 포트(없거나 읽을 수 없으면 Host 기본값 5100)를 런처 렌더·기동 확인·안내에 쓴다. `--port`가 다르면 경고만 한다.
+- 이미 떠 있는 Host는 `running`뿐 아니라 응답 없는 Host(`starting`)도 멈춘다 — status 의 `pid=`(살아 있는 Host 만)로 판단한다. 우리 표식이 있으면 status 는 응답 없는 Host 를 `updating`으로 보이기 때문이다. maintenance.flag 가 있으면 멈추지도 띄우지도 않는다.
+- DryRun 의 컨트롤플레인 도달 확인은 루프백만 프록시를 건너뛴다(`--noproxy 127.0.0.1,localhost,::1`) — 원격 CP 는 사내 프록시가 필요할 수 있다.
+- 인자는 `--opt 값`과 `--opt=값`을 다 받는다. 모르는 위치 인자는 값을 화면에 찍지 않는다(토큰을 잘못 붙였을 수 있다).
+- (검토 반영) `--client-token`·`--agent-token`을 받으면 경고 한 번 뒤 토큰을 env 로 옮기고 그 인자만 뺀 채 자기 자신을 exec 한다(pid 그대로,
+  인자 해석 바로 뒤). 전엔 서막을 거치는 길만 옮겨, `sh install.sh --client-token …`로 바로 부르면 설치 내내(수 분) `/proc/<pid>/cmdline`(ps)에
+  토큰이 남았다. 스크립트를 파일로 다시 읽을 수 없으면(표준 입력으로 돌림) 경고만 하고 잇는다.
+- 시험: `tests/test_install_sh.py`(진짜 install.sh·uninstall.sh·런처·hostctl·Host·브로커, 가짜 uv 하나), `tests/test_hostctl.py`. 리눅스 컨테이너에서 install.sh·uninstall.sh·hostctl 에 버그를 하나씩 넣어(43종) 모두 겨냥한 단정에서 잡히는 것을 확인했다. `bash --posix`(맥 sh 근사)로 stage 없는 설치·제거도 돈다. 진짜 uv(고정 해시 tarball)·오프라인 `uv sync --frozen`으로 설치 → 상태·멈춤·기동 → 재설치 → 제거 → `--purge` 왕복도 컨테이너에서 확인했다.
+- 뒤 단계가 맞출 것: get.sh 는 `--dir`을 절대 경로로, stage 를 `dirname DIR` 아래 `.clewpath-get.*/stage`에 두고 `exec /bin/sh "$tmp/stage/install.sh" --from-stage "$tmp/stage" --dir …`로 넘긴다. 토큰은 env 로만 넘긴다.
+
 ### 3.3 start-connector.template.sh → start-connector.sh (멱등 런처)
 
 **머리**
@@ -607,7 +659,7 @@ cmd_start() {
 **`probe`** (`"$PY" -I -c "$PROBE_PY" "$DATA_DIR" "$DEFAULT_PORT"`, 표준 라이브러리와 psutil)
 - `runtime.json`(`utf-8-sig`)의 port와 pid를 읽는다.
 - 프록시 없는 opener로 `GET http://127.0.0.1:<port>/api/health`(3초)를 보내 `{"status":"ok"}`가 오면 `ok`.
-- 그렇지 않으면 psutil로 pid를 본다. 존재하고, 좀비가 아니고, cmdline 인자에 `session_manager.server`가 있거나 `*/clewpath-host`로 끝나는 인자가 있으면 `busy`.
+- 그렇지 않으면 psutil로 pid를 본다. 존재하고, 좀비가 아니고, 내 uid 이고, cmdline 인자 하나가 `$ROOT/.venv/bin/`으로 시작하고 다른 하나가 `session_manager.server`이거나 `*/clewpath-host`로 끝나면 `busy`(이 설치본의 Host — S27).
 - `AccessDenied`면 보수적으로 `busy`(겹쳐 띄우지 않음).
 - psutil을 import할 수 없으면 `os.kill(pid,0)`과 [linux] `/proc/<pid>/cmdline`, `/proc/<pid>/stat`의 상태 Z로 대신한다.
 - 나머지는 `dead`(pid 있음) 또는 `none`이다.
@@ -624,6 +676,7 @@ cmd_start() {
 - 로그는 이어 쓰기(`ab`)다. liveness가 죽은 프로세스의 꼬리를 읽을 수 있다. Windows의 Start-Process 리다이렉트는 덮어쓴다(실측).
 - 출력은 pid다. spawn 하는 파이썬이 곧 끝나므로 Host는 init에 입양된다. 이중 분리라 좀비가 생기지 않는다.
 - PATH·HOME·TMPDIR·LANG·umask는 손대지 않는다.
+- 띄우기 전에 HUP·INT·QUIT 을 기본 처리로 되돌린다(검토 반영). README 의 `nohup sh start-connector.sh watch &` 처럼 nohup(HUP)·스크립트의 `&`(INT·QUIT)가 둔 '무시'는 exec 로 Host → 브로커 → pty 안의 프로그램까지 물려가, 브로커가 죽어도 pty 자식이 SIGHUP 으로 끝나지 않는다. Host 는 새 세션이라 터미널 신호는 오지 않는다. exec 모드(foreground)는 부른 쪽의 처리를 그대로 둔다.
 
 **인라인 파이썬 규칙**
 - 작은따옴표로 감싼 셸 변수에 넣는다. 그래서 파이썬 코드에는 작은따옴표를 쓰지 않는다(정적 테스트로 확인).
@@ -660,6 +713,16 @@ cmd_start() {
 | :54-56 finally 잠금 삭제 | trap | |
 | ensure_task:15-31 v2가 아니면 재생성 | `_posix.ensure_launcher`: 렌더 결과가 다르면 재생성 | 템플릿 변경도 전파 |
 | ensure_task:33-52 5분 반복 트리거 | 없음(watch는 사람이 켬) | 다음 단계에서 재생성 성공 뒤에만 |
+
+**구현 메모 (2단계, 2026-10-20 — 뒤 단계가 맞출 약속)**
+- `start`는 띄운 뒤 runtime.json에 새 pid가 적히거나(`up`) 끝날 때까지 최대 15초 잠금을 쥔다. 그 사이 온 다른 `start`가 "runtime.json 없음"을 죽음으로 읽고 겹쳐 띄우지 않게 하려는 것이다. 기동 직후 끝나면 `fail: 기동 직후 종료`를 남기고 종료코드 1.
+- 잠금(`launcher.lock`·`watch.lock.d`·`updates/runner.lock.d`)과 `update.inprogress`의 pid는 명령줄까지 본다. 잠금은 런처 파일 이름, 러너 잠금과 `by=runner` 표식은 `update_runner`, `by=install` 표식은 `install.sh`가 명령줄에 있어야 산 것이다(pid 재사용 방지). `by=`가 없으면 pid만 본다. pid 없는 표식은 1분, pid 없는 잠금은 2분까지 "쓰는 중"으로 본다. 러너·install.sh는 표식을 임시 파일에 쓰고 mv 한다.
+- 교체 잔재가 있고 러너가 살아 있으면 `CLEWPATH_UPDATER=1`(러너 자신의 재기동)만 통과하고 나머지는 보류(0)한다. 러너 사본의 `-RecoverOnly` 종료코드: 0이면 복구(잔재가 남으면 실패로 봄), 3이면 다른 러너가 도는 중이거나 이 설치본의 Host 가 떠 있어(3단계) 보류, 그 밖은 막힘(1).
+- probe는 pid가 좀비이거나, 내 uid가 아니거나, 명령줄이 이 설치본의 Host(설치 경로 + 모듈)가 아니면 죽은 것으로 본다(맥 재부팅 뒤 남의 프로세스가 같은 pid를 받는 경우). (검토 반영: 처음엔 runtime.json 의 `started_at`보다 5초 넘게 뒤에 생긴 프로세스도 죽은 것으로 봤다 — 리눅스 psutil 의 create_time 은 지금의 부팅 시각으로 계산해 시계가 앞으로 뛰면(WSL2·VM 재개·NTP) 같이 밀려, 잠깐 응답 없는 산 Host 를 시체로 보고 두 번째 Host 를 띄웠다. 시각 대신 설치 경로로 가린다)
+- `watch`의 틱은 `( cmd_start )` 대신 `/bin/sh "$SELF" start` 새 프로세스로 돈다. 잠금 pid가 진짜 pid가 되고, 다시 렌더된 런처를 쓴다. Host가 살아 있으면(ok·busy) start를 부르지 않는다.
+- 출력: `stop`은 `not running` / `stopped (pid N)` / `stopped (pid N, forced)`. `status`는 위 키에 `maintenance=0|1`을 더하고, venv가 없거나 판정이 안 되면 `venv=missing|broken`을 붙인다. 사람용 안내는 터미널일 때만 표준오류로 낸다(실패는 늘 표준오류).
+- 렌더러: `osdep._posix.write_launcher(root, data_dir=, conf_file=, port=)` → `created|updated|unchanged`(원자 교체, 0755). `hostctl render-launcher`(4단계)와 `ensure_launcher`가 함께 쓴다. `DEFAULT_PORT=` 줄은 그 줄만 있어야 `ensure_launcher`가 기존 포트를 다시 읽는다(시험으로 고정).
+- 시험: `tests/test_launcher_sh.py`(L①~L⑪, 판정 세 갈래 psutil·/proc·ps). 리눅스 컨테이너에서 템플릿에 버그를 하나씩 넣어 시험이 잡는지 확인했다(24종 모두 잡힘).
 
 ### 3.4 update_runner.sh (`session_manager/`, 설치 폴더 밖 사본으로 실행)
 
@@ -819,6 +882,26 @@ PAYLOAD="session_manager pwa pyproject.toml uv.lock install.ps1 install.sh unins
 | :240-242 apply.lock 삭제 | 모든 경로와 하트비트 | |
 | 없음 | runner.lock.d, update.inprogress, 잔재 복구 | 겹침, 감독자 경합 |
 
+**구현 메모 (3단계, 2026-10-20 — 위 설계와 다른 점과 뒤 단계가 맞출 약속)**
+- 되돌림은 지우지 않고 반대로 옮기기만 한다. `new x`는 `ROOT/x`를 `SWAP/new/x`로 되돌리고(명세의 `rm -rf ROOT/x` 대신), `old x`는 `SWAP/old/x`를 제자리로 옮긴다. 되돌리다 죽어도 다시 돌리면 같은 결과다(멱등). 설치 폴더의 항목은 어떤 길에서도 rm 하지 않는다.
+- 저널이 없거나 비어 있으면 아무것도 옮기지 않은 것이라 치우기만 한다. 저널 폴더를 지울 때는 `journal` 파일부터 지운다. 롤백·복구는 되돌림 → uv sync → 저널 정리 순서라, 그 사이에 죽어도 다음 복구가 다시 맞춘다. 저널을 rename 직전에 쓰는 순서가 이 규칙의 전제다(시험: rename 마다 SIGKILL).
+- 지난 교체 잔재 복구는 1단계(잠금·표식)가 아니라 2단계(본체 종료 대기) 뒤, 백업 앞에서 한다. 잔재가 있는데 Host 가 떠 있다면 그 Host 가 잔재 트리로 돌고 있으므로, 내려간 뒤에 되돌린다. 복구가 실패하면 재기동하지 않고 끝낸다(install.sh 안내).
+- `-RecoverOnly`: `InstallRoot/session_manager`가 없어도 교체 저널(`info`)이 있으면 받는다(교체 도중 죽으면 `SWAP/old`에 있다). apply.lock 은 건드리지 않고, 일하는 동안 잠금과 표식을 쥔다. 커밋된 저널은 치우기만 한다(uv sync·last_apply 없음). 되돌렸으면 uv sync 와 `last_apply`(info 의 version, ok=false). 잔재가 있는데 이 설치본의 Host 가 떠 있으면(러너가 재기동 뒤 헬스 전에 죽어 그 Host 가 잔재 트리로 돌고 있다) 되돌리지 않고 3 — 런처는 확인 전에 복구를 부르므로 그대로 보류(0)한다(런처 로그 문구 `skip: 복구 보류(rc=3 …)`). Host 가 내려간 뒤의 start·다음 업데이트가 되돌린다. 종료코드 0 됨·잔재 없음 / 1 실패 / 2 인자 / 3 다른 러너·떠 있는 Host.
+- `info`는 `key=value` 줄(`format=1`, `runner_pid`, `version`, `from`, `started`). `format`이 1이 아니거나 저널에 PAYLOAD 밖 이름·모르는 줄이 있으면 아무것도 옮기지 않고 실패한다.
+- 신호: `trap ':' HUP INT`(빈 처리). 명세의 `trap '' HUP INT`(무시)는 exec 로 uv·런처·재기동 Host·그 Host 가 새로 띄우는 브로커와 claude 까지 물려가, 브로커가 죽어도 claude 가 SIGHUP 으로 끝나지 않는다. `test_posix_scripts`에 `trap ''` 금지 규칙을 더했다.
+- (검토 반영) 런처(`start-connector.sh`)는 PAYLOAD 밖이지만 새 버전 Host 가 뜨자마자(헬스 판정 전) 자기 템플릿으로 다시 렌더한다. 교체 전 런처를 저널(`SWAP/launcher`)과 백업(`BackupDir/start-connector.sh`)에 함께 두고, 되돌림(롤백·`-RecoverOnly`·저널 없는 백업 복원)이 제자리로 돌린다. 되돌린 버전의 `launcher-ensured-<버전>` 표식도 지운다(그 버전을 다시 받으면 그때 새 템플릿으로 렌더하게). 전엔 롤백한 옛 버전이 실패한 릴리스의 런처로 재기동되고(옛 버전의 표식이 있어 다시 렌더하지 않는다) 그 뒤 모든 기동도 그랬다 — 템플릿이 문제인 릴리스면 옛 버전이 영영 못 뜬다. 저널 형식은 그대로 v1(옛 러너는 모르는 파일을 무시한다).
+- (검토 반영) 러너 잠금의 시체 치우기는 런처와 같은 권리 폴더(`runner.lock.d.reclaim`)로 한다 — 둘이 동시에 치우면 같은 교체 저널을 두 러너가 동시에 되돌렸다(`runner_lock_take`).
+- 헬퍼(`HELPER_PY`, `-I -S`)는 `health`만 한다. 부를 때마다 venv 파이썬 → [linux] python3 → curl 문자열 검사 순으로 고른다(업데이트 중 venv 가 바뀔 수 있어서). waitpid·cmdline·procs·JSON 이스케이프는 셸 한 길(`/proc`, 맥은 `ps -A -ww -o pid= -o command=`, sed)로 한다.
+- `-HealthSeconds`(기본 45)를 더했다. 파이썬은 넘기지 않는다(시험과 느린 PC 용).
+- 재기동이 실패하면(런처 종료코드가 0이 아님 — 기동 직후 종료·막힘) 헬스 45초를 기다리지 않고 곧바로 롤백한다.
+- 사전 조건 오류(종료코드 2)라도 설치 루트가 멀쩡하면 옛 버전으로 계속한다. 본체를 죽이지 않고 `WaitSeconds`까지 스스로 내려가기를 기다렸다가(수동 적용은 1.5초 뒤 내려간다) 런처 start 를 부르고, 안 내려가면(재기동 자동 적용) 그대로 둔다. 인자가 망가졌으면(상대·빈 경로, 제어문자) 아무것도 하지 않는다. 교체 전 중단(TERM·백업 실패·스테이지 복사 실패·교체 도중 실패 후 되돌림)도 같은 길이다. 이때는 잠금과 표식을 먼저 풀고 `CLEWPATH_UPDATER` 없이 부른다. 그래야 런처가 평소대로(남의 잔재가 있으면 -RecoverOnly 포함) 판단한다.
+- `last_apply`(ok=false)는 롤백을 시작할 때 먼저 쓴다. 다시 띄운 옛 Host 의 재기동 자동 적용이 같은 버전을 또 받지 않게 하려는 것이다. 살아 있는 설치 표식(`by=install`)도 종료코드 3이다.
+- 인자 검증: `-BackupDir`는 로그 폴더 바로 아래, `-Version`은 `[0-9][0-9A-Za-z.+-]*`(64자까지 — 파일 이름과 JSON 에 들어간다), 숫자 인자는 앞자리 0 금지(`$(( ))`가 8진수로 읽는다), 경로는 절대 경로이고 제어문자·`.`·`..` 조각이 없어야 한다. rm -rf 는 `BackupDir`·`BackupDir.tmp.*`·`BackupDir-failed-*`·`InstallRoot/.clewpath-swap.*`·`WORK/runner.lock.d`에만 한다.
+- 스크립트 전체를 `main()`에 넣었다. updater.apply 의 `copy2`가 같은 자리에 덮어써도, 돌고 있는 sh 는 이미 다 읽은 함수만 쓴다.
+- 시험: `tests/test_update_runner_sh.py`(R①~R⑮, rename 마다 SIGKILL 17곳, curl 길, uv 찾는 순서, 런처 + 진짜 러너 복구, 업데이트 중 감독자 대기, Host 가 떠 있을 때 복구 보류), `test_update_safety`(러너 사본 실행). 리눅스 컨테이너에서 러너에 버그를 하나씩 넣어 시험이 잡는지 확인했다.
+- (4단계에서 고침) 커밋 표식은 `true >"$SWAP/committed"`로 쓴다. `: >…`(특수 내장)는 쓰기가 실패하면 dash·`bash --posix`가 러너를 정리 없이 끝냈다(잠금·표식·apply.lock 이 남음). `test_posix_scripts`가 `:` 리디렉션을 금지한다.
+- 뒤 단계가 맞출 것: install.sh 는 `.clewpath-install`에 `uv=`·`python_pref=`·`python_install_dir=`를 쓴다(러너가 읽는다). install.sh 의 표식은 `by=install`이고 명령줄에 `install.sh`가 있어야 러너가 산 것으로 본다(그동안 러너는 종료코드 3). uninstall.sh 는 살아 있는 러너 표식(`by=runner`)이 있으면 끝나기를 기다리거나 거부하는 편이 안전하다(러너가 끝에 Host 를 다시 띄운다 — 5단계에서 정할 것).
+
 ### 3.5 uninstall.sh (설치 루트)
 
 **인자**: `--yes`, `--purge-data`, `--purge-uv`, `--purge`(둘 다). `--remove-hooks`는 사장님 승인 전까지 만들지 않는다(8절 Q6).
@@ -860,6 +943,15 @@ PAYLOAD="session_manager pwa pyproject.toml uv.lock install.ps1 install.sh unins
 | `~/.claude/projects` 유지 | 같음 | |
 | 없음 | 표식, watch·Host·브로커 정지 | README에는 정지 단계가 없다 |
 | 없음 | 훅 안내(읽기만) | 불가침 원칙 |
+
+**구현 메모 (5단계, 2026-10-20)**
+- 결정 Q6 대로 훅은 지우지 않는다. 데이터 폴더의 부모(= Host 가 훅을 적은 클로드 폴더)의 `settings.json`에서 `/api/hooks/event`가 든 줄 수를 세어 남은 개수·지우는 법·`settings.json.bak-clewpath`(참고용, 통째로 되돌리지 말 것)를 안내한다.
+- 업데이트·설치가 진행 중이면(러너 잠금, 또는 by=runner·by=install 의 살아 있는 표식) 확인을 묻기 전에 거부한다(1) — 러너는 끝에 Host 를 다시 띄우고, 설치는 파일을 놓는 중이다(3단계 메모의 열린 질문).
+- 설치 루트는 session_manager 와 이름이 `clewpath-host`인 pyproject 가 있어야 한다(`--root`로 남의 폴더를 가리켜도 지우지 않게).
+- `--purge-uv`는 폴더째 지우지 않는다: `bin`에서는 `uv`·`uvx`만 지우고 비면 rmdir, `python`은 uv 관리 런타임 모양(`cpython-*`·uv 의 잠금·임시)만 있을 때 통째로 — `CLEWPATH_HOME`을 남과 같이 쓰는 폴더로 정했어도 남의 파일을 지우지 않는다. 끊긴 get.sh 의 `.clewpath-get.*`도 이때 치운다. uv 캐시는 안내만.
+- 남은 프로세스 확인은 후보(`/proc/*/cmdline` grep)를 다 모은 뒤 하나씩 다시 본다 — 찾는 grep 자신이 그 글자를 인자로 가져 '남은 프로세스'로 잡히던 경합(시험에서 느린 grep 으로 늘 재현)을 막는다. 명령줄이 나와 똑같은 프로세스(내 하위 셸 — 하위 셸 안에서도 `$$`는 본 셸의 pid)도 뺀다. 설치 폴더 안의 uninstall.sh 를 `--root`로 직접 부르면 스크립트 경로에 설치 폴더가 들어 있어 제 하위 셸을 남은 것으로 보던 문제(`bash --posix` 시험에서 발견).
+- 확인 질문은 `/dev/tty`가 열릴 때만(하위 셸에서 시험), 표준 입력이 파이프여도 사람에게 묻는다. `y`·`yes` 외에는 취소(1).
+- 남은 것이 없으면 0, 프로세스·설치 폴더·(purge 때) 데이터·uv 가 남으면 1.
 
 ## 4. 파이썬 쪽 변경
 
@@ -935,6 +1027,7 @@ def port_free(host: str, port: int) -> bool:
 
 - 맨 위 import는 표준 라이브러리만 쓴다. 나머지는 명령 안에서 늦게 import 한다.
 - 런처와 러너는 hostctl을 쓰지 않는다. 버전 어긋남과 교체 중 상태를 피하기 위해서다.
+- 구현 메모(4단계): `paths`는 Host 가 기동할 때와 같은 순서로 구한다 — 설정 파일 자리(`appconfig.config_path()`, 런처가 `CLEWPATH_CONFIG`로 고정할 값)를 먼저 정하고, 그 파일을 `apply_env()`로 펼친 뒤(`[claude] config_dir`) 데이터 폴더를 정한다. 같은 프로세스에서 부르는 시험이 물려받지 않게 env 는 끝나면 통째로 되돌린다. 상대 경로·제어문자가 든 경로는 거부한다(1). `write-config`는 설정 파일 자리만 보며 `port=`(유지면 그 파일의 포트)를 함께 낸다. `secure-data-dir`·`wait-ready`는 `--data-dir`, `write-config`는 `--conf-file`을 선택 인자로 받는다(install.sh 는 `paths` 결과를 넘긴다). `provision`은 `reason=`을 낸다(`provision_rate_limited` 등). 발급 로그(room 포함)는 버리고 connector id 만 보여 준다. key=value 값은 파일 시스템 바이트 그대로(`os.fsencode`) 낸다.
 
 ### 4.4 그 밖의 파이썬
 
@@ -942,7 +1035,9 @@ def port_free(host: str, port: int) -> bool:
 - `server._port_free`는 `osdep.port_free`를 부르는 얇은 함수로 남긴다. `test_appconfig`의 monkeypatch 지점을 유지하기 위해서다.
 - `_clewpath_already_there`(server.py:2117-2131)는 `build_opener(ProxyHandler({}))`를 쓴다.
 - `connector.relay_config_from_env(bound_port=None)`은 `local_base` 포트를 `bound_port or SM_PORT`로 정한다. lifespan(server.py:397)이 `_updater_mod.BOUND_PORT`를 넘긴다. OS와 무관한 결함이며 Windows의 폴백 포트에도 해당한다. `SM_PORT` env는 바꾸지 않는다. 바꾸면 러너를 거쳐 재기동 Host로 이어져 포트가 계속 밀린다.
-- `hooks.hook_command`(hooks.py:114)의 `"curl.exe"`를 `osdep.CURL`로 바꾼다. 셸 공통 조건(`||` 금지 등)은 그대로다.
+- `hooks.hook_command`(hooks.py:114)의 `"curl.exe"`를 `osdep.CURL`로 바꾼다. 셸 공통 조건(`||` 금지 등)은 그대로다. 맥·리눅스는 `--noproxy 127.0.0.1`을 더한다(검토 반영 — 훅은 claude 의 env 에서 돌아 curl 이 루프백에도 http_proxy·ALL_PROXY 를 써, 프롬프트가 든 훅 내용이 프록시로 새고 Host 에는 닿지 않았다). Windows 명령은 글자까지 그대로(settings.json 을 다시 쓰지 않게).
+- 커넥터가 로컬 Host 로 가는 길(`local_base`의 httpx 클라이언트, 터미널·재개·관제 WS)은 프록시를 쓰지 않는다(`trust_env=False`, websockets 15+ `proxy=None`)(검토 반영 — 사람 증명 헤더·세션 내용이 프록시로 새고 원격 접속이 끊겼다). 릴레이로 나가는 연결은 사용자의 프록시를 그대로 따른다. OS 무관(Windows 의 시스템 프록시 설정에서도 같은 결함).
+- 훅 첫 등록 때 남기는 `settings.json.bak-clewpath`는 0600 으로 만든다(검토 반영 — env 비밀이 그대로 든 사본이 umask 0644 로 생겼다).
 - `cp_client.provision`(:127)의 표시 이름 기본값을 `appconfig.machine_name()`으로 바꾼다. Windows는 COMPUTERNAME이 먼저라 결과가 같다.
 
 **권장 (작음)**
@@ -982,6 +1077,16 @@ def port_free(host: str, port: int) -> bool:
 - 클레임이 없으면 `["win"]`로 본다. get.sh와 updater가 같은 규칙을 쓴다.
 - CP는 보관과 배포만 하므로 007 변경이 필요 없다. 다만 CP는 최신 한 건만 준다(007 api.py:543-548). 최신이 어떤 OS를 빼면 그 OS는 그동안 설치·업데이트를 받지 못한다(8절 R6).
 - 이번 단계 릴리스는 `["win"]`이다. 맥 단계가 끝나면 `["win","mac"]`, 리눅스 정식 지원 때 `"linux"`를 더한다. 시험 빌드는 `["win","mac","linux"]`로 서명한다.
+
+**구현 메모 (7단계, 2026-10-21 — 4.5·4.6 과 다른 점과 뒤 단계가 맞출 약속)**
+- `sign_release.py sign --platforms`: argparse 형식 검사라 모르는 이름·빈 목록은 서명 전에 종료코드 2. 쉼표·공백·대소문자·겹침을 받고 클레임은 늘 `win,mac,linux` 순서로 쓴다. 서명 출력 줄(`ver=…`)에 `platforms=`를 붙였다(release.ps1 이 그 줄을 로그에 남긴다). `verify`는 배포본(updater)이 받아들이는지 본 뒤 `platforms=win,mac` 한 줄을 찍는다. 클레임이 없으면 `platforms=(클레임 없음 — win 전용으로 읽힌다)`, 모양이 이상하면(문자열·빈 목록·모르는 이름·문자열이 아닌 항목) `[OK]`를 찍지 않고 1.
+- `release.ps1 -Platforms`: `[string[]]`(기본 `win`) — `-File`로 준 `win,mac`과 PowerShell 안의 배열을 다 받는다. 버전 형식 바로 다음에 본다(다른 사전점검보다 먼저). **win 은 늘 들어가야 한다**(4.5 에 없음) — CP 는 최신 한 건만 주므로(R6) win 이 빠진 릴리스가 최신인 동안 Windows 사용자 전체가 업데이트를 못 받고, get.ps1 은 platforms 를 보지 않아 그 zip 을 Windows 에 그대로 깐다. verify 출력의 `platforms=` 줄을 `-Platforms`와 대조한다.
+- (검토 반영) `sign_release.py sign --platforms`도 win 이 없으면 서명 전에 거부(2)하고, `verify`는 win 이 없는 클레임에 `[FAIL]`(1)을 낸다 — 'win 필수'가 release.ps1 에만 있어, 문서에 있는 수동 package→sign→publish 길로 Windows 업데이트가 조용히 끊길 수 있었다.
+- (권장 항목을 이번에 넣음) mac·linux 가 들어가면 `ops/logs/posix-e2e-<ver>.json` = `{"version": "<ver>", "head": "<git rev-parse HEAD>", "ok": true}`가 있어야 한다. 8단계 e2e 가 통과하면 이 모양으로 남길 것. `.gitignore`에 넣어 '깨끗한 트리' 게이트에 걸리지 않게 했다.
+- zip 내용 게이트는 함수 `Test-ReleaseZip`(시험이 AST 로 꺼내 pwsh 로 돌린다): 맥·리눅스 다섯 파일, 이름에 `\` 없음(Windows PowerShell 5.1 의 Compress-Archive 가 만든다 — pwsh 7.6 의 Archive 1.2.6 은 `/`, 실측), `session_manager/updater.py`의 `RELEASE_KEYS` kid 집합이 저장소와 같음(주석 줄의 옛 키는 세지 않는다). 서명 도구가 아니라 여기에 둔 이유: 시험 하네스도 `sign`으로 시험 키 빌드를 서명한다.
+- package-for-user.ps1: `.sh` 형식 게이트는 비밀 스캔 다음·zip 전. 파일마다 이유 한 줄(`(BOM)`·`(CR - 줄끝이 CRLF)`·`(1행이 #!/bin/sh 가 아님)`)을 찍고 1. 1행 비교는 대소문자를 가린다.
+- 드라이런(작업 트리, 출력·스테이지 모두 scratchpad): 98 항목(파일 97 + 하위 폴더만 든 `session_manager/skills/`의 폴더 항목 — Compress-Archive 가 만든다), 역슬래시 0, `create_system=0`·`external_attr=0`, `.sh` 넷 모두 LF·BOM 없음·`#!/bin/sh`, `start-connector.sh`·`.clewpath-install` 없음, `Test-ReleaseZip` 문제 0. 게시·적용은 하지 않았다.
+- 시험: `tests/test_sign_release.py`(새), `tests/test_package_for_user.py`(새 — 가짜 저장소에서 진짜 스크립트를 돌린다, pwsh 가 없으면 건너뜀), `test_release_script`·`test_release_key_safety`·`test_updater`(패키지 대조를 엄격하게 — 넷이 같아야). Windows 에서 두 ps1 에 버그를 하나씩 넣어(18종) 모두 잡히는 것을 확인했다.
 
 ### 4.7 테스트 변경 목록
 
@@ -1284,6 +1389,20 @@ docker run --rm --init --network none --name clewpath-pytest-test -u 1000 clewpa
 ```
 
 pytest 연결: `tests/test_posix_e2e.py`(`@pytest.mark.posix_e2e`, docker가 없으면 skip)가 위 0~2단계를 감싸고 드라이버 JSON을 단정한다. 기본 실행에서는 addopts로 빠진다.
+
+**구현 메모 (8단계, 2026-10-21 — 6.3·6.4 와 다른 점과 뒤 단계가 맞출 약속)**
+- 이름: 이미지도 `clewpath-posix-e2e-test`(명세의 `clewpath-posix-e2e:local` 대신) — 이 PC 의 규칙(일회용 컨테이너·이미지 이름은 `-test`·`-verify`)에 맞췄다. 실행은 `docker run --rm --init --network none --name clewpath-posix-e2e-test clewpath-posix-e2e-test`, 볼륨·운영 네트워크 없음. 이미지는 다음 실행을 위해 남긴다.
+- 컨텍스트(`--out`): `Dockerfile` + `base/`(uv tarball·`warm_cache.sh`·데우기용 최소 트리 = A 의 pyproject·uv.lock·LICENSE·`session_manager/__init__.py`) + `ctx/`(매번 바뀌는 zip·매니페스트·get.sh·드라이버·가짜 CP·`index.json`). 데우기 층을 ctx 보다 앞에 두었다 — 시험 키가 실행마다 새로 생겨 zip 이 바뀌어도 PyPI 데우기를 다시 하지 않는다(명세는 ctx 를 COPY 한 뒤 데움). `--out`은 저장소 밖이어야 하고, 이 도구가 만든 표(`.clewpath-e2e-build`)가 없는 비어 있지 않은 폴더는 거부한다(남의 폴더를 지우지 않게). 키 가드는 이름(`*.pem`·`*.key`·키 폴더)과 내용(개인키 머리글)을 zip 안까지 본다.
+- 기본 zip: pwsh 가 있으면 진짜 `package-for-user.ps1 -OutDir`(TEMP 를 임시 폴더로 — 사용자 `%TEMP%`에 스테이지를 만들지 않게). 파이썬 판은 ps1 의 `$include`·`$excludePatterns`를 그대로 읽어 같은 목록·같은 `-like '*패턴*'` 규칙을 쓰고, 시험이 pwsh 결과와 파일·폴더 항목 목록까지 대조한다.
+- zipfile 은 항목 속성이 0 이면 쓸 때 `0o600 << 16`을 넣는다(`ZipFile._open_to_write`, 실측) — unzip 은 FAT 항목의 그 값을 유닉스 권한으로 받아 0600 으로 푼다. 변형 zip 이 배포 zip(Compress-Archive, 속성 0)과 같게 풀리도록 속성 0 을 그대로 쓰게 했다(시험이 다시 읽어 확인). `tests/test_get_sh.py`의 `_zip_bytes`도 같은 성질인데 거기 단정에는 영향이 없다.
+- 변형: 표의 A·B·C·D·L·P·Z·T·M 에 더해 E(90.0.4 — S9 의 `bash --posix` 러너용, CP 로 내지 않고 드라이버가 `updater.stage`·`osdep.update_runner_argv`로 apply 와 같은 자리를 만든다), L-noinstall(linux 클레임은 있으나 install.sh 없음 — 받아서 푼 뒤 거부되는 길). Z 는 세 zip(`../`·절대 경로·심볼릭 링크), T 는 세 매니페스트(sha256·size 큼·size 작음 — curl 63, 같은 시험 키로 다시 서명). 모든 변형의 README 첫 줄 표식, B~E 는 런처 템플릿 3행 뒤 주석(`# e2e-build: X`) — C 는 뜨지 못하므로 롤백 뒤 런처가 B 그대로인지도 본다.
+- 순서: S9 를 S8 앞에 돌린다(설치본이 있어야 한다). S5 에 S23 확인을 더했다 — maintenance.flag 가 있으면 수동 적용이 400 으로 거부되고 Host·러너가 그대로다. S8 은 watch 를 띄운 채 제거하고, watch·Host·브로커를 첫 길(watch.lock.d·런처 stop·ptyd.json)로 멈췄는지(남은 것 쓸기는 빈손인지)도 본다 — 둘째 방어선이 첫 길의 고장을 가리지 않게.
+- S3 의 '옛 pid normal 표식': 새 Host 가 기동하며 소비한다(`check_previous_exit`). 그래서 '표식이 소비됐고 사고 기록이 없음'으로 본다. 표식 자체는 S4⑤에서 stop 직후 `shutdown.json`으로 확인한다.
+- S4: ①에 '멈춘 뒤 동시에 start 셋 → Host 하나'를 더했다. ④는 시체 잠금 두 갈래(pid 죽음·pid 없이 2분 넘음). ⑤의 TERM 을 받지 못하는 Host 는 진짜 Host 를 SIGSTOP 해서 만든다(15초 뒤 KILL, forced-stop 표식 → 다음 기동이 사고로 보지 않음). 브로커는 Host 의 `/api/owner/ptyd/restart`(→ `ptyclient.ensure`)로 띄운다 — 명령줄이 `venv python -m session_manager.ptyd`인지 본다. ⑪은 산 pid·`CLEWPATH_UPDATER=1`·`by=runner`인데 러너가 아닌 pid(재사용)·죽은 pid 네 갈래.
+- 실측: ⑧의 막는 소켓도 SO_REUSEADDR 가 필요했다 — 방금 내린 Host 의 연결이 5100 에 TIME_WAIT 로 남는다(urllib 은 `Connection: close`라 응답마다 서버 쪽이 먼저 닫는다). 곧 ⑨의 상황은 사람이 로컬 웹을 열기만 해도 생긴다. ⑨는 그 TIME_WAIT 에서 평범한 bind 가 `EADDRINUSE`인 것을 확인한 뒤 곧바로 start 해 5100 에 뜨는지 본다.
+- 설치 루트에 `clewpath_host.egg-info`가 생긴다(uv sync 의 setuptools 편집 설치, 실측) — 2.3 에 더했다. PAYLOAD 밖이라 러너가 건드리지 않고 sync 가 버전마다 다시 쓴다.
+- 결과: 드라이버는 표준출력 마지막 줄 `E2E-RESULT {json}`(단계별 성공·실패·근거·시간), 실패하면 launcher·host·apply·recover·가짜 CP 로그 꼬리를 앞에 찍는다. pytest 는 `CLEWPATH_E2E_OUT`(없으면 tmp)에 `e2e-run.log`·`e2e-result.json`·`docker-build.log`·`fixtures.log`를 남기고, 통과했고 작업 트리가 깨끗하면(release.ps1 과 같은 기준) `ops/logs/posix-e2e-<ver>.json` = `{version, head, ok}`를 쓴다(4.5 게이트). env `CLEWPATH_E2E_UV_ARCHIVE`(고정 해시와 같은 uv tarball — 없으면 GitHub 공식 릴리스에서 받아 `.sha256`·고정값과 대조), `CLEWPATH_GET_SH`.
+- 시험: `tests/test_posix_e2e.py` — 하네스 시험(모든 OS: ps1 과 같은 패키지 목록·zip 모양·pwsh 결과 대조, 변형 내용, 시험 키 서명과 운영 키 거부, 컨텍스트·키 가드, uv 고정 해시, 가짜 CP 라우트·요청 로그, 드라이버의 컨테이너 밖 거부, 릴리스 기록 조건)과 컨테이너 왕복 1건(`-m posix_e2e`, 186 단정·약 4분). `test_posix_scripts`의 PENDING 이 비었고, `tests/posix_e2e`의 셸(`warm_cache.sh`)도 POSIX 규칙으로 검사한다. 배포 zip 사본(또는 get.sh 사본)에 버그를 하나씩 넣어(12종 — port_free 평범한 bind·커넥터가 설정 포트로 프록시·훅 curl.exe·런처 env 정리 없음·런처 umask 077·강제 종료 표식 없음·러너 uv sync 건너뜀·롤백이 브로커까지·apply 의 유지보수 표식 무시·제거가 브로커를 첫 길로 멈추지 않음/두 길 다·get.sh 의 `..` 허용) 컨테이너 왕복을 돌려 모두 겨냥한 단정에서 잡히는 것을 확인했다 — '첫 길로 멈추지 않음'은 처음에 둘째 방어선(sweep)이 가려 놓쳤고, 그래서 S8 의 '제 길로 멈춤' 단정을 더했다.
 
 ## 7. CP 쪽 변경 (서비스 모니터 배포 의뢰 대상)
 

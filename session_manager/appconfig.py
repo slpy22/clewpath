@@ -20,6 +20,7 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 import tomllib
@@ -172,7 +173,7 @@ TEMPLATE = """\
 #   위치: 이 파일은 데이터 폴더에 있습니다. 재설치나 업데이트를 해도 지워지지 않습니다.
 #   반영: 값을 고친 뒤 ClewPath 를 재시작하세요.
 #   우선순위: 환경변수 > 이 파일 > 기본값
-#           (start-connector.ps1 에 $env:... 로 같은 값이 있으면 그쪽이 이깁니다)
+#           (ClewPath 를 띄우는 환경에 같은 값의 환경변수(SM_PORT 등)가 있으면 그쪽이 이깁니다)
 
 [server]
 # 로컬 웹 주소. host 는 127.0.0.1 을 권장합니다 —
@@ -189,16 +190,18 @@ port_fallback = 10
 
 [cloud]
 # 외부(폰·웹) 접속을 중계하는 ClewPath Cloud 주소.
-cp_url    = "{cp_url}"
-relay_url = "{relay_url}"
-app_url   = "{app_url}"
+cp_url    = {cp_url}
+relay_url = {relay_url}
+app_url   = {app_url}
 
 # 폰 페어링 QR 생성용 공유 토큰(운영자에게 받은 값). 없으면 QR 대신 수동 입력을 씁니다.
-# client_token = "..."
+{client_line}
+# 릴레이 공유 agent 토큰(선택·레거시 — 지금은 CP 가 발급하는 JWT 로 붙습니다).
+{agent_line}
 
 [claude]
 # 클로드 데이터 폴더를 옮겨 쓰는 경우에만 지정하세요. 비워두면 자동으로 찾습니다.
-# config_dir = "D:\\\\claude"
+{claude_line}
 
 [update]
 # 새 버전이 있는지 주기적으로 확인합니다(설치는 하지 않음).
@@ -235,8 +238,31 @@ require = false
 """
 
 
+def _toml_str(s: str) -> str:
+    """TOML 기본 문자열(따옴표 포함). JSON 문자열 이스케이프(\\" \\\\ \\n \\uXXXX)는 TOML 과 같다 — 다만 JSON 은
+    DEL(U+007F)을 그대로 두는데 TOML 은 이스케이프를 요구한다. 경로의 역슬래시·따옴표·한글·공백이 그대로 산다."""
+    return json.dumps(str(s), ensure_ascii=False).replace("\x7f", "\\u007f")
+
+
 def render_template(port: int = 5100,
                     cp_url: str = "https://clewpath.pyongso.com/cp",
                     relay_url: str = "wss://clewpath.pyongso.com/relay/ws",
-                    app_url: str = "https://clewpath.pyongso.com/relay/app") -> str:
-    return TEMPLATE.format(port=port, cp_url=cp_url, relay_url=relay_url, app_url=app_url)
+                    app_url: str = "https://clewpath.pyongso.com/relay/app",
+                    client_token: str | None = None,
+                    agent_token: str | None = None,
+                    claude_config_dir: str | None = None) -> str:
+    """새 설정 파일 본문. 맥·리눅스 설치(hostctl write-config)의 원본 — install.ps1 인라인 템플릿과 섹션·키가 같다
+    (test_appconfig 가 묶는다). 값은 _toml_str 로 넣어 따옴표·역슬래시가 든 값에도 파일이 깨지지 않는다.
+    토큰·config_dir 가 없으면 주석 줄로 둔다(빈 값으로 두면 env 를 덮지는 않지만 '설정됨'처럼 보인다)."""
+    port = int(port)
+    if not 1 <= port <= 65535:
+        raise ValueError(f"포트가 잘못됐습니다: {port}")
+    return TEMPLATE.format(
+        port=port, cp_url=_toml_str(cp_url), relay_url=_toml_str(relay_url), app_url=_toml_str(app_url),
+        client_line=(f"client_token = {_toml_str(client_token)}" if client_token
+                     else '# client_token = "..."'),
+        agent_line=(f"agent_token = {_toml_str(agent_token)}" if agent_token
+                    else '# agent_token = "..."'),
+        claude_line=(f"config_dir = {_toml_str(claude_config_dir)}" if claude_config_dir
+                     else '# config_dir = "D:\\\\claude"'),
+    )

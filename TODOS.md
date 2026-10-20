@@ -25,12 +25,61 @@
 - [ ] (앱) 아래 바 '세션' 단추(native-bridge.js)가 폰 웹 재개를 숨기기만 해 claude -p 가 계속 돈다 — 앱 재빌드 때 closeLiveResume 경유로
 - [ ] 사용 중인 실제 소켓 e2e 하네스(scratchpad qs-e2e)를 저장소 tests/ 로 옮겨 릴리스 전 회귀로 둘지 검토
 
-## 진행중: 멀티 OS(Windows + macOS) — docs/designs/multi-os.md (2026-10-15 사장님 결정)
+## 진행중: 멀티 OS(Windows + macOS, 리눅스는 시험용) — docs/designs/multi-os.md (2026-10-15 사장님 결정)
+- [ ] **맥·리눅스를 platforms 에 넣기 전 필수:** 맥·리눅스 전용 스크립트(install.sh·uninstall.sh·get.sh·start-connector.template.sh·update_runner.sh)와 1회차 검토 수리 커밋(0111fde·f09a26e·c834a8b·7630da6·297c502)의 2회차 적대적 검토 — 2026-10-21 사용량 한도로 미룸. Windows 에 닿는 부분(공통 파이썬·출시 도구)은 같은 날 직접 검토·실행 시험함
 - [x] 1단계(0.23.0): `session_manager/osdep/`(_win·_posix) 경계 — pty·자식 동반 종료·프로세스 목록/종료·DPAPI·런처·재개 창·경로·업데이트 러너. Windows 동작 불변, 가드 test_osdep.py
 - [x] 2단계(`macos` 브랜치, 2026-10-15 → **main 합침 0.28.0, 2026-10-20 재검증: 리눅스 컨테이너 612 통과·Windows 620 통과**): POSIX pty(ptyprocess)·pty 끊김 SIGHUP 동반 종료·브로커 유닉스 소켓(0600)·고아 판정 init 입양·범위 감시 POSIX 경로·테스트 OS 분기 — 리눅스 컨테이너 571 통과 + 브로커 통합 확인, Windows 579 통과. **main 배포 시 ptyd 해시가 바뀌어 브로커 업데이트 대기 1회**
-- [ ] (발견) extras `mcp>=1.0.0` 이 잠금에서 mcp 2.0.0 — 2.x 엔 `mcp.server.fastmcp` 가 없어 mcp_server 가 안 뜬다. 설치본엔 extra 가 안 들어가 운영 영향 없음. `<2` 고정 또는 2.x 대응
-- [ ] 3단계(맥 실기): launchd 자동 시작·자기 회복 · 키체인 · `install.sh`·`get.sh`·`start-connector.sh`·`update_runner.sh` · CP `/get.sh`·랜딩 OS 별 한 줄 설치(서비스 모니터 의뢰) · 매니페스트 platforms 표시 · Terminal.app 재개 · 실제 claude 왕복
+- [ ] (발견) extras `mcp>=1.0.0` 이 잠금에서 mcp 2.0.0 — 2.x 엔 `mcp.server.fastmcp` 가 없어 mcp_server 가 안 뜬다. 설치본엔 extra 가 안 들어가 운영 영향 없음. `<2` 고정 또는 2.x 대응(리눅스 컨테이너 pytest 에선 test_mcp_team 이 이 때문에 건너뛰어진다)
+
+### 3a 맥·리눅스 공통 설치·업데이트 — `posix-install` 브랜치(2026-10-20~21), 명세 docs/designs/posix-install.md
+결정(2026-10-20 사장님): 훅 자동 등록은 승인 예외로 기록(CLAUDE.md, 모든 OS 같은 방식) · 제거 때 훅은 안내만 · 나머지 Q1~Q5·Q8~Q21 은
+권장값(리눅스 위치 `${XDG_DATA_HOME:-~/.local/share}/clewpath`, 이번 출시 `platforms=["win"]`, CP `/get.sh` 공개는 맥 단계와 함께,
+작은 OS 무관 수정은 이번에) · `get.sh` 는 공개 전까지 006 `ops/get.sh`. 결과 요약은 multi-os.md 「3a 결과」.
+- [x] 1단계 파이썬 연결부(bf1f9f7): osdep `update_runner_argv`·런처 렌더·`port_free`·`CURL`, updater PAYLOAD·`platforms` 판정·`maintenance.flag` 면 적용 거부, OS 무관 수정(TIME_WAIT 포트 오판·루프백 확인 프록시 우회·커넥터 실제 포트·발급 표시 이름), 정적 계약 시험(test_posix_scripts)
+- [x] 2단계 멱등 런처(ccd4dc1): `start-connector.template.sh` → `start-connector.sh`(start·stop [--hold]·resume·status·watch·paths·foreground), 런처 실행 시험 + 변이 24종
+- [x] 3단계 업데이트 러너(c0e260c): `update_runner.sh` — rename·저널 교체·롤백·브로커 보존·`-RecoverOnly`, 실행 시험 73건 + 변이 47종
+- [x] 4·5단계 설치·제거(58082dd): `install.sh`·`uninstall.sh`·`session_manager/hostctl.py`, 진짜 uv 왕복 34/34 + 변이 43종
+- [x] 6·7단계 부트스트랩·릴리스 도구(ca7ddd8): `ops/get.sh`, `sign_release --platforms`·`release.ps1 -Platforms`(win 필수, mac·linux 는 POSIX e2e 기록 필요)·패키지 `.sh` 형식 게이트·zip 내용 게이트, 변이 54+18종
+- [x] 8단계 e2e(61372eb): 리눅스 `*-test` 컨테이너 왕복(가짜 CP·시험 키) 186/186 — get.sh 거부 12가지·설치·런처 ①~⑪·수동 적용·롤백·재기동 자동 적용·`bash --posix` 러너·제거·다시 설치, 변이 12종
+- [x] 9단계 문서(2026-10-21): README 맥·리눅스 절(시험용, 한 줄 설치 공개 전)·multi-os 단계 표·이 목록, 문서 계약 시험 `tests/test_docs_multi_os.py`
+- [x] 검토 반영(2026-10-21, 지적 11건 — 시험으로 재현한 뒤 고침, 시계 이동은 started_at 을 당겨 흉내): 훅 curl·커넥터 로컬 호출이 프록시 env 를 따르던 것(`--noproxy 127.0.0.1`·`trust_env=False`·`proxy=None`), 훅 백업 0600, install.sh 직접 실행 때 토큰 인자를 env 로 옮겨 다시 실행, 받은 파일 배치를 rename·신호 미루기로, nohup 이 둔 HUP 무시가 Host·브로커·pty 자식에 물려가던 것, 시체 잠금 치우기 경합(권리 폴더 `.reclaim`), probe 의 시각 비교(시계 이동) → 설치 경로로, 롤백·복구가 런처도 되돌림, sign_release 도 win 필수, 문서 계약 시험을 진행 상태에서 떼어 냄 — 명세 각 절의 '검토 반영'
+- [ ] main 합침·릴리스(`platforms=["win"]`): `quick-switch` 와 섞이지 않게 차례로, 합칠 때마다 Windows 전체·리눅스 컨테이너 다시 시험, 이 PC 에서 0.28.1 → 새 버전 업데이트 왕복(명세 R14, `release.ps1 -Apply`). CHANGELOG 는 릴리스 때(`-PrepareChangelog`)
+- [ ] mac·linux 를 넣는 릴리스는 그 릴리스 HEAD(버전·CHANGELOG 커밋 뒤)에서 `python -m pytest -m posix_e2e tests/test_posix_e2e.py` 를 다시 돌려 `ops/logs/posix-e2e-<ver>.json` 을 남겨야 `release.ps1 -Platforms` 게이트를 지난다
+- [ ] (후속, 작음) PWA 가 update/status 의 `unsupported` 를 몰라 '최신 버전입니다'로 보여 준다(서버 응답·적용 거부 사유에는 있다) — 맥 단계 전에. 시작점: `pwa/index.html` checkUpdateNow + tests/pwa. S
+- [ ] (후속, 작음) 런처·러너가 표식의 `at=` 를 `[0-9]{1,12}` 로 받아 앞자리 0(`at=09`)이면 `$(( ))` 8진수 오류로 셸이 끝난다 — 우리 스크립트는 늘 `date +%s` 를 쓰니 손상·손편집 때만. `[1-9]` 로. 시작점: `session_manager/start-connector.template.sh`·`session_manager/update_runner.sh`. S
+- [ ] (후속, 작음) 재설치 때 `--port` 헛 경고 — 사용자가 `--port` 를 주지 않아도 install.sh 가 기본값(5100)을 write-config 에 넘겨(get.sh 도 늘 넘긴다), 설정 파일의 포트가 다르면 '--port 는 새로 만들 때만 씁니다' 경고가 뜬다. 준 값일 때만 넘기면 된다. 시작점: `install.sh` step_config, `session_manager/hostctl.py` write-config. S
+- [ ] (후속, 작음) `-RecoverOnly` 가 떠 있는 Host 때문에 보류(종료코드 3)하는 동안 교체 잔재를 status 가 알리지 않는다(그 Host 가 내려가면 다음 재기동·업데이트가 되돌림) — 런처 status 에 `swap=` 줄 검토. S
+- [ ] (후속) `foreground` 는 launcher.lock 을 잡지 않는다(exec 하면 trap 이 안 돈다) — 동시에 도는 start 와의 경합은 Host 의 두 번째 방어선(같은 포트에 ClewPath 면 종료)에 맡겼다. 3b launchd KeepAlive 와 묶을 때 다시 본다
+- [ ] (한계, 기록만) `curl | sh` 스트림이 마지막 줄 `main` 바로 뒤에서 끊기면 인자 없는 기본 설치가 된다 — 모든 `curl | sh` 설치기의 한계(명세 3.1 구현 메모)
+
+### 3b 맥 실기 — 대기 (명세 1.2, R1: 맥에서 시나리오를 다시 돌리기 전에는 `platforms` 에 mac 을 넣지 않는다)
+- [ ] launchd 자동 시작·자기 회복(`~/Library/LaunchAgents/com.clewpath.host.plist`, RunAtLoad + KeepAlive → 런처 `foreground`) · install.sh `autostart_install` 자리 · launchd 최소 환경(PATH·LANG) 보강 · 제거 때 `launchctl bootout`
+- [ ] 키체인(`osdep.protect`/`unprotect` — 지금은 None 이라 데이터 폴더 0700 안 파일) · Terminal.app 재개(`open_resume_terminal`) · Gatekeeper 격리 속성 확인
+- [ ] 맥에서 전체 pytest + 3a e2e 시나리오(명세 6.3) 반복 + 실제 claude 기동·재접속·업데이트 왕복 → 통과하면 릴리스 `platforms` 에 mac
+- [ ] CP `/get.sh` 공개(서비스 모니터 의뢰, 명세 7절): `ops/get.sh` 를 007 `control_plane/get.sh` 로 옮기고 `/get.sh` 라우트·007 `.gitattributes`·007 테스트·nginx `location = /get.sh` · 랜딩·README OS 별 한 줄(리눅스는 '시험용'으로 표시하거나 빼기) — 이때 tests/test_docs_multi_os.py 의 '공개 주소 없음' 시험도 함께 바꾼다
 - [ ] 맥 확인 거리: claude 설치 경로·pty 출력 차이, 터미널 앱 전체 디스크 접근 권한 필요 여부, Gatekeeper(curl 설치 시 격리 속성)
+- [ ] 맥 확인 거리(3a 가 리눅스로만 흉내 낸 것): bash 3.2 의 sh 모드(`[[:cntrl:]]`·`set -u` 와 빈 `"$@"`) · BSD unzip/zipinfo 목록·종료코드, BSD `find -name '*[[:cntrl:]]*'`(get.sh) · BSD `ps` 가 비ASCII 설치 경로를 vis 로 이스케이프하면 런처 stop·러너가 Host 를 못 알아본다(`CLEWPATH_HOME` 을 한글 경로로 바꾼 경우만 — 그러면 venv 파이썬 psutil 판정으로) · `sysctl hw.optional.arm64` 대상 선택 · uv 관리 런타임 실제 배치(`uv python install`, `--purge-uv` 의 지우기 패턴) — darwin uv 해시 둘은 공식 `.sha256` 과 대조만 했고 실행은 아직
+
+### 리눅스 정식 지원 — 결정 전(지금은 시험용, 설치 때 경고)
+- [ ] systemd `--user` 자동 시작(`systemd-run --scope` 포함)·정식 지원 여부 결정 · R8 시스템 파이썬 업그레이드가 `.venv` 를 깨뜨릴 수 있음(정식 지원 때 관리 런타임 고정 검토) · R11 curl 없는 배포판(slim)에선 상태 훅이 조용히 실패 · musl(Alpine)·FreeBSD 는 범위 밖
+
+### 별건(양 OS, 명세 8.2·1.2)
+- [ ] Q15·R10 러너에 넘기는 env 에서 Host 가 채운 `SM_*` 빼기 — 지금은 업데이트 직후 Host 가 옛 env 를 물려받아 clewpath.toml 변경이 가려진다(Windows 와 같은 기존 성질)
+- [ ] Q16·R13 작업 폴더(zip·stage·backup) 정리 — 최근 2개만 보관(파이썬 공통)
+- [ ] Q5 `CLAUDE_CODE_*` 정리 범위 축소 검토 — `CLAUDE_CODE_USE_BEDROCK` 같은 사용자 설정 변수까지 빠진다(브로커 `ptyd.clean_env` 와 런처가 같은 규칙)
+- [ ] `apply.lock` O_EXCL 원자화(지금은 '있고 5분 안이면 거부' 뒤 쓰기라 아주 짧은 경합 창이 있다)
+- [ ] R6 CP 가 최신 한 건만 줘서 `platforms` 로 뺀 OS 는 그동안 설치·업데이트를 못 받는다 — 릴리스 규칙(모든 릴리스에 지원 OS 유지, release.ps1 이 win 을 강제), 장기적으로 CP `?platform=`(007)
+
+## 별건: Windows 기존 결함 — 명세 docs/designs/posix-install.md 8.1 R15 (2026-10-20 조사, 3a 범위 밖)
+맥·리눅스 설치를 만들며 Windows 스크립트를 다시 읽다 찾았다. 3a 는 Windows 동작을 바꾸지 않았으므로(예외: `update_runner.ps1` 의 `$Payload` 한 줄)
+따로 고친다. install.ps1·update_runner.ps1 은 PS5.1 문법·BOM 을 지키고(test_ps51_compat) 건마다 회귀 시험을 붙인다.
+- [ ] ① **PS5.1 러너가 쓴 `last_apply.json` 의 BOM 때문에 롤백 반복 차단이 꺼질 수 있다**(추정) — 왜: pwsh 가 없는 PC 는 러너가 powershell.exe(5.1)로 돌고, 5.1 의 `Set-Content -Encoding UTF8` 은 BOM 을 붙인다. `updater.recently_failed` 와 update/status 가 `encoding="utf-8"` 로 읽다 실패하면 '방금 실패한 버전'을 몰라, 재기동 자동 적용이 같은 버전을 또 받아 실패 → 롤백을 되풀이하고 화면의 지난 적용 결과도 빈다. 무엇: 읽는 쪽 두 곳을 `utf-8-sig` 로(쓰는 쪽은 5.1 이라 BOM 이 정상). 시작점: `session_manager/update_runner.ps1:237`, `session_manager/updater.py:392`, `session_manager/server.py:741`. S
+- [ ] ② **Copy-Payload 가 복사 오류를 삼키고, 백업 실패 종료는 잠금·결과를 남기지 않는다** — 왜: `Copy-Item … -ErrorAction SilentlyContinue` 라 실패해도 예외가 없어 백업·교체 실패를 잡는 `try/catch` 가 사실상 돌지 않는다(반쪽 백업 위에 교체하면 롤백도 반쪽). 백업 실패 분기의 `exit 1` 은 `apply.lock`(5분 만료까지 다음 적용 거부)과 `last_apply.json`(결과·재시도 차단)을 건너뛴다. 무엇: 복사 오류를 모아 실패로 올리고, 실패·중단 길도 결과 기록·잠금 해제를 거치게(맥·리눅스 러너는 rename·저널로 같은 경우를 처리한다). 시작점: `session_manager/update_runner.ps1:48-57`, `session_manager/update_runner.ps1:166-174`. M
+- [ ] ③ **런처가 host.log 를 덮어써 사고 직전 로그가 사라진다**(실측) — 왜: `Start-Process -RedirectStandardOutput/-RedirectStandardError` 는 파일을 새로 쓴다. 죽은 Host 를 런처가 다시 띄우면 직전 로그가 지워져, 자기 회복의 사고 기록(liveness 의 마지막 로그 10줄)과 원인 조사가 빈손이 된다. 무엇: 띄우기 전에 옛 로그를 한 세대 밀어 두거나 이어 쓰기(맥·리눅스 런처는 이어 쓰기 + 5MB 회전 + `=== launcher start` 구분줄). 시작점: `session_manager/start-connector.template.ps1:51-53`, `install.ps1:526`(템플릿 없는 옛 zip 의 v1 런처). S
+- [ ] ④ **원라인 재설치가 터미널 관리 프로세스(브로커)까지 강제 종료한다** — 왜: get.ps1 은 설치 폴더 아래 python 을 모두 `Stop-Process -Force` 해 `session_manager.ptyd` 와 그 안의 열린 터미널(claude)도 끝낸다(업데이트 러너·롤백은 브로커를 뺀다). README 5절 '지금 끄기'·install.ps1 완료 안내의 중지 명령도 같은 식이다. 무엇: 명령줄에 `session_manager.ptyd` 가 있으면 빼기(러너와 같은 규칙). 007 은 운영 CP 가 bind-mount 로 바로 서빙하므로 고치면 즉시 운영에 나간다 — 시험 먼저. 시작점: `007/control_plane/get.ps1:88-90`, `install.ps1:709`, `README.md`(5절). S
+- [ ] ⑤ **install.ps1 이 `CLAUDE_CONFIG_DIR` 을 빠뜨려 데이터 폴더가 Host 와 어긋난다**(명세 Q20) — 왜: 설정·자격증명을 `SESSION_MANAGER_CLAUDE_HOME` 아니면 `~\.claude\session_manager` 에 쓰는데, Host(`config.py`)는 `SESSION_MANAGER_CLAUDE_HOME > CLAUDE_CONFIG_DIR > ~/.claude` 순이다. `CLAUDE_CONFIG_DIR` 로 클로드 폴더를 옮겨 쓰는 PC 에선 설치가 만든 설정·자격증명을 Host 가 못 찾는다(같은 파일의 [3/6] 클로드 폴더 확인은 `CLAUDE_CONFIG_DIR` 을 본다). 무엇: 같은 순서로(맥·리눅스는 hostctl 이 Host 와 같은 코드로 계산한다). 시작점: `install.ps1:425-427`, `session_manager/config.py`. S
+- [ ] ⑥ **`launcher-ensured-<버전>` 표식이 버전마다 쌓인다**(이 PC 90여 개) — 왜: 런처 보장을 버전당 한 번만 하려고 데이터 폴더에 표식을 남기는데 옛 것을 지우지 않는다(코드는 OS 공통이라 맥·리눅스 설치본에도 쌓인다). 무엇: 새 표식을 쓸 때 다른 버전의 표식을 지우기. 시작점: `session_manager/liveness.py:170-177`. S
+- [ ] ⑦ **런처 템플릿(ps1)·ensure_task.ps1 에 BOM 이 없고 PS5.1 검사 대상도 아니다** — 왜: pwsh 가 없는 PC 에선 둘 다 powershell.exe(5.1)로 읽히고, 5.1 은 BOM 없는 파일을 ANSI 로 읽는다. 템플릿을 인코딩 지정 없는 `Get-Content -Raw` 로 읽어 렌더하므로 설치본 런처의 한글(로그 문구)이 깨진다(추정 — 동작 영향은 작다). `tests/test_ps51_compat.py` 의 `USER_SIDE_PS1` 은 install.ps1·update_runner.ps1 뿐이라 PS7 전용 문법이 들어가도 못 잡는다. 무엇: 두 파일에 BOM + 렌더 읽기에 `-Encoding UTF8` + `USER_SIDE_PS1` 에 추가(5.1 파서·문법 검사). 시작점: `session_manager/start-connector.template.ps1`, `session_manager/ensure_task.ps1:25`, `install.ps1:503`, `tests/test_ps51_compat.py:21`. S
 
 ## 진행중: 화면 재배치 — docs/designs/ux-reorg.md
 - [x] 1단계(0.18.0): 머리줄(⚙만·PC 칩) · 보기 전환에 🧑‍💼 비서 · 검색 옆 ⟳ · 세션 상세(주 동작 위·요약·알림 띠·더 보기·위험 구역) · 목록 줄 ✎ 제거 · 기기 등록 한 줄 띠 · 설정(자주→고급 접힘)
@@ -41,7 +90,7 @@
 - [x] 0.19.3 목록 #라벨 칩 제거(위 필터는 유지) · 살아 있는 세션의 백그라운드 쉘·모니터 수 칩(🐚·📡, jsonl 시작/끝 표식 + 프로세스 시작 이후만) · 남아 있으면 「완료」 대신 「백그라운드」, 작업 완료 푸시 보류(bgtasks.py)
 - [x] 0.19.4 세션 상세 머리에 태그(#칩 × 빼기 · ＋ 태그: 입력/기존 태그 골라 저장), 목록 위 태그 필터는 유지
 - [x] 0.20.0 정기 작업(docs/designs/housekeeping.md): 쉬는 세션 정리(4시간·세션 잠금 재확인·📌 항상 켜 두기) · 모델 목록 갱신(CP+실사용 합본) · 설정 🧹 화면
-- [ ] (간헐) 전체 테스트에서 test_update_safety::test_apply_concurrency_lock 가 다른 테스트의 배경 스레드 Popen 과 겹쳐 가끔 실패 — 단독·재실행 통과
+- [ ] (간헐) 전체 테스트에서 test_update_safety::test_apply_concurrency_lock 가 다른 테스트의 배경 스레드 Popen 과 겹쳐 가끔 실패 — 단독·재실행 통과. 원인(posix-install 3·8단계 관찰): 시험이 `updater.subprocess.Popen`(= 표준 subprocess 모듈 그 자체)을 바꿔 끼우는 동안 앞 시험 앱의 orphan-sweep 스레드가 subprocess 를 불러 호출 수가 하나 늘어난다(assert 3 == 2). 고치는 길: updater 안에 Popen 참조를 따로 두거나, 앱 스레드를 멈춘 뒤 패치
 - [ ] (간헐, 2026-10-13) 전체 테스트가 바쁠 때 test_ptyd::test_webterm_start_restart_adopt_stop 의 adopt 가 0 (브로커 attach 시간 초과 추정), PWA node 테스트도 가끔 — 단독 25회 통과. 릴리스 스크립트가 첫 시도에 자주 멈춤 → 재시도 1회 또는 원인 제거 필요
 - [x] CP 내장 모델 목록 9개로(007 01edb9d, 서비스 모니터 재시작 17:56 완료)
 - [x] 0.20.1 모델 목록 갱신에 claude /model 화면 읽기(modelprobe.py, 사장님 승인 — CLAUDE.md 예외 등록)

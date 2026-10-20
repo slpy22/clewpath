@@ -124,7 +124,9 @@ def provision(client: httpx.Client, display_name: str = "", replaces: dict | Non
     base = cp_url()
     if not base:
         return None
-    body = {"display_name": display_name or os.environ.get("COMPUTERNAME", "")}
+    # 표시 이름 기본값은 화면 머리와 같은 규칙(Windows 는 COMPUTERNAME 이 먼저라 그대로, 맥·리눅스는 hostname — 빈 이름 방지)
+    from session_manager import appconfig
+    body = {"display_name": display_name or appconfig.machine_name()}
     if replaces and replaces.get("connector_id") and replaces.get("claim_secret") and replaces.get("cp_url") == base:
         body["replaces"] = {"connector_id": replaces["connector_id"], "claim_secret": replaces["claim_secret"]}
     try:

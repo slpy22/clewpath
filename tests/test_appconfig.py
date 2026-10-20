@@ -83,6 +83,57 @@ def test_template_is_valid_toml():
     assert d["server"]["port"] == 5100
     assert d["server"]["host"] == "127.0.0.1"
     assert d["cloud"]["cp_url"].startswith("http")
+    assert "client_token" not in d["cloud"] and "agent_token" not in d["cloud"]   # 없으면 주석 줄
+    assert "config_dir" not in d.get("claude", {})
+
+
+def test_template_escapes_awkward_values():
+    """맥·리눅스 설치(hostctl write-config)는 이 함수로 설정을 만든다 — 따옴표·역슬래시·한글·공백·제어문자가 든
+    값에서도 파일이 깨지지 않고 같은 값으로 읽혀야 한다(install.ps1 처럼 문자열을 그냥 꽂으면 TOML 이 깨진다)."""
+    import tomllib
+    vals = dict(cp_url='https://cp.example/c"p\\x', relay_url="wss://r.example/ws?a=1&b=2",
+                app_url="https://앱.example/relay app", client_token='tok"en\\ 끝\x7f\t',
+                agent_token="rly-agt-x'y", claude_config_dir="/Users/김 철수/my \"claude\" data")
+    d = tomllib.loads(appconfig.render_template(port=5123, **vals))
+    assert d["server"]["port"] == 5123
+    assert {k: d["cloud"][k] for k in ("cp_url", "relay_url", "app_url", "client_token", "agent_token")} == \
+        {k: vals[k] for k in ("cp_url", "relay_url", "app_url", "client_token", "agent_token")}
+    assert d["claude"]["config_dir"] == vals["claude_config_dir"]
+    win = tomllib.loads(appconfig.render_template(claude_config_dir="D:\\클로드\\data"))
+    assert win["claude"]["config_dir"] == "D:\\클로드\\data"
+    for bad in (0, 65536):
+        with pytest.raises(ValueError):
+            appconfig.render_template(port=bad)
+
+
+def _install_ps1_toml(port, cp, relay, app, client=None, agent=None, cfg=None) -> str:
+    """install.ps1 의 인라인 toml(here-string)을 같은 입력으로 펼친다 — $clientLine 등 줄 변수는 install.ps1 이 고르는 키로."""
+    import re
+    from pathlib import Path
+    txt = (Path(__file__).resolve().parents[1] / "install.ps1").read_text(encoding="utf-8-sig")
+    m = re.search(r'\$toml = @"\n(.*?)\n"@', txt, re.S)
+    assert m, "install.ps1 에서 $toml here-string 을 못 찾음"
+    keys = dict(re.findall(r'\$(clientLine|agentLine|claudeLine)\s*=\s*if \([^)]*\)\s*\{\s*"(\w+) = ', txt))
+    assert set(keys) == {"clientLine", "agentLine", "claudeLine"}, keys
+    given = {"clientLine": client, "agentLine": agent, "claudeLine": cfg}
+    vals = {"Port": str(port), "CpUrl": cp, "RelayUrl": relay, "AppUrl": app,
+            **{k: (f'{keys[k]} = "{v}"' if v else "") for k, v in given.items()}}
+    return re.sub(r"\$(\w+)", lambda x: vals[x.group(1)], m.group(1))
+
+
+@pytest.mark.parametrize("extra", [{}, {"client": "rly-cli-1", "agent": "rly-agt-2", "cfg": "/data/claude"}])
+def test_template_matches_install_ps1(extra):
+    """맥·리눅스 설정(render_template)과 Windows 설정(install.ps1 인라인)은 섹션·키·값이 같아야 한다 — 한쪽만 고치면
+    OS 마다 다르게 도는 Host 가 생긴다. 템플릿에만 있는 섹션(hooks·push·e2ee)은 코드 기본값과 같은 값이라 허용."""
+    import tomllib
+    args = dict(port=5123, cp="https://cp.example/cp", relay="wss://r.example/ws", app="https://r.example/app")
+    ps = tomllib.loads(_install_ps1_toml(**args, **extra))
+    mine = tomllib.loads(appconfig.render_template(
+        port=args["port"], cp_url=args["cp"], relay_url=args["relay"], app_url=args["app"],
+        client_token=extra.get("client"), agent_token=extra.get("agent"), claude_config_dir=extra.get("cfg")))
+    assert set(ps) <= set(mine), f"install.ps1 에만 있는 섹션: {set(ps) - set(mine)}"
+    for section, body in ps.items():
+        assert mine[section] == body, section
 
 
 # ---- 포트 폴백 ----
@@ -127,3 +178,46 @@ def test_gives_up_when_whole_range_busy(monkeypatch):
     monkeypatch.setattr(server, "_port_free", lambda h, p: False)
     monkeypatch.setattr(server, "_clewpath_already_there", lambda h, p: False)
     assert server.resolve_port("127.0.0.1", 5100, 5) is None
+
+
+def test_port_free_is_decided_by_osdep(monkeypatch):
+    """판정은 OS 별(맥·리눅스는 TIME_WAIT 를 꿰뚫어 본다, Windows 는 0.28 그대로). server._port_free 는 얇은 이름."""
+    from session_manager import osdep
+    seen = []
+    monkeypatch.setattr(osdep, "port_free", lambda h, p: seen.append((h, p)) or False)
+    assert server._port_free("127.0.0.1", 5100) is False and seen == [("127.0.0.1", 5100)]
+
+
+def test_clewpath_probe_ignores_http_proxy(monkeypatch):
+    """S28: 같은 포트에 ClewPath 가 있으면 멈춘다 — 그 확인 요청이 http_proxy 를 타면(맥·리눅스 urllib 기본) '없다'로
+    오판해 두 번째 인스턴스가 옆 포트에 뜬다. 루프백 확인은 프록시를 쓰지 않는다."""
+    import http.server
+    import json
+    import threading
+    import urllib.request
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            body = json.dumps({"claude_home": "/x"}).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        port = srv.server_address[1]
+        for k in ("no_proxy", "NO_PROXY"):
+            monkeypatch.delenv(k, raising=False)
+        monkeypatch.setenv("http_proxy", "http://127.0.0.1:9")      # 닫힌 포트 — 프록시를 타면 실패한다
+        with pytest.raises(OSError):                                 # 시험 전제: 기본 urlopen 은 정말 프록시를 탄다
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/api/owner/diagnostics", timeout=3)
+        assert server._clewpath_already_there("127.0.0.1", port) is True
+        assert server._clewpath_already_there("0.0.0.0", port) is True
+    finally:
+        srv.shutdown()
+        srv.server_close()

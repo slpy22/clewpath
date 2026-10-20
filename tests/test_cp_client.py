@@ -346,6 +346,56 @@ def test_manual_room_still_works_without_cp(monkeypatch):
     assert cfg["room"] == "home-manual"
 
 
+# ---- ★회귀★ 폴백 포트로 뜬 Host 의 커넥터는 실제로 연 포트로 프록시해야 한다(posix-install.md 4.4) ----
+def test_relay_local_base_follows_bound_port(monkeypatch):
+    """설정 포트(5100)가 사용 중이라 5101 로 떴는데 커넥터가 SM_PORT(5100)로 프록시하면 폰 요청이 남의 서버로 간다."""
+    from session_manager import connector as C
+    monkeypatch.setenv("SM_RELAY_URL", "wss://relay.test/ws")
+    monkeypatch.setenv("SM_RELAY_AGENT_TOKEN", "rly-agt-x")
+    monkeypatch.setenv("SM_RELAY_ROOM", "home-manual")
+    monkeypatch.setenv("SM_PORT", "5100")
+    monkeypatch.delenv("SM_LOCAL_BASE", raising=False)
+    assert C.relay_config_from_env()["local_base"] == "http://127.0.0.1:5100"
+    assert C.relay_config_from_env(5101)["local_base"] == "http://127.0.0.1:5101"
+    assert C.relay_config_from_env(None)["local_base"] == "http://127.0.0.1:5100"
+    monkeypatch.setenv("SM_LOCAL_BASE", "http://127.0.0.1:7000")          # 명시 지정은 그대로 이긴다
+    assert C.relay_config_from_env(5101)["local_base"] == "http://127.0.0.1:7000"
+
+
+def test_lifespan_hands_bound_port_to_connector(fake_claude_home, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from session_manager import connector as C, server as S, updater
+    for k in ("SM_RELAY_URL", "SM_RELAY_ROOM", "SM_RELAY_AGENT_TOKEN", "SM_CP_URL"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("SM_HOST", "127.0.0.1")
+    seen = []
+    monkeypatch.setattr(C, "relay_config_from_env", lambda bound_port=None: seen.append(bound_port))
+    monkeypatch.setattr(updater, "BOUND_PORT", 5107)
+    with TestClient(S.create_app()):
+        pass
+    assert seen == [5107]
+    assert os.environ.get("SM_PORT") != "5107", "SM_PORT 는 고쳐 쓰지 않는다(러너를 거쳐 다음 Host 로 이어져 포트가 계속 밀린다)"
+
+
+def test_provision_display_name_defaults_to_machine_name(monkeypatch):
+    """CP 관리 화면의 PC 이름 — Windows 는 COMPUTERNAME(그대로), 맥·리눅스는 빈 이름 대신 hostname(appconfig.machine_name)."""
+    from session_manager import appconfig
+    monkeypatch.setenv("SM_CP_URL", "http://cp.test")
+    monkeypatch.setattr(appconfig, "machine_name", lambda: "my-mac")
+    bodies = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        bodies.append(json.loads(request.content))
+        return httpx.Response(200, json={"connector_id": "c_1", "room_key": "rm_1",
+                                         "credential_public_id": "pub", "secret": "cxs"})
+
+    with _REAL_CLIENT(transport=httpx.MockTransport(handler)) as client:
+        assert cp_client.provision(client)
+        assert cp_client.provision(client, display_name="직접 지은 이름")
+    assert [b["display_name"] for b in bodies] == ["my-mac", "직접 지은 이름"]
+
+
 # ---- 커넥터 URI 구성: JWT 첨부 / fallback ----
 def _connector():
     from session_manager.connector import Connector

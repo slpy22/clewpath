@@ -7,6 +7,13 @@ settings.json 은 사용자의 전역 Claude 설정이다. 여기가 병합이 �
 from __future__ import annotations
 
 import json
+import os
+import shutil
+import stat
+import subprocess
+import sys
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
@@ -42,7 +49,116 @@ def test_register_fresh(home):
     assert "||" not in cmd                          # PS 5.1 파서 에러(타 PC 실사고)
     assert "@- " not in cmd and '"@-"' in cmd       # 맨몸 @- 는 PS 스플래팅 파서 에러
     assert '-H Content-Type:application/json' in cmd  # 공백/인용 헤더 금지(셸 지뢰)
-    assert "curl.exe" in cmd                        # PS 의 curl 별칭(IWR) 회피
+    from session_manager import osdep
+    assert cmd.split()[0] == osdep.CURL               # Windows 는 curl.exe(PS 의 curl 별칭 IWR 회피)
+    assert ("curl.exe" in cmd) is osdep.IS_WIN        # 맥·리눅스엔 curl.exe 가 없다
+
+
+def test_hook_command_uses_this_os_curl(monkeypatch):
+    """맥·리눅스 설치본의 훅이 curl.exe 를 부르면 매 이벤트가 'command not found' 로 버려진다(posix-install.md 4.4)."""
+    from session_manager import osdep
+    monkeypatch.setattr(osdep, "CURL", "curl")
+    cmd = hooks.hook_command(5101)
+    assert cmd.startswith("curl -s -m 3 ") and "curl.exe" not in cmd
+    assert cmd.endswith("http://127.0.0.1:5101/api/hooks/event")
+    monkeypatch.setattr(osdep, "CURL", "curl.exe")
+    assert hooks.hook_command(5101).startswith("curl.exe -s -m 3 ")
+
+
+def test_hook_command_skips_proxies_on_posix_and_keeps_windows_text(monkeypatch):
+    """맥·리눅스 훅은 claude 의 env(사용자 셸)에서 돈다 — curl 은 127.0.0.1 에도 http_proxy·ALL_PROXY 를 써서, 훅 내용
+    (프롬프트)이 프록시로 새고 Host 에는 닿지 않는다(명세 3.0 '루프백 HTTP 는 프록시를 쓰지 않는다'). 따옴표 없는
+    --noproxy 127.0.0.1 은 sh·bash·cmd 공통 문법이다. Windows 명령은 글자 하나 바뀌지 않는다 — 바뀌면 업데이트 때 모든 PC 의
+    settings.json 을 다시 쓴다."""
+    from session_manager import osdep
+    monkeypatch.setattr(osdep, "IS_WIN", False)
+    monkeypatch.setattr(osdep, "CURL", "curl")
+    assert hooks.hook_command(5100) == ('curl -s -m 3 --noproxy 127.0.0.1 --data-binary "@-" '
+                                        '-H Content-Type:application/json http://127.0.0.1:5100/api/hooks/event')
+    monkeypatch.setattr(osdep, "IS_WIN", True)
+    monkeypatch.setattr(osdep, "CURL", "curl.exe")
+    assert hooks.hook_command(5100) == ('curl.exe -s -m 3 --data-binary "@-" '
+                                        '-H Content-Type:application/json http://127.0.0.1:5100/api/hooks/event')
+
+
+class _Recorder:
+    """받은 요청(요청 줄·본문)을 모으고 200 으로 답하는 HTTP 수신기 — 가짜 Host·가짜 프록시."""
+
+    def __init__(self):
+        self.got: list[str] = []
+        box = self
+
+        class H(BaseHTTPRequestHandler):
+            def do_POST(self):  # noqa: N802
+                body = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+                box.got.append(f"{self.requestline} {body.decode('utf-8', 'replace')}")
+                self.send_response(200)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            def log_message(self, *a):
+                pass
+
+        self.srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+        self.port = self.srv.server_address[1]
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+
+    def close(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+
+
+@pytest.mark.skipif(sys.platform == "win32" or not shutil.which("curl"), reason="맥·리눅스 훅 명령(sh + curl)")
+def test_posix_hook_reaches_the_host_when_the_shell_has_a_proxy():
+    """프록시 env 가 있는 셸의 claude 에서도 훅 이벤트는 Host 로 가고 프록시에는 한 바이트도 가지 않는다."""
+    host, proxy = _Recorder(), _Recorder()
+    try:
+        cmd = hooks.hook_command(host.port)
+        base = {k: v for k, v in os.environ.items()
+                if k.lower() not in ("http_proxy", "https_proxy", "all_proxy", "no_proxy")}
+        names = ("http_proxy", "ALL_PROXY", "all_proxy")
+        for var in names:
+            r = subprocess.run(["/bin/sh", "-c", cmd], env={**base, var: f"http://127.0.0.1:{proxy.port}"},
+                               input=b'{"hook_event_name":"UserPromptSubmit","prompt":"SECRET-PROMPT"}',
+                               capture_output=True, timeout=30)
+            assert r.returncode == 0, (var, r.stdout, r.stderr)
+        assert proxy.got == [], "훅 내용이 프록시로 샜다"
+        assert len(host.got) == len(names) and all("SECRET-PROMPT" in g and "/api/hooks/event" in g for g in host.got)
+    finally:
+        host.close()
+        proxy.close()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX 권한 비트(Windows 는 프로필 ACL 을 물려받는다)")
+def test_first_backup_is_owner_only_like_the_settings(home):
+    """첫 등록 때 남기는 settings.json.bak-clewpath 에는 settings.json 의 env 비밀(API 토큰 등)이 그대로 든다 — umask(022)로
+    만들면 0644 라 같은 PC 의 다른 사용자가 읽는다. 제거 때도 안내만 하고 남기므로(결정 Q6) 늘 0600 으로 만든다."""
+    sp = hooks.settings_path()
+    sp.parent.mkdir(parents=True, exist_ok=True)
+    os.chmod(sp.parent, 0o755)
+    sp.write_text(json.dumps({"env": {"ANTHROPIC_AUTH_TOKEN": "sk-secret-example"}}), encoding="utf-8")
+    os.chmod(sp, 0o600)
+    old = os.umask(0o022)
+    try:
+        assert hooks.ensure_registered(5100) is True
+    finally:
+        os.umask(old)
+    bak = sp.with_name("settings.json.bak-clewpath")
+    assert stat.S_IMODE(bak.stat().st_mode) == 0o600
+    assert stat.S_IMODE(sp.stat().st_mode) == 0o600, "원본 권한은 그대로"
+
+
+def test_first_backup_keeps_the_original_bytes_once(home):
+    """백업은 첫 수정 직전의 원본 그대로(BOM 포함), 한 번만 — 다음 등록이 덮어쓰지 않는다."""
+    sp = hooks.settings_path()
+    sp.parent.mkdir(parents=True, exist_ok=True)
+    raw = b'\xef\xbb\xbf{"model": "opus", "env": {"K": "v"}}\r\n'
+    sp.write_bytes(raw)
+    assert hooks.ensure_registered(5100) is True
+    bak = sp.with_name("settings.json.bak-clewpath")
+    assert bak.read_bytes() == raw
+    assert hooks.ensure_registered(5101) is True                      # 포트가 바뀌어 다시 쓴다
+    assert bak.read_bytes() == raw, "백업은 첫 원본 하나"
 
 
 def test_register_is_idempotent(home):

@@ -36,6 +36,8 @@ $include = @(
     "pyproject.toml",
     "uv.lock",          # 의존성 고정 — 없으면 사용자마다 버전이 갈린다
     "install.ps1",
+    "install.sh",       # 맥·리눅스 설치·제거(get.sh 가 stage 의 install.sh 로 넘긴다) — 네 곳 PAYLOAD 와 짝
+    "uninstall.sh",
     "README.md",
     "LICENSE"
 )
@@ -44,6 +46,8 @@ $include = @(
 $excludePatterns = @(
     "__pycache__", "*.pyc", ".venv", "dist",
     "start-public.ps1", "start-relay.ps1", "start-connector.ps1",
+    "start-connector.sh", ".clewpath-install",   # 맥·리눅스 설치본의 생성물(렌더한 런처·설치 기록). 원본 템플릿
+                                                 # start-connector.template.sh 는 부분일치에 걸리지 않는다
     "release-keys", "*.pem",          # 릴리스 서명 개인키 — 최우선 차단
     "*.db", "*.env", ".env", "*.log"
 )
@@ -121,7 +125,7 @@ if ($keyFiles.Count -gt 0) {
 
 $leaks = @()
 Get-ChildItem $stage -Recurse -File | Where-Object {
-    $_.Extension -in @(".py", ".ps1", ".toml", ".md", ".html", ".json", ".txt", ".yml", ".yaml")
+    $_.Extension -in @(".py", ".ps1", ".sh", ".toml", ".md", ".html", ".json", ".txt", ".yml", ".yaml")
 } | ForEach-Object {
     $text = Get-Content $_.FullName -Raw -ErrorAction SilentlyContinue
     if (-not $text) { return }
@@ -148,6 +152,30 @@ if ($leaks.Count -gt 0) {
     exit 1
 }
 Write-Host "  [OK]   비밀 스캔 통과" -ForegroundColor Green
+
+# ── 맥·리눅스 셸 스크립트 형식 (게이트) ──────────────────────
+# /bin/sh 는 줄끝의 CR 한 글자에도 깨진다('\r: not found'). 편집기가 CRLF·BOM 으로 저장해도 .gitattributes(*.sh eol=lf)
+# 정규화 때문에 git status 는 깨끗해 보여 release.ps1 의 '깨끗한 트리' 게이트가 못 잡는다 — 그래서 받은 바이트를 여기서 본다.
+# 실행 비트는 zip 에 없으므로(늘 /bin/sh 파일 로 부른다) 1행은 #!/bin/sh 여야 한다(posix-install.md 3.0).
+$badSh = @()
+Get-ChildItem $stage -Recurse -File | Where-Object { $_.Extension -eq ".sh" } | ForEach-Object {
+    $rel = $_.FullName.Substring($stage.Length).TrimStart('\')
+    $b = [System.IO.File]::ReadAllBytes($_.FullName)
+    if ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF) { $badSh += "$rel (BOM)"; return }
+    if ([Array]::IndexOf($b, [byte]13) -ge 0) { $badSh += "$rel (CR - 줄끝이 CRLF)"; return }
+    $nl = [Array]::IndexOf($b, [byte]10)
+    $first = if ($nl -ge 0) { [System.Text.Encoding]::ASCII.GetString($b, 0, $nl) } else { [System.Text.Encoding]::ASCII.GetString($b) }
+    if ($first -cne "#!/bin/sh") { $badSh += "$rel (1행이 #!/bin/sh 가 아님)" }
+}
+if ($badSh.Count -gt 0) {
+    Write-Host ""
+    Write-Host "  [FAIL] 맥·리눅스 셸 스크립트 형식이 어긋났습니다 - 패키징 중단" -ForegroundColor Red
+    $badSh | ForEach-Object { Write-Host "     $_" -ForegroundColor Red }
+    Write-Host "  LF 줄끝·BOM 없이·1행 #!/bin/sh 로 저장한 뒤 다시 실행하세요." -ForegroundColor Yellow
+    Remove-Item -Recurse -Force $stage
+    exit 1
+}
+Write-Host "  [OK]   셸 스크립트 형식 통과 (LF·BOM 없음·#!/bin/sh)" -ForegroundColor Green
 
 # ── zip ──────────────────────────────────────────────────────
 if (Test-Path $zipPath) {
