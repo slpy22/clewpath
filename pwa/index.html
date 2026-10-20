@@ -1303,14 +1303,15 @@ class Conn{
           dispatch(m);
         }).catch(()=>{});
       };
+      // 소켓이 닫혀 끝난 시도는 sock 표시 — 다시 걸지 말지는 그 닫힘(onclose → _scheduleReconnect(code))이 사유에 맞게 정한다
       ws.onclose=(ev)=>{
-        if(!done){done=true;rej(new Error(this._closeMsg(ev&&ev.code)));}
+        if(!done){done=true;rej(Object.assign(new Error(this._closeMsg(ev&&ev.code)),{sock:true, code:ev&&ev.code}));}
         // 내려놓은 옛 소켓(logout)의 늦은 닫힘 통지 — 정리는 logout 이 이미 했다. 새 연결(새 PC)의 대기 요청·스트림을 끊거나
         // 재접속을 하나 더 걸지 않는다(새 연결이 선 뒤에 오면 그랬다)
         if(this._gone.has(ws)) return;
         this._drop();
         this._scheduleReconnect(ev&&ev.code); };
-      ws.onerror=()=>{ if(!done){done=true;rej(new Error('연결 실패'));} };
+      ws.onerror=()=>{ if(!done){done=true;rej(Object.assign(new Error('연결 실패'),{sock:true}));} };   // 브라우저는 error 뒤에 늘 close 를 보낸다
     });
   }
   // 지금 연결이 끊긴 것과 같게 정리한다(소켓 닫힘·logout): 대기 요청은 disconnected, 스트림은 eof, 상태 표시는 끊김.
@@ -1439,7 +1440,10 @@ class Conn{
       if(g!==this._gen||this._stopped) return;      // 갱신을 기다리는 사이 PC 를 바꿨거나 로그아웃했다 — 그쪽 연결을 두고 그만둔다
       const p=this.connect(this._room,this._token), mine=this._gen;   // connect 가 세대를 하나 올린다(첫 await 전에)
       // 그사이 PC 를 바꿨거나 로그아웃해 밀려난 시도의 실패는 다시 걸지 않는다 — 걸면 새 PC 로 재접속을 하나 더 해 지금 연결을 고아로 만들었다
-      try{ await p; }catch(e){ if(mine===this._gen) this._scheduleReconnect(); return; }
+      // 소켓이 닫혀 끝난 실패(e.sock)는 그 닫힘(onclose)이 이미 사유에 맞게 다시 걸었다 — 4403(room 무효)·4426(버전 낮음)처럼 재시도해도
+      // 소용없는 사유는 안내만 하고 멈춘다. 여기서 코드 없이 또 걸면 그런 사유에도 최대 30초 간격으로 끝없이 다시 붙고 매번 안내했다(검토 3회차).
+      // 소켓을 만들지도 못한 실패(주소 오류 등)만 여기서 다시 건다
+      try{ await p; }catch(e){ if(mine===this._gen&&!(e&&e.sock)) this._scheduleReconnect(); return; }
       if(mine!==this._gen) return;
       this._retry=0;
       const hid=detailHiddenOnPhone();          // loadList 가 목록 칸으로 돌리기 전에 — 폰에서 숨겨 둔 터미널인가

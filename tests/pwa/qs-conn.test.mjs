@@ -389,3 +389,32 @@ test("T63b 페어링 화면의 저장된 PC·머리 줄 PC 고르기도 auth_inv
     header: { entered: 0, stateA: "changed", connectedToast: false },
   });
 });
+
+// ---------------------------------------------------------------- 결함 4: 재접속이 4403·4426 으로 거부돼도 끝없이 다시 붙음
+test("T64 끊긴 뒤 재접속이 4426(앱/커넥터 버전 낮음)·4403(room 무효)으로 거부되면 안내 한 번으로 멈춘다 — 보통 끊김(1006)은 지금처럼 다음 백오프 하나만", async () => {
+  const run = async (code) => {
+    const ctx = await load({ setup: (sb) => { regIds(sb); } });
+    const timers = holdTimers(ctx);
+    const sockets = browserWs(ctx);
+    ev(ctx, "globalThis.__toasts = []; toast = (m) => __toasts.push(String(m)); loadList = async () => {}; reattachForegroundTab = () => {}; refreshVer = async () => {};");
+    const p = ev(ctx, "conn._stopped = false; conn.connect('roomA', 'tok')");
+    await until(() => sockets.length === 1);
+    sockets[0].open(); sockets[0].push({ type: "hello", peer_present: true, cid: "c1" }); await p; await settle();
+    sockets[0].drop(1006); await settle();                              // 망이 잠깐 끊김 → 재접속 예약
+    const rounds = [];
+    for (let i = 0; i < 3; i++) {
+      const rt = reconnectTimers(timers); if (!rt.length) break;
+      timers.splice(timers.indexOf(rt[0]), 1); rt[0].f();
+      await until(() => sockets.length === 2 + i);
+      const ws = sockets.at(-1); ws.open(); ws.drop(code);              // 재기동한 릴레이가 이 판을 거부
+      await settle();
+      rounds.push(reconnectTimers(timers).length);
+    }
+    return { rounds, sockets: sockets.length, notices: ev(ctx, "__toasts.filter((m) => !/다시 연결됨/.test(m)).length") };
+  };
+  assert.deepEqual(plain({ v4426: await run(4426), v4403: await run(4403), v1006: await run(1006) }), {
+    v4426: { rounds: [0], sockets: 2, notices: 1 },
+    v4403: { rounds: [0], sockets: 2, notices: 1 },
+    v1006: { rounds: [1, 1, 1], sockets: 4, notices: 0 },
+  });
+});
