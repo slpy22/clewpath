@@ -95,7 +95,7 @@ def test_hours_option_and_job_state(terms):
     with pytest.raises(ValueError):
         hk.set_options(hours=3)
     hk.set_options(job="idle_sessions", on=False)
-    assert hk._due(time.time()) == ["models", "worklog", "serve_keep", "cleanup_watch"], "꺼진 작업은 때가 돼도 줄에 안 선다"
+    assert hk._due(time.time()) == ["models", "worklog", "serve_keep", "cleanup_watch", "fork_cleanup"], "꺼진 작업은 때가 돼도 줄에 안 선다"
     res = hk.run_job("idle_sessions")
     st = {j["id"]: j for j in hk.status()["jobs"]}
     assert st["idle_sessions"]["last_ok"] is True and st["idle_sessions"]["last_summary"] == res["summary"]
@@ -151,7 +151,7 @@ def test_api_and_remote_privilege(fake_claude_home, monkeypatch):
     from session_manager import labels
     with TestClient(create_app()) as c:
         st = c.get("/api/owner/housekeeping").json()
-        assert {j["id"] for j in st["jobs"]} == {"idle_sessions", "models", "worklog", "serve_keep", "cleanup_watch"} and st["idle_hours"] == 4
+        assert {j["id"] for j in st["jobs"]} == {"idle_sessions", "models", "worklog", "serve_keep", "cleanup_watch", "fork_cleanup"} and st["idle_hours"] == 4
         assert st["builtin"] and st["idle_candidates"] == []
         assert c.post("/api/owner/housekeeping", json={"hours": 8}).json()["idle_hours"] == 8
         assert c.post("/api/owner/housekeeping", json={"hours": 5}).status_code == 400

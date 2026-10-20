@@ -292,11 +292,9 @@ async def run_resume_api(ws, session_id: str, skip_permissions: bool = True,
                         proc.kill(); proc.wait(timeout=2)
                     except Exception:  # noqa: BLE001
                         pass
-                d = lifecycle.delete_session(fork_id, dry_run=False, wait_live_s=3)
-                if d.get("error") == "session_live":
-                    print(f"[resume] fork {fork_id[:8]} 삭제 보류: 아직 살아 있음({d.get('reason')}); 목록에서 확인")
-            except Exception:  # noqa: BLE001
-                pass
+                lifecycle.delete_fork(fork_id, origin=session_id)  # 못 지우면 대기 목록 → 정기 작업이 다시 지움
+            except Exception as e:  # noqa: BLE001
+                print(f"[resume] fork {fork_id[:8]} 정리 실패: {e}")
         # 누적 비용을 사용량 집계에 반영(멀티턴 실제 비용을 일일 한도에 잡히게)
         if on_finish:
             try:
@@ -364,7 +362,7 @@ def ephemeral_ask(session_id: str, prompt: str, skip_permissions: bool = True,
                 proc.kill(); proc.wait(timeout=3)
         except Exception:  # noqa: BLE001
             pass
-        d = lifecycle.delete_session(fork_id, dry_run=False, wait_live_s=3)
+        d = lifecycle.delete_fork(fork_id, origin=session_id)
         fork_deleted = bool(d.get("deleted"))
 
     return {

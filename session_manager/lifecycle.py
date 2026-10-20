@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import json
 import shutil
+import threading
 import time
 from pathlib import Path
 
@@ -145,6 +146,87 @@ def delete_session(session_id: str, dry_run: bool = True, force: bool = False,
     return {"dry_run": False, "session_id": session_id,
             "deleted": moved, "errors": errors,
             "trash": str(bucket), "recoverable": True}
+
+
+# ---- API fork 정리(0.23.9) ----
+# API 재개(/api/v1/resume·ephemeral_ask)는 원본 대신 fork 를 만들어 쓰고 끝나면 지운다. 방금 종료한
+# claude 의 레지스트리(~/.claude/sessions/<pid>.json)가 3초 넘게 남으면 delete_session 이 session_live 로
+# 보류하는데, 다시 시도하는 곳이 없어 fork 가 쌓였다(10-19 실측 6건). 보류분은 대기 목록에 적고
+# 정기 작업(housekeeping fork_cleanup)이 다시 지운다.
+_fork_lock = threading.Lock()
+
+
+def _fork_pending_file() -> Path:
+    return config.data_dir() / "fork_pending.json"
+
+
+def _fork_pending_load() -> dict:
+    try:
+        d = json.loads(_fork_pending_file().read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _fork_pending_save(d: dict) -> None:
+    f = _fork_pending_file()
+    f.parent.mkdir(parents=True, exist_ok=True)
+    tmp = f.with_suffix(".tmp")
+    tmp.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.replace(f)
+
+
+def delete_fork(fork_id: str, origin: str | None = None, wait_live_s: float = 3.0) -> dict:
+    """끝난 API fork 를 휴지통으로 옮긴다. 못 지우면(아직 살아 있음·오류) 대기 목록에 적어 나중에 다시 지운다."""
+    try:
+        d = delete_session(fork_id, dry_run=False, wait_live_s=wait_live_s)
+    except Exception as e:  # noqa: BLE001
+        d = {"session_id": fork_id, "deleted": [], "error": f"{type(e).__name__}: {e}"}
+    if d.get("deleted") or d.get("error") == "세션을 찾을 수 없습니다.":
+        return d
+    reason = d.get("reason") or d.get("error") or "unknown"
+    with _fork_lock:
+        pend = _fork_pending_load()
+        e = pend.get(fork_id) or {"since": time.time(), "origin": origin, "tries": 0}
+        e["reason"] = reason
+        e["tries"] = int(e.get("tries") or 0) + 1
+        pend[fork_id] = e
+        _fork_pending_save(pend)
+    print(f"[fork] {fork_id[:8]} 삭제 보류({reason}) → 정리 대기 목록에 적음")
+    return {**d, "pending": True}
+
+
+def retry_forks() -> dict:
+    """대기 목록의 fork 를 다시 지운다. 살아 있으면 남겨 두고, 이미 없으면 목록에서 뺀다."""
+    with _fork_lock:
+        pend = _fork_pending_load()
+    deleted, kept, gone = [], [], []
+    for fid, e in list(pend.items()):
+        if not _related_paths(fid):
+            gone.append(fid)
+            continue
+        live = _live_reason(fid)
+        if live:
+            kept.append(fid)
+            continue
+        try:
+            d = delete_session(fid, dry_run=False)
+        except Exception as ex:  # noqa: BLE001
+            d = {"error": f"{type(ex).__name__}: {ex}"}
+        if d.get("deleted"):
+            deleted.append(fid)
+        else:
+            kept.append(fid)
+            print(f"[fork] {fid[:8]} 재삭제 실패: {d.get('error')}")
+    with _fork_lock:
+        cur = _fork_pending_load()
+        for fid in deleted + gone:
+            cur.pop(fid, None)
+        for fid in kept:
+            if fid in cur:
+                cur[fid]["tries"] = int(cur[fid].get("tries") or 0) + 1
+        _fork_pending_save(cur)
+    return {"deleted": deleted, "kept": kept, "gone": gone}
 
 
 def list_trash() -> list[dict]:

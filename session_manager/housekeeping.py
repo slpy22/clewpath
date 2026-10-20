@@ -41,6 +41,8 @@ JOBS = {
                    "desc": "API 가 요청마다 fork 해서만 쓰는 세션(가드레일 프로필이 있는 세션)은 원본이 갱신되지 않아 claude 가 보관 기간 뒤 지웁니다. 지워지기 3일 전에 원본과 한 번 짧게 주고받아 기한을 늘립니다"},
     "cleanup_watch": {"name": "지워질 세션 예고", "interval": 24 * 3600, "default_on": True,
                       "desc": "claude 가 보관 기간(기본 30일)이 지난 대화 기록을 지우기 전에, 3일 안에 지워질 세션을 폰으로 한 번 알립니다"},
+    "fork_cleanup": {"name": "API 사본 정리", "interval": 15 * 60, "default_on": True,
+                     "desc": "외부 API 가 원본 대신 쓰고 남긴 사본(fork) 중 끝날 때 바로 못 지운 것을 휴지통으로 옮깁니다(아직 실행 중이면 다음에)"},
 }
 # 화면에 '자동(항상)' 으로만 보여 주는 기존 주기 작업(켜고 끄는 대상 아님)
 BUILTIN_INFO = [
@@ -433,13 +435,18 @@ def keep_serving(metas=None, now: float | None = None, run=None) -> dict:
     return {"kept": kept, "failed": failed, "skipped": skipped, "summary": summary}
 
 
+def _run_fork_cleanup() -> dict:
+    from session_manager import lifecycle
+    return lifecycle.retry_forks()
+
+
 def _run_worklog() -> dict:
     from session_manager import worklog
     return worklog.collect()
 
 
 _RUNNERS = {"idle_sessions": reap_idle, "models": refresh_models, "serve_keep": keep_serving,
-            "cleanup_watch": watch_cleanup, "worklog": _run_worklog}
+            "cleanup_watch": watch_cleanup, "worklog": _run_worklog, "fork_cleanup": _run_fork_cleanup}
 
 
 def run_job(jid: str) -> dict:

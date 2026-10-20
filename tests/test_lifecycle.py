@@ -166,3 +166,36 @@ def test_move_session_blocks_live(fake_claude_home, monkeypatch):
     monkeypatch.setattr(webterm, "has_terminal", lambda sid: True)
     r = lifecycle.move_session("mv222222", r"F:\x", dry_run=False)
     assert "error" in r and "실행 중" in r["error"]
+
+
+def test_delete_fork_pending_then_retry(fake_claude_home, monkeypatch):
+    """API fork 가 끝날 때 아직 '살아 있음'으로 보이면 대기 목록에 적고, 정기 작업이 나중에 지운다(0.23.9 — 10-19 fork 6건 누적)."""
+    jsonl = _make(fake_claude_home, sid="fork0001")
+    live = {"fork0001": "idle"}
+    monkeypatch.setattr(lifecycle, "_live_reason", lambda sid: live.get(sid))
+    d = lifecycle.delete_fork("fork0001", origin="base", wait_live_s=0)
+    assert d["pending"] is True and jsonl.exists()
+    pend = lifecycle._fork_pending_load()
+    assert pend["fork0001"]["reason"] == "idle" and pend["fork0001"]["origin"] == "base"
+    assert lifecycle._fork_pending_file().parent == config.data_dir()
+
+    r = lifecycle.retry_forks()                      # 아직 살아 있으면 남겨 둔다
+    assert r["kept"] == ["fork0001"] and jsonl.exists()
+
+    live.clear()                                      # 프로세스가 끝나 레지스트리가 사라짐
+    r = lifecycle.retry_forks()
+    assert r["deleted"] == ["fork0001"] and not jsonl.exists()
+    assert lifecycle._fork_pending_load() == {}
+    assert lifecycle.list_trash()[0]["session_id"] == "fork0001"   # 휴지통 이동(복구 가능)
+
+
+def test_delete_fork_immediate_and_gone(fake_claude_home, monkeypatch):
+    monkeypatch.setattr(lifecycle, "_live_reason", lambda sid: None)
+    jsonl = _make(fake_claude_home, sid="fork0002")
+    d = lifecycle.delete_fork("fork0002")
+    assert d["deleted"] and not d.get("pending") and not jsonl.exists()
+    assert lifecycle._fork_pending_load() == {}
+    # 대기 목록에 있었는데 다른 경로로 이미 사라진 fork 는 목록에서만 뺀다
+    lifecycle._fork_pending_save({"gone0003": {"since": 0, "tries": 1}})
+    r = lifecycle.retry_forks()
+    assert r["gone"] == ["gone0003"] and lifecycle._fork_pending_load() == {}
