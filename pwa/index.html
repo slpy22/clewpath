@@ -1195,6 +1195,10 @@ class Conn{
       ws._fail=(e)=>{ if(!done){done=true;rej(e);} };   // 내려놓을 때(_retire) hello 를 기다리던 이 시도를 바로 끝낸다
       ws.onopen=()=>{};
       const dispatch=(m)=>{
+        // 다른 기기(cid) 앞으로 온 프레임은 버린다 — 릴레이는 모르는(떠난) cid 앞 프레임을 방 전체에 보내고, 기기마다 요청 번호를
+        // 1 부터 세서 같은 번호인 내 대기 요청·스트림·통지로 들어갔다(남의 응답·출력이 섞이고, 남의 eof 가 내 스트림을 끝내고,
+        // 남의 '해제됨' 통지에 자격 상실 화면이 떴다 — 검토 2회차). cid 를 싣지 않는 옛 커넥터의 프레임은 예전 그대로
+        if(m.cid!=null&&this.cid!=null&&m.cid!==this.cid) return;
         if(m.type==='res'||m.type==='pong'){
           // 이 응답의 대기는 먼저 꺼내 둔다 — 아래 onauth(자격 상실 → logout)가 남은 대기를 disconnected 로 정리해도 이 응답은 그대로 건넨다
           const w=this.waiters.get(m.id); if(w) this.waiters.delete(m.id);

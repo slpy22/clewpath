@@ -287,3 +287,34 @@ test("T44 릴레이: CP 조회를 기다리던 재접속(이전 PC)이 PC 전환
   assert.deepEqual(got, all(["1006", "4402"], { fetched: ["cpA", "cpA", "cpB"], sockets: 2, current: true, wsB: 1, cjwt: "jwtB",
     authed: [["roomA", "devA"], ["roomB", "devB"]], stateB: null, stopped: false, reconnects: 0 }));
 });
+
+test("T45 릴레이: 다른 기기(cid) 앞으로 온 프레임은 같은 번호의 내 스트림·대기 요청·통지로 받지 않는다 — 내 cid·cid 없는 프레임은 그대로(평문·E2EE)", async () => {
+  const run = async (enc) => {
+    const ctx = await load({ setup: (sb) => { if (enc) sb.localStorage.setItem("sm_e2ee_roomA", rk(1)); } });
+    const sockets = browserWs(ctx, { deferClose: false });
+    ev(ctx, "toast = () => {}; globalThis.__notice = []; conn.onnotice = (m) => __notice.push(m.kind);");
+    const ws = await connectWs(ctx, sockets, "roomA");
+    const me = ev(ctx, "conn.cid");
+    ev(ctx, "globalThis.__got = []; conn.startMonitor('x', 'x', (d, eof) => __got.push(eof ? 'eof' : d));"
+          + "globalThis.__res = 'pending'; conn.req('list_sessions', {}).then((r) => { __res = r.data; });");
+    await settle();
+    const [mid, rid] = (await wire(ctx, ws, enc && "roomA")).map((f) => f.id);
+    const pc = enc ? await roomConn(ctx, "roomA") : null;
+    const push = async (m) => ws.push(enc ? { ...(await pc._seal(m)), ...(m.cid ? { cid: m.cid } : {}) } : m);   // E2EE 는 겉에도 cid(릴레이 라우팅)
+    // 릴레이가 방 전체에 보낸 다른 기기(떠난 cid) 앞 프레임 — 기기마다 번호를 1 부터 세서 내 것과 같은 번호다
+    await push({ v: 1, type: "stream", id: mid, cid: "cA_old", data: "남의 관제" });
+    await push({ v: 1, type: "res", id: rid, cid: "cA_old", ok: true, data: { sessions: ["남의 목록"] } });
+    await push({ v: 1, type: "stream", id: mid, cid: "cA_old", eof: true });
+    await push({ v: 1, type: "notice", cid: "cA_old", kind: "device_removed", device: "dA" });
+    await settle();
+    const foreign = { got: ev(ctx, "__got.slice()"), res: ev(ctx, "__res"), notice: ev(ctx, "__notice.slice()") };
+    await push({ v: 1, type: "stream", id: mid, cid: me, data: "내 관제" });
+    await push({ v: 1, type: "stream", id: mid, data: "cid 없음" });           // 옛 커넥터(cid 를 싣지 않음)
+    await push({ v: 1, type: "res", id: rid, cid: me, ok: true, data: { sessions: [] } });
+    await settle();
+    return JSON.parse(JSON.stringify({ foreign, mine: { got: ev(ctx, "__got.slice()"), res: ev(ctx, "__res") } }));   // vm 쪽 객체를 이쪽 값으로
+  };
+  const got = await each(["평문", "E2EE"], (p) => run(p === "E2EE"));
+  assert.deepEqual(got, all(["평문", "E2EE"], { foreign: { got: [], res: "pending", notice: [] },
+                                               mine: { got: ["내 관제", "cid 없음"], res: { sessions: [] } } }));
+});
