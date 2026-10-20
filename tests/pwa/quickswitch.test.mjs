@@ -518,3 +518,121 @@ test("T21 파일 기억은 PC 별(sm_fb_state2_<PC>): 마지막 파일이 21번�
              wrote: { open: ["e:/p|", "e:/p|src"], sort: "mtime", tabs: [{ root: "e:/p", path: "mine.py", pinned: true }], active: "e:/p|mine.py" } },
     oldKept: true });
 });
+
+// ---------------------------------------------------------------- 3단계: 릴레이 PC 전환 정리(T22~)
+// PC 를 바꾸면 이전 PC 의 상세 칸·터미널 탭·파일 상태·지금 화면을 비우고 새 PC 기억을 쓴다(명세 §6-2).
+const X = "xxxxxxxx-1111-2222-3333-444444444444";
+// 터미널 연결을 닫은 순간의 방(sm_room)까지 적는 스텁 — 닫기 신호가 이전 PC 로 갔는지(방을 바꾸기 전에 닫았는지) 본다
+const TC_ROOM = "T.terminal = (sid, cb, opts) => { const h = { sid, cb, opts, closed: false, room: null, close() { h.closed = true; h.room = LS.getItem('sm_room'); }, send() {} }; __tc.push(h); return h; };";
+const TWO_PCS = "pcsUpsert({ room: 'roomA', cs: 'c', cp: 'p', dev: 'dA', name: 'A' }); pcsUpsert({ room: 'roomB', cs: 'c', cp: 'p', dev: 'dB', name: 'B' });";
+const flatEl = (n) => [n, ...(n.children || []).flatMap(flatEl)];
+
+test("T22 PC 전환(switchToPc): 방을 바꾸기 전에 이전 PC 화면을 정리하고(닫기 신호는 이전 PC 로) 터미널 탭·파일·지금 화면을 비운다 — 새 PC 첫 목록 뒤 그 PC 기억으로, 이전 PC 기억은 그대로", async () => {
+  const B_TABS = JSON.stringify({ active: X, list: [{ key: X, sid: X }], mru: [X] });
+  // 파일 기억은 옛 키(PC 구분 없음)에만 — A 폴더(e:/p)와 B 폴더(h:/b) 탭이 섞여 있다. 두 PC 모두 첫 목록 뒤 제 폴더만 옮겨 온다
+  const OLD_FB = JSON.stringify({ open: [], sort: "name", tabs: [{ root: "e:/p", path: "old-a.txt", pinned: true }, { root: "h:/b", path: "b.md", pinned: true }], active: "h:/b|b.md" });
+  const { ctx, pd } = await boot({ setup: (sb) => { sb.localStorage.setItem("sm_room", "roomA"); sb.localStorage.setItem("sm_list_view", "files");
+    sb.localStorage.setItem("sm_tabs_roomB", B_TABS); sb.localStorage.setItem("sm_fb_state2", OLD_FB); } });
+  ev(ctx, TWO_PCS + TC_ROOM + `globalThis.__toasts = []; toast = (m) => __toasts.push(m); maybeShowIosHint = () => {}; refreshPushBtn = () => {};
+    conn.connect = async (room) => { globalThis.__connRoom = room; return {}; };
+    T.list = async () => ({ sessions: SESSIONS.slice() });`);
+  await ev(ctx, "loadList()"); await tick(RENDER);              // PC A 첫 목록(탭 기억 복원 1회 끝, 파일 탐색기가 옛 키에서 A 폴더만 옮김)
+  const fbA = JSON.parse(ctx.localStorage.getItem("sm_fb_state2_roomA") || "null");
+  await ctx.loadTerminal(ev(ctx, "SESSIONS[0]"), false); await tick(RENDER);
+  ev(ctx, `FB.tabs = [fbNewTab('e:/p', 'a.py', true)]; globalThis.__model = FB.tabs[0].model = { disposed: false, dispose() { this.disposed = true; } };
+    FB.active = FB.tabs[0].id; FB.open = new Set(['e:/p|']); FB.kids = { 'e:/p|': { entries: [] } }; fbSaveState();`);
+  const memA = { tabs: ctx.localStorage.getItem("sm_tabs_roomA"), fb: ctx.localStorage.getItem("sm_fb_state2_roomA") };
+  if (!memA.tabs || !memA.fb || ev(ctx, "TABS.list.length") !== 1) throw new Error("출발이 PC A 터미널 탭 1개 + 파일 기억이 아님");
+  ev(ctx, `T.list = async () => ({ sessions: [{ session_id: '${X}', title: 'X', live_terminal: true, cwd: 'H:/b', mtime: 1 }] })`);
+  await ev(ctx, "switchToPc({ room: 'roomB', name: 'B' })");
+  await tick(RENDER);                                              // 새 PC 첫 목록 → 탭 기억·파일 탐색기 복원
+  // 이전 PC 연결이 끊기며 온 끝 알림 뒤 재연결 처리 — 이전 PC 의 터미널로 끌려가지 않는다
+  ev(ctx, "__tc[0].cb(null, true); globalThis.__lt = []; loadTerminal = (s) => { __lt.push(s.session_id); };"); ctx.reattachForegroundTab();
+  assert.deepEqual({
+    closedOn: ev(ctx, "__tc[0].room"), connected: ev(ctx, "__connRoom"), termGone: ev(ctx, "termView.main === null"),
+    pane: { termMode: pd.classList.contains("term-mode"), kids: pd.children.map((c) => String(c.className)).join(","), now: ev(ctx, "PANE_NOW.kind") },
+    modelDisposed: ev(ctx, "__model.disposed"),
+    tabsB: { list: ev(ctx, "TABS.list.map((t) => t.key).join(',')"), active: ev(ctx, "TABS.active"), mru: ev(ctx, "TABS.mru.join(',')") },
+    fbA: fbA && fbA.tabs.map((t) => t.root + "|" + t.path).join(","),
+    fbB: { tabs: ev(ctx, "FB.tabs.map((t) => t.id).join(',')"), kids: ev(ctx, "Object.keys(FB.kids).length"),
+           saved: (JSON.parse(ctx.localStorage.getItem("sm_fb_state2_roomB") || "null") || { tabs: [] }).tabs.map((t) => t.root + "|" + t.path).join(",") },
+    memAKept: ctx.localStorage.getItem("sm_tabs_roomA") === memA.tabs && ctx.localStorage.getItem("sm_fb_state2_roomA") === memA.fb,
+    oldKept: ctx.localStorage.getItem("sm_fb_state2") === OLD_FB,
+    pulledBack: ev(ctx, "__lt.length"),
+  }, {
+    closedOn: "roomA", connected: "roomB", termGone: true,
+    pane: { termMode: false, kids: "detail-empty", now: "empty" },
+    modelDisposed: true,
+    tabsB: { list: X, active: X, mru: X },
+    fbA: "e:/p|old-a.txt",
+    fbB: { tabs: "h:/b|b.md", kids: 0, saved: "h:/b|b.md" },
+    memAKept: true, oldKept: true, pulledBack: 0,
+  });
+});
+
+test("T23 PC 를 바꾸는 사이 늦게 온 이전 PC 목록은 버린다 — 새 PC 의 탭 기억을 빈 목록으로 덮어쓰지 않는다", async () => {
+  const B_TABS = JSON.stringify({ active: X, list: [{ key: X, sid: X }], mru: [X] });
+  const { ctx } = await boot({ setup: (sb) => { sb.localStorage.setItem("sm_room", "roomA"); sb.localStorage.setItem("sm_tabs_roomB", B_TABS); } });
+  ev(ctx, TWO_PCS + "toast = () => {}; T.list = async () => ({ sessions: SESSIONS.slice() });");
+  await ev(ctx, "loadList()"); await tick();                     // PC A 첫 목록
+  ev(ctx, "globalThis.__lr = []; T.list = () => new Promise((r) => __lr.push(r));");
+  const pOld = ev(ctx, "loadList()"); await tick();             // PC A 목록을 다시 청함(⟳ 등) — 응답 대기
+  ev(ctx, "pcSwitchReset(); pcsActivate('roomB')");              // 그사이 PC B 로(switchToPc 의 앞부분)
+  const ready = ev(ctx, "LIST_READY");
+  ev(ctx, "__lr[0]({ sessions: SESSIONS.slice() })"); await pOld; await tick();   // A 의 목록이 늦게 도착
+  const stale = { kept: ctx.localStorage.getItem("sm_tabs_roomB") === B_TABS, restored: ev(ctx, "_tabsRestored"), ready: ev(ctx, "LIST_READY") };
+  const pNew = ev(ctx, "loadList()"); await tick();             // 새 PC 의 첫 목록
+  ev(ctx, `__lr[1]({ sessions: [{ session_id: '${X}', title: 'X', live_terminal: true }] })`); await pNew; await tick();
+  assert.deepEqual({ ready, stale, tabs: ev(ctx, "TABS.list.map((t) => t.key).join(',')"), active: ev(ctx, "TABS.active") },
+                   { ready: false, stale: { kept: true, restored: false, ready: false }, tabs: X, active: X });
+});
+
+test("T24 페어링 화면에서 다른 PC 로 연결해도(저장된 PC 누름 · '＋ 새 PC 추가' 페어링) 연결을 바꾸기 전에 같은 정리 — 같은 PC 면 그대로", async () => {
+  const paths = ["저장된 다른 PC", "저장된 같은 PC", "새 PC 페어링", "같은 PC 새 QR"];
+  const got = await each(paths, async (p) => {
+    const { ctx } = await boot({ setup: (sb) => sb.localStorage.setItem("sm_room", "roomA") });
+    ev(ctx, TWO_PCS + TC_ROOM + `toast = () => {}; enterApp = () => {}; globalThis.__at = null;
+      conn.connect = async (room) => { __at = { room, sm: LS.getItem('sm_room'), tabs: TABS.list.length, term: !!termView.main }; return { auth: null }; };`);
+    await ctx.loadTerminal(ev(ctx, "SESSIONS[0]"), false); await tick(RENDER);
+    if (p.startsWith("저장된")) {
+      const host = stubEl("div"); ctx.document._register("p-pcs", host);
+      ctx.renderPairPcs();
+      const name = p === "저장된 다른 PC" ? "🖥 B" : "🖥 A";
+      const btn = flatEl(host).find((n) => n.tagName === "BUTTON" && n.textContent === name);
+      await btn.onclick();
+    } else {
+      const li = stubEl("input"); li.value = "https://relay.test/relay/app#room=" + (p === "새 PC 페어링" ? "roomN" : "roomA") + "&token=tok";
+      ctx.document._register("p-link", li); ctx.document._register("p-err", stubEl("div")); ctx.document._register("p-go", stubEl("button"));
+      ev(ctx, "doPair()"); await tick(); await tick();
+    }
+    return { ...ev(ctx, "__at"), closedOn: ev(ctx, "__tc[0].room") };
+  });
+  assert.deepEqual(JSON.parse(JSON.stringify(got)), {
+    "저장된 다른 PC": { room: "roomB", sm: "roomB", tabs: 0, term: false, closedOn: "roomA" },
+    "저장된 같은 PC": { room: "roomA", sm: "roomA", tabs: 1, term: true, closedOn: null },
+    "새 PC 페어링": { room: "roomN", sm: "roomA", tabs: 0, term: false, closedOn: "roomA" },
+    "같은 PC 새 QR": { room: "roomA", sm: "roomA", tabs: 1, term: true, closedOn: null },
+  });
+});
+
+test("T25 PC 전환 때 응답 중인 웹 재개는 기다리지 않고 바로 닫고(알림 없음), 받는 중이던 이전 PC 폴더의 실패는 새 트리의 오류로 남지 않는다", async () => {
+  const r = await boot({ width: 390 });
+  ev(r.ctx, `globalThis.__toasts = []; toast = (m) => __toasts.push(m);
+    T.resume = (id, cb) => { const h = { id, cb, closed: 0, sent: [], input(t) { h.sent.push(t); }, close() { h.closed++; } }; __res.push(h); return h; };`);
+  await ev(r.ctx, "loadResume(SESSIONS[1], true, false)");
+  const [ta, send] = composer(r.pd);
+  ta.value = "질문"; send.onclick();                             // 응답 중
+  ev(r.ctx, "pcSwitchReset()");
+  const closedAt = ev(r.ctx, "__res[0].closed");
+  ev(r.ctx, "__res[0].cb({ eof: true })");                        // 이전 PC 연결이 끊기며 오는 끝 알림
+  const f = await boot();
+  ev(f.ctx, `globalThis.__rej = null; SESSIONS = [{ session_id: 's1', title: 'P', cwd: 'E:/p', mtime: 1 }];
+    T.api = () => new Promise((res, rej) => { __rej = rej; });
+    FB.restored = true; FB.open = new Set(['e:/p|']); globalThis.__w = el('div');`);
+  const pt = ev(f.ctx, "renderFbExplorer(__w)"); await tick();   // 이전 PC 폴더를 받는 중
+  if (!ev(f.ctx, "__rej")) throw new Error("폴더 요청까지 가지 못함");
+  ev(f.ctx, "pcSwitchReset()");
+  ev(f.ctx, "__rej(new Error('disconnected'))"); await pt; await tick();   // 이전 연결이 닫히며 그 요청이 실패
+  assert.deepEqual({ closedAt, closed: ev(r.ctx, "__res[0].closed"), toasts: ev(r.ctx, "__toasts.join('|')"), errs: ev(f.ctx, "JSON.stringify(FB.errs)") },
+                   { closedAt: 1, closed: 1, toasts: "", errs: "{}" });
+});

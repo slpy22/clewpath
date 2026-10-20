@@ -1516,8 +1516,12 @@ async function loadList(q){
   // 갈아엎으면 전경 터미널이 발밑에서 사라진다(relay e2e 실측 2026-09-10).
   // 탭 막대 전환(2026-10-14 사장님): 오른쪽 칸은 그대로 — 비어 있을 때만 안내를 그린다(보던 상세·관제·파일·뷰어 유지)
   if(!paneDetail().children.length) detailPlaceholder();
+  const pc=hostVerKey();           // 이 목록을 청한 PC
   try{
     const data=await T.list({limit:0});
+    // 받는 사이 릴레이로 PC 를 바꿨다 — 늦게 온 옛 PC 목록은 버린다(새 PC 의 loadList 가 따로 돈다). 옛 목록으로 새 PC 의
+    // 탭 기억을 복원하면 하나도 맞지 않아 빈 탭 목록이 새 PC 키에 덮어써진다(3단계)
+    if(pc!==hostVerKey()) return;
     SESSIONS=data.sessions||[]; LIST_READY=true;
     if(typeof data.now==='number') CLOCK_SKEW=data.now-Date.now()/1000;
     rerender();
@@ -3219,8 +3223,9 @@ async function loadTerminal(s, safe){
 let _liveViewer=null;
 function closeLiveViewer(){ if(_liveViewer){ try{_liveViewer.close();}catch(e){} _liveViewer=null; } }
 // 웹 재개(claude -p) 닫기 손잡이 — 상세 칸을 떠날 때(paneEnter)와 폰 '‹ 목록'에서 부른다. 응답 중이면 그 응답이 끝난 뒤 닫는다(결정 7)
+// now: PC 전환처럼 연결째 바뀌어 그 응답을 받을 수 없을 때 — 기다리지 않고 지금 닫는다(3단계)
 let _liveResume=null;
-function closeLiveResume(){ const r=_liveResume; _liveResume=null; if(r){ try{ r.close(); }catch(e){} } }
+function closeLiveResume(now){ const r=_liveResume; _liveResume=null; if(r){ try{ r.close(now); }catch(e){} } }
 
 async function loadViewer(s){
   closeLiveViewer();
@@ -3371,7 +3376,7 @@ async function loadResume(s, inplace, safe){
   const shutNow=()=>{ if(shut) return; shut=true; try{ sess&&sess.close(); }catch(e){}
     send.disabled=true; ta.disabled=true; push('result','— 화면을 떠나 재개를 닫았습니다 —'); };
   const closeAfterTurn=(unsent)=>{ shutNow(); toast('응답이 끝나 떠난 웹 재개를 닫았습니다'+(unsent?' — 보내지 않은 메시지 '+unsent+'개':'')); };
-  _liveResume={ close(){ if(leaving) return; leaving=true; if(!busy) shutNow(); } };   // 닫기 손잡이 — 쓰는 함수가 다 생긴 뒤, 첫 await 전에 건다
+  _liveResume={ close(now){ if(leaving) return; leaving=true; if(!busy||now) shutNow(); } };   // 닫기 손잡이 — 쓰는 함수가 다 생긴 뒤, 첫 await 전에 건다
   // 과거 이력 먼저 표시(끝부분)
   const loading=push('msg sys','과거 대화 불러오는 중…');
   try{ const hist=await fetchRecentMessages(s.session_id,120); loading.remove();
@@ -3932,7 +3937,8 @@ async function fbRenderTree(){
   for(const id of need){
     if(!fbAncestorsOpen(id)) continue;
     try{ await fbFetchDir(id); }
-    catch(e){ FB.errs[id]=fbErrText(fbApiErr(e)); if(fbSplit(id)[1]) FB.open.delete(id); }
+    catch(e){ if(gen!==FB.treeGen) return;   // 그사이 새로 그렸거나 PC 를 바꿨다 — 옛 실패(연결 끊김 등)를 새 트리의 오류로 남기지 않는다(3단계)
+      FB.errs[id]=fbErrText(fbApiErr(e)); if(fbSplit(id)[1]) FB.open.delete(id); }
     if(gen!==FB.treeGen) return;
   }
   if(gen!==FB.treeGen||FB.tree!==tree) return;
@@ -5449,6 +5455,7 @@ function renderPairPcs(){
     const b=el('button','btn ghost','🖥 '+pcName(pc));
     b.style.cssText='justify-content:space-between;text-align:left';
     b.onclick=async()=>{
+      if(pc.room!==LS.getItem('sm_room')) pcSwitchReset();   // 다른 PC 로('＋ 새 PC 추가' 화면에서도) — 연결을 바꾸기 전에 이전 PC 화면·탭·파일을 비운다(3단계)
       pcsActivate(pc.room);
       $('#p-err').textContent=''; b.textContent='연결 중… '+pcName(pc);
       conn._stopped=false; conn._retry=0;
@@ -6268,6 +6275,7 @@ function doPair(){
   else { LS.removeItem('sm_cs'); LS.removeItem('sm_cp'); LS.removeItem('sm_cjwt'); }
 
   $('#p-err').textContent=''; $('#p-go').textContent='연결 중…';
+  if(room!==prevRoom) pcSwitchReset();   // 다른 PC 를 페어링('＋ 새 PC 추가') — 연결을 바꾸기 전에 이전 PC 화면·탭·파일을 비운다(3단계)
   conn._pairing=true; conn._stopped=false;
   conn.connect(room,token).then((r)=>{
     conn._pairing=false;
@@ -6409,7 +6417,23 @@ function onLocalTermMessage(ev){
   const rec=findTab(d.fork||d.id); if(!rec||rec.taken) return;
   rec.taken=true; renderTabBarSoon();
 }
+// 릴레이로 PC 를 바꿀 때(결정 9, 명세 §6-2): 이전 PC 의 상세 칸·터미널 탭·파일 상태·지금 화면을 비운다 — 새 PC 에서 이전 PC 의
+// 탭·파일이 보이거나 그 탭이 새 PC 기억(sm_tabs_<PC>)에 덮어써지지 않게. 연결·방(sm_room)을 바꾸기 '전에' 부른다: 닫기 신호가
+// 새 PC 로 가면 커넥터는 rid 만 보고 다른 기기의 같은 번호 파이프를 끊을 수 있다. 저장은 하지 않는다 — 이전 PC 기억은 바뀔 때마다
+// 이미 적혀 있고, 새 PC 기억은 첫 목록 뒤 다시 읽는다(restoreTabsOnce·fbRestoreState). 여러 번 불려도 안전하다.
+function pcSwitchReset(){
+  closeLiveResume(true);                       // 응답 중인 웹 재개도 지금 닫는다 — 연결째 바뀌어 그 응답을 받을 수 없다
+  paneEnter('empty');                          // 터미널(연결·탭 배지)·뷰어 실시간·편집기 스크롤 정리
+  TABS.list=[]; TABS.active=null; TABS.mru=[]; _tabsRestored=false;
+  if(FB.ed){ try{ FB.ed.dispose(); }catch(e){} FB.ed=null; }
+  FB.tabs.forEach(t=>fbDisposeTab(t));         // 파일 내용(Monaco 모델) 해제 — 탐색기·편집기 상태도 모두 처음으로
+  Object.assign(FB,{tabs:[], active:null, sel:'', open:new Set(), kids:{}, errs:{}, ent:{}, rootMap:null, restored:false, reveal:null, q:'', autoShow:false});
+  FB.treeGen++;                                // 받는 중이던 이전 PC 의 폴더 응답은 버린다(파일 응답은 FB.active=null 로 이미 버려진다)
+  LIST_READY=false;
+  detailPlaceholder();                         // 빈 안내 — PANE_NOW 도 빈 화면으로(세대는 이어서 센다: 늦은 뷰어 응답 판정)
+}
 async function switchToPc(pc){
+  pcSwitchReset();                             // 연결·방을 바꾸기 전에(3단계)
   pcsActivate(pc.room);
   toast(pcName(pc)+' 로 전환 중…');
   try{ conn.logout(); }catch(e){}
