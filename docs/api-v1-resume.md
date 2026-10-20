@@ -27,6 +27,8 @@ SM_API_TOKEN  = "sk-sm-..."           # 단일 토큰
 SM_API_TOKENS = "tokA,tokB,tokC"      # (선택) 쉼표로 여러 개
 ```
 
+> 공용 토큰은 `clewpath.toml` 의 `[server] legacy_api_token = false` 로 끌 수 있다(0.27.1). 끄면 공용 토큰 호출은 503, 서비스 토큰은 그대로.
+
 ### 서비스 토큰 (0.25.0, 권장)
 
 외부 서비스는 **서비스 토큰**(`cps_<서비스id>_<64자 hex>`)을 쓴다. 서비스 하나에 원본(용도별 세션)이 묶이고,
