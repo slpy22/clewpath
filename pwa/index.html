@@ -1072,8 +1072,11 @@ function cpBase(){
   return (location.origin + ((m&&m[1])||'') + '/cp');
 }
 async function clientJwt(force){
-  const cs=LS.getItem('sm_cs'), cpid=LS.getItem('sm_cp');
+  const cs=LS.getItem('sm_cs'), cpid=LS.getItem('sm_cp'), room=LS.getItem('sm_room');
   if(!cs||!cpid) return null;                       // 구 방식(공유 토큰) 사용 중
+  // 조회하는 사이 다른 PC 로 바꿨나(pcsActivate 가 sm_cp 를 바꾼다) — 그때 받은 이전 PC 의 JWT 를 지금 PC 자격(sm_cjwt)으로 적거나
+  // 지금 PC 를 '페어링 바뀜'으로 표시하지 않는다(진행 중이던 재접속이 PC 전환 뒤에 끝나던 경우, 검토 2회차)
+  const same=()=>LS.getItem('sm_cp')===cpid&&LS.getItem('sm_room')===room;
   if(!force){
     try{ const c=JSON.parse(LS.getItem('sm_cjwt')||'null');
       // 만료 5분 전부터는 미리 갱신 (폰이 끊긴 사이 만료되는 걸 줄임)
@@ -1084,10 +1087,16 @@ async function clientJwt(force){
     const r=await fetch(cpBase()+'/client/token',{method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({public_id:cpid,secret:cs})});
-    if(!r.ok){ if(r.status===401){ pcMarkState(LS.getItem('sm_room'),'changed');
-        toast('PC 에서 페어링이 바뀌었습니다(해제 또는 QR 재발급) — 새 QR 을 스캔하세요'); } return null; }
+    if(!r.ok){ if(r.status===401){
+        // 거부된 것은 이 조회를 한 자격(cpid)이다 — 그 자격을 가진 저장된 PC 만 표시한다. 방 이름(sm_room)으로 고르면 새 PC 를 페어링하는
+        // 길(doPair·부트 해시)에선 방이 연결 뒤에야 바뀌어, 새 PC 의 무효 QR 하나로 멀쩡한 지금 PC 가 '⛔ 페어링 바뀜'이 됐다(검토 3회차).
+        // 아직 저장되지 않은 새 PC 자격이면 아무것도 표시하지 않는다 — 페어링 화면이 실패를 알린다(E-D16)
+        const pc=pcsLoad().find(x=>x.cp===cpid);
+        if(pc){ pcMarkState(pc.room,'changed');
+          if(same()&&pc.room===room) toast('PC 에서 페어링이 바뀌었습니다(해제 또는 QR 재발급) — 새 QR 을 스캔하세요'); } }
+      return null; }
     const j=await r.json();
-    LS.setItem('sm_cjwt',JSON.stringify({token:j.token,exp:j.expires_at}));
+    if(same()) LS.setItem('sm_cjwt',JSON.stringify({token:j.token,exp:j.expires_at}));
     return j.token;
   }catch(e){
     // CP 불통: 캐시된 JWT 가 아직 유효하면 그걸로 버틴다
@@ -1106,11 +1115,24 @@ class Conn{
     this.devToken=LS.getItem('sm_devtoken')||''; this.authed=false; this.cid=null; this.onauth=null;
     // E2EE: 페어링 때 받은 룸 키(sm_e2ee_<room>). 송수신을 각각 직렬화해
     // WebCrypto 비동기 완료 순서가 프레임 순서를 깨지 않게 한다(터미널 입력 필수).
-    this.e2eeKey=null; this._txq=Promise.resolve(); this._rxq=Promise.resolve(); }
-  async _seal(obj){
+    this.e2eeKey=null; this._txq=Promise.resolve(); this._rxq=Promise.resolve();
+    // 내려놓은 옛 소켓(PC 전환·로그아웃·다시 연결) — 늦게 온 그 소켓의 프레임·닫힘 통지는 지금 연결을 건드리지 않는다(_retire)
+    this._gone=new WeakSet();
+    // 연결 세대 — connect·logout 이 하나씩 올린다. 그 뒤에 끝난 옛 연결 시도는 지금 연결을 건드리지 않는다: PC 를 바꾸는 순간
+    // 진행 중이던 재접속이 실패로 끝나며 재접속을 하나 더 걸어, 전환 때 연 소켓을 고아로 만들었다(검토 2회차)
+    this._gen=0;
+    this._reauthP=null; this._reauthGen=-1; }   // 진행 중인 다시 인증(_reauth — 한 번에 하나, 그 연결 세대에서만)
+  // 나중에 시작한 connect·logout 에 밀려난 연결 시도의 거부 — 부른 쪽(PC 전환·페어링·재접속)은 조용히 그만둔다
+  _superseded(){ const e=new Error('다른 연결로 바뀌었습니다'); e.superseded=true; return e; }
+  // 소켓을 지금 연결에서 뗀다: 그 소켓의 늦은 프레임·닫힘 통지는 무시하고(_gone), hello 를 기다리던 connect() 는 바로 거부하고,
+  // 이미 큐에 든 프레임(E2EE 봉인 대기 — PC 전환 직전 화면 정리의 stream_close 등)을 보낸 뒤에 닫는다. 뗀 게 있으면 true
+  _retire(ws){ if(!ws||this._gone.has(ws)) return false; this._gone.add(ws);
+    if(ws._fail) ws._fail(this._superseded());
+    this._txq.then(()=>{ try{ws.close();}catch(e){} }); return true; }
+  async _seal(obj, key=this.e2eeKey){
     const nonce=crypto.getRandomValues(new Uint8Array(12));
     const pt=new TextEncoder().encode(JSON.stringify(obj));
-    const ct=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv:nonce},this.e2eeKey,pt));
+    const ct=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv:nonce},key,pt));
     const raw=new Uint8Array(13+ct.length); raw[0]=1; raw.set(nonce,1); raw.set(ct,13);
     return {v:1,e:'a1',p:u8ToB64u(raw)};
   }
@@ -1121,15 +1143,21 @@ class Conn{
       {name:'AES-GCM',iv:raw.subarray(1,13)},this.e2eeKey,raw.subarray(13)));
     return JSON.parse(new TextDecoder().decode(pt));
   }
-  _tx(obj){                              // 유일한 송신 경로(암호화 여부 일원화)
-    if(!this.e2eeKey){ try{this.ws.send(JSON.stringify(obj));}catch(e){} return; }
-    this._txq=this._txq.then(async()=>{ const env=await this._seal(obj);
-      this.ws.send(JSON.stringify(env)); }).catch(()=>{});
+  // 유일한 송신 경로(암호화 여부 일원화). 보낼 소켓·키는 부를 때 정한다 — 봉인(비동기)을 기다리는 사이 연결이 바뀌어도
+  // 그 프레임은 처음 소켓·키로만 나간다(PC 를 바꿀 때 이전 PC 의 닫기 신호가 새 PC 키로 봉인돼 새 PC 로 가거나 버려지던 것).
+  // 스트림 손잡이는 자기를 연 소켓·키를 넘긴다(startResume·startTerminal·startMonitor).
+  _tx(obj, ws=this.ws, key=this.e2eeKey){
+    if(!key){ try{ws.send(JSON.stringify(obj));}catch(e){} return; }
+    this._txq=this._txq.then(async()=>{ const env=await this._seal(obj,key);
+      ws.send(JSON.stringify(env)); }).catch(()=>{});
   }
-  _doAuth(){   // 기기 토큰이 있으면 릴레이 연결 직후 기기 인증 → {ok,error,data} (토큰 없으면 null)
+  // quiet: 전역 onauth 는 부르는 쪽이 부른다(connect 의 hello — 연결 시도를 먼저 끝낸 뒤)
+  _doAuth(gen, quiet){   // 기기 토큰이 있으면 릴레이 연결 직후 기기 인증 → {ok,error,data} (토큰 없으면 null)
     if(!this.devToken){ this.authed=false; return Promise.resolve(null); }
     // name: 폰이 자기 이름을 보고한다(B-1) — Host 는 등록부의 임시 이름만 이걸로 채운다.
     return this.req('auth',{token:this.devToken,pv:PV,name:deviceSelfName()}).then(r=>{
+      // 기다리는 사이 다른 연결(PC 전환·로그아웃)로 바뀌었다 — 이 결과로 지금 연결의 인증 상태·자격 상실 화면을 건드리지 않는다
+      if(gen!==undefined&&gen!==this._gen) return {ok:false, error:'superseded', data:null};
       this.authed=!!(r&&r.ok);
       // 접속한 PC(호스트)의 버전 — 우선 auth 응답값으로 표시, 이어서 최신 여부까지 확인.
       if(this.authed && r.data && r.data.ver){ showVer(r.data.ver, null); refreshVer(); }
@@ -1141,82 +1169,190 @@ class Conn{
       }
       // 페어링 중(_pairing)에는 전역 onauth(자격 상실 화면·로그아웃)를 부르지 않는다 — 결과는 doPair 가
       // connect() 의 auth 필드로 받아 되돌리기(pairRollback)까지 스스로 처리한다.
-      if(this.onauth && !this._pairing)this.onauth(this.authed, r&&r.error);
+      if(this.onauth && !this._pairing && !quiet)this.onauth(this.authed, r&&r.error);
       return {ok:this.authed, error:(r&&r.error)||null, data:(r&&r.data)||null};
     }).catch(e=>({ok:false, error:String((e&&e.message)||e||'auth_failed'), data:null}));
   }
+  // 이 연결로 기기 인증을 다시 한다(한 번에 하나) — PC(커넥터)가 다시 떠 이 연결의 인증이 비었을 때(agent_online·auth_required).
+  // 자격이 정말 무효면 결과가 auth_invalid 라 _doAuth 가 onauth 로 자격 상실을 알린다.
+  _reauth(){
+    if(!this.devToken) return Promise.resolve(null);
+    if(this._reauthP&&this._reauthGen===this._gen) return this._reauthP;
+    const p=this._doAuth(this._gen).finally(()=>{ if(this._reauthP===p) this._reauthP=null; });
+    this._reauthP=p; this._reauthGen=this._gen;
+    return p;
+  }
+  // PC(커넥터)가 릴레이에서 떠났다(PC 재기동·Host 업데이트·커넥터만 다시 접속·PC 꺼짐). 그 PC 가 연 파이프는 모두 끝났고(커넥터가 다시
+  // 붙어도 이전 파이프는 끝낸다) 기다리던 요청은 답을 받을 수 없다 — E2EE 면 릴레이의 agent_offline 응답이 id 를 실을 수 없어(본문을
+  // 못 읽는다) 영원히 기다렸다(검토 3회차). 소켓은 그대로 두고 대기 요청은 agent_offline, 스트림은 끝(eof — 터미널은 끊긴 탭이 되어
+  // PC 가 돌아오면 다시 붙는다), 인증은 PC 가 돌아오면 다시 한다(_onAgentOnline).
+  _agentGone(){
+    this.peer=false; this.authed=false;
+    const ws=[...this.waiters.values()]; this.waiters.clear();
+    for(const w of ws) w({ok:false,error:'agent_offline'});
+    const hs=[...this.streams.values()]; this.streams.clear();
+    for(const h of hs){ try{h({eof:true});}catch(e){} }
+  }
+  // PC(커넥터)가 다시 붙었다. 새 커넥터는 이 연결의 기기 인증을 모른다 — 다시 인증하지 않으면 다음 요청이 auth_required 를 받아
+  // 멀쩡한 PC 가 '⛔ 페어링 바뀜'이 되고 새로고침해도 자동 접속하지 않았다(검토 3회차). 인증한 뒤 PC 가 준비될 틈(1.5초)을 두고
+  // 목록을 새로 받고(pcBack) 보던 터미널을 다시 붙인다.
+  _onAgentOnline(){
+    if(this._pairing) return;                       // 페어링 중 — 결과는 doPair 가 맡는다
+    const gen=this._gen, t0=Date.now();
+    setTimeout(()=>{ if(gen===this._gen) try{ refreshVer(); }catch(e){} }, 3000);   // PC 재기동(업데이트) 뒤 버전 확인
+    (this.devToken?this._reauth():Promise.resolve({ok:true})).then(a=>{
+      // 그사이 PC 를 바꿨거나 PC 가 또 내려갔거나, 자격이 무효다(onauth 가 알렸다)
+      if(gen!==this._gen||!this.peer||!(a&&a.ok)) return;
+      setTimeout(()=>{
+        if(gen!==this._gen||!this.peer) return;
+        let hid; try{ hid=pcBack(); }catch(e){}
+        // PC 없이 다시 붙을 때(_scheduleReconnect) 재 둔 값이 있으면 그것 — 그 뒤의 목록 칸은 사용자가 아니라 재접속 흐름이 돌린 것이다.
+        // 그 사이 사용자가 다른 화면을 눌렀으면 reattachForegroundTab 이 누름 순번(discSeq)을 보고 그만둔다
+        const k=this._hidAtBack; this._hidAtBack=null;
+        if(k&&k.gen===gen) hid=k.hid;
+        // 릴레이 연결은 살아 있고 PC 만 다시 뜬 경우: 끊긴 전경 터미널을 다시 붙인다(전엔 화면 복귀·재접속 때만 → 오래 끊김, 2026-10-12)
+        try{ reattachForegroundTab(hid); }catch(e){}
+      }, Math.max(0,1500-(Date.now()-t0)));
+    });
+  }
   async connect(room,token){
+    const gen=++this._gen;                        // 이 연결 시도 — 앞서 진행 중이던 시도(재접속 등)는 밀려난다
+    // 직접 부른 연결(PC 전환·페어링)이 기다리던 재접속 타이머보다 앞선다 — 타이머가 나중에 돌아 이 연결을 밀어내지 않게
+    if(this._retryTimer){clearTimeout(this._retryTimer);this._retryTimer=null;}
+    // 지금 소켓은 내려놓는다(같은 PC 다시 페어링처럼 logout 없이 다시 연결) — 남기면 그 소켓이 나중에 닫힐 때 새 연결의
+    // 대기 요청·스트림을 끊고 재접속을 하나 더 걸었다
+    { const old=this.ws; this.ws=null; if(this._retire(old)) this._drop(); }
     this._room=room; this._token=token;           // 재접속에 사용
-    // E2EE 키 로드(페어링 때 저장됨). 없으면 평문(구 페어링 호환).
-    this.e2eeKey=null;
+    // E2EE 키 로드(페어링 때 저장됨). 없으면 평문(구 페어링 호환). 키는 새 소켓과 함께 바꾼다(아래) — 먼저 비우면
+    // 키를 받는 사이 지금 소켓으로 나가는 프레임이 평문이 되거나 봉인에 실패했다.
+    let key=null;
     const rk=LS.getItem('sm_e2ee_'+room);
     if(rk && window.crypto && crypto.subtle){
-      try{ this.e2eeKey=await crypto.subtle.importKey('raw', b64uToU8(rk), 'AES-GCM',
+      try{ key=await crypto.subtle.importKey('raw', b64uToU8(rk), 'AES-GCM',
              false, ['encrypt','decrypt']); }catch(e){}
+      if(gen!==this._gen) throw this._superseded();   // 키를 읽는 사이 밀려났다 — 그 PC 자격으로 CP 를 조회하지 않는다(아래)
     }
     const cjwt=await clientJwt(false);            // 기기 전용 자격이 있으면 JWT 로
+    // 룸 키·CP 조회를 기다리는 사이 다른 PC 로 바꿨거나(그쪽 connect) 로그아웃했다 — 소켓을 만들지 않는다. 만들면 지금 연결(새 PC)을
+    // 이전 PC 소켓·키로 덮고, 그 소켓의 hello 가 새 PC 의 기기 토큰으로 이전 PC 에 인증해(auth_invalid) 새 PC 가 '페어링 바뀜'이 됐다
+    if(gen!==this._gen) throw this._superseded();
     return new Promise((res,rej)=>{
       let done=false;
       let url=`${wsUrl()}?role=client&room=${encodeURIComponent(room)}&v=1`;
       if(cjwt) url+=`&jwt=${encodeURIComponent(cjwt)}`;
       else if(token) url+=`&token=${encodeURIComponent(token)}`;
-      const ws=new WebSocket(url); this.ws=ws;
+      const ws=new WebSocket(url); this.ws=ws; this.e2eeKey=key;
+      ws._fail=(e)=>{ if(!done){done=true;rej(e);} };   // 내려놓을 때(_retire) hello 를 기다리던 이 시도를 바로 끝낸다
       ws.onopen=()=>{};
       const dispatch=(m)=>{
+        // 다른 기기(cid) 앞으로 온 프레임은 버린다 — 릴레이는 모르는(떠난) cid 앞 프레임을 방 전체에 보내고, 기기마다 요청 번호를
+        // 1 부터 세서 같은 번호인 내 대기 요청·스트림·통지로 들어갔다(남의 응답·출력이 섞이고, 남의 eof 가 내 스트림을 끝내고,
+        // 남의 '해제됨' 통지에 자격 상실 화면이 떴다 — 검토 2회차). cid 를 싣지 않는 옛 커넥터의 프레임은 예전 그대로
+        if(m.cid!=null&&this.cid!=null&&m.cid!==this.cid) return;
         if(m.type==='res'||m.type==='pong'){
-          if(m.error==='auth_required'&&this.onauth)this.onauth(false,'auth_required');
+          // 이 응답의 대기는 먼저 꺼내 둔다 — 아래 onauth(자격 상실 → logout)가 남은 대기를 disconnected 로 정리해도 이 응답은 그대로 건넨다
+          const w=this.waiters.get(m.id); if(w) this.waiters.delete(m.id);
+          // 릴레이가 PC 로 보내지 못했다(PC 가 없다 — 릴레이가 직접 보내 cid 가 없다). E2EE 면 id 가 없어 어느 대기인지 모른다 —
+          // PC 가 떠난 것과 같게 남은 대기·스트림을 모두 끝낸다(_agentGone)
+          if(m.cid==null&&(m.error==='agent_offline'||m.error==='agent_send_failed')){ if(w) w(m); this._agentGone(); this.onstatus(true,false); return; }
+          // 서버가 스트림 시작을 거절했다(인증 없음 등 — 스트림 프레임이 아니라 응답으로 온다) — 그 스트림의 끝으로 알린다. 핸들러만 남으면
+          // '연결 종료'도 없이 살아 있는 척하는 빈 화면이 됐다
+          if(!w&&m.ok===false&&m.id!=null&&this.streams.has(m.id)){ const h=this.streams.get(m.id); this.streams.delete(m.id);
+            try{ h({eof:true, error:(m.error==='auth_required')?undefined:m.error}); }catch(e){} }
+          // 대기가 없는 auth_required(스트림 시작) — 다시 인증하고 보던 터미널을 다시 붙인다. 대기가 있는 요청은 req() 가 다시 인증해 다시 보낸다.
+          // 기기 토큰이 없는 옛 페어링은 인증할 길이 없다 — 예전처럼 자격 상실
+          if(m.error==='auth_required'&&!w){
+            if(this.devToken) this._reauth().then(a=>{ if(a&&a.ok) try{ reattachForegroundTab(); }catch(e){} });
+            else if(this.onauth&&!this._pairing) this.onauth(false,'auth_required'); }
           if((m.error==='e2ee_key_mismatch'||m.error==='e2ee_required')&&!this._e2eeWarned){
             this._e2eeWarned=true;
             toast(m.error==='e2ee_required'
               ?'이 PC 가 종단 암호화를 요구합니다 - 새 QR 로 재페어링해 주세요'
               :'암호화 키가 맞지 않습니다 - 이 기기를 다시 페어링해 주세요'); }
-          const w=this.waiters.get(m.id);
-          if(w){this.waiters.delete(m.id); w(m);} return; }
-        if(m.type==='stream'){ const h=this.streams.get(m.id); if(h)h(m); return; }
+          if(w) w(m); return; }
+        // 서버가 끝낸 스트림(eof)은 핸들러부터 지운다 — 커넥터는 이미 그 rid 를 비웠으니 화면이 나중에 닫아도 stream_close 를
+        // 보내지 않는다(커넥터는 rid 만 보고 닫아, 그사이 같은 번호를 쓴 다른 기기의 파이프를 끊을 수 있다)
+        if(m.type==='stream'){ const h=this.streams.get(m.id); if(m.eof) this.streams.delete(m.id); if(h)h(m); return; }
         if(m.type==='notice'){ if(this.onnotice) this.onnotice(m); return; }   // 0.11.0: PC 가 이 기기를 해제/재발급
       };
       ws.onmessage=(ev)=>{
+        if(this._gone.has(ws)) return;   // 내려놓은 옛 소켓(PC 전환)의 늦은 프레임 — 이전 PC 의 응답·통지를 지금 화면에 섞지 않는다
         let m; try{m=JSON.parse(ev.data);}catch(e){return;}
         // 릴레이가 직접 보내는 제어 프레임(암호화 대상 아님)
         if(m.type==='hello'){ this.peer=!!m.peer_present; this.cid=m.cid||null;
           this.onstatus(true,this.peer);
           // connect() 의 resolve 값에 auth 결과를 싣는다(eng E-D16): hello 는 릴레이 입장일 뿐이라
           // 기기 인증 실패(만료 QR 등)를 '성공' 으로 오해하지 않게. reject 는 안 한다(onauth 경로 유지).
-          if(!done){ if(this.devToken){ this._doAuth().then(a=>{ if(!done){done=true;res({...m, auth:a});} }); }
+          // PC 가 꺼져 있으면(peer_present 아님) 인증을 보내지 않고 바로 끝낸다 — 릴레이가 agent_offline 로 돌려주는데 E2EE 면 그 응답에
+          // id 가 없어 connect 가 끝나지 않았다('연결 중…'). PC 가 붙으면(agent_online) 인증한다(_onAgentOnline)
+          // 자격 상실 안내(onauth → 로그아웃)는 연결 시도를 끝낸 뒤에 — 먼저 부르면 로그아웃이 기다리던 connect 를 '밀려남'으로 거부해
+          // 저장된 자격으로 부팅·저장된 PC 고르기가 '연결 중…'에 멈췄다(검토 3회차). 부른 쪽은 auth 결과를 보고 앱에 들어가지 않는다
+          if(!done){ if(this.devToken&&this.peer){ this._doAuth(gen, true).then(a=>{ if(!done){done=true;res({...m, auth:a});}
+                       if(a&&a.error!=='superseded'&&gen===this._gen&&this.onauth&&!this._pairing) this.onauth(a.ok, a.error); }); }
+                     else if(this.devToken){ this.authed=false; done=true; res({...m, auth:{ok:false, error:'agent_offline', data:null}}); }
                      else { done=true; res({...m, auth:null}); } }
           return; }
-        if(m.type==='peer'){ if(m.event==='agent_online'){ this.peer=true; setTimeout(()=>{ try{ refreshVer(); }catch(e){} }, 3000);   // PC 재기동(업데이트) 뒤 버전 확인
-            // 릴레이 연결은 살아 있고 PC 만 재기동된 경우: 끊긴 전경 터미널을 다시 붙인다(전엔 화면 복귀·재접속 때만 → 오래 끊김, 2026-10-12)
-            setTimeout(()=>{ try{ reattachForegroundTab(); }catch(e){} }, 1500); }
-          if(m.event==='agent_offline')this.peer=false; this.onstatus(true,this.peer); return; }
-        // 나머지: 봉투면 복호(수신 직렬화로 순서 보존) 후 디스패치
+        // 나머지(PC 의 오고 감 통지 포함)는 받은 순서대로: 봉투면 복호(수신 직렬화로 순서 보존) 후 디스패치. 피어 통지도 이 줄을 선다 —
+        // 바로 처리하면 응답 봉투 바로 뒤에 온 agent_offline 이 복호 중인 그 응답의 대기를 먼저 끝내, PC 가 처리한 동작이 실패로 보이고
+        // 부트 해시 페어링(앱 QR 스캔)은 멀쩡한 QR 을 되돌렸다(검토 4회차)
         this._rxq=this._rxq.then(async()=>{
+          if(this._gone.has(ws)) return;
+          if(m.type==='peer'){
+            if(m.event==='agent_offline'){ this._agentGone(); this.onstatus(true,false); return; }
+            if(m.event==='agent_online'){ this.peer=true; this.onstatus(true,true); this._onAgentOnline(); return; }
+            this.onstatus(true,this.peer); return; }
           if(m&&m.e==='a1'&&m.p){
             if(!this.e2eeKey) return;      // 키 없이 온 봉투는 처리 불가
             try{ m=await this._openEnv(m); }catch(e){ return; }
           }
+          if(this._gone.has(ws)) return;   // 복호하는 사이 내려놓았다
           dispatch(m);
         }).catch(()=>{});
       };
-      ws.onclose=(ev)=>{ this.onstatus(false,false);
-        if(!done){done=true;rej(new Error(this._closeMsg(ev&&ev.code)));}
-        for(const w of this.waiters.values())w({ok:false,error:'disconnected'});
-        this.waiters.clear();
-        // 릴레이가 끊기면 서버측 rid 는 전부 죽는다(커넥터가 client_offline 로 파이프 해체).
-        // 핸들러를 남겨두면 '살아있다고 착각하는 죽은 스트림'이 된다(재연결 후 조용한 사망) —
-        // eof 를 통지해 화면이 '연결 종료'를 그리고 termView 가 재접속 대상임을 알게 한다.
-        for(const h of this.streams.values()){ try{h({eof:true});}catch(e){} }
-        this.streams.clear();
+      // 소켓이 닫혀 끝난 시도는 sock 표시 — 다시 걸지 말지는 그 닫힘(onclose → _scheduleReconnect(code))이 사유에 맞게 정한다
+      ws.onclose=(ev)=>{
+        if(!done){done=true;rej(Object.assign(new Error(this._closeMsg(ev&&ev.code)),{sock:true, code:ev&&ev.code}));}
+        // 내려놓은 옛 소켓(logout)의 늦은 닫힘 통지 — 정리는 logout 이 이미 했다. 새 연결(새 PC)의 대기 요청·스트림을 끊거나
+        // 재접속을 하나 더 걸지 않는다(새 연결이 선 뒤에 오면 그랬다)
+        if(this._gone.has(ws)) return;
+        this._drop();
         this._scheduleReconnect(ev&&ev.code); };
-      ws.onerror=()=>{ if(!done){done=true;rej(new Error('연결 실패'));} };
+      ws.onerror=()=>{ if(!done){done=true;rej(Object.assign(new Error('연결 실패'),{sock:true}));} };   // 브라우저는 error 뒤에 늘 close 를 보낸다
     });
   }
+  // 지금 연결이 끊긴 것과 같게 정리한다(소켓 닫힘·logout): 대기 요청은 disconnected, 스트림은 eof, 상태 표시는 끊김.
+  // 릴레이가 끊기면 서버측 rid 는 전부 죽는다(커넥터가 client_offline 로 파이프 해체).
+  // 핸들러를 남겨두면 '살아있다고 착각하는 죽은 스트림'이 된다(재연결 후 조용한 사망) —
+  // eof 를 통지해 화면이 '연결 종료'를 그리고 termView 가 재접속 대상임을 알게 한다.
+  _drop(){ this.onstatus(false,false);
+    for(const w of this.waiters.values())w({ok:false,error:'disconnected'});
+    this.waiters.clear();
+    for(const h of this.streams.values()){ try{h({eof:true});}catch(e){} }
+    this.streams.clear(); }
   req(method,params={}){
+    return this._req1(method,params).then(r=>{
+      if(!(r&&r.error==='auth_required')||method==='auth') return r;
+      // 이 연결의 기기 인증이 PC 에 없다 — PC(커넥터)가 다시 떠 인증 상태가 비었거나, 다시 인증하기 전에 나간 요청이다. 기기 토큰으로
+      // 다시 인증하고 한 번만 다시 보낸다. 자격이 정말 무효면 다시 인증이 auth_invalid 를 받아 onauth 가 자격 상실을 알린다
+      // (검토 3회차: 전엔 auth_required 를 곧바로 '⛔ 페어링 바뀜'으로 적어, PC 재기동·업데이트 뒤 멀쩡한 PC 를 새 QR 없이 못 썼다).
+      // 기기 토큰이 없는 옛 페어링은 인증할 길이 없다 — 예전처럼 자격 상실
+      if(!this.devToken){ if(this.onauth&&!this._pairing) this.onauth(false,'auth_required'); return r; }
+      return this._reauth().then(a=>{
+        if(!(a&&a.ok)) return r;
+        return this._req1(method,params).then(r2=>{
+          if(r2&&r2.error==='auth_required'&&this.onauth&&!this._pairing) this.onauth(false,'auth_required');   // 방금 인증했는데도 거부 — 그 자격은 쓸 수 없다
+          return r2; });
+      });
+    });
+  }
+  _req1(method,params){
     return new Promise((res)=>{
       // 소켓이 안 열려 있으면 즉시 실패. _tx 는 닫힌 소켓의 send 예외를 삼켜 프레임을 버리므로
       // 여기서 안 막으면 waiter 가 영원히 대기한다(재연결 뒤에도 미해소 — relay e2e 실측).
       // onclose 가 남은 waiter 에 주는 것과 같은 답을 준다.
       if(!this.ws||this.ws.readyState!==1){ res({ok:false,error:'disconnected'}); return; }
+      // PC(커넥터)가 릴레이에 없다 — 보내도 릴레이가 agent_offline 로 돌려주는데, E2EE 면 그 응답에 id 가 없어 영원히 기다렸다(검토 3회차)
+      if(!this.peer){ res({ok:false,error:'agent_offline'}); return; }
       const id='c'+(++this.seq); this.waiters.set(id,res);
       this._tx({v:1,type:'req',id,method,params});
     });
@@ -1234,43 +1370,56 @@ class Conn{
       e.status=r.data.status; e.json=r.data.json; throw e; }
     return r.data.json;
   }
+  // 스트림 손잡이(재개·터미널·관제)는 자기를 연 소켓·키로만 보낸다 — PC 를 바꾼 뒤 남은 손잡이의 입력·닫기가 새 PC 로 가지 않게.
+  // 닫기(stream_close)는 아직 살아 있는 스트림에만: 서버가 끝냈거나(eof) 그 연결이 끊겼으면 커넥터에는 이미 그 rid 가 없고,
+  // 커넥터는 rid 만 보고 닫으므로 그사이 같은 번호를 쓴 다른 기기·다른 PC 의 파이프를 끊을 수 있다.
+  // 열려 있지 않은 소켓(끊김·다시 연결 중)엔 스트림을 열 수 없다 — 요청을 보내지 않고, 손잡이를 돌려준 뒤 끊김(eof)을 알린다(_open).
+  // 핸들러만 남기면 그 소켓의 정리(_drop)는 이미 끝나 eof 가 오지 않아, 끊긴 사이 연 터미널이 '연결 종료'도 없이 살아 있는 척하는
+  // 빈 화면이 됐다(검토 2회차). 터미널은 이 eof 로 끊긴 탭이 되어 다시 연결될 때 다시 붙는다(reattachForegroundTab).
+  // PC(커넥터)가 없을 때도 같다 — 릴레이가 agent_offline 로 돌려주는데 그 응답은 스트림 끝이 아니라서(E2EE 면 id 도 없다) 끝나지 않았다.
+  _open(id, ws, req){
+    if(ws&&ws.readyState===1&&this.peer){ this._tx(req, ws); return; }
+    setTimeout(()=>{ const h=this.streams.get(id); if(!h) return; this.streams.delete(id); try{ h({eof:true}); }catch(e){} },0);
+  }
   startResume(sessionId,onFrame,inplace,cred){
-    const id='s'+(++this.seq); this.streams.set(id,onFrame);
-    this._tx({v:1,type:'req',id,method:'resume',
+    const id='s'+(++this.seq), ws=this.ws, key=this.e2eeKey; this.streams.set(id,onFrame);
+    this._open(id, ws, {v:1,type:'req',id,method:'resume',
       params:{session_id:sessionId,skip:!(cred&&cred.safe),inplace:!!inplace,
         grace:(cred&&cred.grace)||'',otp:(cred&&cred.otp)||''}});
     return {
       id,
       input:(text)=>this._tx({v:1,type:'stream_in',id,
-        data:{type:'user',message:{role:'user',content:[{type:'text',text}]}}}),
-      close:()=>this.streams.delete(id),
+        data:{type:'user',message:{role:'user',content:[{type:'text',text}]}}}, ws, key),
+      // 터미널처럼 서버에도 stream_close — 핸들러만 지우면 PC 의 재개 파이프(claude -p)가 릴레이가 끊길 때까지 남았다(1-2)
+      close:()=>{ if(this.streams.delete(id)) this._tx({v:1,type:'stream_close',id}, ws, key); },
     };
   }
   // 웹터미널 스트림(원시 텍스트). onData(data,eof)
   startTerminal(sessionId,onData,cred){
-    const id='t'+(++this.seq);
+    const id='t'+(++this.seq), ws=this.ws, key=this.e2eeKey;
     this.streams.set(id,(m)=>{ if(m.eof){onData(null,true,m.error);} else onData(m.data,false); });
-    this._tx({v:1,type:'req',id,method:'terminal',
+    this._open(id, ws, {v:1,type:'req',id,method:'terminal',
       params:{session_id:sessionId,skip:!(cred&&cred.safe),   // safe=권한확인 유지(원격 승인용)
         grace:(cred&&cred.grace)||'',otp:(cred&&cred.otp)||'',
         screen:(cred&&cred.screen)||''}});   // 화면 커서: 재접속 때 이 화면이 못 본 델타만 리플레이
-    return { send:(obj)=>this._tx({v:1,type:'stream_in',id,data:obj}),
+    return { send:(obj)=>this._tx({v:1,type:'stream_in',id,data:obj}, ws, key),
              // close 는 서버에 stream_close 를 보내 이 rid 의 로컬 WS 를 끊게 한다
              // (배경 탭 detach: 화면만 뗌, PTY 는 persist 유지). 이게 없으면 릴레이
              // 모드에서 close 가 클라 핸들러만 지우고 서버 화면은 계속 붙어 있었다.
-             close:()=>{ try{this._tx({v:1,type:'stream_close',id});}catch(e){} this.streams.delete(id); } };
+             close:()=>{ if(this.streams.delete(id)) this._tx({v:1,type:'stream_close',id}, ws, key); } };
   }
   // 오케스트레이션 관제 스트림(읽기전용). onEvent(dataStr, eof, error)
   startMonitor(ids,manager,onEvent,gid){
-    const id='mon'+(++this.seq);
+    const id='mon'+(++this.seq), ws=this.ws, key=this.e2eeKey;
     this.streams.set(id,(m)=>{ if(m.eof){onEvent(null,true,m.error);} else onEvent(m.data,false); });
-    this._tx({v:1,type:'req',id,method:'monitor',params:gid?{ids,manager,gid}:{ids,manager}});
+    this._open(id, ws, {v:1,type:'req',id,method:'monitor',params:gid?{ids,manager,gid}:{ids,manager}});
     return {
       add:(sid,role)=>this._tx({v:1,type:'stream_in',id,
-        data:{type:'add',session_id:sid,role:role||'sub'}}),
+        data:{type:'add',session_id:sid,role:role||'sub'}}, ws, key),
       remove:(sid)=>this._tx({v:1,type:'stream_in',id,
-        data:{type:'remove',session_id:sid}}),
-      close:()=>this.streams.delete(id),
+        data:{type:'remove',session_id:sid}}, ws, key),
+      // 관제·뷰어 실시간·탭 배지도 서버에 stream_close — PC 쪽 관제 파이프를 끊는다(1-2)
+      close:()=>{ if(this.streams.delete(id)) this._tx({v:1,type:'stream_close',id}, ws, key); },
     };
   }
   _closeMsg(code){
@@ -1284,20 +1433,45 @@ class Conn{
     if(this._stopped) return;                       // 사용자가 로그아웃한 경우
     if(code===4403||code===4426){                   // 재시도해도 소용없는 사유
       toast(this._closeMsg(code)); return; }
+    // ⛔/🔄 로 표시된 PC(자격이 무효 — CP 가 거부·PC 에서 해제)는 다시 붙지 않는다(부팅 자동 접속과 같게, 새 QR 로만). CP 가 자격을
+    // 거부하면 JWT 없이 붙어 4401 로 끝없이 돌았다(검토 3회차)
+    { const pc=pcsLoad().find(x=>x.room===this._room); if(pc&&pc.state) return; }
     if(this._retryTimer) return;
     this._retry=Math.min((this._retry||0)+1,6);
     const wait=Math.min(1000*Math.pow(2,this._retry-1),30000);
     this._retryTimer=setTimeout(async()=>{
       this._retryTimer=null;
+      const g=this._gen;                            // 이 재접속을 건 연결의 세대
       if(code===4402) await clientJwt(true);        // 만료 추정 → JWT 강제 갱신
-      try{ await this.connect(this._room,this._token); this._retry=0; toast('다시 연결됨'); loadList();
-        reattachForegroundTab(); }              // 보고 있던 터미널 탭을 persist PTY 에 다시 붙인다
-      catch(e){ this._scheduleReconnect(); }
+      if(g!==this._gen||this._stopped) return;      // 갱신을 기다리는 사이 PC 를 바꿨거나 로그아웃했다 — 그쪽 연결을 두고 그만둔다
+      const p=this.connect(this._room,this._token), mine=this._gen;   // connect 가 세대를 하나 올린다(첫 await 전에)
+      // 그사이 PC 를 바꿨거나 로그아웃해 밀려난 시도의 실패는 다시 걸지 않는다 — 걸면 새 PC 로 재접속을 하나 더 해 지금 연결을 고아로 만들었다
+      // 소켓이 닫혀 끝난 실패(e.sock)는 그 닫힘(onclose)이 이미 사유에 맞게 다시 걸었다 — 4403(room 무효)·4426(버전 낮음)처럼 재시도해도
+      // 소용없는 사유는 안내만 하고 멈춘다. 여기서 코드 없이 또 걸면 그런 사유에도 최대 30초 간격으로 끝없이 다시 붙고 매번 안내했다(검토 3회차).
+      // 소켓을 만들지도 못한 실패(주소 오류 등)만 여기서 다시 건다
+      try{ await p; }catch(e){ if(mine===this._gen&&!(e&&e.sock)) this._scheduleReconnect(); return; }
+      if(mine!==this._gen) return;
+      this._retry=0;
+      const hid=detailHiddenOnPhone();          // loadList 가 목록 칸으로 돌리기 전에 — 폰에서 숨겨 둔 터미널인가
+      if(!this.peer){
+        // 릴레이에는 붙었지만 PC 가 꺼져 있다(릴레이 재기동 때 폰이 먼저 붙는 경우 등) — '다시 연결됨'이라 하지 않고 터미널도 지금 붙이지
+        // 않는다. PC 가 붙으면 인증하고 목록·터미널을 이어 준다(_onAgentOnline). 목록 칸은 PC 가 꺼져 있다고 알린다.
+        // 그때 쓸 '보던 터미널이 보였나'는 지금 재 둔다 — 아래 loadList 가 폰을 목록 칸으로 돌려, PC 가 붙은 뒤에 재면 보던 터미널도 숨긴 것처럼
+        // 보여 다시 붙이지 않았다(검토 4회차: 폰만 목록에 남았다)
+        this._hidAtBack={gen:mine, hid};
+        toast('연결은 됐지만 PC 가 꺼져 있습니다 — 켜지면 자동으로 이어집니다'); loadList(); return; }
+      toast('다시 연결됨');
+      loadList();
+      reattachForegroundTab(hid);               // 보고 있던 터미널 탭을 persist PTY 에 다시 붙인다
     },wait);
   }
-  logout(){ this._stopped=true;
+  // 지금 연결을 내려놓는다(로그아웃·PC 전환·자격 상실). 닫힘 통지(onclose)는 늦게 온다 — 그사이 새 연결이 서면 옛 통지가 새 연결의
+  // 대기 요청·스트림을 끊고 재접속을 하나 더 걸었다. 그래서 정리는 여기서 바로 하고 옛 소켓은 지금 연결에서 뗀다(_retire).
+  // 세대도 올려 진행 중이던 연결 시도(재접속 등)가 끝나도 지금 연결을 건드리지 않게 한다.
+  logout(){ this._stopped=true; this._gen++;
     if(this._retryTimer){clearTimeout(this._retryTimer);this._retryTimer=null;}
-    try{this.ws&&this.ws.close();}catch(e){} }
+    const ws=this.ws; this.ws=null; this._retire(ws);
+    this._drop(); }
 }
 
 const conn=new Conn();
@@ -1377,10 +1551,57 @@ let SELECTED_ID=null;
 const paneList=()=>$('#paneList'), paneDetail=()=>$('#paneDetail');
 function showListPane(){ $('#app').setAttribute('data-view','list'); }
 function showDetailPane(){ $('#app').setAttribute('data-view','detail'); }
-function detailPlaceholder(txt){ const p=paneDetail(); closeInlineMonitor(); p.classList.remove('term-mode','fb-mode','mon-mode'); p.innerHTML='';
+function detailPlaceholder(txt){ paneEnter('empty'); const p=paneDetail(); closeInlineMonitor(); p.classList.remove('term-mode','fb-mode','mon-mode'); p.innerHTML='';
   p.appendChild(el('div','detail-empty',txt||'왼쪽에서 세션을 선택하세요')); }
 function highlightSelected(){ document.querySelectorAll('.srow').forEach(r=>
   r.classList.toggle('sel', r.dataset.sid===SELECTED_ID)); }
+// ---- 화면 진입 기록(quick-switch §8 2단계) ----
+// 상세 칸 화면을 열 때마다 칸을 비우는 줄(closeInlineMonitor·classList.remove) '바로 앞'에서 부른다 — 클래스를 지운 뒤에는
+// 떠나는 화면이 터미널·편집기였는지 알 수 없다. 모자란 정리만 하고, 여러 번 불려도 안전하다(이미 한 정리는 다시 해도 무해).
+// PANE_NOW = 지금 상세 칸 화면 {kind, sid, key, gid, code, gen}(저장 안 함). gen 은 들어올 때마다 하나씩 — 응답을 기다리던
+// 옛 화면이 늦게 그리거나 실시간 연결을 열지 않게(뷰어 T5). 폰 관제 덮개는 상세 칸 밖이라 여기 들지 않는다.
+let PANE_NOW={kind:'empty', gen:0};
+// PC 전환 세대 — pcSwitchReset 이 하나씩 올린다. 기다리던 동작(2차 인증 확인·목록 받기)이 깨어나 'PC 가 바뀌었나'를 볼 때 쓴다(pcNow).
+// 방 이름(sm_room)만 보면 '＋ 새 PC 추가'의 새 PC 페어링(doPair)에선 연결이 선 뒤에야 방이 바뀌어, 그사이 깨어난 이전 PC 의
+// 터미널·웹 재개가 이어 달려 이전 PC 세션이 새 PC 화면·탭 기억에 남았다(검토 2회차)
+let PC_GEN=0;
+function pcNow(){ return hostVerKey()+'#'+PC_GEN; }
+// 상세 칸 화면을 여는 누름의 순번 — 목록 줄·⋯·🔔·알림·팀 구성원·탭 칩이 목록을 새로 받거나 2차 인증을 확인하는 사이 다른 화면을
+// 누르면, 늦게 끝난 앞 누름은 화면을 바꾸지 않는다(§4 공통 '연달아 누르면 마지막 누름만 화면을 바꿉니다', 검토 2회차).
+// navTicket() 은 지금 누름을 등록하고, 돌려준 함수는 그 뒤 다른 누름(NAV_SEQ)·다른 화면(PANE_NOW)·PC 전환이 없었으면 true.
+let NAV_SEQ=0;
+function navTicket(){ const n=++NAV_SEQ, g=PANE_NOW.gen, pc=pcNow(); return ()=>n===NAV_SEQ&&g===PANE_NOW.gen&&pc===pcNow(); }
+// 누름이 아닌 자동 동작(재연결·화면 복귀·PC 재기동 뒤 '보던 터미널 다시 붙이기')의 표 — 순번을 올리지 않아 사용자의 누름을 밀어내지 않고,
+// 그 뒤 누름·다른 화면·PC 전환이 있으면 스스로 그만둔다. 전엔 자동 다시 붙이기가 순번을 올려, 2차 인증·목록을 기다리던 사용자의 다른
+// 화면 누름이 조용히 버려졌다(검토 3회차)
+function navPassive(){ const n=NAV_SEQ, g=PANE_NOW.gen, pc=pcNow(); return ()=>n===NAV_SEQ&&g===PANE_NOW.gen&&pc===pcNow(); }
+function paneEnter(kind, ref){
+  const p=paneDetail(), r=ref||{};
+  if(kind!=='terminal'&&(p.classList.contains('term-mode')||termView.main)) leaveTerminalView();   // 연결·탭 배지를 닫는다 — 재연결·화면 복귀가 떠난 터미널로 끌고 가지 않게(T2)
+  if(kind!=='terminal') CURRENT_TERM_SID=null;                  // 그 세션 알림이 무시되지 않게(T3)
+  if(kind!=='viewer') closeLiveViewer();
+  if(kind!=='files'&&p.classList.contains('fb-mode')) fbKeepView();   // 편집기가 아직 붙어 있을 때 스크롤 위치를 둔다(T9)
+  closeLiveResume();                                            // 웹 재개를 떠나면 끝낸다 — 응답 중이면 그 응답이 끝난 뒤(결정 7)
+  PANE_NOW={kind, gen:PANE_NOW.gen+1, sid:r.session_id||null, key:(kind==='terminal'&&r.session_id)?tabKey(r):null,
+    gid:kind==='monitor'?(r.gid||null):null, code:kind==='ledger'?(r.code||null):null};
+  if(r.session_id&&(kind==='viewer'||kind==='detail'||kind==='resume'))   // 웹 재개는 그 세션 대화로 기억한다(§4-3)
+    paneMemSet('viewer', {sid:r.session_id, kind:kind==='detail'?'detail':'viewer', name:sessLabel(r), at:Date.now()});
+}
+// 화면 기억(§6-1) sm_pane_<PC> = {viewer:{sid, kind:'viewer'|'detail', name, at}, monitor:{team, gid, name, at}}. 기기·PC 마다 따로(§6-2).
+// PC 키는 로컬 화면 = local, 릴레이 = 그 PC 의 방 이름(sm_e2ee_<room> 과 같은 방식, hostVerKey 와 같은 구분) — 릴레이로 PC 를
+// 바꿔 써도 기억이 섞이지 않게. 터미널 탭(sm_tabs)·파일(sm_fb_state2)도 이 키를 쓴다(3단계). 저장이 막혀도(사생활 보호 창 등) 화면은 그대로 돈다.
+function paneKey(base){ return base+'_'+hostVerKey(); }
+function paneMem(){ const m=lsJson(paneKey('sm_pane'),{}); return (m&&typeof m==='object'&&!Array.isArray(m))?m:{}; }
+function paneMemSet(part, val){ const m=paneMem(); if(val) m[part]=val; else delete m[part]; lsSet(paneKey('sm_pane'), m); }
+// PC 별 기억 읽기(3단계) — 이 PC 의 새 키가 아직 없으면 옛 키(PC 구분이 없던 0.28 까지의 sm_tabs·sm_fb_state2)를 읽고 old:true 로
+// 알린다. 옛 키엔 다른 PC 의 탭이 섞였을 수 있어 부르는 쪽이 이 PC 목록으로 걸러 새 키에 한 번 옮긴다. 옛 버전으로 되돌려도
+// 깨지지 않게 옛 키는 지우지 않는다. 새 키가 깨졌으면 옛 키로 돌아가지 않고 빈 기억으로 본다.
+function pcMemLoad(base){
+  let raw=null, old=false;
+  try{ raw=LS.getItem(paneKey(base)); if(raw==null){ raw=LS.getItem(base); old=(raw!=null); } }catch(e){}
+  let v=null; try{ v=JSON.parse(raw||'null'); }catch(e){}
+  return {v:(v&&typeof v==='object'&&!Array.isArray(v))?v:null, old};
+}
 
 // ---- UI helpers ----
 function toast(msg){ const t=$('#toast'); t.textContent=msg; t.classList.add('show');
@@ -1449,6 +1670,9 @@ let ACTIVE_LABEL='';  // 선택된 라벨 필터('' = 전체)
 const LIST_VIEWS=['sessions','groups','files'];
 let LIST_VIEW=(()=>{ try{ const v=LS.getItem('sm_list_view'); return LIST_VIEWS.includes(v)?v:'sessions'; }catch(e){ return 'sessions'; } })();
 function setListView(v){ LIST_VIEW=LIST_VIEWS.includes(v)?v:'sessions'; try{ LS.setItem('sm_list_view',LIST_VIEW); }catch(e){} }
+let LIST_READY=false;   // 지금 PC 의 첫 목록을 받았나(PC 전환 때 false) — SESSIONS 가 이 PC 것이라 믿고 기억을 걸러도 되는가(quick-switch 3단계)
+let LIST_AT=0;          // 지금 SESSIONS 를 서버에 청한 시각(ms) — 그 뒤에 이 페이지가 본 것(방금 띄운 터미널)은 목록이 아직 모른다(tabSeenLive)
+let LIST_FAIL=false;    // 목록 칸이 '목록 실패'를 보이는 중인가 — PC 가 돌아오면(pcBack) 처음부터 다시 받는다(20초 갱신은 옛 목록 칸에 그린다)
 async function loadList(q){
   const main=paneList(); $('#head').textContent='세션';
   main.innerHTML=''; syncTabbar();
@@ -1480,11 +1704,16 @@ async function loadList(q){
   // 갈아엎으면 전경 터미널이 발밑에서 사라진다(relay e2e 실측 2026-09-10).
   // 탭 막대 전환(2026-10-14 사장님): 오른쪽 칸은 그대로 — 비어 있을 때만 안내를 그린다(보던 상세·관제·파일·뷰어 유지)
   if(!paneDetail().children.length) detailPlaceholder();
+  const pc=pcNow(), at=Date.now();        // 이 목록을 청한 PC·시각
   try{
     const data=await T.list({limit:0});
-    SESSIONS=data.sessions||[];
+    // 받는 사이 릴레이로 PC 를 바꿨다 — 늦게 온 옛 PC 목록은 버린다(새 PC 의 loadList 가 따로 돈다). 옛 목록으로 새 PC 의
+    // 탭 기억을 복원하면 하나도 맞지 않아 빈 탭 목록이 새 PC 키에 덮어써진다(3단계)
+    if(pc!==pcNow()) return;
+    SESSIONS=data.sessions||[]; LIST_READY=true; LIST_AT=at; LIST_FAIL=false;
     if(typeof data.now==='number') CLOCK_SKEW=data.now-Date.now()/1000;
     rerender();
+    fbRetryAfterList();            // 목록 전에 연 파일 탭의 '세션을 찾지 못했습니다'를 굳히지 않는다(quick-switch §4-2)
     if(paneDetail().classList.contains('term-mode')) renderTabBarSoon();   // 살아있는 탭 스트립의 상태 갱신
     consumePendingOpen();          // 알림 클릭으로 진입한 경우 해당 세션 자동 열기
     restoreTabsOnce();             // 저장된 터미널 탭 워킹셋 복원(1회, 화면 탈취 없이 목록만)
@@ -1492,17 +1721,20 @@ async function loadList(q){
     if(PENDING_APPROVAL){ const a=PENDING_APPROVAL; PENDING_APPROVAL=''; openApprovalById(a); }
     LIST_CTX={rerender};
     refreshTodo();                 // 🔔 배지(승인 요청 수는 서버에서, 권한·입력 대기는 방금 받은 목록에서)           // 자동 갱신(뱃지 실시간화)이 쓸 컨텍스트
-  }catch(e){ listWrap.innerHTML=''; listWrap.appendChild(el('div','empty','목록 실패: '+e.message)); }
+  }catch(e){ if(pc!==pcNow()) return;   // 받는 사이 PC 를 바꿨다 — 새 PC 의 loadList 가 따로 돈다
+    LIST_FAIL=true; listWrap.innerHTML=''; listWrap.appendChild(el('div','empty','목록 실패: '+connErrText(e.message))); }
 }
 
 // ---- 목록 자동 갱신: 훅 상태 뱃지를 실시간처럼 (화면 보일 때만, 스크롤 보존) ----
 let LIST_CTX=null;
-setInterval(async()=>{
+// 목록을 조용히 새로 받는다(20초 갱신·PC 가 돌아왔을 때 pcBack) — 화면·스크롤·입력 중인 폼은 그대로
+async function listTick(){
   if(document.hidden||!LIST_CTX) return;
   if($('#app').classList.contains('hidden')) return;
   try{
-    const d=await T.list({limit:0});
-    SESSIONS=d.sessions||[];
+    const pc=pcNow(), at=Date.now(), d=await T.list({limit:0});
+    if(pc!==pcNow()) return;       // 받는 사이 PC 를 바꿨다 — 이전 PC 목록으로 새 PC 의 SESSIONS 를 덮지 않는다(새 PC 첫 목록이 다시 그린다)
+    SESSIONS=d.sessions||[]; LIST_AT=at;
     if(typeof d.now==='number') CLOCK_SKEW=d.now-Date.now()/1000;
     let skipList=false;
     if(LIST_VIEW==='groups'){
@@ -1517,7 +1749,18 @@ setInterval(async()=>{
     // 터미널 탭 칩의 상태 밑줄도 같은 훅 상태를 쓴다 — 목록과 함께 갱신(term-mode 일 때만 의미)
     if(paneDetail().classList.contains('term-mode')) renderTabBarSoon();
   }catch(e){}
-}, 20000);
+}
+setInterval(listTick, 20000);
+// 연결 오류 코드를 목록 칸에 보일 말로 — PC 가 꺼져 있으면 켜지면 다시 불러온다는 것까지(pcBack)
+function connErrText(m){ return m==='agent_offline'?'PC 가 꺼져 있습니다 — 켜지면 자동으로 다시 불러옵니다':m; }
+// PC(커넥터)가 다시 붙고 인증까지 끝났다(agent_online, Conn._onAgentOnline) — 목록을 새로 받는다. 아직 못 받았거나 실패한 채면 처음부터
+// (loadList 는 폰을 목록 칸으로 돌리므로 그 전에 잰 '보던 터미널을 숨겼나'를 돌려준다 — 다시 붙이기가 쓴다), 받아 둔 목록이 있으면 조용히.
+function pcBack(){
+  toast('PC 다시 연결됨');
+  if($('#app').classList.contains('hidden')) return undefined;     // 페어링 화면 — 앱에 들어갈 때 목록을 받는다
+  if(LIST_CTX&&!LIST_FAIL){ listTick(); return undefined; }
+  const hid=detailHiddenOnPhone(); loadList(); return hid;
+}
 
 // 모바일에서 앱을 내렸다 올리면 WS 는 이미 죽어 있다(onclose 가 eof 통지). 화면이 다시
 // 보이는 순간 전경 탭을 재접속 — 얼어붙은 화면을 '살아있는 척' 두지 않는다.
@@ -1552,30 +1795,87 @@ function dropGoneTab(t){
   removeTab(t.key); saveTabs();
   if(onView) leaveTerminalView();
 }
-function jumpToSession(s){
-  const t=TABS.list.find(x=>x.s.session_id===s.session_id);
-  if(t&&!tabGone(t,s)){ switchTab(t.key); return; }
+// 떠나기 직전까지 이 페이지가 살아 있음을 본 탭인데 그 뒤 목록을 아직 받지 않았다 — 목록의 live_terminal=false 는 아직 모르는
+// 것(방금 띄운 터미널). ⋯ 메뉴 표시용(정리한 터미널은 tabGone 이 늘 꺼짐으로 본다) — 누르면 jumpToSession 이 목록을 새로 받아 판정한다
+function tabSeenLive(t){ return !!(t.seenLiveAt&&t.seenLiveAt>=LIST_AT); }
+// 그 관찰을 목록 대신 믿어도 될 만큼 최근인가 — 목록을 받지 못했을 때(끊김·늦음) 그 탭으로 갈지. 화면을 숨기면 20초 목록이 돌지 않아
+// tabSeenLive 는 몇 시간이고 이어진다(LIST_AT 이 멈춤). 그사이 쉬는 세션 정리로 꺼졌으면 터미널을 열면 새 claude 가 뜬다(검토 2회차)
+const SEEN_TRUST_MS=60000;
+function tabSeenRecently(t){ return !!(t.seenLiveAt&&Date.now()-t.seenLiveAt<SEEN_TRUST_MS); }
+// 목록을 한 번 새로 받아 SESSIONS 를 바꾸고 그 세션의 지금 정보를 돌려준다 — 목록에 없으면 null, 받지 못하면(끊김·3초 넘김·받는
+// 사이 PC 전환) undefined. 20초 목록이 옛값일 수 있는 판정(꺼진 터미널·화면 인계) 바로 앞에서 쓴다(openSessionById 와 같은 방식).
+async function freshSess(sid){
+  const pc=pcNow(), at=Date.now();
+  let d=null, timer=null;
+  try{ d=await Promise.race([T.list({limit:0}), new Promise(r=>{ timer=setTimeout(()=>r(null),3000); })]); }
+  catch(e){ d=null; }
+  finally{ clearTimeout(timer); }
+  if(!d||!d.sessions||pc!==pcNow()) return undefined;
+  SESSIONS=d.sessions; LIST_AT=at; if(typeof d.now==='number') CLOCK_SKEW=d.now-Date.now()/1000;
+  return SESSIONS.find(x=>x.session_id===sid)||null;
+}
+// 이 PC 의 탭 기억에 적힌 그 세션 탭의 '권한확인' — 탭 기억을 되살리기 전(알림으로 새로고침·앱 다시 열기)에 그 탭을 먼저 열 때. 모르면 undefined
+function savedTabSafe(s){
+  if(_tabsRestored) return undefined;
+  const v=pcMemLoad('sm_tabs').v, it=v&&Array.isArray(v.list)&&v.list.find(x=>x&&x.sid===s.session_id);
+  return it?!!it.safe:undefined;
+}
+// 목록을 새로 받는 동안 — 빠르면(0.4초 안) 아무것도 띄우지 않고, 늦으면 누름을 받아들였음을 알린다(아무 반응 없이 3초 기다리지 않게)
+async function freshSessShown(sid){
+  const tm=setTimeout(()=>toast('터미널 상태를 확인하는 중…'),400);
+  try{ return await freshSess(sid); }finally{ clearTimeout(tm); }
+}
+// fresh: 부르는 쪽이 방금 목록을 받았다(알림 진입) — 다시 받지 않는다
+async function jumpToSession(s, fresh){
+  const live=navTicket();
+  let t=TABS.list.find(x=>x.s.session_id===s.session_id), listed=!!fresh;
+  // 목록(20초)은 꺼졌다는데 이 페이지는 그 뒤에 살아 있음을 봤다(방금 띄운 터미널) — 판정 전에 한 번 새로 받는다(§4-1). 탭을 버리지 않게.
+  // 그런 관찰이 없는 탭(새로고침 뒤 '중지됨'으로 되살린 탭 등)은 목록대로 바로 판정한다 — 받는 동안 아무 반응 없이 기다리지 않게
+  if(t&&!fresh&&tabGone(t,s)&&tabSeenLive(t)){
+    const recent=tabSeenRecently(t);
+    const f=await freshSessShown(s.session_id);
+    if(!live()) return;           // 기다리는 사이 다른 누름·다른 화면·PC 전환 — 늦게 끝난 이 누름은 화면을 바꾸지 않는다
+    listed=true;                  // 받았든 못 받았든 — loadTerminal 이 같은 목록을 또 기다리지 않게(느린 망에서 3초씩 두 번)
+    t=TABS.list.find(x=>x.s.session_id===s.session_id);           // 기다리는 사이 탭이 닫혔을 수 있다
+    if(f) s=f;
+    else if(f===undefined&&t){    // 목록을 받지 못했다(끊김·늦음)
+      // 떠나기 직전까지 살아 있음을 막 본 탭이면 그 탭으로(떠나도 터미널을 정리하지 않던 때와 같게). 끊겼으면 '연결 종료'로 열려
+      // 다시 연결될 때 붙는다(Conn._open)
+      if(recent){ switchTab(t.key,{listed}); return; }
+      // 본 지 오래다(앱을 내려 둔 몇 시간 등) — 그사이 꺼졌을 수 있어 터미널(꺼졌으면 새 claude)을 열지 않고 상세로(§4-1).
+      // 꺼졌는지 모르므로 탭은 버리지 않는다
+      loadDetail(s); return;
+    }
+  }
+  if(t&&!tabGone(t,s)){ switchTab(t.key,{listed}); return; }
   if(t) dropGoneTab(t);
-  if(s.live_terminal){ loadTerminal(s); return; }
+  if(s.live_terminal){ loadTerminal(s, savedTabSafe(s), {listed}); return; }
   loadDetail(s);
 }
 const _findSess=(sid)=>(SESSIONS||[]).find(x=>x.session_id===sid || (x.session_id||'').startsWith(sid));
 async function openSessionById(sid){
   if(!sid) return;
-  if(CURRENT_TERM_SID===sid) return;   // 이미 그 세션 터미널을 보는 중 - 화면 갈아엎지 않음
+  const live=navTicket();         // 이 알림 누름 — 바로 끝나도(보던 터미널) 마지막 누름이다. 목록을 받던 앞 누름이 늦게 덮지 않게
+  // 이미 그 세션 터미널을 보는 중 - 화면 갈아엎지 않음. 폰에서 '‹ 목록'으로 숨겨 둔 것이면 다시 보여 주기만(1-3).
+  // 끊겼거나 다른 기기가 가져간 화면이면 아래 탭 규칙(switchTab — 같은 탭에 다시 붙기·인계 확인)으로 — 죽은 화면만 보이지 않게
+  if(CURRENT_TERM_SID===sid){ const cur=findTab(TABS.active);
+    if(!termView.disconnected&&!(cur&&cur.taken)){ if(paneDetail().classList.contains('term-mode')) showDetailPane(); return; } }
   // 배경 탭으로 열려 있는 세션이면 새 화면을 만들지 않고 그 탭으로 전환한다
   const t=TABS.list.find(x=>x.s.session_id===sid || (x.s.session_id||'').startsWith(sid));
   if(t){ switchTab(t.key); return; }
   // 목록은 20초 폴링이라 live_terminal 이 stale 일 수 있다 → 판단 전에 새로 받는다(실패 시 캐시)
-  try{ const d=await T.list({limit:0}); if(d&&d.sessions){ SESSIONS=d.sessions; if(typeof d.now==='number') CLOCK_SKEW=d.now-Date.now()/1000; } }catch(e){}
+  const pc=pcNow(), at=Date.now();
+  try{ const d=await T.list({limit:0}); if(d&&d.sessions&&pc===pcNow()){ SESSIONS=d.sessions; LIST_AT=at; if(typeof d.now==='number') CLOCK_SKEW=d.now-Date.now()/1000; } }catch(e){}
+  // 받는 사이 다른 화면을 눌렀거나 PC 를 바꿨다 — 마지막 누름을 덮거나 이전 PC 의 세션을 새 PC 에서 열지 않는다
+  if(!live()) return;
   const s=_findSess(sid);
-  if(s){ jumpToSession(s); } else { PENDING_OPEN_SID=sid; }
+  if(s){ jumpToSession(s, true); } else { PENDING_OPEN_SID=sid; }
 }
 function consumePendingOpen(){
   if(!PENDING_OPEN_SID) return;
   const sid=PENDING_OPEN_SID; PENDING_OPEN_SID='';
   const s=_findSess(sid);
-  if(s) jumpToSession(s);   // 콜드 스타트(#open=)도 같은 규칙 — 목록은 방금 받은 것
+  if(s) jumpToSession(s, true);   // 콜드 스타트(#open=)도 같은 규칙 — 목록은 방금 받은 것
 }
 if('serviceWorker' in navigator){
   navigator.serviceWorker.addEventListener('message',(e)=>{
@@ -2383,6 +2683,7 @@ async function loadDetail(s){
   closeLiveViewer();                       // 뷰어 실시간 스트림 정리(있으면)
   SELECTED_ID=s.session_id; highlightSelected();
   CURRENT_TERM_SID=null;                   // 터미널 화면에서 벗어남
+  paneEnter('detail', s);                  // 칸을 비우기 바로 앞 — 떠나는 터미널·편집기 정리, 뷰어 칸 기억(quick-switch 2단계)
   const main=paneDetail(); closeInlineMonitor(); main.classList.remove('term-mode','fb-mode','mon-mode'); main.innerHTML=''; $('#head').textContent='세션 상세';
   main.appendChild(backbar('목록',()=>showListPane(),'tolist'));
   showDetailPane();
@@ -2554,9 +2855,14 @@ async function loadDetail(s){
 // 살아있다(설계 문서 docs/2026-09-10-multi-terminal-tabs-design.md §9).
 // 이전엔 이 전부가 loadTerminal 클로저 지역변수 + 전역 _term={close} 였다 — "화면"과
 // "어느 세션에 붙었나"를 분리해 객체로 들어야 탭 전환이 가능하다.
-const TABS={ list:[], active:null };
+const TABS={ list:[], active:null, mru:[] };   // mru = 최근 본 순서(key, 맨 앞이 마지막으로 본 탭) — 바로가기가 돌아갈 탭(quick-switch 3단계)
 const tabKey=(s)=>(s.fork_id||s.session_id);
 const findTab=(key)=>TABS.list.find(t=>t.key===key)||null;
+function tabSeen(key){ TABS.mru=[key, ...TABS.mru.filter(k=>k!==key)]; }
+// 이 페이지가 스스로 놓은 화면 id(탭 인스턴스 해체·새로 띄우기). 20초 목록의 screen 이 아직 이 값이면 내 옛 화면이지
+// 다른 기기가 아니다 — 정리한 터미널로 금방 돌아올 때 가짜 인계 확인창을 막는다(quick-switch 1-1). 오래된 것부터 버림.
+const RELEASED_SCREENS=[];
+function releaseScreen(id){ if(!id) return; RELEASED_SCREENS.push(id); if(RELEASED_SCREENS.length>50) RELEASED_SCREENS.shift(); }
 
 // termView: 터미널 영역(wrap) 안에 탭별 화면 인스턴스(릴레이=xterm, 로컬=iframe)를 보유한다.
 //  · 전환은 즉시다: 이전 탭은 tc 만 닫고(stream_close → 서버 화면 detach, PTY·xterm 버퍼 유지)
@@ -2571,6 +2877,7 @@ const termView={
   tabs:{},              // key -> {host, term, fit, ux, tc, frame, screenId, lastDim, ended}
   active:null,          // 전경 탭 key
   sid:null, disconnected:false,
+  discSeq:undefined,    // 전경 탭이 끊긴 때의 누름 순번(NAV_SEQ) — 그 뒤 누름이 있었으면 자동 다시 붙이기를 하지 않는다
   // 이 pane 에 터미널 뷰가 떠 있는가 — 탭 전환 fast-path(재구축 없이 attach 만)의 조건
   mounted(main){ return !!main && this.main===main && main.classList.contains('term-mode') && !!this.wrap; },
   cur(){ return this.active?this.tabs[this.active]:null; },
@@ -2586,9 +2893,11 @@ const termView={
     const wrap=el('div','term-wrap'); main.appendChild(wrap); this.wrap=wrap;
     if(MODE==='local') return;
     await loadXterm();
+    if(this.wrap!==wrap) return;   // 받는 사이 해체됐다(다른 화면으로 감) — 화면 꺼짐 방지·크기 감시를 새로 걸지 않는다
     // 터미널 표시 중 화면꺼짐 방지(§5) — 뷰당 1개. 실패해도 무해(iOS<16.4 등).
+    // 응답 전에 해체됐으면(다른 화면으로 감) 늦게 온 잠금을 바로 놓는다 — 해체 때는 아직 놓을 잠금이 없었다
     if(navigator.wakeLock&&navigator.wakeLock.request){
-      navigator.wakeLock.request('screen').then(l=>{this.wl=l;}).catch(()=>{}); }
+      navigator.wakeLock.request('screen').then(l=>{ if(this.wrap!==wrap){ try{l.release();}catch(e){} return; } this.wl=l; }).catch(()=>{}); }
     this.onWin=()=>this.resize(); window.addEventListener('resize',this.onWin);
     // wrap 이 실제 크기를 얻거나 바뀔 때마다 전경 탭을 채운다 — 초기 레이아웃/창 리사이즈 모두.
     if(window.ResizeObserver){ this.ro=new ResizeObserver(()=>this.resize()); this.ro.observe(wrap); }
@@ -2645,7 +2954,7 @@ const termView={
     }
     if(t.tc) return;                       // 이미 라이브(같은 탭 재호출)
     const term=t.term;
-    if(fresh){ term.reset(); t.lastDim=''; t.screenId=this._newScreenId(); t.ended=false; }
+    if(fresh){ term.reset(); t.lastDim=''; releaseScreen(t.screenId); t.screenId=this._newScreenId(); t.ended=false; }
     // 보조키 바는 터치 기기에서만, 전경 탭 것만 붙인다
     if(matchMedia('(pointer: coarse)').matches && t.ux&&t.ux.bar) this.main.appendChild(t.ux.bar);
     // 세션 잠금 감지: 이전 Host 강제종료로 남은 고아가 claude bg 에이전트로
@@ -2681,7 +2990,7 @@ const termView={
           // 화면 복귀 때 다시 빼앗아 핑퐁이 나지 않게. 가져오려면 사용자가 탭을 누른다(확인창).
           term.write('\r\n\x1b[93m── 다른 기기에서 보는 중 — 다시 가져오려면 탭을 누르세요 ──\x1b[0m\r\n');
           renderTabBarSoon(); return; }
-        if(this.active===key) this.disconnected=true;   // 재연결·화면 복귀 시 reattachForegroundTab 의 근거
+        if(this.active===key){ this.disconnected=true; this.discSeq=NAV_SEQ; }   // 재연결·화면 복귀 시 reattachForegroundTab 의 근거(그 뒤 누름이 있었나)
         if(err==='2fa_invalid'||err==='2fa_required') clearGrace();
         term.write('\r\n\x1b[91m── '+(err?otpErrMsg(err):'연결 종료')+' ──\x1b[0m\r\n'); }
       else { _detectBgLock(data);
@@ -2694,6 +3003,9 @@ const termView={
   detach(){ const c=this.cur(); if(c&&c.tc){ try{c.tc.close();}catch(e){} c.tc=null; } this.sid=null; },
   // 탭 하나의 인스턴스 해체(탭 닫기). 로컬 iframe 은 about:blank 로 WS 를 닫게 한다.
   closeTabInstance(key){ const t=this.tabs[key]; if(!t) return;
+    releaseScreen(t.screenId);             // 버리는 화면 id — 목록이 옛값이어도 가짜 인계 확인창이 안 뜨게(1-1)
+    // 떠나기 직전까지 살아 있던 전경 화면 — 20초 목록이 아직 모르는 동안(방금 띄움) ⋯ 메뉴가 '재개'를 내밀지 않게(tabSeenLive)
+    const rec=findTab(key); if(rec) rec.seenLiveAt=(this.active===key&&!this.disconnected&&!t.ended)?Date.now():0;
     if(t.tc){ try{t.tc.close();}catch(e){} t.tc=null; }
     if(t.ux){ try{t.ux.dispose();}catch(e){} if(t.ux.bar) t.ux.bar.remove(); }
     if(t.term){ try{t.term.dispose();}catch(e){} }
@@ -2711,6 +3023,7 @@ const termView={
 // 터미널 뷰를 떠날 때(상세/이력/종료/포크) 화면 전부 해체. 탭 목록은 유지(배경 PTY 살아있음).
 function leaveTerminalView(){ termView.dispose(); }
 function removeTab(key){ TABS.list=TABS.list.filter(t=>t.key!==key); if(TABS.active===key) TABS.active=null;
+  TABS.mru=TABS.mru.filter(k=>k!==key);
   termView.closeTabInstance(key); }   // 보유하던 xterm/iframe 해제
 
 // ---- 멀티탭 동작: 탭 스트립·전환·닫기·추가·저장/복원·재접속 ----
@@ -2724,14 +3037,24 @@ function shouldConfirmTakeover(s, t0){
   // 로컬(iframe)은 화면 id 가 없어 목록의 screen 이 '내 iframe' 인지 남인지 못 가린다 → 통지(taken)로만 판단
   if(MODE==='local') return false;
   const sc=s&&s.screen; if(!sc||!sc.attached) return false;      // 붙은 화면 없음(또는 stale false — 상대 통지가 메운다)
+  if(RELEASED_SCREENS.indexOf(sc.screen_id)>=0) return false;     // 이 페이지가 놓은 옛 화면(20초 목록의 옛값) — 남이 아니다(1-1)
   const mine=t0&&termView.tabs&&termView.tabs[t0.key]&&termView.tabs[t0.key].screenId;
   return !(mine&&sc.screen_id===mine);                            // 붙은 화면이 내 것이면 그냥 재접속
 }
+// 목록의 screen 이 이 페이지가 놓은 옛 화면이라 위 판정이 묻지 않을 참인가 — 그 목록은 놓기 전 값일 수 있어 loadTerminal 이 새로 받아 본다
+function releasedOnList(s, t0){ const sc=s&&s.screen;
+  return MODE!=='local'&&!(t0&&t0.taken)&&!!sc&&!!sc.attached&&RELEASED_SCREENS.indexOf(sc.screen_id)>=0; }
 // 세션 색: 모니터 색은 서버(webmonitor)가 주지만 터미널엔 없다 → 클라에서 결정적 hash→hsl.
 function tabColor(sid){ let h=0; for(const c of String(sid)) h=(h*31+c.charCodeAt(0))>>>0; return `hsl(${h%360},62%,58%)`; }
+// 기억 키는 PC 별(sm_tabs_<PC>, 3단계·결정 9) — 릴레이로 PC 를 바꿔 써도 다른 PC 의 탭과 섞이거나 지워지지 않게.
+// 이 PC 의 탭 기억을 아직 읽지 않았으면(첫 목록 전·PC 전환 직후 — 비서·알림으로 먼저 연 터미널) 남아 있는 기억을 덮어쓰지 않는다.
+// 첫 목록 뒤 restoreTabsOnce 가 그 기억과 지금 탭을 합쳐 적는다. 남은 기억이 없었으면 이 페이지가 처음부터 적는다(_tabsOwn).
+let _tabsOwn=false;
 function saveTabs(){
-  try{ LS.setItem('sm_tabs',JSON.stringify({active:TABS.active,
-    list:TABS.list.map(t=>({key:t.key,sid:t.s.session_id,safe:!!t.safe}))})); }catch(e){}
+  if(!_tabsRestored&&!_tabsOwn){ if(pcMemLoad('sm_tabs').v) return; _tabsOwn=true; }
+  try{ LS.setItem(paneKey('sm_tabs'),JSON.stringify({active:TABS.active,
+    list:TABS.list.map(t=>({key:t.key,sid:t.s.session_id,safe:!!t.safe})),
+    mru:TABS.mru.filter(k=>findTab(k))})); }catch(e){}
 }
 // 부팅 후 SESSIONS 가 준비된 시점에 1회. 탭 '목록'만 복원하고 터미널은 열지 않는다 — 자동으로
 // 붙이면 다른 기기가 쥔 화면을 탈취한다(세션당 화면 1개, webterm 점유 규칙). live_terminal 이
@@ -2739,15 +3062,19 @@ function saveTabs(){
 let _tabsRestored=false;
 function restoreTabsOnce(){
   if(_tabsRestored) return; _tabsRestored=true;
-  let saved=null; try{ saved=JSON.parse(LS.getItem('sm_tabs')||'null'); }catch(e){}
-  if(!saved||!Array.isArray(saved.list)||!saved.list.length) return;
+  // 이 PC 의 탭 기억. 아직 없으면 옛 키(PC 구분 없던 값)를 읽어 아래 목록 거르기를 거친 것만 새 키에 옮긴다(saveTabs, 1회)
+  const saved=pcMemLoad('sm_tabs').v;
+  if(!saved||!Array.isArray(saved.list)||!saved.list.length){ if(TABS.list.length) saveTabs(); return; }   // 목록 전에 연 탭은 이제 적는다
   const byId=new Map((SESSIONS||[]).map(s=>[s.session_id,s]));
   let n=0;
   for(const it of saved.list){
     const s=byId.get(it.sid); if(!s||findTab(it.key)) continue;
     TABS.list.push({key:it.key,s,safe:!!it.safe,dead:!s.live_terminal}); n++;
   }
-  if(saved.active&&findTab(saved.active)) TABS.active=saved.active;
+  // 알림 진입(#open=) 등으로 이미 정해진 마지막 탭은 덮지 않는다 — 로컬은 그 터미널이 먼저 동기로 잡혀 화면·기억이 어긋났다(1-4)
+  if(!TABS.active&&saved.active&&findTab(saved.active)) TABS.active=saved.active;
+  // 최근 본 순서: 이 페이지에서 이미 본 탭(알림 진입 등)이 앞, 그 뒤로 저장된 순서. 순서가 없던 옛 저장은 마지막 탭 하나로
+  for(const k of [...(Array.isArray(saved.mru)?saved.mru:[]), saved.active]) if(findTab(k)&&TABS.mru.indexOf(k)<0) TABS.mru.push(k);
   if(n) toast(`터미널 탭 ${n}개 복원됨 (터미널을 열면 탭 스트립에 보입니다)`);
   saveTabs();
 }
@@ -2832,14 +3159,17 @@ const tabBadge={
   },
   close(){ if(this.h){ try{this.h.close();}catch(e){} } this.h=null; this.subs=new Set(); this.armedAt={}; },
 };
-function switchTab(key){
+// opt.listed: 부르는 쪽이 방금 목록을 받았거나 받지 못했다(jumpToSession) — loadTerminal 이 같은 목록을 또 기다리지 않게
+function switchTab(key, opt){
   const t=findTab(key); if(!t) return;
   // 이미 전경 — 단 터미널 화면이 실제로 떠 있을 때만(상세/목록으로 나간 뒤엔 탭이 '활성'이어도
   // 화면이 없다 → 다시 구축해야 한다. 알림→탭 점프 e2e 에서 발견)
-  if(key===TABS.active&&termView.sid===t.s.session_id&&!termView.disconnected&&!t.taken&&paneDetail().classList.contains('term-mode')) return;
+  // 폰에서 '‹ 목록'으로 숨겨 둔 것이면 다시 보여 주기만 한다(재접속 없음, 1-3)
+  // 바로 끝나는 누름도 마지막 누름으로 센다(navTicket) — 목록을 받던 앞 누름이 늦게 이 화면을 덮지 않게
+  if(key===TABS.active&&termView.sid===t.s.session_id&&!termView.disconnected&&!t.taken&&paneDetail().classList.contains('term-mode')){ if(!(opt&&opt.auto)) navTicket(); showDetailPane(); return; }
   // 목록의 최신 세션 객체로 갱신(제목·live_terminal 변동 반영)
   const fresh=(SESSIONS||[]).find(s=>s.session_id===t.s.session_id); if(fresh) t.s=fresh;
-  loadTerminal(t.s, t.safe);   // 뷰가 떠 있으면 fast-path(attach 만), 아니면 구축
+  loadTerminal(t.s, t.safe, opt);   // 뷰가 떠 있으면 fast-path(attach 만), 아니면 구축
 }
 // 탭 닫기: 결정 2 — '화면만 닫기(PTY 유지)' vs '세션 종료(PTY 종료, 원격은 OTP)'.
 function closeTab(key){
@@ -2889,17 +3219,26 @@ function openTabPicker(){
     loadTerminal(s);
   }, {title:'➕ 터미널 탭 추가', hint:'터미널로 열어 탭에 추가할 세션을 고르세요. 이미 열린 탭은 목록에 없습니다.'});
 }
+// 폰에서 상세 칸을 숨기고 목록 칸을 보는 중인가('‹ 목록') — PC 폭은 두 칸이 함께 보여 해당 없음
+function detailHiddenOnPhone(){ return innerWidth<880&&$('#app').getAttribute('data-view')!=='detail'; }
 // 릴레이 재연결·화면 복귀 시: 전경 탭이 끊겨 있으면 persist PTY 에 다시 붙인다(서버가 tail 리플레이).
-function reattachForegroundTab(){
+// hidden: 폰에서 '‹ 목록'으로 숨겨 둔 터미널이면 저절로 다시 띄우지 않는다 — 목록을 보던 사람에게 화면을 바꾸거나 2차 인증을
+// 묻지 않게(§6-2). 같은 탭·세션 줄·알림으로 다시 보여 줄 때(switchTab) 다시 붙는다. 재연결 흐름은 loadList 가 목록 칸으로
+// 돌리기 전에 잰 값을 넘긴다(그 뒤엔 보던 터미널도 숨은 것처럼 보인다).
+function reattachForegroundTab(hidden){
   // disconnected && active = "사용자가 보고 있던 전경 터미널이 발밑에서 죽었다"는 뜻이다
   // (사용자가 스스로 떠났으면 leaveTerminalView→dispose 가 disconnected 를 지운다).
   // 뷰가 아직 떠 있으면 loadTerminal 의 fast-path(attach 만), 재연결 흐름(loadList 등)이
   // pane 을 갈아엎었으면 전체 재구축 — 어느 쪽이든 복원한다. relay e2e 실측(2026-09-10):
   // mounted() 를 요구하면 재연결 뒤 목록 화면에 갇힌 채 아무것도 복원되지 않았다.
   if(MODE!=='relay'||!termView.disconnected||!TABS.active) return;
+  if(hidden===undefined?detailHiddenOnPhone():hidden) return;
   const t=findTab(TABS.active); if(!t||t.taken) return;   // 빼앗긴 탭은 자동으로 되찾지 않는다(핑퐁 차단)
   const inst=termView.tabs&&termView.tabs[t.key]; if(inst&&inst.ended) return;   // claude 자체가 끝난 탭은 자동으로 새로 띄우지 않는다
-  switchTab(t.key);
+  // 끊긴 뒤 사용자가 다른 화면을 눌렀다(누름 순번이 바뀜) — 그 누름이 화면을 정한다. 자동 다시 붙이기는 누름이 아니라서, 다시 붙여
+  // 2차 인증을 기다리던 그 누름을 밀어내거나 예상 못 한 두 번째 코드 창을 띄우면 안 된다(검토 3회차)
+  if(termView.discSeq!==undefined&&termView.discSeq!==NAV_SEQ) return;
+  switchTab(t.key, {auto:true});
 }
 let _xtermP=null;
 function loadXterm(){
@@ -3092,25 +3431,41 @@ function termComposer(o){
     append(d){ inp.value+=d; try{ inp.focus(); }catch(e){} } };
   return api;
 }
-async function loadTerminal(s, safe){
-  closeLiveViewer();                       // 뷰어 실시간 스트림 정리(있으면)
+// opt.listed: 부르는 쪽이 방금 목록을 받았거나 받지 못했다(jumpToSession) — 아래 화면 인계 판정에서 같은 목록을 또 기다리지 않는다
+// opt.auto: 누름이 아닌 자동 다시 붙이기(reattachForegroundTab) — 누름 순번을 올리지 않는다(navPassive)
+async function loadTerminal(s, safe, opt){
+  const live=(opt&&opt.auto)?navPassive():navTicket();   // 이 누름 — 2차 인증·목록을 기다리는 사이 다른 누름·화면·PC 전환이 있으면 그만둔다
   let cred={};
   if(MODE==='relay'){ cred=await ensurePriv(); if(cred===null) return; }   // 외부 터미널 → grace/2차 인증
+  // 2차 인증 확인을 기다리는 사이 다른 화면을 눌렀다(마지막 누름이 이긴다) — 또는 PC 를 바꿨다(새 PC 페어링 포함): 이전 PC 세션을
+  // 새 PC 로 열거나 새 PC 탭 기억에 적지 않는다
+  if(!live()) return;
+  // 권한확인을 정하지 않은 길(목록 줄·알림·비서 등)은 그 탭의 설정을 이어 쓴다 — 탭별 권한확인 그대로(§7, 알림 콜드 스타트가 끄던 것)
+  if(safe===undefined){ const tt=findTab(tabKey(s)); if(tt) safe=!!tt.safe; }
   if(safe) cred={...cred, safe:true};      // 권한확인 유지 - 프롬프트가 뜨고 원격 승인 가능
   // 탭 등록(dedupe: key 가 같으면 기존 탭을 최신 세션 객체로 갱신) + 전경 지정
   const key=tabKey(s);
-  const t0=findTab(key);
+  let t0=findTab(key);
+  // 목록의 screen 이 '내가 놓은 옛 화면'이라 묻지 않을 참이다 — 떠나 있는 사이(20초 목록·앱을 내렸다 올림) 다른 기기가 가져갔을 수
+  // 있다(떠날 때 연결을 닫아 인계 통지는 못 받는다). 목록을 한 번 새로 받아 그 screen 으로 판단한다(§9 화면 탈취 착각)
+  let chk=s;
+  if(releasedOnList(s,t0)&&!(opt&&opt.listed)){ const f=await freshSessShown(s.session_id); if(!live()) return;
+    if(f) chk={...s, screen:f.screen}; t0=findTab(key); }
   // wasDead: 복원 시점에 PTY 가 없던 탭(다시 열면 새 스폰). attach 가 보유 xterm 을 비울지 정하는
   // 근거 — 20초 폴링의 SESSIONS.live_terminal 은 stale 해서(e2e 실측: 살아난 뒤에도 false) 못 쓴다.
   const wasDead=!!(t0&&t0.dead);
   const wasTaken=!!(t0&&t0.taken);           // 로컬 iframe 은 되찾을 때 리로드가 필요(스트림이 이미 끊김)
   // 화면 소유권 인계(v0.9.4, 로컬은 0.9.6): 다른 기기가 보고 있으면 가져가기 전에 묻는다 — 그쪽은 통지를 받고 입력이 막힌다
-  if(shouldConfirmTakeover(s,t0)){
+  if(shouldConfirmTakeover(chk,t0)){
     if(!confirm('다른 기기(화면)에서 이 세션을 보고 있습니다.\n여기로 가져오면 그쪽 화면은 입력이 막히고 "다른 기기에서 보는 중" 으로 바뀝니다.\n\n가져올까요?')) return;
   }
+  // 관문(2차 인증·인계 확인)을 지난 뒤에만 보던 화면을 정리한다 — 취소하면 보던 뷰어 실시간 연결이 그대로(T11)
+  closeLiveViewer();                       // 뷰어 실시간 스트림 정리(있으면)
+  paneEnter('terminal', s);                // 빠른 전환·칸 비우기 앞 — 떠나는 편집기 스크롤·웹 재개 정리(quick-switch 2단계)
   if(t0){ t0.s=s; t0.safe=!!safe; t0.dead=false; t0.act=false; t0.actN=0; t0.last=null; t0.taken=false; }   // 보는 순간 배지 소거
   else TABS.list.push({key, s, safe:!!safe, dead:false, act:false});
   TABS.active=key;
+  tabSeen(key);                            // 최근 본 순서 맨 앞으로(바로가기·탭 기억, 3단계)
   CURRENT_TERM_SID=s.session_id;           // 알림 클릭이 이 화면을 갈아엎지 않게 표시
   const main=paneDetail();
   $('#head').textContent='터미널 재개'+(safe?' (권한확인)':'');
@@ -3149,8 +3504,11 @@ async function loadTerminal(s, safe){
   closeInlineMonitor(); main.classList.remove('fb-mode','mon-mode'); main.classList.add('term-mode');
   // 터미널 영역(wrap)을 만들고 그 안에 탭별 host(xterm 또는 iframe)를 보유한다 — termView.mount.
   try{ await termView.mount(main); }catch(e){
+    if(termView.main!==main) return;   // 받는 사이 다른 화면으로 갔다(해체) — 지금 화면을 지우거나 실패를 그리지 않는다(아래 성공 길과 같게)
     closeInlineMonitor(); main.classList.remove('term-mode','fb-mode','mon-mode'); main.innerHTML='';
     main.appendChild(el('div','term-note','xterm 로드 실패: '+e.message)); return; }
+  // xterm 을 처음 받는 사이 다른 화면으로 갔다(paneEnter 가 해체) — 늦게 붙어 보이지 않는 터미널에 연결이 남지 않게
+  if(termView.main!==main) return;
   termView.strip=strip;
   termView.attach(s, cred, safe, wasDead, wasTaken);
   renderTabBar(); saveTabs();
@@ -3158,9 +3516,17 @@ async function loadTerminal(s, safe){
 
 let _liveViewer=null;
 function closeLiveViewer(){ if(_liveViewer){ try{_liveViewer.close();}catch(e){} _liveViewer=null; } }
+// 웹 재개(claude -p) 닫기 손잡이 — 상세 칸을 떠날 때(paneEnter)와 폰 '‹ 목록'에서 부른다. 응답 중이면 그 응답이 끝난 뒤 닫는다(결정 7)
+// now: PC 전환처럼 연결째 바뀌어 그 응답을 받을 수 없을 때 — 기다리지 않고 지금 닫는다(3단계). 응답 중에 떠나 닫기를 미뤄 둔
+// 재개(_leftResumes, 그 응답이 끝나면 스스로 빠진다)도 함께 — 남겨 두면 이전 PC 의 늦은 끝 알림이 새 PC 로 닫기 신호를 보냈다.
+let _liveResume=null;
+const _leftResumes=new Set();
+function closeLiveResume(now){ const r=_liveResume; _liveResume=null; if(r){ try{ r.close(now); }catch(e){} }
+  if(now) for(const x of [..._leftResumes]){ try{ x.close(true); }catch(e){} } }
 
 async function loadViewer(s){
   closeLiveViewer();
+  paneEnter('viewer', s); const gen=PANE_NOW.gen;   // 칸을 비우기 바로 앞. gen: 응답을 기다리는 사이 다른 화면으로 가면 늦게 그리지 않게(T5)
   const main=paneDetail(); closeInlineMonitor(); main.classList.remove('term-mode','fb-mode','mon-mode'); main.innerHTML=''; $('#head').textContent='뷰어';
   const bar=listBack();
   const badge=el('div','vlive off'); badge.appendChild(el('span','vdot'));
@@ -3171,12 +3537,13 @@ async function loadViewer(s){
   const pend={}; let lastTs='';
   try{
     const msgs=await fetchRecentMessages(s.session_id,300);
+    if(gen!==PANE_NOW.gen) return;   // 그사이 다른 화면으로 갔다 — 그리기·스크롤·실시간 연결 모두 하지 않는다(관제 뷰어 selGen 방식)
     wrap.innerHTML='';
     if(!msgs.length){ wrap.appendChild(el('div','empty','표시할 대화 없음')); }
     for(const m of msgs){ renderHistoryMsg(wrap,m,pend);
       if(m.timestamp&&m.timestamp>lastTs) lastTs=m.timestamp; }
     main.scrollTop=main.scrollHeight;
-  }catch(e){ wrap.innerHTML=''; wrap.appendChild(el('div','empty','뷰어 실패: '+e.message)); return; }
+  }catch(e){ if(gen!==PANE_NOW.gen) return; wrap.innerHTML=''; wrap.appendChild(el('div','empty','뷰어 실패: '+e.message)); return; }
   // 실시간 tail: 단일 세션 monitor 스트림을 붙여 새 메시지를 같은 카드로 append
   const setBadge=(on,txt)=>{ badge.className='vlive '+(on?'on':'off'); bt.textContent=txt; };
   const nearBot=()=> main.scrollHeight-main.scrollTop-main.clientHeight < 120;
@@ -3261,12 +3628,17 @@ function mdToHtml(src){
 // ---- 재개(스트리밍 + 입력) ----
 async function loadResume(s, inplace, safe){
   const isIn = inplace!==false;   // 기본 in-place(실제 세션)
+  const live=navTicket();         // 이 누름(이 재개를 연 PC 포함)
   let cred={};
   if(isIn){ cred=await ensurePriv(); if(cred===null) return; }   // 외부 in-place → grace/2차 인증
+  // 2차 인증을 기다리는 사이 다른 화면을 눌렀거나(마지막 누름이 이긴다) PC 를 바꿨다(새 PC 페어링 포함) — 이전 PC 세션의 claude -p 를
+  // 새 PC 에 띄우지 않는다
+  if(!live()) return;
   if(safe) cred={...cred, safe:true};   // 일반 모드: 도구 자동허용 없이(웹은 물을 수 없어 거부됨)
+  paneEnter('resume', s);   // 2차 인증 뒤, 칸을 비우기 바로 앞 — 보던 뷰어 실시간·터미널·옛 재개 정리(quick-switch 2단계)
   const main=paneDetail(); closeInlineMonitor(); main.classList.remove('term-mode','fb-mode','mon-mode'); main.innerHTML='';
   $('#head').textContent='재개'+(safe?' (일반)':'');
-  main.appendChild(listBack(()=>{ sess&&sess.close(); }));
+  main.appendChild(listBack(()=>closeLiveResume()));   // 폰 '‹ 목록'도 화면을 떠나는 것 — 응답 중이면 그 응답이 끝난 뒤 닫는다(결정 7)
   showDetailPane();
   const stream=el('div','stream'); main.appendChild(stream);
   stream.appendChild(el('div','result', isIn
@@ -3283,6 +3655,10 @@ async function loadResume(s, inplace, safe){
   comp.appendChild(ta); comp.appendChild(send);
   main.appendChild(comp);
   let sess=null, busy=false, busyEl=null;
+  // 이 화면을 떠나면 재개(claude -p)를 끝낸다(결정 7) — 응답 중이면 끊지 않고 그 응답이 끝난 뒤(result·eof) 닫고 알린다.
+  // 떠난 뒤엔 칸(이제 다른 화면)의 스크롤을 건드리지 않고, 닫은 뒤엔 보내기를 막는다(창을 넓혀 다시 보여도 닫힌 재개로 보내지 않게).
+  let leaving=false, shut=false;
+  const toEnd=()=>{ if(!leaving) main.scrollTop=main.scrollHeight; };
   const cleanup=()=>{ comp.remove(); };
   // back 시 composer 제거
   const obs=new MutationObserver(()=>{ if(!document.contains(stream)){cleanup();obs.disconnect();} });
@@ -3290,14 +3666,22 @@ async function loadResume(s, inplace, safe){
   // busyEl 이 있으면 그 위에 삽입(진행표시기는 항상 맨 아래 유지)
   const push=(cls,txt)=>{ const d=el('div',cls); if(txt!=null)d.textContent=txt;
     if(busyEl) stream.insertBefore(d,busyEl); else stream.appendChild(d);
-    main.scrollTop=main.scrollHeight; return d; };
-  const setBusy=(on)=>{ busy=on; send.disabled=on;
+    toEnd(); return d; };
+  const setBusy=(on)=>{ busy=on; send.disabled=on||shut;
     send.classList.toggle('working',on); send.textContent=on?'…':'↑';
     if(on){ if(!busyEl){ busyEl=el('div','busy');
       busyEl.innerHTML='<span class="bdot"></span><span class="bdot"></span><span class="bdot"></span>'
         +'<span style="margin-left:6px">작업 중…</span>';
-      stream.appendChild(busyEl); main.scrollTop=main.scrollHeight; } }
+      stream.appendChild(busyEl); toEnd(); } }
     else if(busyEl){ busyEl.remove(); busyEl=null; } };
+  const shutNow=()=>{ if(shut) return; shut=true; _leftResumes.delete(handle); try{ sess&&sess.close(); }catch(e){}
+    send.disabled=true; ta.disabled=true; push('result','— 화면을 떠나 재개를 닫았습니다 —'); };
+  const closeAfterTurn=(unsent)=>{ shutNow(); toast('응답이 끝나 떠난 웹 재개를 닫았습니다'+(unsent?' — 보내지 않은 메시지 '+unsent+'개':'')); };
+  // 닫기 손잡이 — 쓰는 함수가 다 생긴 뒤, 첫 await 전에 건다. 응답 중에 떠나면 닫기를 미루고 _leftResumes 에 남긴다.
+  // now 는 이미 떠나 미뤄 둔 것도 지금 닫는다(PC 전환 — closeLiveResume(true))
+  const handle={ close(now){ if(shut||(leaving&&!now)) return; leaving=true;
+    if(!busy||now) shutNow(); else _leftResumes.add(handle); } };
+  _liveResume=handle;
   // 과거 이력 먼저 표시(끝부분)
   const loading=push('msg sys','과거 대화 불러오는 중…');
   try{ const hist=await fetchRecentMessages(s.session_id,120); loading.remove();
@@ -3305,17 +3689,20 @@ async function loadResume(s, inplace, safe){
     for(const m of hist) renderHistoryMsg(stream,m,hpend);
     if(hist.length) stream.appendChild(el('div','result','── 여기서 이어서 대화 ──'));
   }catch(e){ loading.textContent='(과거 이력 로드 실패)'; }
+  if(leaving) return;   // 이력을 받는 사이 화면을 떠났다 — 재개(claude -p)를 띄우지 않는다(결정 7)
   main.scrollTop=main.scrollHeight;
   // 카드 버튼이 답을 보낼 때 쓰는 헬퍼(사용자 말풍선 + 전송). busy 여도 보낸다 -
   // 도구 실패 직후 턴이 아직 도는 중일 수 있고, stream-json 입력은 큐잉된다.
-  const sendText=(t)=>{ push('msg user',t); setBusy(true); try{ sess.input(t); }catch(e){} };
+  const sendText=(t)=>{ if(shut) return; push('msg user',t); setBusy(true); try{ sess.input(t); }catch(e){} };
   const toolPend={};   // tool_use id -> 결과 핸들러 (구조화 카드 짝맞춤)
   sess=T.resume(s.session_id,(f)=>{
-    if(f.eof){ setBusy(false);
+    if(f.eof){ const unsent=pend.length; setBusy(false);
       if(f.error==='2fa_invalid'||f.error==='2fa_required') clearGrace();  // 만료 → 재인증
       while(pend.length){ const it=pend.shift();                            // 대기분은 못 보냄
         it.chip.textContent='✖ 전송되지 않음 - 세션이 종료됨'; it.chip.classList.add('fail'); }
-      push('result', f.error?('종료: '+otpErrMsg(f.error)):'— 세션 종료 —'); return; }
+      push('result', f.error?('종료: '+otpErrMsg(f.error)):'— 세션 종료 —');
+      if(leaving&&!shut) closeAfterTurn(unsent);   // 떠난 뒤 끝났다 — 손잡이를 정리하고 알린다(결정 7)
+      return; }
     const ev=f.data||{};
     if(ev.type==='system'){ if(ev.subtype==='init')push('msg sys','● 세션 시작'); return; }
     if(ev.type==='assistant'){ const c=ev.message&&ev.message.content;
@@ -3326,12 +3713,13 @@ async function loadResume(s, inplace, safe){
           if(x.name==='AskUserQuestion' && renderAskCard(stream,x.input,sendText)){}
           else if(x.name==='ExitPlanMode' && renderPlanCard(stream,x.input,sendText,()=>ta.focus())){}
           else renderToolUse(stream,{id:x.id,name:x.name,input:x.input},toolPend);
-          main.scrollTop=main.scrollHeight;
+          toEnd();
         }
       } return; }
     if(ev.type==='result'){ setBusy(false);
       const cost=ev.total_cost_usd!=null?(' · $'+ev.total_cost_usd):'';
       push('result','완료'+cost);
+      if(leaving){ if(!shut) closeAfterTurn(pend.length); return; }   // 떠난 화면 — 대기 메시지는 보내지 않고 닫는다(결정 7)
       drainPend();                       // 대기 중이던 메시지를 이어서 전송
       return; }
     if(ev.type==='user'){            // tool_result 를 카드에 짝 맞춰 채운다
@@ -3679,10 +4067,19 @@ function monSessName(s){ return s.title||s.label_name||s.slug||s.session_id.slic
 // 그룹은 Host 의 monitor_groups.json 에 산다. 알림 소스는 훅(관리 Stop/하위 Stop/하위 시작),
 // 발송은 Host 의 웹푸시. 알림 클릭 → #monitor=<gid> → 그 그룹 오버레이.
 async function fetchMonGroups(){ try{ const r=await T.api('GET','/api/owner/monitor/groups'); return (r&&r.groups)||[]; }catch(e){ return []; } }
+// 관제 기억(quick-switch §4-4) — 팀 코드를 먼저 적는다(팀을 보관했다 풀면 관제 id 가 새로 생김). 팀 목록을 아직 못 받았으면
+// (관제 알림 진입 등) 같은 관제의 옛 팀 코드를 이어 쓴다. teamAsGroup 반환 모양은 그대로 둔다(team.test 단언).
+function paneMemMonitor(g){
+  if(!g||!g.id) return;
+  const t=(TEAMS||[]).find(x=>x.monitor_group_id===g.id), old=paneMem().monitor;
+  paneMemSet('monitor', {team:t?t.code:((old&&old.gid===g.id&&old.team)||null), gid:g.id, name:g.name||(t&&t.name)||'', at:Date.now()});
+}
 function openMonitorGroup(g, o){
   const ids=[g.manager].concat((g.subs||[]).filter(s=>s!==g.manager));
   const inline=(o&&o.inline!==undefined)?o.inline:monInlineWanted();
-  if(inline){ if(MON_INLINE&&MON_INLINE.gid===g.id&&paneDetail().classList.contains('mon-mode')) return;   // 이미 보고 있음
+  paneMemMonitor(g);   // 상세 칸·폰 덮개·관제 알림 어느 길이든 마지막 관제로 기억(sm_mon_last 는 아래 그대로)
+  // 이미 보고 있음 — 같은 팀이 살아 있을 때만 그대로. 끊겼으면(연결 종료) 아래에서 다시 연다(1-5)
+  if(inline){ if(MON_INLINE&&MON_INLINE.gid===g.id&&!MON_INLINE.dead()&&paneDetail().classList.contains('mon-mode')){ showDetailPane(); return; }
     try{ LS.setItem('sm_mon_last',g.id); }catch(e){} }
   openMonitor(ids, g.manager, Object.assign({}, g.labels||{}), {gid:g.id, name:g.name, inline});   // 저장 그룹 → 💾 는 갱신 모드
 }
@@ -3691,7 +4088,10 @@ async function openMonitorGroupById(gid){
   if(!gid) return;
   const g=(await fetchMonGroups()).find(x=>x.id===gid);
   if(!g){ toast('그 팀의 관제를 찾을 수 없습니다(보관됐거나 관리 세션이 없음)'); return; }
-  if(document.getElementById('mon-ov')) return;   // 이미 관제 중이면 갈아엎지 않는다
+  // 이미 관제 중: 같은 팀이 살아 있으면 갈아엎지 않고, 끊겼거나 다른 팀이면 알림의 팀으로 바꾼다(1-5).
+  // 폰 덮개(MON_OV)는 여기서 닫고 새로 연다. PC 상세 칸 관제는 openMonitorGroup 이 같은 팀·살아 있음을 가린다.
+  const m=MON_OV;
+  if(m){ if(m.gid===gid&&!m.dead()) return; m.close(); }
   openMonitorGroup(g);
 }
 function consumePendingMonitor(){
@@ -3708,7 +4108,8 @@ const MON_NOTIFY_DEFAULT={manager_stop:true, sub_stop:true, sub_start:false, err
 // 탭 규칙(VS Code): 한 번 누름 = 미리보기 탭(기울임, 다음 파일이 그 자리를 씀), 두 번 누름 = 고정.
 const FB={sort:'name', open:new Set(), kids:{}, errs:{}, ent:{}, sel:'', q:'', tabs:[], active:null, rootMap:null,
   restored:false, reveal:null, treeGen:0, wordWrap:false, ed:null, wrap:null, tree:null, tabsEl:null, crumbEl:null,
-  edHost:null, alt:null, seq:0, autoShow:false};
+  edHost:null, alt:null, seq:0, autoShow:false,
+  migrate:false};   // migrate: 옛 키를 이 PC 첫 목록 전에 읽어 아직 거르지 못함 — 목록 뒤 fbRetryAfterList 가 걸러 한 번 적는다
 const FB_LANG={py:'python',pyw:'python',pyi:'python',js:'javascript',mjs:'javascript',cjs:'javascript',jsx:'javascript',
   ts:'typescript',tsx:'typescript',mts:'typescript',md:'markdown',markdown:'markdown',html:'html',htm:'html',
   css:'css',scss:'scss',less:'less',xml:'xml',svg:'xml',xaml:'xml',csproj:'xml',yaml:'yaml',yml:'yaml',
@@ -3760,15 +4161,44 @@ function fbRootSid(rk){ const r=fbRoot(rk); return r?r.sid:null; }
 function fbRootMatches(r,q){ if(!q) return true; q=q.toLowerCase();
   return r.cwd.toLowerCase().includes(q) || r.sessions.some(s=>sessLabel(s).toLowerCase().includes(q)); }
 function fbParentLabel(cwd){ const parts=String(cwd||'').split(/[\\/]/).filter(Boolean); parts.pop(); return parts.slice(-2).join('\\'); }
-const FB_STATE='sm_fb_state2';
+const FB_STATE='sm_fb_state2', FB_KEEP=20;   // 기억 키는 PC 별(sm_fb_state2_<PC>, 3단계). FB_KEEP = 새로고침 뒤 되살리는 파일 탭 상한
 function fbNewTab(rk,path,pinned){ return {id:fbId(rk,path), root:rk, path, name:baseName(path), pinned:!!pinned}; }
-function fbSaveState(){ try{ LS.setItem(FB_STATE, JSON.stringify({open:[...FB.open], sort:FB.sort,
-  tabs:FB.tabs.map(t=>({root:t.root,path:t.path,pinned:!!t.pinned})), active:FB.active})); }catch(e){} }
+// 마지막 파일이 복원 상한(앞 20개) 밖이면 20번째 자리로 당겨 적는다 — 새로고침 뒤 마지막 파일 대신 첫 탭이 뜨지 않게(3단계)
+// 이 PC 기억을 아직 읽지 않았거나(PC 전환 직후) 옛 키를 아직 거르지 못했으면(migrate) 적지 않는다 — 읽지 않은 기억을 덮어쓰거나
+// 다른 PC 폴더가 섞인 채로 새 키에 굳지 않게
+function fbSaveState(){ if(!FB.restored||FB.migrate) return;
+  try{ const tabs=FB.tabs.slice(), i=tabs.findIndex(t=>t.id===FB.active);
+  if(i>=FB_KEEP) tabs.splice(FB_KEEP-1, 0, tabs.splice(i,1)[0]);
+  LS.setItem(paneKey(FB_STATE), JSON.stringify({open:[...FB.open], sort:FB.sort,
+  tabs:tabs.map(t=>({root:t.root,path:t.path,pinned:!!t.pinned})), active:FB.active})); }catch(e){} }
 function fbRestoreState(){ if(FB.restored) return; FB.restored=true;
-  let st=null; try{ st=JSON.parse(LS.getItem(FB_STATE)||'null'); }catch(e){}
-  FB.open=new Set((st&&st.open)||[]); FB.sort=(st&&st.sort)==='mtime'?'mtime':'name';
-  FB.tabs=((st&&st.tabs)||[]).slice(0,20).filter(t=>t&&t.root&&t.path).map(t=>fbNewTab(t.root,t.path,t.pinned));
-  FB.active=(st&&st.active&&FB.tabs.some(t=>t.id===st.active))?st.active:(FB.tabs[0]?FB.tabs[0].id:null); }
+  const m=pcMemLoad(FB_STATE), st=m.v;
+  // 옛 키(PC 구분 없던 값)를 처음 옮겨 올 때는 다른 PC 의 폴더가 섞였을 수 있다 — 이 PC 목록에 있는 폴더의 탭·펼침만 남겨 새 키에
+  // 적는다(§9 '목록으로 걸러 버림'). 이 PC 목록을 아직 못 받았으면(LIST_READY 전) 거르지 못한다 — 옮기기를 목록 뒤로 미루고
+  // (FB.migrate) 그때까지 새 키에 적지 않는다. 목록이 오면 fbRetryAfterList 가 걸러 한 번 적는다(같은 페이지엔 '다음 복원'이 없다).
+  const move=m.old&&LIST_READY; if(move) fbRoots();
+  FB.migrate=!!(m.old&&!LIST_READY);
+  const mine=(rk)=>!move||FB.rootMap.has(rk);
+  FB.open=new Set((st&&Array.isArray(st.open)?st.open:[]).filter(id=>mine(fbSplit(id)[0]))); FB.sort=(st&&st.sort)==='mtime'?'mtime':'name';
+  FB.tabs=((st&&Array.isArray(st.tabs))?st.tabs:[]).filter(t=>t&&t.root&&t.path&&mine(t.root)).slice(0,FB_KEEP).map(t=>fbNewTab(t.root,t.path,t.pinned));
+  FB.active=(st&&st.active&&FB.tabs.some(t=>t.id===st.active))?st.active:(FB.tabs[0]?FB.tabs[0].id:null);
+  if(move) fbSaveState(); }
+// 목록을 받기 전에 연 탭은 뿌리(세션)를 못 찾아 '세션을 찾지 못했습니다'로 남는다 — 목록이 오면 뿌리를 새로 셈해, 이제 찾을 수 있는
+// 탭만 오류를 지우고 한 번 다시 받는다(굳지 않게, quick-switch §4-2). 여전히 그 폴더 세션이 없으면 오류 그대로(다시 받지 않음).
+function fbRetryAfterList(){
+  // 첫 목록 전에 옛 키를 읽어 두었다(FB.migrate) — 이제 이 PC 목록에 있는 폴더의 탭·펼침만 남기고 새 키에 한 번 적는다(§9)
+  if(FB.migrate){ FB.migrate=false; fbRoots(); const mine=(rk)=>FB.rootMap.has(rk);
+    FB.open=new Set([...FB.open].filter(id=>mine(fbSplit(id)[0])));
+    FB.tabs=FB.tabs.filter(t=>{ if(mine(t.root)) return true; fbDisposeTab(t); return false; });
+    if(!FB.tabs.some(t=>t.id===FB.active)) FB.active=FB.tabs[0]?FB.tabs[0].id:null;
+    fbSaveState();
+    if(paneDetail().classList.contains('fb-mode')){ fbRenderTabs(); fbRenderActive(); } }
+  if(!FB.tabs.length) return;
+  fbRoots();
+  let again=false;
+  for(const t of FB.tabs){ if(t.err&&t.err.error==='no_session'&&fbRootSid(t.root)){ t.err=null; if(t.id===FB.active) again=true; } }
+  if(again&&paneDetail().classList.contains('fb-mode')) fbRenderActive();
+}
 // 세션 상세의 📂 파일 보기 → 그 세션 폴더를 펼쳐서 보여 준다
 function fbUseSession(s){ if(!s||!s.cwd) return; fbRestoreState();
   const id=fbId(s.cwd.toLowerCase(),''); FB.open.add(id); FB.sel=id; FB.reveal=id; FB.q=''; fbSaveState(); }
@@ -3825,7 +4255,8 @@ async function fbRenderTree(){
   for(const id of need){
     if(!fbAncestorsOpen(id)) continue;
     try{ await fbFetchDir(id); }
-    catch(e){ FB.errs[id]=fbErrText(fbApiErr(e)); if(fbSplit(id)[1]) FB.open.delete(id); }
+    catch(e){ if(gen!==FB.treeGen) return;   // 그사이 새로 그렸거나 PC 를 바꿨다 — 옛 실패(연결 끊김 등)를 새 트리의 오류로 남기지 않는다(3단계)
+      FB.errs[id]=fbErrText(fbApiErr(e)); if(fbSplit(id)[1]) FB.open.delete(id); }
     if(gen!==FB.treeGen) return;
   }
   if(gen!==FB.treeGen||FB.tree!==tree) return;
@@ -3962,6 +4393,7 @@ function fbShowEditor(){
     if(main.classList.contains('term-mode')) leaveTerminalView();
     closeLiveViewer(); CURRENT_TERM_SID=null;
     if(FB.ed){ try{ FB.ed.dispose(); }catch(e){} FB.ed=null; }   // 다른 화면이 DOM 을 지웠다 — 편집기는 새로(모델은 탭이 보유)
+    paneEnter('files');                    // 칸을 비우기 바로 앞 — 웹 재개 등 떠나는 화면 정리(quick-switch 2단계)
     closeInlineMonitor(); main.classList.remove('term-mode','fb-mode','mon-mode'); main.innerHTML=''; main.classList.add('fb-mode');
     main.appendChild(backbar('탐색기',()=>showListPane(),'tolist'));
     FB.tabsEl=el('div','fbtabs'); FB.crumbEl=el('div','fbcrumb');
@@ -4293,6 +4725,7 @@ function teamNotifySheet(t){
 let LEDGER=null;   // {code, el}
 function openLedger(t){
   closeLiveViewer(); SELECTED_ID=null; highlightSelected(); CURRENT_TERM_SID=null;
+  paneEnter('ledger', t);                  // 칸을 비우기 바로 앞 — 떠나는 터미널·편집기·웹 재개 정리(quick-switch 2단계)
   const main=paneDetail(); closeInlineMonitor(); main.classList.remove('term-mode','fb-mode','mon-mode'); main.innerHTML='';
   $('#head').textContent='작업 장부';
   main.appendChild(listBack());
@@ -4649,7 +5082,10 @@ function newTeamForm(){
 
 // opts.gid/name: 팀의 관제로 열었을 때 — 서버가 팀 구성원 변경을 밀어 준다(gid).
 // 데스크톱 그룹 보기: 왼쪽 = 그룹 목록, 오른쪽(상세 칸) = 그 그룹 관제(2026-10-12 사장님). 폰은 전체 화면 오버레이 그대로.
-let MON_INLINE=null;   // {gid, close}
+let MON_INLINE=null;   // {gid, close, dead}
+// 폰 관제 덮개 {gid, close, dead} — 상세 칸 관제와 따로 든다. 둘 다 id 'mon-ov' 라, 창을 좁히면(가로→세로 회전·창 반쪽) 남아 있는
+// 상세 칸 관제를 getElementById 가 먼저 잡아 덮개를 놓치고 덮개를 또 쌓았다(앞 덮개의 관제 연결도 열린 채)
+let MON_OV=null;
 function closeInlineMonitor(){ const m=MON_INLINE; MON_INLINE=null; if(m){ try{ m.close(); }catch(e){} } }
 function monInlineWanted(){ return innerWidth>=880; }
 function openMonitor(ids, manager, labels, opts){
@@ -4680,10 +5116,12 @@ function openMonitor(ids, manager, labels, opts){
     const main=paneDetail();
     if(main.classList.contains('term-mode')) leaveTerminalView();
     closeLiveViewer(); CURRENT_TERM_SID=null;
+    paneEnter('monitor', {gid:opts.gid||null});   // 칸을 비우기 바로 앞 — 떠나는 편집기 스크롤·웹 재개 정리(quick-switch 2단계)
     closeInlineMonitor(); main.classList.remove('term-mode','fb-mode'); main.innerHTML=''; main.classList.add('mon-mode');
     main.appendChild(ov); $('#head').textContent='관제'; showDetailPane();
   } else {
     const old=document.getElementById('mon-ov'); if(old&&old.classList.contains('inline')) closeInlineMonitor();
+    if(MON_OV) MON_OV.close();   // 덮개는 하나만 — 앞 덮개와 그 관제 연결을 닫는다
     document.body.appendChild(ov);
   }
   vtoggle.onclick=()=>{ const hid=viewer.classList.toggle('hide'); rez.classList.toggle('gone',hid); };
@@ -4769,7 +5207,7 @@ function openMonitor(ids, manager, labels, opts){
     }
   }
 
-  let handle=null;
+  let handle=null, monDead=false;   // monDead: 끊김(eof)·연결 실패 — 같은 팀을 다시 열 때 다시 붙는 근거(1-5)
   // ---- 타임라인 필터: 종류 단일 선택 + 세션별 숨김. 행은 렌더 시 data-sid·종류 클래스를 갖고,
   //      필터는 .fhid 토글만 한다(재렌더 없음). 우측 뷰어·자동 추적·활동점은 필터와 무관(표시만 거름).
   let fKind='all'; const fHide=new Set(); let fTotal=0, fShown=0;
@@ -4873,7 +5311,7 @@ function openMonitor(ids, manager, labels, opts){
   }
 
   function onMsg(dataStr, eof, error){
-    if(eof){ setLive(false, error?('종료: '+error):'연결 종료'); return; }
+    if(eof){ monDead=true; setLive(false, error?('종료: '+error):'연결 종료'); return; }
     let m; try{ m=JSON.parse(dataStr); }catch(e){ return; }
     if(m.type==='heartbeat'){ setLive(true,'● live'); return; }
     if(m.type==='error'){ setLive(false,'오류: '+(m.error||'')); toast('관제 오류: '+(m.error||'')); return; }
@@ -4900,15 +5338,18 @@ function openMonitor(ids, manager, labels, opts){
   }
 
   try{ handle=T.monitor(ids.join(','), manager, onMsg, opts.gid||null); }
-  catch(e){ setLive(false,'연결 실패'); toast('관제 연결 실패: '+e.message); }
+  catch(e){ monDead=true; setLive(false,'연결 실패'); toast('관제 연결 실패: '+e.message); }
   const shut=()=>{ try{ handle&&handle.close(); }catch(e){} };
   if(inline){
-    MON_INLINE={gid:opts.gid||null, close:shut};
+    MON_INLINE={gid:opts.gid||null, close:shut, dead:()=>monDead};
     x.title='관제 닫기';
     x.onclick=()=>{ closeInlineMonitor(); paneDetail().classList.remove('mon-mode'); detailPlaceholder('왼쪽에서 팀을 고르세요');
       highlightGroup(null); };
     highlightGroup(opts.gid||null);
-  } else x.onclick=()=>{ shut(); ov.remove(); };
+  } else { const closeOv=()=>{ shut(); ov.remove(); if(MON_OV===mo) MON_OV=null; };
+    const mo={gid:opts.gid||null, close:closeOv, dead:()=>monDead};
+    ov._mon=MON_OV=mo;   // 폰 덮개 — 관제 알림이 같은 팀·살아 있음을 가린다(1-5)
+    x.onclick=closeOv; }
 }
 
 // 관전 중 추가할 세션 고르기(현재 그룹에 없는 세션만)
@@ -5329,7 +5770,7 @@ function renderPairPcs(){
       const again=el('button','btn ghost sm','다시 페어링'); again._keep=true;
       again.onclick=()=>{ if(appScanAvailable()) appScanPair(); else { const li=$('#p-link'); if(li&&li.focus) li.focus(); toast('PC 에서 새 QR 을 만들어 스캔하거나 링크를 붙여넣으세요'); } };
       const rm=el('button','btn ghost sm','지우기'); rm._keep=true;
-      rm.onclick=()=>{ pcsRemove(pc.room); renderPairPcs(); applyPairSituation(); };
+      rm.onclick=()=>{ pcsRemove(pc.room); forgetPcMem(pc.room); renderPairPcs(); applyPairSituation(); };   // 그 PC 의 화면 기억도
       wrap.appendChild(pairRow({name:'🖥 '+pcName(pc), chip:PC_STATE_CHIP[pc.state], buttons:[again, rm],
         meta:[pc.last?('최근 '+relTs(Math.floor(pc.last/1000))):null]}));
       return;
@@ -5337,12 +5778,18 @@ function renderPairPcs(){
     const b=el('button','btn ghost','🖥 '+pcName(pc));
     b.style.cssText='justify-content:space-between;text-align:left';
     b.onclick=async()=>{
+      // 다른 PC 로('＋ 새 PC 추가' 화면에서도) — 연결을 바꾸기 전에 이전 PC 화면·탭·파일을 비우고(3단계) 이전 연결을 내려놓는다.
+      // 소켓을 남기면 이전 PC 의 파이프(웹 재개 claude -p·터미널 화면·관제)가 그 소켓이 닫힐 때까지 남았다(머리 줄 전환과 같게)
+      if(pc.room!==LS.getItem('sm_room')){ pcSwitchReset(); try{ conn.logout(); }catch(e){} }
       pcsActivate(pc.room);
       $('#p-err').textContent=''; b.textContent='연결 중… '+pcName(pc);
-      conn._stopped=false; conn._retry=0;
-      try{ await conn.connect(pc.room, LS.getItem('sm_token')||'');
+      conn._stopped=false; conn._retry=0; conn._pairing=false;   // 페어링이 아닌 연결 — 밀려난 페어링의 표시가 남지 않게
+      try{ const r=await conn.connect(pc.room, LS.getItem('sm_token')||'');
+           // 그 PC 에서 이 기기 자격이 무효(해제·재발급) — 안내·로그아웃은 onauth 가 했다. '연결 중…'으로 두지 않고 목록을 ⛔ 로 다시 그린다
+           if(authLostRes(r)){ $('#p-err').textContent=AUTH_LOST_LINE; renderPairPcs(); return; }
            LS.setItem('sm_room',pc.room); T=relayT; enterApp(); }
-      catch(e){ $('#p-err').textContent=e.message; b.textContent='🖥 '+pcName(pc); }
+      catch(e){ if(e&&e.superseded) return;   // 그사이 다른 PC 를 골랐다 — 그쪽이 화면을 맡는다
+        $('#p-err').textContent=e.message; b.textContent='🖥 '+pcName(pc); }
     };
     wrap.appendChild(b);
   });
@@ -5354,11 +5801,15 @@ function renderPairPcs(){
 //       브라우저에 저장된 '접속 자격'만 지운다.
 const PAIR_KEYS_ACTIVE=['sm_room','sm_token','sm_cs','sm_cp','sm_devtoken','sm_cjwt','sm_grace'];
 const PAIR_KEYS_ALL=PAIR_KEYS_ACTIVE.concat(['sm_pcs','sm_hint_done']);
+// PC 별 화면 기억(quick-switch §6-1: 터미널 탭·파일·화면 = <키>_<PC>) — 그 PC 의 파일 경로·세션 제목·팀 이름이 든다.
+// 페어링 해제는 그 PC 것을, 이 기기 초기화는 모든 PC 것과 PC 구분 없던 옛 키(sm_tabs·sm_fb_state2)까지 지운다.
+const PC_MEM_KEYS=['sm_tabs','sm_fb_state2','sm_pane'];
+function forgetPcMem(room){ if(room) PC_MEM_KEYS.forEach(b=>LS.removeItem(b+'_'+room)); }
 function clearPairing(all){
   (all?PAIR_KEYS_ALL:PAIR_KEYS_ACTIVE).forEach(k=>LS.removeItem(k));
-  if(all){ // E2EE 룸 키도 함께(자격 완전 소거)
+  if(all){ // E2EE 룸 키도 함께(자격 완전 소거). PC 별 화면 기억도 — 기기를 넘겨도 PC 흔적이 남지 않게
     for(let i=LS.length-1;i>=0;i--){ const k=LS.key(i);
-      if(k&&k.indexOf('sm_e2ee_')===0) LS.removeItem(k); } }
+      if(k&&(k.indexOf('sm_e2ee_')===0||PC_MEM_KEYS.some(b=>k===b||k.indexOf(b+'_')===0))) LS.removeItem(k); } }
   try{ conn.devToken=''; }catch(e){}
   setTitle(''); const sel=$('#pcname'); if(sel) sel.classList.add('hidden');   // 헤더 PC 표시 숨김
 }
@@ -5447,7 +5898,7 @@ function unpairPc(room){
       if(cur && full){                                       // ② 연결돼 있으면 PC 에 바로 알림(📵 즉시 반영)
         try{ await Promise.race([conn.req('bye_device',{}), new Promise(r=>setTimeout(r,2000))]); }catch(e){}
       }
-      pcsRemove(room);                                       // ③ 로컬 제거
+      pcsRemove(room); forgetPcMem(room);                    // ③ 로컬 제거(그 PC 의 화면 기억도)
       let fl={done:[]}; try{ fl=await Promise.race([revokeFlush(), new Promise(r=>setTimeout(()=>r({done:[]}),5000))]); }catch(e){}
       const serverDone=full && (fl.done||[]).includes(room);
       pc && (pc._unpairResult=serverDone);
@@ -5553,8 +6004,12 @@ async function maybeShowFirstRunHint(){
 // ---- 부팅 ----
 conn.onstatus=(on,peer)=>setStatus(on,peer);
 conn.onauth=(ok,err)=>{
-  if(ok){ window._authLost=false; return; }
-  if(err==='auth_required'||err==='auth_invalid'){ pcMarkState(LS.getItem('sm_room'),'changed'); showAuthLost(err); }
+  const room=conn._room||LS.getItem('sm_room');   // 이 인증을 한 연결의 PC
+  if(ok){ window._authLost=false;
+    // 인증됐다 = 이 기기 자격은 그 PC 에서 유효하다 — 예전 결함(PC 재기동 뒤 auth_required 를 '페어링 바뀜'으로 적음)이 남긴 ⛔ 를 지운다
+    const pc=pcsLoad().find(x=>x.room===room); if(pc&&pc.state&&pc.dev&&pc.dev===conn.devToken) pcMarkState(room,null);
+    return; }
+  if(err==='auth_required'||err==='auth_invalid'){ pcMarkState(room,'changed'); showAuthLost(err); }
 };
 conn.onnotice=(m)=>{
   const room=LS.getItem('sm_room');
@@ -5826,7 +6281,7 @@ function openPop(anchor,content,title){
 function rowMenuItems(s){
   const it=[]; const bd=sessionBadge(s);
   if(bd&&bd.text==='권한 대기') it.push(['✋','원격 승인','claude 가 도구 사용 허락을 기다립니다',()=>showApprove(s),'warn']);
-  if(s.live_terminal||TABS.list.some(x=>x.s.session_id===s.session_id&&!tabGone(x,s))) it.push(['🖥','터미널 열기','실행 중인 화면으로 바로',()=>jumpToSession(s)]);
+  if(s.live_terminal||TABS.list.some(x=>x.s.session_id===s.session_id&&(!tabGone(x,s)||tabSeenLive(x)))) it.push(['🖥','터미널 열기','실행 중인 화면으로 바로',()=>jumpToSession(s)]);
   else if(s.peer) it.push([rowResumeIcon(s),'재개…',peerOriginLabel(s.peer).text+'에서 실행 중 — 방식 선택',()=>showResumeChooser(s)]);
   else it.push(['▶','재개','웹 / 터미널 선택',()=>showResumeChooser(s)]);
   it.push(['💬','대화 보기',null,()=>loadViewer(s)]);
@@ -5913,6 +6368,9 @@ function syncTabbar(){
 }
 function tabbarGo(v){
   if(v==='assist') return openAssistant();
+  // 폰 웹 재개 화면에서 탭 막대로 나가는 것도 '‹ 목록'처럼 화면을 떠나는 것 — 재개(claude -p)를 끝낸다(응답 중이면 그 응답이 끝난 뒤,
+  // 결정 7). 재개는 바로가기로 돌아갈 화면이 아니라 숨겨 두면 다음 상세 칸 화면이 열릴 때까지 돌았다
+  if(PANE_NOW.kind==='resume'&&$('#app').getAttribute('data-view')==='detail') closeLiveResume();
   const changed=LIST_VIEW!==v;
   if(changed) setListView(v);
   const onList=$('#app').getAttribute('data-view')==='list';
@@ -6096,7 +6554,36 @@ function openAddPc(){
 function leaveAddPc(){
   const back=$('#p-back'); if(back) back.hidden=true;
   $('#pair').classList.add('hidden'); $('#app').classList.remove('hidden');
+  // 새 PC 를 페어링해 보느라 지금 PC 연결을 내려놓았는데(다른 PC 를 페어링하면 먼저 내려놓는다) 실패했다 — 원래 PC 로 다시 붙는다.
+  // 화면만 돌리면 연결 없는 빈 앱('PC 에 연결하는 중…')에 갇혔다(검토 3회차). 페어링이 아직 진행 중이면 그쪽이 화면을 맡는다(실패하면 pairFailedBehind)
+  if(MODE!=='relay'||conn._pairing) return;
+  reconnectCurrentPc();
 }
+// 지금 PC(sm_room)로 다시 붙는다(새 PC 페어링 뒤 돌아왔을 때). 이미 붙어 있으면 그대로. 붙을 수 없으면(⛔/🔄 PC — 새 QR 로만, 자격 없음) false
+function reconnectCurrentPc(){
+  const room=LS.getItem('sm_room'), pc=room?pcsLoad().find(x=>x.room===room):null;
+  if(!room||(pc&&pc.state)) return false;                                   // ⛔/🔄 PC 는 새 QR 로만
+  if(conn.ws&&conn.ws.readyState<=1&&!conn._stopped) return true;          // 연결은 그대로다
+  if(!(LS.getItem('sm_cs')&&LS.getItem('sm_cp'))&&!LS.getItem('sm_token')) return false;
+  conn._stopped=false; conn._retry=0;
+  conn.connect(room, LS.getItem('sm_token')||'').then(r=>{ if(authLostRes(r)) return; T=relayT; enterApp(); })
+    .catch(e=>{ if(e&&e.superseded) return; toast('연결 실패: '+e.message); });
+  return true;
+}
+// '＋ 새 PC 추가'의 새 PC 페어링이 실패했는데 사용자는 그 전에 '← 돌아가기'로 앱에 돌아가 있다(페어링 화면이 숨음) — 숨은 화면의 오류 줄만 고치고
+// 끝나면 앱이 연결 없이 'PC 에 연결하는 중…'에 갇혔다(재접속·오류 안내 없음, 머리 줄의 같은 PC 고르기는 무시, 검토 4회차). 실패를 알리고 되살린
+// 지금 PC 로 다시 붙는다. 다시 붙을 수 없으면 페어링 화면(오류 줄·저장된 PC)을 다시 보인다. 페어링 화면이 보이면 거기 오류가 보인다(그대로)
+function pairFailedBehind(msg){
+  const pair=$('#pair'); if(!pair||!pair.classList.contains('hidden')) return;
+  toast('새 PC 연결 실패: '+msg);
+  if(reconnectCurrentPc()) return;
+  const app=$('#app'); if(app) app.classList.add('hidden');
+  pair.classList.remove('hidden');
+  try{ renderPairPcs(); }catch(e){}
+}
+// connect() 결과가 '이 기기의 자격이 PC 에서 무효'인가(해제·재발급) — 자격 상실 안내·로그아웃은 onauth 가 맡고 부른 쪽은 앱에 들어가지 않는다
+function authLostRes(r){ const a=r&&r.auth; return !!(a&&!a.ok&&(a.error==='auth_invalid'||a.error==='auth_required')); }
+const AUTH_LOST_LINE='⛔ PC 에서 이 기기의 페어링이 바뀌었습니다(해제 또는 QR 재발급) — 새 QR 을 스캔하세요';
 // 폰이 auth 때 보고하는 자기 이름(B-1): 앱은 브리지의 기기 모델, 웹은 UA 요약. Host 가 40자·제어문자 정리.
 function deviceSelfName(){
   try{ const B=window.ClewBridge; if(B&&B.deviceName){ const n=B.deviceName(); if(n) return String(n); } }catch(e){}
@@ -6105,13 +6592,15 @@ function deviceSelfName(){
   const br=/CriOS|Chrome/.test(ua)?'Chrome':/FxiOS|Firefox/.test(ua)?'Firefox':/Safari/.test(ua)?'Safari':'';
   return br?dev+' '+br:dev;
 }
-// 페어링 실패 되돌리기: 방금 쓴 자격·룸 키를 지우고, 이전에 쓰던 PC 가 있으면 그 자격을 되살린다.
+// 페어링 실패 되돌리기(E-D16 — 잘못된·만료된 QR 은 아무것도 바꾸지 않는다): 연결을 내려놓고(재접속이 거부된 자격으로 끝없이 돌지 않게)
+// 방금 쓴 자격·룸 키를 지운 뒤, 이전에 쓰던 PC 가 저장돼 있으면 그 자격을 되살린다 — 같은 PC 의 새 QR 이었으면 그 PC 의 저장된(옛) 자격을.
+// 새 자격은 연결이 선 뒤에야 저장하므로 저장된 기록은 늘 이전 것이다. 공유 토큰(sm_token)도 성공 뒤에만 적으므로 건드리지 않는다.
 function pairRollback(room, prevRoom, hadRk){
-  try{ conn._stopped=true; if(conn.ws) conn.ws.close(); }catch(e){}
-  ['sm_devtoken','sm_cs','sm_cp','sm_cjwt','sm_token'].forEach(k=>LS.removeItem(k));
+  try{ conn.logout(); }catch(e){}
+  ['sm_devtoken','sm_cs','sm_cp','sm_cjwt'].forEach(k=>LS.removeItem(k));
   if(!hadRk) LS.removeItem('sm_e2ee_'+room);
   conn.devToken='';
-  if(prevRoom && prevRoom!==room && pcsLoad().some(x=>x.room===prevRoom)) pcsActivate(prevRoom);
+  if(prevRoom && pcsLoad().some(x=>x.room===prevRoom)) pcsActivate(prevRoom);
 }
 function doPair(){
   // ① 페어링 링크를 붙여넣었으면 거기서 값을 뽑는다(권장 경로)
@@ -6156,6 +6645,8 @@ function doPair(){
   else { LS.removeItem('sm_cs'); LS.removeItem('sm_cp'); LS.removeItem('sm_cjwt'); }
 
   $('#p-err').textContent=''; $('#p-go').textContent='연결 중…';
+  // 다른 PC 를 페어링('＋ 새 PC 추가') — 연결을 바꾸기 전에 이전 PC 화면·탭·파일을 비우고(3단계) 이전 연결을 내려놓는다(머리 줄 전환과 같게)
+  if(room!==prevRoom){ pcSwitchReset(); try{ conn.logout(); }catch(e){} }
   conn._pairing=true; conn._stopped=false;
   conn.connect(room,token).then((r)=>{
     conn._pairing=false;
@@ -6167,6 +6658,7 @@ function doPair(){
         ? '이 QR 은 더 이상 유효하지 않습니다 — PC 의 📱 기기 목록에서 새 QR 을 만드세요'
         : 'PC 인증 실패: '+((a&&a.error)||'unknown');
       $('#p-go').textContent='연결';
+      pairFailedBehind($('#p-err').textContent);   // 그 전에 '← 돌아가기'로 앱에 돌아갔으면 — 알리고 지금 PC 로 다시 붙는다
       return;
     }
     LS.setItem('sm_room',room);
@@ -6174,7 +6666,12 @@ function doPair(){
     pcsUpsert({room, cs, cp, dev, name:(a&&a.data&&a.data.hostname)||'', pv:(a&&a.data&&a.data.pv)|0});
     if(prevPc && prevPc.cp && prevPc.cp!==cp){ revokeEnqueue(prevPc).then(()=>revokeFlush()).catch(()=>{}); }
     T=relayT; enterApp();
-  }).catch(e=>{ conn._pairing=false; $('#p-err').textContent=e.message; $('#p-go').textContent='연결'; });
+  }).catch(e=>{ if(e&&e.superseded) return;   // 그사이 다른 PC 를 골랐거나 다시 페어링했다 — 그쪽이 화면·표시를 맡는다
+    // 연결 자체가 실패했다(CP 가 자격 거부 → 4401 등) — 인증 실패와 같게 되돌린다. 전엔 새 자격이 지금 PC 방 이름과 섞인 채 남고
+    // 재접속이 거부된 새 PC 로 끝없이 돌았다(검토 3회차)
+    conn._pairing=false; pairRollback(room, prevRoom, hadRk);
+    $('#p-err').textContent=e.message; $('#p-go').textContent='연결';
+    pairFailedBehind(e.message); });
 }
 
 // ---- 버전 표기 -------------------------------------------------------------
@@ -6297,14 +6794,40 @@ function onLocalTermMessage(ev){
   const rec=findTab(d.fork||d.id); if(!rec||rec.taken) return;
   rec.taken=true; renderTabBarSoon();
 }
+// 릴레이로 PC 를 바꿀 때(결정 9, 명세 §6-2): 이전 PC 의 상세 칸·터미널 탭·파일 상태·지금 화면을 비운다 — 새 PC 에서 이전 PC 의
+// 탭·파일이 보이거나 그 탭이 새 PC 기억(sm_tabs_<PC>)에 덮어써지지 않게. 연결·방(sm_room)을 바꾸기 '전에' 부른다: 닫기 신호가
+// 새 PC 로 가면 커넥터는 rid 만 보고 다른 기기의 같은 번호 파이프를 끊을 수 있다. 저장은 하지 않는다 — 이전 PC 기억은 바뀔 때마다
+// 이미 적혀 있고, 새 PC 기억은 첫 목록 뒤 다시 읽는다(restoreTabsOnce·fbRestoreState). 여러 번 불려도 안전하다.
+function pcSwitchReset(){
+  PC_GEN++;                                    // 기다리던 이전 PC 동작(2차 인증 확인·목록)이 깨어나도 이어 달리지 않게(pcNow) — 방은 늦게 바뀔 수 있다
+  closeLiveResume(true);                       // 응답 중인 웹 재개도 지금 닫는다 — 연결째 바뀌어 그 응답을 받을 수 없다
+  paneEnter('empty');                          // 터미널(연결·탭 배지)·뷰어 실시간·편집기 스크롤 정리
+  TABS.list=[]; TABS.active=null; TABS.mru=[]; _tabsRestored=false; _tabsOwn=false;
+  if(FB.ed){ try{ FB.ed.dispose(); }catch(e){} FB.ed=null; }
+  FB.tabs.forEach(t=>fbDisposeTab(t));         // 파일 내용(Monaco 모델) 해제 — 탐색기·편집기 상태도 모두 처음으로
+  Object.assign(FB,{tabs:[], active:null, sel:'', open:new Set(), kids:{}, errs:{}, ent:{}, rootMap:null, restored:false, migrate:false, reveal:null, q:'', autoShow:false});
+  FB.treeGen++;                                // 받는 중이던 이전 PC 의 폴더 응답은 버린다(파일 응답은 FB.active=null 로 이미 버려진다)
+  LIST_READY=false;
+  // 목록 칸의 이전 PC 줄·탐색기도 지운다 — 새 PC 연결을 기다리는 사이 옛 줄·파일을 누르면 이전 PC 세션·파일이 새 PC 기억 키에
+  // 적히고 이전 PC 세션을 새 PC 로 열었다. 새 PC 첫 목록(loadList)이 다시 그리고, 20초 갱신도 그때까지 쉰다(LIST_CTX)
+  SESSIONS=[]; LIST_CTX=null;
+  { const pl=paneList(); if(pl){ pl.innerHTML=''; pl.appendChild(el('div','empty','PC 에 연결하는 중…')); } }
+  detailPlaceholder();                         // 빈 안내 — PANE_NOW 도 빈 화면으로(세대는 이어서 센다: 늦은 뷰어 응답 판정)
+  showListPane();                              // 폰: 상세 칸이 빈 안내(폰에선 숨김)뿐이면 막다른 빈 화면 — 연결이 실패해도 목록 칸을 보인다
+}
 async function switchToPc(pc){
+  pcSwitchReset();                             // 연결·방을 바꾸기 전에(3단계)
   pcsActivate(pc.room);
   toast(pcName(pc)+' 로 전환 중…');
   try{ conn.logout(); }catch(e){}
-  conn._stopped=false; conn._retry=0;
-  try{ await conn.connect(pc.room, LS.getItem('sm_token')||'');
-       T=relayT; enterApp(); refreshPcSelect(); toast(pcName(pc)+' 연결됨'); }
-  catch(e){ toast('전환 실패: '+e.message); refreshPcSelect(); }
+  conn._stopped=false; conn._retry=0; conn._pairing=false;   // 페어링이 아닌 연결 — 밀려난 페어링의 표시가 남지 않게
+  try{ const r=await conn.connect(pc.room, LS.getItem('sm_token')||'');
+       if(authLostRes(r)){ refreshPcSelect(); return; }   // 그 PC 에서 자격 무효 — 안내·로그아웃은 onauth 가 했다('연결됨' 아님)
+       T=relayT; enterApp(); refreshPcSelect();
+       // PC 가 꺼져 있으면 '연결됨'이라 하지 않는다 — 켜지면 인증하고 목록을 받는다(Conn._onAgentOnline)
+       toast(pcName(pc)+(conn.peer?' 연결됨':' — PC 가 꺼져 있습니다(켜지면 자동으로 이어집니다)')); }
+  catch(e){ if(e&&e.superseded) return;   // 그사이 다른 PC 로 또 바꿨다 — 그쪽이 화면·알림을 맡는다
+    toast('전환 실패: '+e.message); refreshPcSelect(); }
 }
 function onPcSelect(){
   const sel=$('#pcname'); if(!sel) return;
@@ -6505,6 +7028,19 @@ if(_pcexport){
   renderPairPcs(); applyPairSituation(); // 저장된 PC 가 있으면 페어링 화면에서 바로 고를 수 있게 + 상황 줄 1개(DR-1)
   if(revokeQLoad().length) setTimeout(()=>{ revokeFlush().catch(()=>{}); }, 3000);   // 폐기 대기 재시도(오프라인 해제분)
   const _curPc=pcsLoad().find(x=>x.room===room);
+  const _bootRoom=LS.getItem('sm_room')||'';   // 이 해시 전에 쓰던 PC — 방(sm_room)은 연결이 선 뒤에야 바꾼다
+  // 해시 페어링(앱 QR 스캔·링크 열기)이 실패했다 — 이 QR 이 바꾼 것을 되돌린다(E-D16): 저장돼 있던 PC 의 새 QR 이면 그 PC 의 옛 기록을, 새 PC 면
+  // 목록에서 빼고, 활성은 이 해시 전에 쓰던 PC 로(다음에 열 때 그 PC 로 자동 접속). 연결도 내려놓는다 — 재접속이 거부된 자격으로 끝없이 돌았다(검토 3회차).
+  // 저장된 PC 의 새 QR 이라는 것만으로 그 PC 를 활성으로 만들면, 다른 PC 를 쓰던 중 넣은 그 PC 의 새 QR 이 실패했을 때 다음 실행이 그 PC(옛 자격 —
+  // ⛔ 였으면 자동 접속 없음)로 갔다(검토 4회차). 쓰던 PC 가 없었으면 지금처럼 옛 기록의 PC 를 활성으로
+  const hashPairRollback=()=>{
+    try{ conn.logout(); }catch(e){}
+    if(_prevPc) pcsUpsert({..._prevPc});                                       // 옛 페어링 기록 복원(상태 표시까지)
+    else pcsRemove(room);
+    const back=(_bootRoom&&pcsLoad().some(x=>x.room===_bootRoom))?_bootRoom:(_prevPc?_prevPc.room:'');
+    if(back){ ['sm_devtoken','sm_cs','sm_cp','sm_cjwt'].forEach(k=>LS.removeItem(k)); pcsActivate(back); }
+    else clearPairing(false);
+  };
   if(room&&(hasCs||token)&&!(_curPc&&_curPc.state&&!_hashPair)){   // ⛔/🔄 PC 는 자동 재접속하지 않는다
     $('#p-err').textContent=''; $('#p-go').textContent='연결 중…';
     if(_hashPair) conn._pairing=true;
@@ -6512,18 +7048,22 @@ if(_pcexport){
       conn._pairing=false;
       const a=r&&r.auth;
       if(_hashPair && !(a&&a.ok)){
-        if(_prevPc){ pcsUpsert({..._prevPc}); pcsActivate(_prevPc.room); }   // 옛 페어링 복원
-        else { pcsRemove(room); clearPairing(false); }
+        hashPairRollback();
         $('#p-err').textContent=(a&&a.error==='auth_invalid')?'이 QR 은 더 이상 유효하지 않습니다 — PC 의 📱 기기 목록에서 새 QR 을 만드세요':'PC 인증 실패: '+((a&&a.error)||'unknown');
         $('#p-go').textContent='연결'; renderPairPcs(); return;
       }
+      if(authLostRes(r)){   // 저장된 자격이 PC 에서 무효(해제·재발급) — 안내·로그아웃은 onauth 가 했다. 앱에 들어가지 않고 페어링 화면을 맞춘다
+        $('#p-go').textContent='연결'; $('#p-err').textContent=AUTH_LOST_LINE; renderPairPcs(); return; }
       if(a&&a.ok&&a.data){ pcsUpsert({room, cs:LS.getItem('sm_cs')||'', cp:LS.getItem('sm_cp')||'', dev:LS.getItem('sm_devtoken')||'',
                                       name:a.data.hostname||'', pv:a.data.pv|0}); }
       if(_hashPair && _prevPc && _prevPc.cp && _prevPc.cp!==LS.getItem('sm_cp')){
         await revokeEnqueue(_prevPc); revokeFlush().catch(()=>{});                  // B-7: 옛 cpub 은 새 자격 성공 뒤 폐기
       }
       LS.setItem('sm_room',room); T=relayT; enterApp(); })
-      .catch(e=>{ conn._pairing=false; $('#p-err').textContent=e.message; $('#p-go').textContent='연결'; });
+      .catch(e=>{ if(e&&e.superseded) return;   // 연결을 기다리는 사이 다른 PC 를 골랐다 — 그쪽이 화면·표시를 맡는다
+        conn._pairing=false;
+        if(_hashPair) hashPairRollback();         // 연결 자체가 실패(CP 가 새 자격 거부 → 4401 등)해도 인증 실패와 같게 되돌린다
+        $('#p-err').textContent=e.message; $('#p-go').textContent='연결'; renderPairPcs(); });
   }
 }
 </script>

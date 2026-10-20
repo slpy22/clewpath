@@ -45,7 +45,7 @@ test("목록 줄 클릭: 실행 중인 클루패스 터미널이면 바로 터�
   const [a, b] = rowsOf(wrap.children.filter((k) => cls(k) === "glist").find((g) => rowsOf(g).some((r) => r.dataset.sid === A)));
   a.children[0].onclick(); b.children[0].onclick();
   ev(ctx, `TABS.list=[{key:'k-b', s:{session_id:${JSON.stringify(B)}}}]`);
-  b.children[0].onclick();
+  await b.children[0].onclick();                          // 꺼진 것으로 보이면 판정 전에 목록을 한 번 새로 받는다(받지 못하면 지금 목록으로)
   same(ev(ctx, "__c"), [["term", A], ["detail", B], ["detail", B]]);
   same(ev(ctx, "TABS.list.length"), 0);
 });

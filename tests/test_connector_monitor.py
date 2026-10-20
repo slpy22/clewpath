@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from urllib.parse import urlparse, parse_qs
 
 import pytest
@@ -107,3 +108,57 @@ async def test_start_monitor_stream_exists(monkeypatch):
     await conn._start_monitor("r3", {"ids": MGR})
     assert sent == [("r3", False, "stream_exists")]
     conn.streams.pop("r3")
+
+
+class _BlockWS:
+    """취소될 때까지 살아 있는 로컬 관제 WS 대역(Host /ws/monitor 는 클라가 끊을 때까지 이벤트를 민다)."""
+
+    def __aiter__(self):
+        async def gen():
+            await asyncio.Event().wait()   # 취소되기 전까지 블록
+            yield  # 도달 안 함
+        return gen()
+
+    async def send(self, m):
+        pass
+
+
+class _BlockCM:
+    def __init__(self, closed: dict, key: str):
+        self._closed, self._key = closed, key
+
+    async def __aenter__(self):
+        return _BlockWS()
+
+    async def __aexit__(self, *a):
+        self._closed[self._key] = True     # async with 해제 = 로컬 WS 닫힘 → Host 관제 루프가 끝난다
+        return False
+
+
+@pytest.mark.asyncio
+async def test_stream_close_ends_monitor_pipe(monkeypatch):
+    """폰이 관제·뷰어 실시간·탭 배지를 닫으면(stream_close) 그 rid 의 로컬 /ws/monitor 만 끊는다.
+
+    PWA 의 릴레이 관제 close 가 앱 쪽 핸들러만 지우던 때는 PC 쪽 관제 파이프가 릴레이가 끊길 때까지
+    남았다(quick-switch 1-2 — 이제 터미널처럼 stream_close 를 보낸다). 다른 관제 rid 는 그대로."""
+    conn = _conn()
+    closed = {"mon1": False, "mon2": False}
+    monkeypatch.setattr("session_manager.connector.connect",
+                        lambda url, **kw: _BlockCM(closed, "mon1" if MGR in url else "mon2"))
+
+    await conn._start_monitor("mon1", {"ids": [MGR, SUB], "manager": MGR})
+    await conn._start_monitor("mon2", {"ids": SUB})
+    t1, t2 = conn.streams["mon1"], conn.streams["mon2"]
+    for _ in range(3):
+        await asyncio.sleep(0)             # 파이프가 로컬 WS 에 붙어 대기하도록
+
+    await conn._on_frame(json.dumps({"v": 1, "type": "stream_close", "id": "mon1"}))
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(t1, 5)      # 못 끊으면 매달리지 않고 TimeoutError 로 실패
+    assert closed["mon1"] is True          # 로컬 /ws/monitor 닫힘
+    assert "mon1" not in conn.streams and "mon1" not in conn.stream_in
+    assert "mon2" in conn.streams and not t2.done() and closed["mon2"] is False   # 다른 관제는 무영향
+
+    t2.cancel()                            # 정리
+    with pytest.raises(asyncio.CancelledError):
+        await t2

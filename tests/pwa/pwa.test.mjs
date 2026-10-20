@@ -59,13 +59,13 @@ test("jumpToSession: 탭 → 전환, live_terminal → 터미널, 그 외 → �
   assert.deepEqual(calls, [["switch", "k1"], ["term", "B"], ["detail", "C"]]);
 });
 
-test("jumpToSession: 프로세스가 꺼진(정리 등) 세션의 탭은 닫고 상세로 — 다시 띄우지 않는다", () => {
+test("jumpToSession: 프로세스가 꺼진(정리 등) 세션의 탭은 닫고 상세로 — 다시 띄우지 않는다", async () => {
   const calls = [];
   ctx.switchTab = (k) => calls.push(["switch", k]);
   ctx.loadTerminal = (s) => calls.push(["term", s.session_id]);
   ctx.loadDetail = (s) => calls.push(["detail", s.session_id]);
   ev(ctx, "TABS.list = [{key:'k1', s:{session_id:'A'}, safe:false, dead:false, act:false}, {key:'k2', s:{session_id:'Z'}, safe:false, dead:true, act:false}]; TABS.active = 'k1'; termView.sid = null");
-  ctx.jumpToSession({ session_id: "A", live_terminal: false });
+  await ctx.jumpToSession({ session_id: "A", live_terminal: false });   // 판정 전에 목록을 새로 받아 본다(받지 못하면 지금 목록으로)
   assert.deepEqual(calls, [["detail", "A"]]);
   assert.deepEqual(JSON.parse(ev(ctx, "JSON.stringify(TABS.list.map(t=>t.key))")), ["k2"]);   // 그 탭만 내림
   // 방금 띄워 화면에 붙어 있는 탭은 목록이 아직 옛값(live_terminal:false)이어도 그대로 전환
