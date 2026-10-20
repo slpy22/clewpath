@@ -149,3 +149,144 @@ async def test_other_device_cannot_close_my_stream(conn, monkeypatch):
 async def test_ping_pong_keeps_device_id(conn):
     await conn._on_frame(_req("cidA", "c9", "ping", {}))
     assert conn.sent[-1] == {"v": 1, "type": "pong", "id": "c9", "cid": "cidA"}
+
+
+# ---- 검토 2회차: cid 가 client_offline 없이 바뀔 때(릴레이 재기동·커넥터가 끊긴 사이 기기 이탈)·떠난 기기 앞 프레임 ----
+
+class _RelayWS:
+    """커넥터가 릴레이로 내보낸 프레임을 모은다 — 실제 send(봉투·버리기)를 거친 결과."""
+
+    def __init__(self):
+        self.wire = []
+
+    async def send(self, s):
+        self.wire.append(json.loads(s))
+
+
+@pytest.fixture
+def wired(monkeypatch):
+    c = _conn()
+    monkeypatch.setattr("session_manager.devices.enforced", lambda: False)
+    c.ws = _RelayWS()
+    return c
+
+
+async def _ticks(n=5):
+    for _ in range(n):
+        await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_relay_reconnect_ends_pipes_of_previous_connection(wired, monkeypatch):
+    """릴레이에 다시 붙으면(_on_connected) 이전 연결에서 연 파이프(웹 재개·관제)를 끝내고 그 cid 앞 늦은 프레임은 보내지 않는다.
+
+    릴레이가 재기동하면 cid 가 모두 바뀌고 옛 cid 의 client_offline 은 오지 않는다. 남은 파이프는 새 cid 의 stream_close 로도
+    닫지 못했고(키가 (옛 cid, id)), 출력은 사라진 cid 앞이라 릴레이가 방 전체에 평문으로 broadcast 했다(재기동으로 enc_cids 를 비움).
+    웹 재개라면 Host 의 claude -p 가 Host 재시작까지 남았다. 같은 기기가 새 cid 로 다시 말을 걸면 그 cid 는 그대로 쓴다.
+    """
+    cms = []
+
+    def fake_connect(url, **kw):
+        cm = _BlockCM()
+        cms.append(cm)
+        return cm
+    monkeypatch.setattr("session_manager.connector.connect", fake_connect)
+    c = wired
+    await c._on_frame(_req("cid1", "s3", "resume", {"session_id": SID, "inplace": False}))
+    await c._on_frame(_req("cid1", "mon1", "monitor", {"ids": SID}))
+    await _ticks()
+    old = list(c.streams.values())
+    assert len(old) == 2
+
+    c._on_connected()                       # 릴레이 재기동 → 커넥터가 다시 붙음(run() 이 부르는 것)
+    for t in old:
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(t, 5)
+    await _ticks()
+    assert [cm.closed for cm in cms] == [True, True] and c.streams == {} and c.stream_in == {}
+
+    # 옛 cid 앞으로 늦게 나가는 응답·출력은 보내지 않는다(릴레이가 모르는 cid 라 방 전체로 갔다)
+    await c._res(("cid1", "c9"), True, data={"secret": 1})
+    await c._stream_send(("cid1", "s3"), data="late")
+    assert c.ws.wire == []
+
+    # 같은 폰이 새 cid 로 다시 붙어 같은 번호를 다시 써도 새 파이프는 정상이고, 옛 cid 의 닫기 신호는 새 파이프를 건드리지 않는다
+    await c._on_frame(_req("cid2", "s3", "resume", {"session_id": SID, "inplace": False}))
+    await _ticks()
+    new = c.streams[("cid2", "s3")]
+    await c._on_frame(json.dumps({"v": 1, "type": "stream_close", "id": "s3", "cid": "cid1"}))
+    await _ticks()
+    assert not new.done()
+    await c._stream_send(("cid2", "s3"), data="live")
+    assert c.ws.wire[-1] == {"v": 1, "type": "stream", "id": "s3", "cid": "cid2", "data": "live"}
+    # 릴레이는 살아 있고 커넥터만 다시 붙은 경우: 옛 cid 의 기기가 다시 말을 걸면 그 cid 는 다시 받는다
+    c._on_connected()
+    await _ticks()
+    await c._on_frame(_req("cid2", "c1", "ping", {}))
+    assert c.ws.wire[-1] == {"v": 1, "type": "pong", "id": "c1", "cid": "cid2"}
+
+
+@pytest.mark.asyncio
+async def test_stream_owner_comes_from_its_key_not_the_bounded_route_table(wired, monkeypatch):
+    """스트림의 주인(cid)은 키에서 읽는다 — 응답 길 표(req_cid)는 상한(4000)을 넘으면 오래된 것부터 지우고 재접속 때 비운다.
+
+    표에 기대면 오래 열어 둔 터미널의 입력이 '인증 없는 기기'로 몰려 파이프가 끊기고, client_offline·drop_device 가 그 파이프를 찾지 못했다.
+    """
+    monkeypatch.setattr("session_manager.connector.connect", lambda url, **kw: _BlockCM())
+    monkeypatch.setattr("session_manager.connector._priv_ok", lambda params: True)
+    c = wired
+    await c._on_frame(_req("cidA", "t1", "terminal", {"session_id": SID}))
+    await c._on_frame(_req("cidB", "t1", "terminal", {"session_id": SID}))
+    await _ticks()
+    ta, tb = c.streams[("cidA", "t1")], c.streams[("cidB", "t1")]
+    c.req_cid.clear()                       # 상한을 넘겨 오래된 길이 지워진 것과 같다
+    monkeypatch.setattr("session_manager.devices.enforced", lambda: True)
+    monkeypatch.setattr("session_manager.devices.is_active", lambda did: True)
+    c.authed = {"cidA": {"id": "dA"}, "cidB": {"id": "dB"}}
+    await c._on_frame(json.dumps({"v": 1, "type": "stream_in", "id": "t1", "cid": "cidA", "data": {"type": "input", "data": "ls"}}))
+    assert c.stream_in[("cidA", "t1")].qsize() == 1                       # 살아 있는 인증 → 통과
+    await _ticks()
+    assert not ta.done()                                                    # 끊지 않음
+    assert await c.drop_device("dA") == 1                                   # 그 기기 해제 → 그 파이프만
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(ta, 5)
+    assert not tb.done()
+    await c._on_frame(json.dumps({"v": 1, "type": "peer", "event": "client_offline", "cid": "cidB"}))
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(tb, 5)
+
+
+@pytest.mark.asyncio
+async def test_late_answer_to_departed_device_is_dropped_not_broadcast_in_plaintext(wired, monkeypatch):
+    """긴 요청 중에 기기가 떠나면(client_offline·기기 해제) 그 응답은 보내지 않는다.
+
+    E2EE 기기는 떠날 때 enc_cids 에서 빠져 응답이 평문으로, 릴레이가 모르는 cid 앞이라 방 전체로 갔다(다른 기기의 같은 번호 대기에도).
+    남아 있는 E2EE 기기의 응답은 그대로 봉투로 간다.
+    """
+    import os
+
+    from session_manager import e2ee
+    key = os.urandom(32)
+    c = wired
+    c.e2ee_key = key
+    gate = asyncio.Event()
+
+    async def _get(url, params=None, headers=None):
+        await gate.wait()
+        return _Resp({"secret": url.rsplit("/", 1)[-1]})
+    monkeypatch.setattr(c.http, "get", _get)
+
+    def env(cid, rid, path):
+        inner = {"v": 1, "type": "req", "id": rid, "method": "api", "params": {"verb": "GET", "path": path}}
+        return json.dumps({"v": 1, "e": "a1", "cid": cid, "p": e2ee.seal_payload(key, inner)})
+    tasks = [asyncio.create_task(c._on_frame(env("cidA", "c7", "/api/a"))),       # E2EE 폰 — 떠남
+             asyncio.create_task(c._on_frame(env("cidB", "c7", "/api/b"))),       # E2EE 태블릿 — 남음
+             asyncio.create_task(c._on_frame(_req("cidC", "c7", "api", {"verb": "GET", "path": "/api/c"})))]   # 평문 기기 — 떠남
+    await _ticks()
+    await c._on_frame(json.dumps({"v": 1, "type": "peer", "event": "client_offline", "cid": "cidA"}))
+    await c._on_frame(json.dumps({"v": 1, "type": "peer", "event": "client_offline", "cid": "cidC"}))
+    gate.set()
+    await asyncio.gather(*tasks)
+    assert [(f.get("cid"), f.get("e")) for f in c.ws.wire] == [("cidB", "a1")], "떠난 기기 앞 응답은 평문으로도 봉투로도 나가지 않는다"
+    inner = e2ee.unwrap_frame(key, c.ws.wire[0])
+    assert inner["id"] == "c7" and inner["data"]["json"] == {"secret": "b"}

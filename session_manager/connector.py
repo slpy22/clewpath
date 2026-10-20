@@ -235,10 +235,16 @@ class Connector:
         self.authed: dict[str, dict] = {}    # cid -> 인증된 기기{id,name}
         self.e2ee_key: bytes | None = None   # room E2EE 키(접속 시 로드)
         self.enc_cids: set = set()           # 암호화 봉투로 말한 기기들(cid)
+        self.gone_cids: dict = {}            # 떠난 기기(cid) — 그 앞 프레임은 보내지 않는다(send). 삽입순 집합, 상한 있음
 
     # ---- 릴레이 송신 ----
     async def send(self, obj: dict) -> None:
         if self.ws is None:
+            return
+        # 떠난 기기(client_offline·기기 해제·이전 릴레이 연결의 cid) 앞 프레임은 버린다 — 릴레이는 모르는 cid 앞 프레임을 방 전체에
+        # broadcast 하고, E2EE 기기라도 떠날 때 enc_cids 에서 빠져 긴 요청의 늦은 응답·남은 파이프 출력이 평문으로 나갔다(검토 2회차).
+        # 그 cid 로 다시 말을 걸면 _on_frame 이 풀어 준다(릴레이는 살아 있고 커넥터만 다시 붙은 경우).
+        if obj.get("cid") is not None and obj["cid"] in self.gone_cids:
             return
         # E2EE: 암호화로 말을 건 기기에는 암호화로 답한다. 평문 기기는 평문(호환).
         if self.e2ee_key is not None and obj.get("cid") in self.enc_cids:
@@ -264,6 +270,21 @@ class Connector:
         if isinstance(rid, tuple):
             return rid[1], rid[0]
         return rid, self.req_cid.get(rid)
+
+    def _owner(self, rid):
+        """그 요청·스트림을 연 기기(cid). 튜플 키는 키에서 읽는다 — 응답 길 표(req_cid)는 상한을 넘으면 오래된 것부터 지우고
+        재접속 때 비우므로, 표에 기대면 오래 열어 둔 터미널의 입력이 '인증 없는 기기'로 몰려 끊기고 client_offline·기기 해제가
+        그 파이프를 찾지 못했다(검토 2회차)."""
+        return self._wire(rid)[1]
+
+    def _mark_gone(self, cid) -> None:
+        """이 cid 앞 프레임은 더 보내지 않는다(send). 무한 증식 방지 상한."""
+        if cid is None:
+            return
+        self.gone_cids[cid] = None
+        if len(self.gone_cids) > 4000:
+            for k in list(self.gone_cids)[:1000]:
+                self.gone_cids.pop(k, None)
 
     async def _res(self, rid, ok, data=None, error=None) -> None:
         wid, cid = self._wire(rid)
@@ -341,7 +362,7 @@ class Connector:
         method = frame.get("method")
         params = frame.get("params") or {}
         cid = frame.get("cid")
-        if cid is not None:
+        if cid is not None and not isinstance(rid, tuple):   # 튜플 키는 cid 를 품는다(_wire·_owner) — 표에 적지 않는다
             self._track_cid(rid, cid)
         try:
             from session_manager import devices
@@ -668,7 +689,7 @@ class Connector:
         # 이미 열린 터미널 입력이 계속 들어가던 구멍(0.9.8). 폐기된 기기의 프레임은 버리고 파이프를 끊는다.
         from session_manager import devices
         if devices.enforced():
-            cid = self.req_cid.get(rid)
+            cid = self._owner(rid)
             dev = self.authed.get(cid) if cid is not None else None
             if not dev or not devices.is_active(dev["id"]):
                 task = self.streams.get(rid)
@@ -700,10 +721,11 @@ class Connector:
             n = 0
             for cid in cids:
                 for rid, task in list(self.streams.items()):
-                    if self.req_cid.get(rid) == cid:
+                    if self._owner(rid) == cid:
                         task.cancel()
                 self.authed.pop(cid, None)
                 self.enc_cids.discard(cid)
+                self._mark_gone(cid)          # 해제한 기기 앞으로 늦게 나가는 응답(평문이 됐다)도 보내지 않는다
                 n += 1
             if n:
                 _log(f"[devices] 기기 {device_id} 연결 {n}개 해제(스트림 종료{', ' + notice if notice else ''})")
@@ -741,6 +763,9 @@ class Connector:
                                         **({"cid": frame["cid"]} if frame.get("cid") is not None else {})})
                 return
         t = frame.get("type")
+        # 기기가 말을 걸었다 — 떠난 것으로 적어 둔 cid(이전 릴레이 연결의 cid)라도 다시 받는다(릴레이는 살아 있고 커넥터만 다시 붙은 경우)
+        if t in ("req", "stream_in", "stream_close", "ping") and frame.get("cid") is not None:
+            self.gone_cids.pop(frame["cid"], None)
         # 기기(폰·태블릿 등)는 저마다 요청 id 를 1 부터 센다 — 둘이 동시에 붙으면 'c5'·'t3' 가 겹쳐 응답이 다른 기기로 가고
         # 터미널 출력이 섞이며, 한쪽의 stream_close 가 다른 기기 스트림을 끊었다(0.29.0 발견). 릴레이가 붙인 cid 와 묶어
         # (cid, id) 를 내부 키로 쓴다. 응답·스트림 프레임에는 _wire 가 원래 id 와 cid 를 그대로 싣는다.
@@ -767,6 +792,7 @@ class Connector:
                 cid = frame.get("cid")
                 self.authed.pop(cid, None)
                 self.enc_cids.discard(cid)
+                self._mark_gone(cid)          # 긴 요청의 늦은 응답은 보내지 않는다 — 평문으로 방 전체에 갔다(검토 2회차)
                 # ★ 그 기기가 잡고 있던 스트림 파이프 해체. 이게 빠져 있어서 폰이
                 # 소리 없이 사라지면(앱 스와이프 종료·탭 닫기·전파 단절) 파이프가
                 # Host 로컬 WS 를 계속 잡아 웹재개 claude(-p 스트림)가 고아로
@@ -775,7 +801,7 @@ class Connector:
                 # 프로세스를 정리한다. persist 터미널은 화면만 떨어지고 PTY 는
                 # 설계대로 유지된다(webterm 의 프로세스-화면 분리).
                 for rid, task in list(self.streams.items()):
-                    if self.req_cid.get(rid) == cid:
+                    if self._owner(rid) == cid:
                         _log(f"[stream] client_offline cid={cid} → 파이프 해체 rid={rid}")
                         task.cancel()
         elif t == "ping":
@@ -849,7 +875,21 @@ class Connector:
 
     def _on_connected(self) -> None:
         """릴레이 (재)접속 직후: cid 는 전부 새로 발급되므로 인증·암호화·라우팅 상태를 비운다.
-        (옛 cid 의 authed 가 남아 '접속 중' 으로 잘못 보이거나 스트림 입력이 통과하던 문제, 0.9.8)"""
+        (옛 cid 의 authed 가 남아 '접속 중' 으로 잘못 보이거나 스트림 입력이 통과하던 문제, 0.9.8)
+
+        이전 연결에서 연 파이프(웹 재개·터미널 화면·관제)도 끝내고 그 cid 들 앞 프레임은 보내지 않는다(검토 2회차). 릴레이가
+        재기동했으면 그 cid 는 사라졌고 client_offline 도 오지 않아, 남은 파이프는 새 cid 의 stream_close 로도 닫히지 않았고
+        (웹 재개면 claude -p 가 Host 재시작까지 남음) 출력은 모르는 cid 앞이라 방 전체에 평문으로 broadcast 됐다. 릴레이가 살아
+        있었어도 인증·암호화 상태를 비웠으니 그 파이프는 더 쓸 수 없다. persist 터미널은 화면만 떨어지고 PTY 는 그대로다.
+        """
+        old = set(self.authed) | set(self.enc_cids) | {c for c in self.req_cid.values() if c is not None}
+        for rid, task in list(self.streams.items()):
+            old.add(self._owner(rid))
+            task.cancel()
+        if self.streams:
+            _log(f"[stream] 릴레이 재접속 → 이전 연결의 파이프 {len(self.streams)}개 해체")
+        for cid in old:
+            self._mark_gone(cid)
         self.enc_cids.clear()
         self.authed.clear()
         self.req_cid.clear()
