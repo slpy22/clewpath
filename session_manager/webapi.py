@@ -160,7 +160,7 @@ def _user_message(text: str) -> str:
 async def run_resume_api(ws, session_id: str, skip_permissions: bool = True,
                          fork_id: str | None = None,
                          guardrails: dict | None = None,
-                         on_finish=None, human: bool = False) -> None:
+                         on_finish=None, human: bool = False, allow=None) -> None:
     """WebSocket 한 개에 대해 claude 재개(stream-json) 프로세스를 띄우고 중계한다.
 
     human=True(API 토큰 없이 들어온 resume-inplace = PWA 의 사람): 보낸 프롬프트를 팀 장부에 알려
@@ -169,6 +169,7 @@ async def run_resume_api(ws, session_id: str, skip_permissions: bool = True,
     fork_id 가 있으면 원본을 건드리지 않는 fork 로 재개하고, 연결 종료 시 fork 를 삭제한다.
     guardrails 는 실효 가드레일(도구·권한·모델 등).
     on_finish(total_cost_usd) 는 종료 시 누적 비용을 콜백으로 넘긴다(사용량 집계용).
+    allow() 가 있으면 턴마다 물어 False 면 끊는다(서비스 정지·폐기, 서비스 대장 S2).
     호출 측에서 ws.accept()/인증은 끝난 상태로 가정.
     """
     loop = asyncio.get_event_loop()
@@ -251,6 +252,10 @@ async def run_resume_api(ws, session_id: str, skip_permissions: bool = True,
                 await _send(ws, {"type": "error", "message": "JSON 파싱 실패"})
                 continue
             line, text_in = parse_input(msg)
+            if allow is not None and not allow():
+                await _send(ws, {"type": "error", "error": "service_inactive",
+                                 "message": "서비스가 정지되었거나 폐기되었습니다."})
+                break
             if line is None:
                 await _send(ws, {"type": "error",
                                  "message": "알 수 없는 메시지 타입(prompt 또는 user 필요)"})

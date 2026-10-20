@@ -27,6 +27,30 @@ SM_API_TOKEN  = "sk-sm-..."           # 단일 토큰
 SM_API_TOKENS = "tokA,tokB,tokC"      # (선택) 쉼표로 여러 개
 ```
 
+### 서비스 토큰 (0.25.0, 권장)
+
+외부 서비스는 **서비스 토큰**(`cps_<서비스id>_<64자 hex>`)을 쓴다. 서비스 하나에 원본(용도별 세션)이 묶이고,
+그 토큰으로는 아래만 된다(그 밖은 **403 `service_scope`**). 설계: `docs/designs/service-registry.md`.
+
+| 호출 | 조건 |
+|---|---|
+| `WS /api/v1/resume/{id}` | id 가 자기 원본일 때만, 항상 사본(fork) |
+| `POST /api/v1/sessions/{id}/ask` | id 가 자기 원본일 때만 |
+| `GET /api/v1/sessions/{id}/profile` | 자기 원본만(읽기) |
+| `GET /api/v1/service/me` | 자기 서비스 정보·오늘 사용량·한도 |
+
+- 한도는 서비스별(`limits`: `daily_calls`·`daily_usd`·`max_call_usd`), 초과 시 429. 감사 기록에는 `service` 로 남는다.
+- 정지·폐기되면 즉시 **401 `service_suspended`/`service_revoked`**, 열려 있는 재개 WS 는 다음 턴에 끊긴다.
+- 발급·재발급·정지는 이 PC 에서만(`/api/owner/services`, 로컬 전용). 토큰 원문은 발급 응답에서 한 번만 보이고 Host 는 해시만 저장한다.
+
+```
+POST /api/owner/services            {"id":"nklaw","name":"북한법","bases":{"chat":"<세션 id>"},"limits":{"daily_usd":5}}
+                                    → {"service":{…}, "token":"cps_nklaw_…"}   (원본에 가드레일 프로필이 있어야 함)
+POST /api/owner/services/{id}       {"status":"suspended"|"active"|"revoked", "bases":…, "limits":…, "name":…}
+POST /api/owner/services/{id}/rotate → 새 토큰(옛 토큰 즉시 401)
+GET  /api/owner/services            목록 + 오늘 사용량
+```
+
 ## 세션 목록 조회 (HTTP)
 
 재개할 세션 UUID 를 찾기 위한 목록 API. 같은 API 토큰으로 인증한다.

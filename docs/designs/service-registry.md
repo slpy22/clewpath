@@ -157,7 +157,7 @@
 | 단계 | 내용 | 효과 |
 |---|---|---|
 | S1 차단 ✅ 0.24.0 | 권한표(§5) 중 소유자 토큰 축소: profile/labels/title POST 로컬 전용, in-place 원격 거부 | 지금 구멍의 대부분이 바로 닫힘. nklaw 미사용 확인(004 회신). 가드: test_service_s1.py |
-| S2 대장·토큰 | services.json, 서비스 토큰 발급·검증, resume/ask 에서 base 일치 검사, 서비스별 한도·감사 | 서비스별 격리 |
+| S2 대장·토큰 ✅ 0.25.0 | services.json(`bases:{용도:id}`), 서비스 토큰 발급·재발급·정지·폐기(`/api/owner/services`, 로컬 전용 — 신청·claim 은 S3), resume/ask 에서 base 일치 검사(루프백도), 서비스별 한도·감사(`service`), 정지 시 WS 다음 턴 끊김. 가드레일 프로필 없는 원본·다른 서비스 원본은 거부 | 서비스별 격리. 가드: test_service_s2.py |
 | S3 등록 흐름 | 신청 API·폴더 검사·승인 kind·claim·원본 준비 | 새 서비스가 스스로 등록 |
 | S4 화면 | 설정 「외부 서비스」: 목록·오늘 사용량·재발급·폐기·정지, 승인 시트에 검사 결과 | 사장님 관리 |
 | S5 이행 | 북한법: 1ca057f1 입양(chat) + 생성기 원본 신설(gen) → 승인 → 새 토큰 → `SM_AGENT_SESSION`·`SM_GEN_SESSION` 고정 + 토큰 env 교체(서비스 모니터 의뢰) → 옛 토큰 폐기 | 레거시 토큰 제거 |

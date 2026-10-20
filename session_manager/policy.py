@@ -91,29 +91,44 @@ def _save_usage(d: dict) -> None:
     os.replace(tmp, f)
 
 
-def check_quota(token: str | None) -> tuple[bool, str, dict]:
-    """호출 전 일일 한도 검사. 로컬(token None)은 신뢰하여 무제한.
+def caller_id(token: str | None, service: dict | None = None) -> str:
+    """사용량·감사의 호출자 키. 서비스 토큰이면 'svc:<id>'(토큰을 바꿔도 이어진다), 아니면 토큰 해시."""
+    return f"svc:{service['id']}" if service else token_id(token)
+
+
+def _caps(service: dict | None) -> tuple[int, float]:
+    lim = (service or {}).get("limits") or {}
+    return (int(lim.get("daily_calls", daily_calls_cap())),
+            float(lim.get("daily_usd", daily_usd_cap())))
+
+
+def today_usage(token: str | None, service: dict | None = None) -> dict:
+    with _LOCK:
+        return _load_usage().get(f"{caller_id(token, service)}:{_today()}", {"calls": 0, "usd": 0.0})
+
+
+def check_quota(token: str | None, service: dict | None = None) -> tuple[bool, str, dict]:
+    """호출 전 일일 한도 검사. 로컬(token None)은 신뢰하여 무제한. 서비스는 서비스별 한도(services.limits).
 
     Returns: (allowed, reason, today_usage)
     """
-    if not token:  # 로컬 루프백 등 — 신뢰
+    if not token and not service:  # 로컬 루프백 등 — 신뢰
         return True, "", {"calls": 0, "usd": 0.0}
-    key = f"{token_id(token)}:{_today()}"
-    with _LOCK:
-        u = _load_usage().get(key, {"calls": 0, "usd": 0.0})
-    if u["calls"] >= daily_calls_cap():
-        return False, f"일일 호출 한도 초과 ({daily_calls_cap()}회)", u
-    if u["usd"] >= daily_usd_cap():
-        return False, f"일일 비용 한도 초과 (${daily_usd_cap()})", u
+    u = today_usage(token, service)
+    calls_cap, usd_cap = _caps(service)
+    if u["calls"] >= calls_cap:
+        return False, f"일일 호출 한도 초과 ({calls_cap}회)", u
+    if u["usd"] >= usd_cap:
+        return False, f"일일 비용 한도 초과 (${usd_cap})", u
     return True, "", u
 
 
 def record_usage(token: str | None, cost: float | None,
-                 count_call: bool = True) -> dict:
+                 count_call: bool = True, service: dict | None = None) -> dict:
     """일일 사용량 누적. count_call=False 면 비용만 더하고 호출 수는 안 올린다."""
-    if not token:
+    if not token and not service:
         return {"calls": 0, "usd": 0.0}
-    key = f"{token_id(token)}:{_today()}"
+    key = f"{caller_id(token, service)}:{_today()}"
     with _LOCK:
         d = _load_usage()
         u = d.get(key, {"calls": 0, "usd": 0.0})
@@ -125,11 +140,12 @@ def record_usage(token: str | None, cost: float | None,
     return u
 
 
-def effective_guardrails(session_id: str) -> dict:
-    """전역 정책 + 세션 프로파일을 '더 빡센 쪽'으로 병합해 실효 가드레일을 만든다."""
+def effective_guardrails(session_id: str, service: dict | None = None) -> dict:
+    """전역 정책 + 세션 프로파일(+ 서비스 1회 한도)을 '더 빡센 쪽'으로 병합해 실효 가드레일을 만든다."""
     prof = profiles.get(session_id)
     denied = sorted(set(denied_tools()) | set(prof.get("denied_tools") or []))
-    budgets = [b for b in (max_call_usd(), prof.get("max_budget_usd")) if b]
+    svc_call = ((service or {}).get("limits") or {}).get("max_call_usd")
+    budgets = [b for b in (max_call_usd(), prof.get("max_budget_usd"), svc_call) if b]
     return {
         "denied_tools": denied,                       # 합집합(차단 늘어남)
         "allowed_tools": prof.get("allowed_tools") or None,  # 화이트리스트(더 빡셈)
@@ -171,7 +187,7 @@ def usage_summary(recent_n: int = 30) -> dict:
         usage = _load_usage()
     today_tokens = []
     for key, u in usage.items():
-        tid, _, day = key.partition(":")
+        tid, _, day = key.rpartition(":")   # svc:<id>:<날짜> 도 있다
         if day == today:
             today_tokens.append({"token": tid, "calls": u.get("calls", 0),
                                  "usd": round(u.get("usd", 0.0), 4)})

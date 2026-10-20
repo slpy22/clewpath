@@ -38,6 +38,15 @@ class AskReq(BaseModel):
     timeout: int = 300
 
 
+class ServiceReq(BaseModel):
+    """외부 서비스 등록·수정 바디(서비스 대장 S2). bases = {용도: 원본 세션 id}."""
+    id: str | None = None
+    name: str | None = None
+    bases: dict[str, str] | None = None
+    limits: dict | None = None
+    status: str | None = None
+
+
 class TitleReq(BaseModel):
     """네이티브 세션 이름(Ctrl+R custom-title) 설정 바디."""
     title: str
@@ -62,7 +71,7 @@ class ProfileReq(BaseModel):
 from session_manager import (
     scanner, viewer, search, stats, lifecycle, exporter, importer, resume,
     webterm, webapi, webmonitor, auth, labels, policy, profiles, native_title,
-    owner2fa, devices, appconfig, config, connector,
+    owner2fa, devices, appconfig, config, connector, services,
 )
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -173,12 +182,23 @@ class AuthASGIMiddleware:
 
         # 외부 API v1: API 토큰 전용
         if path.startswith("/api/v1/"):
+            tok = (query.get("token", [None])[0]
+                   or auth.bearer(headers.get("authorization")))
+            # 서비스 토큰(S2): 자기 원본의 ask·프로필 읽기·자기 정보만. WS(resume)는 핸들러가 검사.
+            if services.looks_like(tok):
+                svc = services.lookup(tok)
+                if not svc:
+                    return await deny_json(401)
+                if svc.get("status") != "active":
+                    return await JSONResponse({"error": f"service_{svc.get('status')}"}, status_code=401)(
+                        scope, receive, send)
+                if services.http_allowed(svc, scope.get("method", "GET"), path):
+                    return await self.app(scope, receive, send)
+                return await JSONResponse({"error": "service_scope"}, status_code=403)(scope, receive, send)
             if not auth.api_enabled():
                 return await JSONResponse(
                     {"error": "API 비활성(SM_API_TOKEN 미설정)"}, status_code=503
                 )(scope, receive, send)
-            tok = (query.get("token", [None])[0]
-                   or auth.bearer(headers.get("authorization")))
             if auth.valid_api_token(tok):
                 return await self.app(scope, receive, send)
             return await deny_json(401)
@@ -1458,35 +1478,44 @@ def create_app() -> FastAPI:
     async def ws_api_resume(websocket: WebSocket, session_id: str):
         token = (websocket.query_params.get("token")
                  or auth.bearer(websocket.headers.get("authorization")))
-        if not _is_local(websocket):
-            if not auth.valid_api_token(token):
+        # 서비스 토큰(S2)은 어디서 오든(루프백 포함) 자기 원본만, 서비스 한도로.
+        svc = services.identify(token) if services.looks_like(token) else None
+        who = {"service": svc["id"]} if svc else {"token": policy.token_id(token)}
+        if services.looks_like(token) and not svc:
+            await websocket.close(code=1008)  # 모르는·정지·폐기 서비스 토큰
+            return
+        if svc and not services.owns(svc, session_id):
+            policy.audit({"event": "resume", **who, "session": session_id, "blocked": "not_service_base"})
+            await websocket.close(code=1008)
+            return
+        if svc or not _is_local(websocket):
+            if not svc and not auth.valid_api_token(token):
                 await websocket.close(code=1008)  # 토큰 없음/불일치
                 return
-            ok, reason, _ = policy.check_quota(token)
+            ok, reason, _ = policy.check_quota(token, svc)
             if not ok:
-                policy.audit({"event": "resume", "token": policy.token_id(token),
-                              "session": session_id, "blocked": reason})
+                policy.audit({"event": "resume", **who, "session": session_id, "blocked": reason})
                 await websocket.close(code=1008)
                 return
         skip = websocket.query_params.get("skip", "1") not in ("0", "false", "False")
         # 외부 API 세션 사용은 무조건 fork(원본 불변) + 위험 도구 하드 차단
         import uuid as _uuid
         fork_id = str(_uuid.uuid4())
-        policy.record_usage(token, 0, count_call=True)  # 호출 수만 카운트
-        policy.audit({"event": "resume", "token": policy.token_id(token),
-                      "session": session_id, "fork": fork_id})
+        policy.record_usage(token, 0, count_call=True, service=svc)  # 호출 수만 카운트
+        policy.audit({"event": "resume", **who, "session": session_id, "fork": fork_id})
 
         def _finish(cost):
             # 멀티턴 누적 비용을 사용량·감사에 반영(호출수는 이미 셌으므로 비용만)
-            policy.record_usage(token, cost, count_call=False)
-            policy.audit({"event": "resume_end", "token": policy.token_id(token),
-                          "session": session_id, "fork": fork_id, "cost_usd": cost})
+            policy.record_usage(token, cost, count_call=False, service=svc)
+            policy.audit({"event": "resume_end", **who, "session": session_id, "fork": fork_id, "cost_usd": cost})
 
         await websocket.accept()
         await webapi.run_resume_api(websocket, session_id, skip_permissions=skip,
                                     fork_id=fork_id,
-                                    guardrails=policy.effective_guardrails(session_id),
-                                    on_finish=_finish)
+                                    guardrails=policy.effective_guardrails(session_id, svc),
+                                    on_finish=_finish,
+                                    # 정지·폐기되면 다음 턴부터 끊는다
+                                    allow=(lambda: services.is_active(svc["id"])) if svc else None)
 
     # ---- 외부 API v1: 세션 in-place 재개(소유자용, fork 아님) ----
     # 원본 /api/v1/resume 는 untrusted 호출자용(강제 fork). 이건 소유자가 '실제 세션'을
@@ -1823,20 +1852,24 @@ def create_app() -> FastAPI:
     def api_v1_ask(session_id: str, body: AskReq, request: Request):
         token = (request.query_params.get("token")
                  or auth.bearer(request.headers.get("authorization")))
-        ok, reason, _ = policy.check_quota(token)
+        svc = services.identify(token) if services.looks_like(token) else None
+        who = {"service": svc["id"]} if svc else {"token": policy.token_id(token)}
+        if services.looks_like(token) and (not svc or not services.owns(svc, session_id)):
+            # 원격은 미들웨어가 이미 막는다 — 루프백으로 서비스 토큰을 들고 온 경우도 같은 규칙
+            return JSONResponse({"error": "service_scope"}, status_code=403)
+        ok, reason, _ = policy.check_quota(token, svc)
         if not ok:
-            policy.audit({"event": "ask", "token": policy.token_id(token),
-                          "session": session_id, "blocked": reason})
+            policy.audit({"event": "ask", **who, "session": session_id, "blocked": reason})
             return JSONResponse({"error": reason}, status_code=429)
 
-        g = policy.effective_guardrails(session_id)  # 전역 ∩ 세션 프로파일
+        g = policy.effective_guardrails(session_id, svc)  # 전역 ∩ 세션 프로파일 ∩ 서비스 1회 한도
         prompt = body.prompt or ""
         # 내용 필터(입력): 길이 제한 + 금지 정규식
         if g["max_prompt_chars"] and len(prompt) > g["max_prompt_chars"]:
             prompt = prompt[:g["max_prompt_chars"]]
         hit = policy.match_denied(prompt, g["deny_patterns"])
         if hit:
-            policy.audit({"event": "ask", "token": policy.token_id(token),
+            policy.audit({"event": "ask", **who,
                           "session": session_id, "blocked": f"prompt matched deny: {hit}"})
             return JSONResponse({"error": "프롬프트가 세션 정책의 금지 패턴에 걸렸습니다."},
                                 status_code=400)
@@ -1855,8 +1888,8 @@ def create_app() -> FastAPI:
                 r["answer"] = ans[:g["max_output_chars"]]
                 r["truncated"] = True
 
-        policy.record_usage(token, r.get("cost_usd"))
-        policy.audit({"event": "ask", "token": policy.token_id(token),
+        policy.record_usage(token, r.get("cost_usd"), service=svc)
+        policy.audit({"event": "ask", **who,
                       "session": session_id, "fork": r.get("fork_id"),
                       "prompt": prompt[:200], "cost_usd": r.get("cost_usd"),
                       "is_error": r.get("is_error"),
@@ -1867,6 +1900,57 @@ def create_app() -> FastAPI:
     @app.get("/api/v1/labels")
     def api_v1_labels():
         return {"labels": labels.label_counts()}
+
+    # ---- 서비스 대장 S2: 서비스 토큰의 자기 정보 ----
+    @app.get("/api/v1/service/me")
+    def api_v1_service_me(request: Request):
+        token = (request.query_params.get("token")
+                 or auth.bearer(request.headers.get("authorization")))
+        svc = services.identify(token)
+        if not svc:
+            return JSONResponse({"error": "service_token_required"}, status_code=400)
+        return {"service": svc, "today": policy.today_usage(token, svc)}
+
+    # ---- 서비스 대장 S2: 사장님 관리(이 PC 로컬 전용 — 화면·2FA 는 S4) ----
+    def _svc_call(request: Request, fn):
+        if not _is_local(request):
+            return JSONResponse({"error": "local_only"}, status_code=403)
+        try:
+            return fn()
+        except services.ServiceError as e:
+            return JSONResponse({"error": e.code, "message": e.message}, status_code=e.status)
+
+    @app.get("/api/owner/services")
+    def owner_services(request: Request):
+        return _svc_call(request, lambda: {"services": [
+            {**r, "today": policy.today_usage(None, r)} for r in services.list_all()]})
+
+    @app.post("/api/owner/services")
+    def owner_service_create(body: ServiceReq, request: Request):
+        def run():
+            rec, token = services.create(body.id or "", body.name or "", body.bases or {}, body.limits)
+            policy.audit({"event": "service_create", "service": rec["id"], "bases": rec["bases"]})
+            return {"service": rec, "token": token,
+                    "note": "토큰 원문은 지금 한 번만 보입니다. 서비스 env 에 넣고 이 응답은 남기지 마세요."}
+        return _svc_call(request, run)
+
+    @app.post("/api/owner/services/{sid}")
+    def owner_service_update(sid: str, body: ServiceReq, request: Request):
+        def run():
+            rec = services.update(sid, name=body.name, bases=body.bases, limits=body.limits, status=body.status)
+            policy.audit({"event": "service_update", "service": sid,
+                          **{k: v for k, v in (("status", body.status), ("bases", body.bases)) if v is not None}})
+            return {"service": rec}
+        return _svc_call(request, run)
+
+    @app.post("/api/owner/services/{sid}/rotate")
+    def owner_service_rotate(sid: str, request: Request):
+        def run():
+            rec, token = services.rotate(sid)
+            policy.audit({"event": "service_rotate", "service": sid})
+            return {"service": rec, "token": token,
+                    "note": "옛 토큰은 지금부터 401 입니다. 새 토큰 원문은 이번 한 번만 보입니다."}
+        return _svc_call(request, run)
 
     # ---- 세션 가드레일 프로파일 (외부 API, 토큰) ----
     @app.get("/api/v1/sessions/{session_id}/profile")
