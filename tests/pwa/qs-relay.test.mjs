@@ -353,3 +353,29 @@ test("T47 릴레이(실제 연결): 새 PC 페어링이 이전 PC 의 2차 인�
     after: { room: "roomB", tabsB: null, now: "empty", termMode: false, terminalOnB: 0 },
   });
 });
+
+test("T51 릴레이(실제 연결): 끊긴 사이 터미널 줄을 누르면 터미널은 '연결 종료'로 열리고(죽은 소켓에 살아 있는 척 붙지 않음) 다시 연결되면 보던 탭에 다시 붙는다 — 방금 본 탭(목록상 꺼짐)·목록상 살아 있음", async () => {
+  const paths = ["방금 본 탭(목록상 꺼짐)", "목록상 살아 있음"];
+  const got = await each(paths, async (p) => {
+    const ctx = await load({ setup: (sb) => sb.localStorage.setItem("sm_room", "room1") });
+    const pd = stubEl("div"), app = stubEl("div");
+    for (const [id, e] of [["paneDetail", pd], ["app", app], ["head", stubEl("span")], ["paneList", stubEl("div")]]) ctx.document._register(id, e);
+    app.setAttribute("data-view", "list");
+    const sockets = browserWs(ctx, { deferClose: false });
+    ev(ctx, `innerWidth = 1400; toast = () => {}; fetchRecentMessages = async () => []; globalThis.MutationObserver = class { observe() {} disconnect() {} };
+      globalThis.__sched = []; conn._scheduleReconnect = (c) => __sched.push(c);
+      SESSIONS = [{ session_id: '${A}', title: 'A', live_terminal: ${p === "목록상 살아 있음"}, cwd: 'E:/p' }, { session_id: '${B}', title: 'B', live_terminal: true, cwd: 'E:/q' }];`);
+    ctx.ensurePriv = async () => ({}); ctx.confirm = () => true;
+    const ws1 = await connectWs(ctx, sockets, "room1");
+    await ctx.loadTerminal(ev(ctx, "SESSIONS[0]"), false); await tick(RENDER);   // 터미널 A(방금 띄움)
+    await ev(ctx, "loadViewer(SESSIONS[1])"); await tick(15);                     // 떠남
+    ws1.close(1006); await tick();                                                 // 앱을 내렸다 올림 — 소켓이 죽었다(재연결 대기)
+    await ctx.jumpToSession(ev(ctx, "SESSIONS[0]")); await tick(RENDER);          // 목록 줄 A — 목록은 'disconnected' 로 바로 실패
+    const afterClick = { now: ev(ctx, "PANE_NOW.kind"), termMode: pd.classList.contains("term-mode"), disconnected: ev(ctx, "termView.disconnected"),
+                         streams: ev(ctx, "conn.streams.size") };
+    const ws2 = await connectWs(ctx, sockets, "room1");                            // 다시 연결됨
+    ev(ctx, "reattachForegroundTab(false)"); await tick(RENDER);                   // 재연결 흐름의 '보던 터미널 다시 붙이기'
+    return { afterClick, reattached: ws2.sent.filter((f) => f.type === "req" && f.method === "terminal").map((f) => f.params.session_id.slice(0, 1)) };
+  });
+  assert.deepEqual(got, all(paths, { afterClick: { now: "terminal", termMode: true, disconnected: true, streams: 0 }, reattached: ["a"] }));
+});

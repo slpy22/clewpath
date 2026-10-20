@@ -312,3 +312,31 @@ test("T48b 터미널·웹 재개가 2차 인증 확인을, 알림 진입이 목�
   });
   assert.deepEqual(got, all(paths, { afterB: "detail:b", final: "detail:b", termMode: false, terms: 0, resumes: 0 }));
 });
+
+test("T52 폰: 터미널을 보다 떠나 앱을 몇 시간 내려 둔 뒤(20초 목록이 돌지 않음) 그 줄을 누르면 — 목록이 늦어도 터미널(꺼졌으면 새 claude)을 열지 않고 상세로, 탭은 버리지 않는다. 목록이 오면 그대로 판정", async () => {
+  const paths = ["목록 늦음", "목록 옴(꺼짐)"];
+  const got = await each(paths, async (p) => {
+    const { ctx } = await boot({ width: 390 });
+    ev(ctx, "T.list = async () => ({ sessions: SESSIONS.map((s) => ({ ...s })) });");
+    await ev(ctx, "loadList()"); await tick();                                   // 목록(A 살아 있음)
+    await ctx.loadTerminal(ev(ctx, "SESSIONS[0]"), false); await tick(RENDER);  // 터미널 A 를 보다가
+    await ev(ctx, "loadDetail(SESSIONS[1])"); await tick(15);                     // 다른 세션 상세로 떠남(터미널 정리)
+    ctx.document.hidden = true;                                                   // 앱을 내림 — 20초 갱신은 숨은 동안 건너뛴다
+    const poll = ev(ctx, "__intervals.find((i) => i.ms === 20000).f");
+    ev(ctx, "globalThis.__lists = 0; T.list = async () => { __lists++; return { sessions: SESSIONS.map((s) => ({ ...s, live_terminal: false })) }; };");
+    for (let i = 0; i < 3; i++) await poll();
+    const polledWhileHidden = ev(ctx, "__lists");
+    ev(ctx, "const __realNow = Date.now; Date.now = () => __realNow() + 4 * 3600 * 1000;");   // 4시간 뒤(그사이 쉬는 세션 정리로 꺼짐)
+    ctx.document.hidden = false;
+    ev(ctx, "SESSIONS[0].live_terminal = false");                                // 화면의 줄은 꺼짐으로 보인다고 해도 같은 결과가 되게
+    const menu = ev(ctx, "rowMenuItems(SESSIONS[0])[0][1]");                     // 떠난 뒤 목록을 아직 못 받았다 — 누르면 목록을 새로 받아 판정
+    if (p === "목록 늦음") ev(ctx, "T.list = () => { __lists++; return new Promise(() => {}); };");
+    const before = ev(ctx, "__tc.length");
+    await ctx.jumpToSession(ev(ctx, "SESSIONS[0]")); await tick(RENDER);
+    return { polledWhileHidden, menu, now: nowAt(ctx), terminalRequests: ev(ctx, "__tc.length") - before, tabs: ev(ctx, "TABS.list.length") };
+  });
+  assert.deepEqual(got, {
+    "목록 늦음": { polledWhileHidden: 0, menu: "터미널 열기", now: "detail:a", terminalRequests: 0, tabs: 1 },
+    "목록 옴(꺼짐)": { polledWhileHidden: 0, menu: "터미널 열기", now: "detail:a", terminalRequests: 0, tabs: 0 },
+  });
+});
