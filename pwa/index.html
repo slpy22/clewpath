@@ -1151,7 +1151,8 @@ class Conn{
     this._txq=this._txq.then(async()=>{ const env=await this._seal(obj,key);
       ws.send(JSON.stringify(env)); }).catch(()=>{});
   }
-  _doAuth(gen){   // 기기 토큰이 있으면 릴레이 연결 직후 기기 인증 → {ok,error,data} (토큰 없으면 null)
+  // quiet: 전역 onauth 는 부르는 쪽이 부른다(connect 의 hello — 연결 시도를 먼저 끝낸 뒤)
+  _doAuth(gen, quiet){   // 기기 토큰이 있으면 릴레이 연결 직후 기기 인증 → {ok,error,data} (토큰 없으면 null)
     if(!this.devToken){ this.authed=false; return Promise.resolve(null); }
     // name: 폰이 자기 이름을 보고한다(B-1) — Host 는 등록부의 임시 이름만 이걸로 채운다.
     return this.req('auth',{token:this.devToken,pv:PV,name:deviceSelfName()}).then(r=>{
@@ -1168,7 +1169,7 @@ class Conn{
       }
       // 페어링 중(_pairing)에는 전역 onauth(자격 상실 화면·로그아웃)를 부르지 않는다 — 결과는 doPair 가
       // connect() 의 auth 필드로 받아 되돌리기(pairRollback)까지 스스로 처리한다.
-      if(this.onauth && !this._pairing)this.onauth(this.authed, r&&r.error);
+      if(this.onauth && !this._pairing && !quiet)this.onauth(this.authed, r&&r.error);
       return {ok:this.authed, error:(r&&r.error)||null, data:(r&&r.data)||null};
     }).catch(e=>({ok:false, error:String((e&&e.message)||e||'auth_failed'), data:null}));
   }
@@ -1280,7 +1281,10 @@ class Conn{
           // 기기 인증 실패(만료 QR 등)를 '성공' 으로 오해하지 않게. reject 는 안 한다(onauth 경로 유지).
           // PC 가 꺼져 있으면(peer_present 아님) 인증을 보내지 않고 바로 끝낸다 — 릴레이가 agent_offline 로 돌려주는데 E2EE 면 그 응답에
           // id 가 없어 connect 가 끝나지 않았다('연결 중…'). PC 가 붙으면(agent_online) 인증한다(_onAgentOnline)
-          if(!done){ if(this.devToken&&this.peer){ this._doAuth(gen).then(a=>{ if(!done){done=true;res({...m, auth:a});} }); }
+          // 자격 상실 안내(onauth → 로그아웃)는 연결 시도를 끝낸 뒤에 — 먼저 부르면 로그아웃이 기다리던 connect 를 '밀려남'으로 거부해
+          // 저장된 자격으로 부팅·저장된 PC 고르기가 '연결 중…'에 멈췄다(검토 3회차). 부른 쪽은 auth 결과를 보고 앱에 들어가지 않는다
+          if(!done){ if(this.devToken&&this.peer){ this._doAuth(gen, true).then(a=>{ if(!done){done=true;res({...m, auth:a});}
+                       if(a&&a.error!=='superseded'&&gen===this._gen&&this.onauth&&!this._pairing) this.onauth(a.ok, a.error); }); }
                      else if(this.devToken){ this.authed=false; done=true; res({...m, auth:{ok:false, error:'agent_offline', data:null}}); }
                      else { done=true; res({...m, auth:null}); } }
           return; }
@@ -5758,7 +5762,9 @@ function renderPairPcs(){
       pcsActivate(pc.room);
       $('#p-err').textContent=''; b.textContent='연결 중… '+pcName(pc);
       conn._stopped=false; conn._retry=0; conn._pairing=false;   // 페어링이 아닌 연결 — 밀려난 페어링의 표시가 남지 않게
-      try{ await conn.connect(pc.room, LS.getItem('sm_token')||'');
+      try{ const r=await conn.connect(pc.room, LS.getItem('sm_token')||'');
+           // 그 PC 에서 이 기기 자격이 무효(해제·재발급) — 안내·로그아웃은 onauth 가 했다. '연결 중…'으로 두지 않고 목록을 ⛔ 로 다시 그린다
+           if(authLostRes(r)){ $('#p-err').textContent=AUTH_LOST_LINE; renderPairPcs(); return; }
            LS.setItem('sm_room',pc.room); T=relayT; enterApp(); }
       catch(e){ if(e&&e.superseded) return;   // 그사이 다른 PC 를 골랐다 — 그쪽이 화면을 맡는다
         $('#p-err').textContent=e.message; b.textContent='🖥 '+pcName(pc); }
@@ -6539,6 +6545,7 @@ function leaveAddPc(){
 }
 // connect() 결과가 '이 기기의 자격이 PC 에서 무효'인가(해제·재발급) — 자격 상실 안내·로그아웃은 onauth 가 맡고 부른 쪽은 앱에 들어가지 않는다
 function authLostRes(r){ const a=r&&r.auth; return !!(a&&!a.ok&&(a.error==='auth_invalid'||a.error==='auth_required')); }
+const AUTH_LOST_LINE='⛔ PC 에서 이 기기의 페어링이 바뀌었습니다(해제 또는 QR 재발급) — 새 QR 을 스캔하세요';
 // 폰이 auth 때 보고하는 자기 이름(B-1): 앱은 브리지의 기기 모델, 웹은 UA 요약. Host 가 40자·제어문자 정리.
 function deviceSelfName(){
   try{ const B=window.ClewBridge; if(B&&B.deviceName){ const n=B.deviceName(); if(n) return String(n); } }catch(e){}
@@ -6774,7 +6781,8 @@ async function switchToPc(pc){
   toast(pcName(pc)+' 로 전환 중…');
   try{ conn.logout(); }catch(e){}
   conn._stopped=false; conn._retry=0; conn._pairing=false;   // 페어링이 아닌 연결 — 밀려난 페어링의 표시가 남지 않게
-  try{ await conn.connect(pc.room, LS.getItem('sm_token')||'');
+  try{ const r=await conn.connect(pc.room, LS.getItem('sm_token')||'');
+       if(authLostRes(r)){ refreshPcSelect(); return; }   // 그 PC 에서 자격 무효 — 안내·로그아웃은 onauth 가 했다('연결됨' 아님)
        T=relayT; enterApp(); refreshPcSelect();
        // PC 가 꺼져 있으면 '연결됨'이라 하지 않는다 — 켜지면 인증하고 목록을 받는다(Conn._onAgentOnline)
        toast(pcName(pc)+(conn.peer?' 연결됨':' — PC 가 꺼져 있습니다(켜지면 자동으로 이어집니다)')); }
@@ -7002,6 +7010,8 @@ if(_pcexport){
         $('#p-err').textContent=(a&&a.error==='auth_invalid')?'이 QR 은 더 이상 유효하지 않습니다 — PC 의 📱 기기 목록에서 새 QR 을 만드세요':'PC 인증 실패: '+((a&&a.error)||'unknown');
         $('#p-go').textContent='연결'; renderPairPcs(); return;
       }
+      if(authLostRes(r)){   // 저장된 자격이 PC 에서 무효(해제·재발급) — 안내·로그아웃은 onauth 가 했다. 앱에 들어가지 않고 페어링 화면을 맞춘다
+        $('#p-go').textContent='연결'; $('#p-err').textContent=AUTH_LOST_LINE; renderPairPcs(); return; }
       if(a&&a.ok&&a.data){ pcsUpsert({room, cs:LS.getItem('sm_cs')||'', cp:LS.getItem('sm_cp')||'', dev:LS.getItem('sm_devtoken')||'',
                                       name:a.data.hostname||'', pv:a.data.pv|0}); }
       if(_hashPair && _prevPc && _prevPc.cp && _prevPc.cp!==LS.getItem('sm_cp')){

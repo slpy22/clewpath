@@ -339,3 +339,53 @@ test("T62d 예전 결함이 남긴 ⛔(멀쩡한 PC 를 '페어링 바뀜'으로
   await connectAuthed(env);
   assert.equal(ev(ctx, "pcsLoad()[0].state || null"), null);
 });
+
+// ---------------------------------------------------------------- 결함 5: 저장된 자격이 PC 에서 무효(auth_invalid)일 때 '연결 중…'에 멈춤
+// 자격 상실 안내(onauth → 로그아웃)가 connect 보다 먼저 돌아 기다리던 connect 가 '밀려남'으로 거부됐고, 부른 쪽은 조용히 그만둬
+// 페어링 화면 버튼이 '연결 중…' 그대로·오류 문구 없음·저장된 PC 목록도 ⛔ 전 상태였다.
+const flatButtons = (host) => flatEl(host).filter((n) => n.tagName === "BUTTON").map((n) => n.textContent);
+test("T63 저장된 자격으로 부팅했는데 PC 에서 이 기기를 해제·재발급했으면(auth_invalid) 안내를 띄우고 페어링 화면을 맞춘다 — '연결 중…'에 멈추지 않고 그 PC 는 ⛔ 줄", async () => {
+  let els;
+  const ctx = await load({ setup: (sb) => {
+    for (const [k, v] of [["sm_room", "roomA"], ["sm_cs", "csA"], ["sm_cp", "cpA"], ["sm_devtoken", "devA"], ["sm_pcs", JSON.stringify([PC_A])]]) sb.localStorage.setItem(k, v);
+    els = regIds(sb); sb.fetch = cpFetch(sb);
+    sb.__all = browserWs(sb);
+  } });
+  ev(ctx, "globalThis.__entered = 0; enterApp = () => { __entered++; }; globalThis.__modals = []; openModal = (t) => { __modals.push(String(t)); };");
+  const sockets = ctx.__all;
+  await until(() => sockets.length === 1);
+  await helloAuth(sockets[0], "c1", { ok: false, error: "auth_invalid" });
+  await settle(); await tick(30);
+  assert.deepEqual(plain({ go: els["p-go"].textContent, err: els["p-err"].textContent.includes("페어링이 바뀌었"), entered: ev(ctx, "__entered"),
+                           modals: ev(ctx, "__modals.slice()"), state: ev(ctx, "pcsLoad()[0].state || null"), rows: flatButtons(els["p-pcs"]), stopped: ev(ctx, "!!conn._stopped") }),
+                   { go: "연결", err: true, entered: 0, modals: ["🔒 접속 자격 해제됨"], state: "changed", rows: ["다시 페어링", "지우기"], stopped: true });
+});
+
+test("T63b 페어링 화면의 저장된 PC·머리 줄 PC 고르기도 auth_invalid 면 '연결 중…'·'연결됨'으로 끝나지 않는다 — 앱에 들어가지 않고 ⛔ 로 다시 그린다", async () => {
+  const run = async (how) => {
+    let els;
+    const ctx = await load({ setup: (sb) => {
+      sb.localStorage.setItem("sm_pcs", JSON.stringify([PC_A, { room: "roomB", cs: "csB", cp: "cpB2", dev: "devB", name: "B" }]));
+      sb.localStorage.setItem("sm_room", "roomB");
+      els = regIds(sb); sb.fetch = cpFetch(sb, []);
+    } });
+    const sockets = browserWs(ctx);
+    ev(ctx, "globalThis.__entered = 0; enterApp = () => { __entered++; }; openModal = () => {}; globalThis.__toasts = []; toast = (m) => __toasts.push(String(m));");
+    if (how === "저장된 PC") {
+      ctx.renderPairPcs();
+      const btn = flatEl(els["p-pcs"]).find((n) => n.tagName === "BUTTON" && n.textContent === "🖥 A");
+      btn.onclick();
+    } else ev(ctx, "switchToPc(pcsLoad().find((p) => p.room === 'roomA'))");
+    await until(() => sockets.length === 1);
+    await helloAuth(sockets[0], "c1", { ok: false, error: "auth_invalid" });
+    await settle(); await tick(30);
+    return { entered: ev(ctx, "__entered"), stateA: ev(ctx, "pcsLoad().find((p) => p.room === 'roomA').state || null"),
+             connectedToast: ev(ctx, "__toasts.some((m) => m.endsWith('연결됨'))"),
+             ...(how === "저장된 PC" ? { err: els["p-err"].textContent.includes("페어링이 바뀌었"), stuck: flatButtons(els["p-pcs"]).some((t) => t.startsWith("연결 중")),
+                                        rowsA: flatButtons(els["p-pcs"]).filter((t) => t === "다시 페어링").length } : {}) };
+  };
+  assert.deepEqual(plain({ saved: await run("저장된 PC"), header: await run("머리 줄") }), {
+    saved: { entered: 0, stateA: "changed", connectedToast: false, err: true, stuck: false, rowsA: 1 },
+    header: { entered: 0, stateA: "changed", connectedToast: false },
+  });
+});
