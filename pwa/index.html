@@ -1072,8 +1072,11 @@ function cpBase(){
   return (location.origin + ((m&&m[1])||'') + '/cp');
 }
 async function clientJwt(force){
-  const cs=LS.getItem('sm_cs'), cpid=LS.getItem('sm_cp');
+  const cs=LS.getItem('sm_cs'), cpid=LS.getItem('sm_cp'), room=LS.getItem('sm_room');
   if(!cs||!cpid) return null;                       // 구 방식(공유 토큰) 사용 중
+  // 조회하는 사이 다른 PC 로 바꿨나(pcsActivate 가 sm_cp 를 바꾼다) — 그때 받은 이전 PC 의 JWT 를 지금 PC 자격(sm_cjwt)으로 적거나
+  // 지금 PC 를 '페어링 바뀜'으로 표시하지 않는다(진행 중이던 재접속이 PC 전환 뒤에 끝나던 경우, 검토 2회차)
+  const same=()=>LS.getItem('sm_cp')===cpid&&LS.getItem('sm_room')===room;
   if(!force){
     try{ const c=JSON.parse(LS.getItem('sm_cjwt')||'null');
       // 만료 5분 전부터는 미리 갱신 (폰이 끊긴 사이 만료되는 걸 줄임)
@@ -1084,10 +1087,10 @@ async function clientJwt(force){
     const r=await fetch(cpBase()+'/client/token',{method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify({public_id:cpid,secret:cs})});
-    if(!r.ok){ if(r.status===401){ pcMarkState(LS.getItem('sm_room'),'changed');
-        toast('PC 에서 페어링이 바뀌었습니다(해제 또는 QR 재발급) — 새 QR 을 스캔하세요'); } return null; }
+    if(!r.ok){ if(r.status===401){ pcMarkState(room,'changed');   // 거부된 것은 이 조회를 한 PC 의 자격
+        if(same()) toast('PC 에서 페어링이 바뀌었습니다(해제 또는 QR 재발급) — 새 QR 을 스캔하세요'); } return null; }
     const j=await r.json();
-    LS.setItem('sm_cjwt',JSON.stringify({token:j.token,exp:j.expires_at}));
+    if(same()) LS.setItem('sm_cjwt',JSON.stringify({token:j.token,exp:j.expires_at}));
     return j.token;
   }catch(e){
     // CP 불통: 캐시된 JWT 가 아직 유효하면 그걸로 버틴다
@@ -1141,10 +1144,12 @@ class Conn{
     this._txq=this._txq.then(async()=>{ const env=await this._seal(obj,key);
       ws.send(JSON.stringify(env)); }).catch(()=>{});
   }
-  _doAuth(){   // 기기 토큰이 있으면 릴레이 연결 직후 기기 인증 → {ok,error,data} (토큰 없으면 null)
+  _doAuth(gen){   // 기기 토큰이 있으면 릴레이 연결 직후 기기 인증 → {ok,error,data} (토큰 없으면 null)
     if(!this.devToken){ this.authed=false; return Promise.resolve(null); }
     // name: 폰이 자기 이름을 보고한다(B-1) — Host 는 등록부의 임시 이름만 이걸로 채운다.
     return this.req('auth',{token:this.devToken,pv:PV,name:deviceSelfName()}).then(r=>{
+      // 기다리는 사이 다른 연결(PC 전환·로그아웃)로 바뀌었다 — 이 결과로 지금 연결의 인증 상태·자격 상실 화면을 건드리지 않는다
+      if(gen!==undefined&&gen!==this._gen) return {ok:false, error:'superseded', data:null};
       this.authed=!!(r&&r.ok);
       // 접속한 PC(호스트)의 버전 — 우선 auth 응답값으로 표시, 이어서 최신 여부까지 확인.
       if(this.authed && r.data && r.data.ver){ showVer(r.data.ver, null); refreshVer(); }
@@ -1161,7 +1166,7 @@ class Conn{
     }).catch(e=>({ok:false, error:String((e&&e.message)||e||'auth_failed'), data:null}));
   }
   async connect(room,token){
-    this._gen++;                                  // 이 연결 시도 — 앞서 진행 중이던 시도(재접속 등)는 밀려난다
+    const gen=++this._gen;                        // 이 연결 시도 — 앞서 진행 중이던 시도(재접속 등)는 밀려난다
     // 직접 부른 연결(PC 전환·페어링)이 기다리던 재접속 타이머보다 앞선다 — 타이머가 나중에 돌아 이 연결을 밀어내지 않게
     if(this._retryTimer){clearTimeout(this._retryTimer);this._retryTimer=null;}
     // 지금 소켓은 내려놓는다(같은 PC 다시 페어링처럼 logout 없이 다시 연결) — 남기면 그 소켓이 나중에 닫힐 때 새 연결의
@@ -1175,8 +1180,12 @@ class Conn{
     if(rk && window.crypto && crypto.subtle){
       try{ key=await crypto.subtle.importKey('raw', b64uToU8(rk), 'AES-GCM',
              false, ['encrypt','decrypt']); }catch(e){}
+      if(gen!==this._gen) throw this._superseded();   // 키를 읽는 사이 밀려났다 — 그 PC 자격으로 CP 를 조회하지 않는다(아래)
     }
     const cjwt=await clientJwt(false);            // 기기 전용 자격이 있으면 JWT 로
+    // 룸 키·CP 조회를 기다리는 사이 다른 PC 로 바꿨거나(그쪽 connect) 로그아웃했다 — 소켓을 만들지 않는다. 만들면 지금 연결(새 PC)을
+    // 이전 PC 소켓·키로 덮고, 그 소켓의 hello 가 새 PC 의 기기 토큰으로 이전 PC 에 인증해(auth_invalid) 새 PC 가 '페어링 바뀜'이 됐다
+    if(gen!==this._gen) throw this._superseded();
     return new Promise((res,rej)=>{
       let done=false;
       let url=`${wsUrl()}?role=client&room=${encodeURIComponent(room)}&v=1`;
@@ -1209,7 +1218,7 @@ class Conn{
           this.onstatus(true,this.peer);
           // connect() 의 resolve 값에 auth 결과를 싣는다(eng E-D16): hello 는 릴레이 입장일 뿐이라
           // 기기 인증 실패(만료 QR 등)를 '성공' 으로 오해하지 않게. reject 는 안 한다(onauth 경로 유지).
-          if(!done){ if(this.devToken){ this._doAuth().then(a=>{ if(!done){done=true;res({...m, auth:a});} }); }
+          if(!done){ if(this.devToken){ this._doAuth(gen).then(a=>{ if(!done){done=true;res({...m, auth:a});} }); }
                      else { done=true; res({...m, auth:null}); } }
           return; }
         if(m.type==='peer'){ if(m.event==='agent_online'){ this.peer=true; setTimeout(()=>{ try{ refreshVer(); }catch(e){} }, 3000);   // PC 재기동(업데이트) 뒤 버전 확인

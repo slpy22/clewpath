@@ -238,3 +238,52 @@ test("T43 릴레이: 재접속 connect() 가 진행 중일 때 PC 를 바꿔도 
     inFlight: { reconnectQueued: 0, sockets: 3, current: true, switchOpen: 1, reconnectedToast: 0, loads: 0 },
   });
 });
+
+test("T44 릴레이: CP 조회를 기다리던 재접속(이전 PC)이 PC 전환 뒤에 끝나도 지금 연결(새 PC)을 덮지 않는다 — 소켓을 만들지 않고, 그 JWT 를 새 PC 자격으로 적지 않으며, 새 PC 가 '페어링 바뀜'이 되지 않는다(끊김 1006·자격 만료 4402)", async () => {
+  const run = async (code) => {
+    const { ctx, timers } = await bootConn({ setup: (sb) => {
+      sb.localStorage.setItem("sm_cs", "csA"); sb.localStorage.setItem("sm_cp", "cpA"); sb.localStorage.setItem("sm_devtoken", "devA"); } });
+    ev(ctx, "conn.devToken = 'devA'; pcsUpsert({ room: 'roomA', name: 'A', cs: 'csA', cp: 'cpA', dev: 'devA' });"
+          + "pcsUpsert({ room: 'roomB', name: 'B', cs: 'csB', cp: 'cpB', dev: 'devB' });");
+    // CP /client/token 조회는 손으로 끝낸다(느린 망)
+    const fetches = [];
+    ctx.fetch = (url, opts) => new Promise((res) => { fetches.push({ pid: JSON.parse(opts.body).public_id, res }); });
+    const answer = (i, token, ttl) => fetches[i].res({ ok: true, status: 200, json: async () => ({ token, expires_at: Math.floor(Date.now() / 1000) + ttl }) });
+    const sockets = browserWs(ctx);
+    const authed = [];
+    const authOk = async (ws, cid) => {
+      ws.open(); ws.push({ type: "hello", peer_present: true, cid });
+      await until(() => ws.sent.some((f) => f.method === "auth"));
+      const a = ws.sent.find((f) => f.method === "auth"); authed.push([new URL(ws.url).searchParams.get("room"), a.params.token]);
+      ws.push({ type: "res", id: a.id, ok: true, data: { id: "d", name: "n" } }); await settle();
+    };
+    // 1) PC A — JWT 는 곧 만료(200초 → 5분 사전 갱신 구간이라 재접속 때 다시 조회한다)
+    const p = ev(ctx, "conn.connect('roomA', 'tok')");
+    await until(() => fetches.length === 1); answer(0, "jwtA", 200);
+    await until(() => sockets.length === 1); await authOk(sockets[0], "cA"); await p;
+    // 2) 끊김 → 재접속이 CP 조회를 기다린다(1006 은 connect 안에서, 4402 는 재접속 타이머의 강제 갱신)
+    sockets[0]._code = code; sockets[0].finishClose(); await tick();
+    timers.shift()();
+    await until(() => fetches.length === 2);
+    // 3) 그사이 머리 줄에서 PC B 로 — B 조회가 먼저 끝나 B 가 연결된다
+    const pSwitch = ev(ctx, "switchToPc({ room: 'roomB', name: 'B' })");
+    await until(() => fetches.length === 3); answer(2, "jwtB", 3600);
+    await until(() => sockets.length === 2); const wsB = sockets[1];
+    await authOk(wsB, "cB"); await pSwitch; await settle();
+    // 4) 늦게 A 조회가 끝난다
+    answer(1, "jwtA2", 3600); await settle(); await tick(50);
+    // (고치기 전에는 여기서 A 소켓이 생겼다 — 그 hello 가 지금 기기 토큰으로 A 에 인증하고 A 는 모르는 토큰이라 auth_invalid)
+    if (sockets.length > 2) {
+      const wsA2 = sockets[2]; wsA2.open(); wsA2.push({ type: "hello", peer_present: true, cid: "cA2" });
+      await until(() => wsA2.sent.some((f) => f.method === "auth"), 20);
+      const a = wsA2.sent.find((f) => f.method === "auth");
+      if (a) { authed.push(["roomA", a.params.token]); wsA2.push({ type: "res", id: a.id, ok: false, error: "auth_invalid" }); await settle(); }
+    }
+    return { fetched: fetches.map((f) => f.pid), sockets: sockets.length, current: ev(ctx, "conn.ws") === wsB, wsB: wsB.readyState,
+             cjwt: JSON.parse(ctx.localStorage.getItem("sm_cjwt")).token, authed, stateB: ev(ctx, "pcsLoad().find((x) => x.room === 'roomB').state || null"),
+             stopped: ev(ctx, "conn._stopped"), reconnects: timers.length };
+  };
+  const got = await each(["1006", "4402"], (c) => run(Number(c)));
+  assert.deepEqual(got, all(["1006", "4402"], { fetched: ["cpA", "cpA", "cpB"], sockets: 2, current: true, wsB: 1, cjwt: "jwtB",
+    authed: [["roomA", "devA"], ["roomB", "devB"]], stateB: null, stopped: false, reconnects: 0 }));
+});
