@@ -20,6 +20,7 @@
 - [x] 6·7단계 부트스트랩·릴리스 도구(ca7ddd8): `ops/get.sh`, `sign_release --platforms`·`release.ps1 -Platforms`(win 필수, mac·linux 는 POSIX e2e 기록 필요)·패키지 `.sh` 형식 게이트·zip 내용 게이트, 변이 54+18종
 - [x] 8단계 e2e(61372eb): 리눅스 `*-test` 컨테이너 왕복(가짜 CP·시험 키) 186/186 — get.sh 거부 12가지·설치·런처 ①~⑪·수동 적용·롤백·재기동 자동 적용·`bash --posix` 러너·제거·다시 설치, 변이 12종
 - [x] 9단계 문서(2026-10-21): README 맥·리눅스 절(시험용, 한 줄 설치 공개 전)·multi-os 단계 표·이 목록, 문서 계약 시험 `tests/test_docs_multi_os.py`
+- [x] 검토 반영(2026-10-21, 지적 11건 — 시험으로 재현한 뒤 고침, 시계 이동은 started_at 을 당겨 흉내): 훅 curl·커넥터 로컬 호출이 프록시 env 를 따르던 것(`--noproxy 127.0.0.1`·`trust_env=False`·`proxy=None`), 훅 백업 0600, install.sh 직접 실행 때 토큰 인자를 env 로 옮겨 다시 실행, 받은 파일 배치를 rename·신호 미루기로, nohup 이 둔 HUP 무시가 Host·브로커·pty 자식에 물려가던 것, 시체 잠금 치우기 경합(권리 폴더 `.reclaim`), probe 의 시각 비교(시계 이동) → 설치 경로로, 롤백·복구가 런처도 되돌림, sign_release 도 win 필수, 문서 계약 시험을 진행 상태에서 떼어 냄 — 명세 각 절의 '검토 반영'
 - [ ] main 합침·릴리스(`platforms=["win"]`): `quick-switch` 와 섞이지 않게 차례로, 합칠 때마다 Windows 전체·리눅스 컨테이너 다시 시험, 이 PC 에서 0.28.1 → 새 버전 업데이트 왕복(명세 R14, `release.ps1 -Apply`). CHANGELOG 는 릴리스 때(`-PrepareChangelog`)
 - [ ] mac·linux 를 넣는 릴리스는 그 릴리스 HEAD(버전·CHANGELOG 커밋 뒤)에서 `python -m pytest -m posix_e2e tests/test_posix_e2e.py` 를 다시 돌려 `ops/logs/posix-e2e-<ver>.json` 을 남겨야 `release.ps1 -Platforms` 게이트를 지난다
 - [ ] (후속, 작음) PWA 가 update/status 의 `unsupported` 를 몰라 '최신 버전입니다'로 보여 준다(서버 응답·적용 거부 사유에는 있다) — 맥 단계 전에. 시작점: `pwa/index.html` checkUpdateNow + tests/pwa. S

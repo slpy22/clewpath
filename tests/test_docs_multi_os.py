@@ -308,22 +308,60 @@ def test_readme_folder_tree_and_tests_list_posix_files():
 
 # ---------------------------------------------------------------- multi-os.md
 
-def test_multi_os_stage_table_reflects_posix_install():
-    rows = _table(_section(_read(MULTI_OS), r"^단계"))
+# 이 파일의 시험은 기본 pytest 실행에 들어가 release.ps1 의 게이트(마지막 줄에 failed 면 중단)를 지난다. 그래서 문서를 코드와
+# 묶을 뿐, 진행 상태(할 일 체크·단계 상태 칸·고친 항목 지우기)에는 묶지 않는다 — 다음 할 일을 체크했다고 이후 Windows 릴리스가
+# 전부 막히면 안 된다. 아래 *_survives_* 시험이 그런 편집을 사본에 해 보고 여전히 통과하는지 본다.
+
+def _check_stage_table(md: str) -> None:
+    rows = _table(_section(md, r"^단계"))
     head, body = rows[0], {r[0]: dict(zip(rows[0], r)) for r in rows[1:]}
     assert "상태" in head and {"1", "2", "3a", "3b"} <= set(body), f"단계 표: {list(body)}"
-    for sid in ("1", "2"):
-        assert "완료" in body[sid]["상태"]
+    for sid in ("1", "2", "3a"):                       # 끝난 단계는 계속 '완료'(합침·릴리스 기록이 붙어도)
+        assert "완료" in body[sid]["상태"], f"{sid} 상태: {body[sid]['상태']}"
     a = body["3a"]
     whole = " ".join(a.values())
-    assert "완료" in a["상태"] and "posix-install" in a["상태"] and "posix-install.md" in whole
-    assert 'platforms=["win"]' in whole
+    assert "posix-install.md" in whole
+    assert 'platforms=["win"]' in whole               # 3a 가 내보낸 릴리스 모양(그 단계의 기록)
     for word, path in (("get.sh", "get.sh"), ("install.sh", "install.sh"), ("uninstall.sh", "uninstall.sh"),
                        ("start-connector.sh", "start-connector.sh"), ("update_runner.sh", "update_runner.sh"),
                        ("hostctl", "hostctl.py")):
         assert word in whole and SCRIPTS[path].is_file(), f"3a 행의 {word}"
     b = body["3b"]
-    assert "대기" in b["상태"] and all(w in " ".join(b.values()) for w in ("launchd", "키체인", "/get.sh"))
+    assert b["상태"].strip(), "3b 상태 칸이 비었습니다"     # 값은 진행에 따라 바뀐다(대기 → 진행 중 → 완료)
+    assert all(w in " ".join(b.values()) for w in ("launchd", "키체인", "/get.sh"))
+
+
+def _set_status(md: str, sid: str, value: str) -> str:
+    """단계 표에서 그 단계 행의 마지막 칸(상태)을 바꾼 사본."""
+    out = []
+    for line in md.splitlines(keepends=True):
+        if line.startswith(f"| {sid} |"):
+            cells = line.rstrip("\n").split("|")
+            cells[-2] = f" {value} "
+            line = "|".join(cells) + "\n"
+        out.append(line)
+    assert out != md.splitlines(keepends=True), f"{sid} 행이 없습니다"
+    return "".join(out)
+
+
+def test_multi_os_stage_table_reflects_posix_install():
+    _check_stage_table(_read(MULTI_OS))
+
+
+@pytest.mark.parametrize("sid,value", [
+    ("3a", "완료 — main 합침 0.29.0(2026-10-22)"),     # 합칠 때 브랜치 이름이 빠진 상태(2단계가 그랬다)
+    ("3b", "진행 중"),
+    ("3b", "완료 — 0.31.0"),
+])
+def test_stage_table_check_survives_progress(sid, value):
+    _check_stage_table(_set_status(_read(MULTI_OS), sid, value))
+
+
+def test_stage_table_check_still_catches_drift():
+    with pytest.raises(AssertionError):
+        _check_stage_table(_set_status(_read(MULTI_OS), "3a", "대기"))          # 끝난 단계가 되돌아감
+    with pytest.raises(AssertionError):
+        _check_stage_table(_read(MULTI_OS).replace("posix-install.md", "posix-setup.md"))
 
 
 def test_multi_os_install_table_matches_scripts():
@@ -338,38 +376,87 @@ def test_multi_os_install_table_matches_scripts():
 
 # ---------------------------------------------------------------- TODOS.md
 
-def _multi_os_todos() -> str:
-    return _section(_read(TODOS), r"멀티 OS")
-
-
-def test_todos_multi_os_progress():
-    sec = _multi_os_todos()
+def _check_todos_progress(todos: str) -> None:
+    sec = _section(todos, r"멀티 OS")
     a = _section(sec, r"^3a ")
     assert "posix-install.md" in a
     done = set()
     for m in re.finditer(r"(?m)^- \[x\] (\d)(?:·(\d))?단계", a):
         done.update(int(g) for g in m.groups() if g)
     assert done == set(range(1, 10)), f"3a 단계 1~9 중 완료 표시: {sorted(done)}"
-    assert re.search(r"(?m)^- \[ \] [^\n]*main 합침", a), "main 합침·릴리스가 남은 일로 있어야 합니다"
+    assert re.search(r"(?m)^- \[[ x]\] [^\n]*main 합침", a), "main 합침·릴리스 항목이 없습니다"
     b = _section(sec, r"^3b ")
-    assert re.search(r"(?m)^- \[ \] [^\n]*launchd", b) and re.search(r"(?m)^- \[ \] [^\n]*/get\.sh", b)
+    assert re.search(r"(?m)^- \[[ x]\] [^\n]*launchd", b) and re.search(r"(?m)^- \[[ x]\] [^\n]*/get\.sh", b)
 
 
-def test_todos_lists_windows_defects_from_spec_r15():
-    row = next(ln for ln in _read(SPEC).splitlines() if ln.startswith("| R15 |"))
+def test_todos_multi_os_progress():
+    _check_todos_progress(_read(TODOS))
+
+
+@pytest.mark.parametrize("sub,item", [("3a", r"main 합침"), ("3b", r"launchd"), ("3b", r"/get\.sh")])
+def test_todos_progress_check_survives_checking_items_off(sub, item):
+    todos = _read(TODOS)
+    part = _section(_section(todos, r"멀티 OS"), rf"^{sub} ")
+    line = next(ln for ln in part.splitlines() if re.match(rf"- \[ \] .*{item}", ln))
+    _check_todos_progress(todos.replace(line, line.replace("- [ ]", "- [x]", 1), 1))
+
+
+def _check_r15(spec: str, todos: str) -> None:
+    """명세 R15(Windows 기존 결함 ①~⑦)를 TODOS 가 별건으로 들고 있다 — 고쳐서 체크한 항목·지운 항목·통째로 지운 절은
+    괜찮다(진행). 명세에 없는 번호·순서 뒤바뀜, 남은 항목의 시작점 파일이 없는 것만 잡는다."""
+    row = next(ln for ln in spec.splitlines() if ln.startswith("| R15 |"))
     marks = re.findall(r"[①-⑳]", row)
     assert len(marks) == 7, f"명세 R15 의 항목 수가 바뀌었습니다: {marks}"
-    sec = _section(_read(TODOS), r"R15")
+    try:
+        sec = _section(todos, r"R15")
+    except AssertionError:
+        return                                         # 다 고쳐 절을 지웠다
     items = re.findall(r"(?m)^- \[([ x])\] ([①-⑳])(.*)$", sec)
-    assert [m for _, m, _ in items] == marks, "TODOS 의 Windows 기존 결함 항목이 명세 R15 ①~⑦ 과 다릅니다"
+    got = [m for _, m, _ in items]
+    assert got == [m for m in marks if m in got] and len(set(got)) == len(got), \
+        f"TODOS 의 Windows 기존 결함 항목이 명세 R15 ①~⑦ 과 다릅니다: {got}"
     missing = []
-    for _, mark, rest in items:
+    for box, mark, rest in items:
+        if box == "x":
+            continue                                   # 고친 것 — 시작점 파일이 그 뒤 바뀌었을 수 있다
         start = re.search(r"시작점: (.*)", rest)
         assert start, f"{mark} 에 시작점이 없습니다"
         paths = [p.split(":", 1)[0] for p in re.findall(r"`([^`]+)`", start.group(1))]
         assert paths, f"{mark} 의 시작점에 파일이 없습니다"
         missing += [f"{mark} {p}" for p in paths if not p.startswith("007/") and not (ROOT / p).exists()]
     assert not missing, f"없는 시작점 파일: {missing}"
+
+
+def test_todos_lists_windows_defects_from_spec_r15():
+    _check_r15(_read(SPEC), _read(TODOS))
+
+
+def _r15_lines(todos: str) -> list[str]:
+    """R15 절의 항목 줄(다른 절에도 ①… 목록이 있다)."""
+    return [ln for ln in _section(todos, r"R15").splitlines() if re.match(r"- \[[ x]\] [①-⑦]", ln)]
+
+
+def test_r15_check_survives_fixing_and_removing_items():
+    spec, todos = _read(SPEC), _read(TODOS)
+    one = _r15_lines(todos)[0]
+    fixed = one.replace("- [ ]", "- [x]", 1).replace("session_manager/updater.py", "session_manager/gone.py")
+    _check_r15(spec, todos.replace(one, fixed))                       # 고쳐서 체크(그 뒤 파일이 옮겨 감)
+    _check_r15(spec, todos.replace(_r15_lines(todos)[2] + "\n", ""))   # 고친 항목을 지움
+    head = next(ln for ln in todos.splitlines() if ln.startswith("## ") and "R15" in ln)
+    start = todos.index(head)
+    end = todos.index("\n## ", start + 1)
+    _check_r15(spec, todos[:start] + todos[end + 1:])                 # 다 고쳐 절째 지움
+
+
+def test_r15_check_still_catches_drift():
+    spec, todos = _read(SPEC), _read(TODOS)
+    lines = _r15_lines(todos)
+    with pytest.raises(AssertionError):                               # 명세에 없는 번호
+        _check_r15(spec, todos.replace(lines[-1], lines[-1] + "\n- [ ] ⑧ 새 결함 — 시작점: `install.ps1`"))
+    with pytest.raises(AssertionError):                               # 순서 뒤바뀜
+        _check_r15(spec, todos.replace(lines[0], "@@").replace(lines[1], lines[0]).replace("@@", lines[1]))
+    with pytest.raises(AssertionError):                               # 남은 항목의 시작점 파일이 없다
+        _check_r15(spec, todos.replace("session_manager/liveness.py", "session_manager/nowhere.py"))
 
 
 @pytest.mark.parametrize("doc", [README, TODOS, MULTI_OS], ids=lambda p: p.name)
