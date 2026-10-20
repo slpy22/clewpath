@@ -99,6 +99,16 @@ def test_sign_refuses_unknown_or_empty_platforms(tmp_path, key, arg):
     assert "플랫폼" in r.stderr and not (tmp_path / "m.jwt").exists()
 
 
+@pytest.mark.parametrize("arg", ["mac", "linux", "mac,linux"])
+def test_sign_refuses_platforms_without_windows(tmp_path, key, arg):
+    """win 은 늘 들어가야 한다(명세 4.6 구현 메모) — CP 는 최신 한 건만 주므로 win 이 빠진 릴리스가 최신인 동안 Windows Host 는
+    업데이트를 못 받고(check 가 unsupported, PWA 는 '최신'으로 보인다) get.ps1 은 platforms 를 보지 않아 그 zip 을 Windows 에
+    그대로 깐다. 이 규칙이 release.ps1 에만 있었다 — 문서의 수동 package→sign→publish 길도 같은 규칙."""
+    r = _sign(tmp_path, key[0], "--platforms", arg)
+    assert r.returncode == 2, r.stdout + r.stderr                       # argparse 사용법 오류 — 서명 전에
+    assert "win" in r.stderr and not (tmp_path / "m.jwt").exists()
+
+
 def test_parse_platforms_is_the_osdep_vocabulary():
     """값은 osdep.NAME 과 같은 낱말(win·mac·linux) — Host 가 자기 이름을 클레임에서 찾는다."""
     from session_manager import osdep
@@ -125,6 +135,8 @@ def _token(pem: Path, kid: str, **claims) -> str:
     ("win", 1, "[FAIL] platforms 클레임 모양이 이상합니다"),
     (["win", "bsd"], 1, "[FAIL] platforms 클레임 모양이 이상합니다"),
     ([], 1, "[FAIL] platforms 클레임 모양이 이상합니다"),
+    (["mac"], 1, "[FAIL] platforms 에 win 이 없습니다"),                   # 손으로 서명한 옛 매니페스트도 게시 전에 막는다
+    (["mac", "linux"], 1, "[FAIL] platforms 에 win 이 없습니다"),
 ])
 def test_verify_reports_platforms(tmp_path, key, monkeypatch, capsys, plats, rc, line):
     """verify 는 배포본(updater)이 받아들이는지 본 뒤 받는 OS 를 한 줄로 — release.ps1 이 그 줄을 -Platforms 와 대조한다."""

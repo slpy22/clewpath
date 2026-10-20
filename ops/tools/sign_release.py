@@ -69,13 +69,20 @@ DEFAULT_PLATFORMS = "win"
 
 
 def parse_platforms(text: str) -> list[str]:
-    """'win,mac' → ['win', 'mac'](정해진 순서). 모르는 이름·빈 목록은 거부 — 오타 하나가 그 OS 사용자 전체의 설치·업데이트를 끊는다."""
+    """'win,mac' → ['win', 'mac'](정해진 순서). 모르는 이름·빈 목록은 거부 — 오타 하나가 그 OS 사용자 전체의 설치·업데이트를 끊는다.
+
+    win 은 늘 들어가야 한다(release.ps1 과 같은 규칙 — 문서의 수동 sign·publish 길도 여기서 막는다). CP 는 최신 한 건만 주므로
+    win 이 빠진 릴리스가 최신인 동안 Windows Host 는 업데이트를 못 받고(PWA 는 '최신'으로 보인다), get.ps1 은 platforms 를
+    보지 않아 그 zip 을 Windows 에 그대로 깐다.
+    """
     names = [p for p in re.split(r"[\s,]+", (text or "").strip().lower()) if p]
     bad = sorted(set(names) - set(PLATFORMS))
     if bad:
         raise argparse.ArgumentTypeError(f"모르는 플랫폼: {', '.join(bad)} (쓸 수 있는 값: {', '.join(PLATFORMS)})")
     if not names:
         raise argparse.ArgumentTypeError("플랫폼이 비었습니다(예: --platforms win)")
+    if "win" not in names:
+        raise argparse.ArgumentTypeError("플랫폼에 win 이 없습니다 — 늘 넣어야 합니다(예: --platforms win,mac)")
     return [p for p in PLATFORMS if p in names]
 
 
@@ -204,6 +211,11 @@ def cmd_verify(a) -> int:
     if plats is None:
         print(f"[FAIL] platforms 클레임 모양이 이상합니다: {m.get('platforms')!r} — 어느 OS 의 Host 도 받지 않습니다")
         print(f"       -> 쓸 수 있는 값: {', '.join(PLATFORMS)} (sign --platforms win,mac)")
+        return 1
+    if "win" not in m.get("platforms", ["win"]):
+        print(f"[FAIL] platforms 에 win 이 없습니다: {m['platforms']!r} — 게시하면 Windows 는 업데이트를 못 받고 "
+              "get.ps1 은 이 zip 을 그대로 깝니다")
+        print("       -> sign --platforms win,… 로 다시 서명하세요")
         return 1
     print("[OK] 검증 통과")
     print(json.dumps(m, indent=2, ensure_ascii=False))

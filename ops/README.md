@@ -10,7 +10,7 @@
 | `start-public.ps1` | 운영자 PC 의 006 기동 (스케줄러 `SessionManager` → `deploy/start-hidden.vbs` 가 호출) | 라이브 비밀번호·토큰 포함 |
 | `start-relay.ps1` | 릴레이 로컬 디버그 (운영은 도커 `util-session-relay`) | 8787 충돌 주의 |
 | `package-for-user.ps1` | 배포 zip 생성 → `dist/` | 비밀·키 스캔 게이트, 맥·리눅스 `.sh` 형식 게이트(LF·BOM 없음·`#!/bin/sh`) 내장 |
-| `tools/sign_release.py` | 릴리스 keygen/sign/verify/publish | 실행: `python ops/tools/sign_release.py ...` · `sign --platforms`(받는 OS, 기본 win) |
+| `tools/sign_release.py` | 릴리스 keygen/sign/verify/publish | 실행: `python ops/tools/sign_release.py ...` · `sign --platforms`(받는 OS, 기본 win — win 은 늘 넣는다. 빠지면 sign 이 거부하고 verify 가 [FAIL]) |
 | `get.sh` | 맥·리눅스 원라인 설치 부트스트랩(`curl … \| sh`) — CP 공개 전 보관 | 아직 서빙되지 않음. 공개할 때 007 `control_plane/`로 옮기고 라우트·nginx 추가(docs/designs/posix-install.md 7절) |
 | `release-keys/` | ★ 릴리스 서명 개인키 | 유출=전 사용자 PC 장악 · 분실=업데이트 불능. 오프라인 백업 필수. 상세는 안의 README |
 | `deploy/start-hidden.vbs` | 스케줄러가 006 을 창 없이 띄우는 셸 | 로그를 `logs/server.log` 로 리다이렉트 |
