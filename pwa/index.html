@@ -1106,11 +1106,13 @@ class Conn{
     this.devToken=LS.getItem('sm_devtoken')||''; this.authed=false; this.cid=null; this.onauth=null;
     // E2EE: 페어링 때 받은 룸 키(sm_e2ee_<room>). 송수신을 각각 직렬화해
     // WebCrypto 비동기 완료 순서가 프레임 순서를 깨지 않게 한다(터미널 입력 필수).
-    this.e2eeKey=null; this._txq=Promise.resolve(); this._rxq=Promise.resolve(); }
-  async _seal(obj){
+    this.e2eeKey=null; this._txq=Promise.resolve(); this._rxq=Promise.resolve();
+    // 내려놓은 옛 소켓(PC 전환·로그아웃) — 늦게 온 그 소켓의 프레임·닫힘 통지는 지금 연결을 건드리지 않는다(logout)
+    this._gone=new WeakSet(); }
+  async _seal(obj, key=this.e2eeKey){
     const nonce=crypto.getRandomValues(new Uint8Array(12));
     const pt=new TextEncoder().encode(JSON.stringify(obj));
-    const ct=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv:nonce},this.e2eeKey,pt));
+    const ct=new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM',iv:nonce},key,pt));
     const raw=new Uint8Array(13+ct.length); raw[0]=1; raw.set(nonce,1); raw.set(ct,13);
     return {v:1,e:'a1',p:u8ToB64u(raw)};
   }
@@ -1121,10 +1123,13 @@ class Conn{
       {name:'AES-GCM',iv:raw.subarray(1,13)},this.e2eeKey,raw.subarray(13)));
     return JSON.parse(new TextDecoder().decode(pt));
   }
-  _tx(obj){                              // 유일한 송신 경로(암호화 여부 일원화)
-    if(!this.e2eeKey){ try{this.ws.send(JSON.stringify(obj));}catch(e){} return; }
-    this._txq=this._txq.then(async()=>{ const env=await this._seal(obj);
-      this.ws.send(JSON.stringify(env)); }).catch(()=>{});
+  // 유일한 송신 경로(암호화 여부 일원화). 보낼 소켓·키는 부를 때 정한다 — 봉인(비동기)을 기다리는 사이 연결이 바뀌어도
+  // 그 프레임은 처음 소켓·키로만 나간다(PC 를 바꿀 때 이전 PC 의 닫기 신호가 새 PC 키로 봉인돼 새 PC 로 가거나 버려지던 것).
+  // 스트림 손잡이는 자기를 연 소켓·키를 넘긴다(startResume·startTerminal·startMonitor).
+  _tx(obj, ws=this.ws, key=this.e2eeKey){
+    if(!key){ try{ws.send(JSON.stringify(obj));}catch(e){} return; }
+    this._txq=this._txq.then(async()=>{ const env=await this._seal(obj,key);
+      ws.send(JSON.stringify(env)); }).catch(()=>{});
   }
   _doAuth(){   // 기기 토큰이 있으면 릴레이 연결 직후 기기 인증 → {ok,error,data} (토큰 없으면 null)
     if(!this.devToken){ this.authed=false; return Promise.resolve(null); }
@@ -1147,11 +1152,12 @@ class Conn{
   }
   async connect(room,token){
     this._room=room; this._token=token;           // 재접속에 사용
-    // E2EE 키 로드(페어링 때 저장됨). 없으면 평문(구 페어링 호환).
-    this.e2eeKey=null;
+    // E2EE 키 로드(페어링 때 저장됨). 없으면 평문(구 페어링 호환). 키는 새 소켓과 함께 바꾼다(아래) — 먼저 비우면
+    // 키를 받는 사이 지금 소켓으로 나가는 프레임이 평문이 되거나 봉인에 실패했다.
+    let key=null;
     const rk=LS.getItem('sm_e2ee_'+room);
     if(rk && window.crypto && crypto.subtle){
-      try{ this.e2eeKey=await crypto.subtle.importKey('raw', b64uToU8(rk), 'AES-GCM',
+      try{ key=await crypto.subtle.importKey('raw', b64uToU8(rk), 'AES-GCM',
              false, ['encrypt','decrypt']); }catch(e){}
     }
     const cjwt=await clientJwt(false);            // 기기 전용 자격이 있으면 JWT 로
@@ -1160,22 +1166,26 @@ class Conn{
       let url=`${wsUrl()}?role=client&room=${encodeURIComponent(room)}&v=1`;
       if(cjwt) url+=`&jwt=${encodeURIComponent(cjwt)}`;
       else if(token) url+=`&token=${encodeURIComponent(token)}`;
-      const ws=new WebSocket(url); this.ws=ws;
+      const ws=new WebSocket(url); this.ws=ws; this.e2eeKey=key;
       ws.onopen=()=>{};
       const dispatch=(m)=>{
         if(m.type==='res'||m.type==='pong'){
+          // 이 응답의 대기는 먼저 꺼내 둔다 — 아래 onauth(자격 상실 → logout)가 남은 대기를 disconnected 로 정리해도 이 응답은 그대로 건넨다
+          const w=this.waiters.get(m.id); if(w) this.waiters.delete(m.id);
           if(m.error==='auth_required'&&this.onauth)this.onauth(false,'auth_required');
           if((m.error==='e2ee_key_mismatch'||m.error==='e2ee_required')&&!this._e2eeWarned){
             this._e2eeWarned=true;
             toast(m.error==='e2ee_required'
               ?'이 PC 가 종단 암호화를 요구합니다 - 새 QR 로 재페어링해 주세요'
               :'암호화 키가 맞지 않습니다 - 이 기기를 다시 페어링해 주세요'); }
-          const w=this.waiters.get(m.id);
-          if(w){this.waiters.delete(m.id); w(m);} return; }
-        if(m.type==='stream'){ const h=this.streams.get(m.id); if(h)h(m); return; }
+          if(w) w(m); return; }
+        // 서버가 끝낸 스트림(eof)은 핸들러부터 지운다 — 커넥터는 이미 그 rid 를 비웠으니 화면이 나중에 닫아도 stream_close 를
+        // 보내지 않는다(커넥터는 rid 만 보고 닫아, 그사이 같은 번호를 쓴 다른 기기의 파이프를 끊을 수 있다)
+        if(m.type==='stream'){ const h=this.streams.get(m.id); if(m.eof) this.streams.delete(m.id); if(h)h(m); return; }
         if(m.type==='notice'){ if(this.onnotice) this.onnotice(m); return; }   // 0.11.0: PC 가 이 기기를 해제/재발급
       };
       ws.onmessage=(ev)=>{
+        if(this._gone.has(ws)) return;   // 내려놓은 옛 소켓(PC 전환)의 늦은 프레임 — 이전 PC 의 응답·통지를 지금 화면에 섞지 않는다
         let m; try{m=JSON.parse(ev.data);}catch(e){return;}
         // 릴레이가 직접 보내는 제어 프레임(암호화 대상 아님)
         if(m.type==='hello'){ this.peer=!!m.peer_present; this.cid=m.cid||null;
@@ -1191,26 +1201,34 @@ class Conn{
           if(m.event==='agent_offline')this.peer=false; this.onstatus(true,this.peer); return; }
         // 나머지: 봉투면 복호(수신 직렬화로 순서 보존) 후 디스패치
         this._rxq=this._rxq.then(async()=>{
+          if(this._gone.has(ws)) return;
           if(m&&m.e==='a1'&&m.p){
             if(!this.e2eeKey) return;      // 키 없이 온 봉투는 처리 불가
             try{ m=await this._openEnv(m); }catch(e){ return; }
           }
+          if(this._gone.has(ws)) return;   // 복호하는 사이 내려놓았다
           dispatch(m);
         }).catch(()=>{});
       };
-      ws.onclose=(ev)=>{ this.onstatus(false,false);
+      ws.onclose=(ev)=>{
         if(!done){done=true;rej(new Error(this._closeMsg(ev&&ev.code)));}
-        for(const w of this.waiters.values())w({ok:false,error:'disconnected'});
-        this.waiters.clear();
-        // 릴레이가 끊기면 서버측 rid 는 전부 죽는다(커넥터가 client_offline 로 파이프 해체).
-        // 핸들러를 남겨두면 '살아있다고 착각하는 죽은 스트림'이 된다(재연결 후 조용한 사망) —
-        // eof 를 통지해 화면이 '연결 종료'를 그리고 termView 가 재접속 대상임을 알게 한다.
-        for(const h of this.streams.values()){ try{h({eof:true});}catch(e){} }
-        this.streams.clear();
+        // 내려놓은 옛 소켓(logout)의 늦은 닫힘 통지 — 정리는 logout 이 이미 했다. 새 연결(새 PC)의 대기 요청·스트림을 끊거나
+        // 재접속을 하나 더 걸지 않는다(새 연결이 선 뒤에 오면 그랬다)
+        if(this._gone.has(ws)) return;
+        this._drop();
         this._scheduleReconnect(ev&&ev.code); };
       ws.onerror=()=>{ if(!done){done=true;rej(new Error('연결 실패'));} };
     });
   }
+  // 지금 연결이 끊긴 것과 같게 정리한다(소켓 닫힘·logout): 대기 요청은 disconnected, 스트림은 eof, 상태 표시는 끊김.
+  // 릴레이가 끊기면 서버측 rid 는 전부 죽는다(커넥터가 client_offline 로 파이프 해체).
+  // 핸들러를 남겨두면 '살아있다고 착각하는 죽은 스트림'이 된다(재연결 후 조용한 사망) —
+  // eof 를 통지해 화면이 '연결 종료'를 그리고 termView 가 재접속 대상임을 알게 한다.
+  _drop(){ this.onstatus(false,false);
+    for(const w of this.waiters.values())w({ok:false,error:'disconnected'});
+    this.waiters.clear();
+    for(const h of this.streams.values()){ try{h({eof:true});}catch(e){} }
+    this.streams.clear(); }
   req(method,params={}){
     return new Promise((res)=>{
       // 소켓이 안 열려 있으면 즉시 실패. _tx 는 닫힌 소켓의 send 예외를 삼켜 프레임을 버리므로
@@ -1234,45 +1252,48 @@ class Conn{
       e.status=r.data.status; e.json=r.data.json; throw e; }
     return r.data.json;
   }
+  // 스트림 손잡이(재개·터미널·관제)는 자기를 연 소켓·키로만 보낸다 — PC 를 바꾼 뒤 남은 손잡이의 입력·닫기가 새 PC 로 가지 않게.
+  // 닫기(stream_close)는 아직 살아 있는 스트림에만: 서버가 끝냈거나(eof) 그 연결이 끊겼으면 커넥터에는 이미 그 rid 가 없고,
+  // 커넥터는 rid 만 보고 닫으므로 그사이 같은 번호를 쓴 다른 기기·다른 PC 의 파이프를 끊을 수 있다.
   startResume(sessionId,onFrame,inplace,cred){
-    const id='s'+(++this.seq); this.streams.set(id,onFrame);
+    const id='s'+(++this.seq), ws=this.ws, key=this.e2eeKey; this.streams.set(id,onFrame);
     this._tx({v:1,type:'req',id,method:'resume',
       params:{session_id:sessionId,skip:!(cred&&cred.safe),inplace:!!inplace,
         grace:(cred&&cred.grace)||'',otp:(cred&&cred.otp)||''}});
     return {
       id,
       input:(text)=>this._tx({v:1,type:'stream_in',id,
-        data:{type:'user',message:{role:'user',content:[{type:'text',text}]}}}),
+        data:{type:'user',message:{role:'user',content:[{type:'text',text}]}}}, ws, key),
       // 터미널처럼 서버에도 stream_close — 핸들러만 지우면 PC 의 재개 파이프(claude -p)가 릴레이가 끊길 때까지 남았다(1-2)
-      close:()=>{ try{this._tx({v:1,type:'stream_close',id});}catch(e){} this.streams.delete(id); },
+      close:()=>{ if(this.streams.delete(id)) this._tx({v:1,type:'stream_close',id}, ws, key); },
     };
   }
   // 웹터미널 스트림(원시 텍스트). onData(data,eof)
   startTerminal(sessionId,onData,cred){
-    const id='t'+(++this.seq);
+    const id='t'+(++this.seq), ws=this.ws, key=this.e2eeKey;
     this.streams.set(id,(m)=>{ if(m.eof){onData(null,true,m.error);} else onData(m.data,false); });
     this._tx({v:1,type:'req',id,method:'terminal',
       params:{session_id:sessionId,skip:!(cred&&cred.safe),   // safe=권한확인 유지(원격 승인용)
         grace:(cred&&cred.grace)||'',otp:(cred&&cred.otp)||'',
         screen:(cred&&cred.screen)||''}});   // 화면 커서: 재접속 때 이 화면이 못 본 델타만 리플레이
-    return { send:(obj)=>this._tx({v:1,type:'stream_in',id,data:obj}),
+    return { send:(obj)=>this._tx({v:1,type:'stream_in',id,data:obj}, ws, key),
              // close 는 서버에 stream_close 를 보내 이 rid 의 로컬 WS 를 끊게 한다
              // (배경 탭 detach: 화면만 뗌, PTY 는 persist 유지). 이게 없으면 릴레이
              // 모드에서 close 가 클라 핸들러만 지우고 서버 화면은 계속 붙어 있었다.
-             close:()=>{ try{this._tx({v:1,type:'stream_close',id});}catch(e){} this.streams.delete(id); } };
+             close:()=>{ if(this.streams.delete(id)) this._tx({v:1,type:'stream_close',id}, ws, key); } };
   }
   // 오케스트레이션 관제 스트림(읽기전용). onEvent(dataStr, eof, error)
   startMonitor(ids,manager,onEvent,gid){
-    const id='mon'+(++this.seq);
+    const id='mon'+(++this.seq), ws=this.ws, key=this.e2eeKey;
     this.streams.set(id,(m)=>{ if(m.eof){onEvent(null,true,m.error);} else onEvent(m.data,false); });
     this._tx({v:1,type:'req',id,method:'monitor',params:gid?{ids,manager,gid}:{ids,manager}});
     return {
       add:(sid,role)=>this._tx({v:1,type:'stream_in',id,
-        data:{type:'add',session_id:sid,role:role||'sub'}}),
+        data:{type:'add',session_id:sid,role:role||'sub'}}, ws, key),
       remove:(sid)=>this._tx({v:1,type:'stream_in',id,
-        data:{type:'remove',session_id:sid}}),
+        data:{type:'remove',session_id:sid}}, ws, key),
       // 관제·뷰어 실시간·탭 배지도 서버에 stream_close — PC 쪽 관제 파이프를 끊는다(1-2)
-      close:()=>{ try{this._tx({v:1,type:'stream_close',id});}catch(e){} this.streams.delete(id); },
+      close:()=>{ if(this.streams.delete(id)) this._tx({v:1,type:'stream_close',id}, ws, key); },
     };
   }
   _closeMsg(code){
@@ -1297,9 +1318,14 @@ class Conn{
       catch(e){ this._scheduleReconnect(); }
     },wait);
   }
+  // 지금 연결을 내려놓는다(로그아웃·PC 전환·자격 상실). 닫힘 통지(onclose)는 늦게 온다 — 그사이 새 연결이 서면 옛 통지가 새 연결의
+  // 대기 요청·스트림을 끊고 재접속을 하나 더 걸었다. 그래서 정리는 여기서 바로 하고 옛 소켓은 지금 연결에서 뗀다(_gone).
+  // 소켓은 이미 큐에 든 프레임(E2EE 봉인 대기 — PC 전환 직전 화면 정리의 stream_close 등)을 보낸 뒤에 닫는다.
   logout(){ this._stopped=true;
     if(this._retryTimer){clearTimeout(this._retryTimer);this._retryTimer=null;}
-    try{this.ws&&this.ws.close();}catch(e){} }
+    const ws=this.ws; this.ws=null;
+    if(ws){ this._gone.add(ws); this._txq.then(()=>{ try{ws.close();}catch(e){} }); }
+    this._drop(); }
 }
 
 const conn=new Conn();
@@ -3223,9 +3249,12 @@ async function loadTerminal(s, safe){
 let _liveViewer=null;
 function closeLiveViewer(){ if(_liveViewer){ try{_liveViewer.close();}catch(e){} _liveViewer=null; } }
 // 웹 재개(claude -p) 닫기 손잡이 — 상세 칸을 떠날 때(paneEnter)와 폰 '‹ 목록'에서 부른다. 응답 중이면 그 응답이 끝난 뒤 닫는다(결정 7)
-// now: PC 전환처럼 연결째 바뀌어 그 응답을 받을 수 없을 때 — 기다리지 않고 지금 닫는다(3단계)
+// now: PC 전환처럼 연결째 바뀌어 그 응답을 받을 수 없을 때 — 기다리지 않고 지금 닫는다(3단계). 응답 중에 떠나 닫기를 미뤄 둔
+// 재개(_leftResumes, 그 응답이 끝나면 스스로 빠진다)도 함께 — 남겨 두면 이전 PC 의 늦은 끝 알림이 새 PC 로 닫기 신호를 보냈다.
 let _liveResume=null;
-function closeLiveResume(now){ const r=_liveResume; _liveResume=null; if(r){ try{ r.close(now); }catch(e){} } }
+const _leftResumes=new Set();
+function closeLiveResume(now){ const r=_liveResume; _liveResume=null; if(r){ try{ r.close(now); }catch(e){} }
+  if(now) for(const x of [..._leftResumes]){ try{ x.close(true); }catch(e){} } }
 
 async function loadViewer(s){
   closeLiveViewer();
@@ -3373,10 +3402,14 @@ async function loadResume(s, inplace, safe){
         +'<span style="margin-left:6px">작업 중…</span>';
       stream.appendChild(busyEl); toEnd(); } }
     else if(busyEl){ busyEl.remove(); busyEl=null; } };
-  const shutNow=()=>{ if(shut) return; shut=true; try{ sess&&sess.close(); }catch(e){}
+  const shutNow=()=>{ if(shut) return; shut=true; _leftResumes.delete(handle); try{ sess&&sess.close(); }catch(e){}
     send.disabled=true; ta.disabled=true; push('result','— 화면을 떠나 재개를 닫았습니다 —'); };
   const closeAfterTurn=(unsent)=>{ shutNow(); toast('응답이 끝나 떠난 웹 재개를 닫았습니다'+(unsent?' — 보내지 않은 메시지 '+unsent+'개':'')); };
-  _liveResume={ close(now){ if(leaving) return; leaving=true; if(!busy||now) shutNow(); } };   // 닫기 손잡이 — 쓰는 함수가 다 생긴 뒤, 첫 await 전에 건다
+  // 닫기 손잡이 — 쓰는 함수가 다 생긴 뒤, 첫 await 전에 건다. 응답 중에 떠나면 닫기를 미루고 _leftResumes 에 남긴다.
+  // now 는 이미 떠나 미뤄 둔 것도 지금 닫는다(PC 전환 — closeLiveResume(true))
+  const handle={ close(now){ if(shut||(leaving&&!now)) return; leaving=true;
+    if(!busy||now) shutNow(); else _leftResumes.add(handle); } };
+  _liveResume=handle;
   // 과거 이력 먼저 표시(끝부분)
   const loading=push('msg sys','과거 대화 불러오는 중…');
   try{ const hist=await fetchRecentMessages(s.session_id,120); loading.remove();
@@ -5455,7 +5488,9 @@ function renderPairPcs(){
     const b=el('button','btn ghost','🖥 '+pcName(pc));
     b.style.cssText='justify-content:space-between;text-align:left';
     b.onclick=async()=>{
-      if(pc.room!==LS.getItem('sm_room')) pcSwitchReset();   // 다른 PC 로('＋ 새 PC 추가' 화면에서도) — 연결을 바꾸기 전에 이전 PC 화면·탭·파일을 비운다(3단계)
+      // 다른 PC 로('＋ 새 PC 추가' 화면에서도) — 연결을 바꾸기 전에 이전 PC 화면·탭·파일을 비우고(3단계) 이전 연결을 내려놓는다.
+      // 소켓을 남기면 이전 PC 의 파이프(웹 재개 claude -p·터미널 화면·관제)가 그 소켓이 닫힐 때까지 남았다(머리 줄 전환과 같게)
+      if(pc.room!==LS.getItem('sm_room')){ pcSwitchReset(); try{ conn.logout(); }catch(e){} }
       pcsActivate(pc.room);
       $('#p-err').textContent=''; b.textContent='연결 중… '+pcName(pc);
       conn._stopped=false; conn._retry=0;
@@ -6275,7 +6310,8 @@ function doPair(){
   else { LS.removeItem('sm_cs'); LS.removeItem('sm_cp'); LS.removeItem('sm_cjwt'); }
 
   $('#p-err').textContent=''; $('#p-go').textContent='연결 중…';
-  if(room!==prevRoom) pcSwitchReset();   // 다른 PC 를 페어링('＋ 새 PC 추가') — 연결을 바꾸기 전에 이전 PC 화면·탭·파일을 비운다(3단계)
+  // 다른 PC 를 페어링('＋ 새 PC 추가') — 연결을 바꾸기 전에 이전 PC 화면·탭·파일을 비우고(3단계) 이전 연결을 내려놓는다(머리 줄 전환과 같게)
+  if(room!==prevRoom){ pcSwitchReset(); try{ conn.logout(); }catch(e){} }
   conn._pairing=true; conn._stopped=false;
   conn.connect(room,token).then((r)=>{
     conn._pairing=false;

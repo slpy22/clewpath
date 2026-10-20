@@ -84,9 +84,16 @@ test("Conn: 터미널/모니터 스트림 라우팅, close 는 stream_close, 소
   // 서버가 2fa 로 스트림을 끝냄 → eof + error 전달
   ws.push({ type: "stream", id: ft.id, eof: true, error: "2fa_invalid" }); await tick();
   same(ev(ctx, "globalThis.__term").at(-1), [null, true, "2fa_invalid"]);
-  // 터미널 close → 서버에 stream_close(배경 탭 detach 계약)
+  // 서버가 이미 끝낸 스트림은 나중에 닫아도 stream_close 를 보내지 않는다 — 커넥터는 그 rid 를 비웠고 rid 만 보고 닫으므로
+  // 그사이 같은 번호를 쓴 다른 기기의 파이프를 끊을 수 있다(quick-switch 검토)
+  const nSent = ws.sent.length;
   ev(ctx, "globalThis.__h.close()");
-  same(ws.sent.at(-1), { v: 1, type: "stream_close", id: ft.id });
+  assert.equal(ws.sent.length, nSent, "끝난 스트림의 close 는 서버로 보내지 않는다");
+  // 살아 있는 터미널 close → 서버에 stream_close(배경 탭 detach 계약)
+  ev(ctx, "globalThis.__h2 = conn.startTerminal('" + A + "', () => {}, {})");
+  const ft2 = ws.sent.at(-1);
+  ev(ctx, "globalThis.__h2.close()");
+  same(ws.sent.at(-1), { v: 1, type: "stream_close", id: ft2.id });
   // 새 스트림 + 미해결 요청을 둔 채 소켓이 끊기면: waiter 는 disconnected, 스트림은 eof, 재연결 예약
   ev(ctx, "globalThis.__term2 = []; conn.startTerminal('" + A + "', (d, eof) => globalThis.__term2.push([d, eof]), {})");
   const pend = ev(ctx, "conn.req('ping')");
