@@ -1496,21 +1496,13 @@ def create_app() -> FastAPI:
     async def ws_api_resume_inplace(websocket: WebSocket, session_id: str):
         token = (websocket.query_params.get("token")
                  or auth.bearer(websocket.headers.get("authorization")))
+        # 서비스 대장 S1(0.24.0): 원본 직접 재개는 로컬만(PWA·MCP, 폰은 커넥터가 루프백으로 열고 2FA 는 커넥터가 검사).
+        # 외부 API 토큰은 거부 — 2차 인증 자리만 있고 구현이 없어 토큰 하나로 모든 원본을 자동 허용으로 열 수 있었다.
         if not _is_local(websocket):
-            if not auth.valid_api_token(token):
-                await websocket.close(code=1008)
-                return
-            ok, reason, _ = policy.check_quota(token)
-            if not ok:
-                policy.audit({"event": "resume_inplace", "token": policy.token_id(token),
-                              "session": session_id, "blocked": reason})
-                await websocket.close(code=1008)
-                return
-        # ── SECURITY HOOK ──────────────────────────────────────────────
-        # in-place 는 실제 세션을 조작하는 특권 동작. 여기에 2차 인증을 추가한다:
-        #   otp = websocket.query_params.get("otp")
-        #   if not auth.verify_owner_2fa(otp): await websocket.close(4403); return
-        # ───────────────────────────────────────────────────────────────
+            policy.audit({"event": "resume_inplace", "token": policy.token_id(token),
+                          "session": session_id, "blocked": "local_only"})
+            await websocket.close(code=1008)
+            return
         skip = websocket.query_params.get("skip", "1") not in ("0", "false", "False")
         policy.record_usage(token, 0, count_call=True)
         policy.audit({"event": "resume_inplace", "token": policy.token_id(token),
@@ -1880,18 +1872,26 @@ def create_app() -> FastAPI:
         return {"session_id": session_id, "profile": profiles.get(session_id),
                 "effective": policy.effective_guardrails(session_id)}
 
+    # 서비스 대장 S1(0.24.0): 외부 API 토큰으로는 가드레일·라벨·이름을 못 바꾼다 — 로컬(MCP·이 PC)만.
+    # PWA·폰은 /api/sessions/… 경로를 쓰므로 영향 없음. docs/designs/service-registry.md §5
     @app.post("/api/v1/sessions/{session_id}/profile")
-    def api_v1_set_profile(session_id: str, body: ProfileReq):
+    def api_v1_set_profile(session_id: str, body: ProfileReq, request: Request):
+        if not _is_local(request):
+            return JSONResponse({"error": "local_only"}, status_code=403)
         rec = profiles.set_record(session_id, **body.to_fields())
         return {"session_id": session_id, "profile": rec}
 
     @app.post("/api/v1/sessions/{session_id}/labels")
-    def api_v1_set_labels(session_id: str, body: LabelReq):
+    def api_v1_set_labels(session_id: str, body: LabelReq, request: Request):
+        if not _is_local(request):
+            return JSONResponse({"error": "local_only"}, status_code=403)
         rec = labels.set_record(session_id, **body.to_fields())
         return {"session_id": session_id, "record": rec}
 
     @app.post("/api/v1/sessions/{session_id}/title")
-    def api_v1_set_title(session_id: str, body: TitleReq):
+    def api_v1_set_title(session_id: str, body: TitleReq, request: Request):
+        if not _is_local(request):
+            return JSONResponse({"error": "local_only"}, status_code=403)
         r = native_title.set_native_title(session_id, body.title,
                                           allow_live=body.force)
         code = 200 if r.get("ok") else (409 if r.get("error") == "session_live" else 400)
