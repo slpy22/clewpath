@@ -46,6 +46,7 @@ test("Conn: connect(hello)→상태 콜백, req 는 id 로 응답 매칭, 소켓
   same((await p2).data, { n: 2 }); same((await p1).data, { sessions: [] });
   ws.push({ type: "res", id: "c999", ok: true });                     // 모르는 id 는 무시
   ws.push({ type: "peer", event: "agent_offline" }); ws.push({ type: "peer", event: "agent_online" });
+  await tick();                                                        // 피어 통지도 받은 순서대로 줄을 선다(_rxq, 검토 4회차)
   same(ev(ctx, "globalThis.__st").slice(1), [[true, false], [true, true]]);
   // api(): HTTP 상태를 예외로, 정상은 json 만
   const pa = ev(ctx, "conn.api('GET', '/api/x').then(v => ['ok', v], e => ['err', e.message, e.status])");
@@ -77,15 +78,23 @@ test("Conn: 터미널/모니터 스트림 라우팅, close 는 stream_close, 소
   same(ws.sent.slice(-3).map((f) => [f.type, f.id, f.data]), [
     ["stream_in", ft.id, { type: "input", data: "ls" }], ["stream_in", fm.id, { type: "add", session_id: "c", role: "sub" }],
     ["stream_in", fm.id, { type: "remove", session_id: "b" }]]);
-  ev(ctx, "globalThis.__m.close()");                                  // 모니터 close 는 핸들러만
+  ev(ctx, "globalThis.__m.close()");                                  // 모니터 close 도 서버에 stream_close(PC 쪽 관제 파이프 해체) + 핸들러 제거
+  same(ws.sent.at(-1), { v: 1, type: "stream_close", id: fm.id }, "핸들러만 지우면 PC 쪽 파이프가 남는다(quick-switch 1-2)");
   ws.push({ type: "stream", id: fm.id, data: "late" }); await tick();
   assert.equal(ev(ctx, "globalThis.__mon.length"), 1);
   // 서버가 2fa 로 스트림을 끝냄 → eof + error 전달
   ws.push({ type: "stream", id: ft.id, eof: true, error: "2fa_invalid" }); await tick();
   same(ev(ctx, "globalThis.__term").at(-1), [null, true, "2fa_invalid"]);
-  // 터미널 close → 서버에 stream_close(배경 탭 detach 계약)
+  // 서버가 이미 끝낸 스트림은 나중에 닫아도 stream_close 를 보내지 않는다 — 커넥터는 그 rid 를 비웠고 rid 만 보고 닫으므로
+  // 그사이 같은 번호를 쓴 다른 기기의 파이프를 끊을 수 있다(quick-switch 검토)
+  const nSent = ws.sent.length;
   ev(ctx, "globalThis.__h.close()");
-  same(ws.sent.at(-1), { v: 1, type: "stream_close", id: ft.id });
+  assert.equal(ws.sent.length, nSent, "끝난 스트림의 close 는 서버로 보내지 않는다");
+  // 살아 있는 터미널 close → 서버에 stream_close(배경 탭 detach 계약)
+  ev(ctx, "globalThis.__h2 = conn.startTerminal('" + A + "', () => {}, {})");
+  const ft2 = ws.sent.at(-1);
+  ev(ctx, "globalThis.__h2.close()");
+  same(ws.sent.at(-1), { v: 1, type: "stream_close", id: ft2.id });
   // 새 스트림 + 미해결 요청을 둔 채 소켓이 끊기면: waiter 는 disconnected, 스트림은 eof, 재연결 예약
   ev(ctx, "globalThis.__term2 = []; conn.startTerminal('" + A + "', (d, eof) => globalThis.__term2.push([d, eof]), {})");
   const pend = ev(ctx, "conn.req('ping')");
@@ -97,7 +106,7 @@ test("Conn: 터미널/모니터 스트림 라우팅, close 는 stream_close, 소
   same(ev(ctx, "globalThis.__sched"), [4402]);
 });
 
-test("Conn: 기기 인증 — devToken 있으면 hello 직후 auth, 성공 시 ver 표시·pv 경고 1회, auth_required 는 onauth(false)", async () => {
+test("Conn: 기기 인증 — devToken 있으면 hello 직후 auth, 성공 시 ver 표시·pv 경고 1회, auth_required 는 다시 인증해 무효면 onauth(false)", async () => {
   const ctx = await load();
   ctx.localStorage.setItem("sm_devtoken", "dev-1");
   ev(ctx, "conn.devToken = 'dev-1'; globalThis.__auth = []; conn.onauth = (ok, err) => globalThis.__auth.push([ok, err]);"
@@ -117,11 +126,16 @@ test("Conn: 기기 인증 — devToken 있으면 hello 직후 auth, 성공 시 v
   assert.equal(ev(ctx, "conn.authed"), true); assert.equal(ev(ctx, "globalThis.__ver"), "0.9.5");
   same(ev(ctx, "globalThis.__auth"), [[true, undefined]]);
   assert.ok(ev(ctx, "globalThis.__toasts")[0].includes("더 새 통신 규약"), "Host pv 가 높으면 업데이트 안내");
-  // 이후 아무 응답이 auth_required 면(폐기 기기) onauth(false)
+  // 이후 응답이 auth_required 면 기기 토큰으로 다시 인증한다(PC 가 다시 떠 인증이 비었을 수 있다 — 검토 3회차). 폐기 기기면
+  // 다시 인증이 auth_invalid 를 받아 onauth(false) — 원래 요청은 auth_required 그대로 끝난다
   const q = ev(ctx, "conn.req('list_sessions')"); await tick();
   ws.push({ type: "res", id: ws.sent.at(-1).id, ok: false, error: "auth_required" });
-  await q;
-  same(ev(ctx, "globalThis.__auth").at(-1), [false, "auth_required"]);
+  await tick(); await tick();
+  const ra = ws.sent.at(-1);
+  assert.equal(ra.method, "auth"); assert.equal(ra.params.token, "dev-1");
+  ws.push({ type: "res", id: ra.id, ok: false, error: "auth_invalid" });
+  same((await q).error, "auth_required");
+  same(ev(ctx, "globalThis.__auth").at(-1), [false, "auth_invalid"]);
   ev(ctx, "conn._stopped = true"); ws.close();
 });
 
@@ -149,7 +163,7 @@ test("Conn: 재연결 백오프(1s→2s→…→30s, 6회 상한)·타이머 중
   }
   same(waits, [1000, 2000, 4000, 8000, 16000, 30000, 30000]);
   // 타이머 콜백: 4402(자격 만료 추정) 는 JWT 강제 갱신 → connect 성공 → 카운터 리셋·목록·전경 탭
-  ev(ctx, "conn._retry = 3; conn.connect = async () => {}");
+  ev(ctx, "conn._retry = 3; conn.connect = async () => { conn.peer = true; }");   // PC 도 붙어 있는 재연결(PC 가 꺼져 있으면 '다시 연결됨'이 아니다 — qs-conn)
   ev(ctx, "conn._scheduleReconnect(4402)");
   await timers.at(-1).f(); await tick();
   assert.equal(ev(ctx, "globalThis.__jwt"), 1); assert.equal(ev(ctx, "conn._retry"), 0);

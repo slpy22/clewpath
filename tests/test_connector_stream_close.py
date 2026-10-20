@@ -111,3 +111,34 @@ async def test_stream_close_only_targets_its_rid(monkeypatch):
     taskB.cancel()                          # 정리
     with pytest.raises(asyncio.CancelledError):
         await taskB
+
+
+@pytest.mark.asyncio
+async def test_stream_close_ends_inplace_resume_pipe(monkeypatch):
+    """웹 재개(in-place, 폰은 2차 인증 유예로 연다)도 stream_close 로 그 파이프를 끊는다.
+
+    로컬 WS 가 닫히면 Host 가 claude -p 를 끝낸다(webapi.run_resume_api 의 finally). PWA 의 릴레이 재개
+    close 가 앱 쪽 핸들러만 지우던 때는 릴레이가 끊길 때까지 claude -p 가 남았다(quick-switch 1-2)."""
+    conn = _conn()
+    closed = {"v": False}
+    urls = []
+
+    def fake_connect(url, **kw):
+        urls.append(url)
+        return _BlockCM(closed)
+    monkeypatch.setattr("session_manager.connector.connect", fake_connect)
+    monkeypatch.setattr("session_manager.owner2fa.required", lambda: True)
+    monkeypatch.setattr("session_manager.owner2fa.verify_grace", lambda g: g == "g-ok")
+    monkeypatch.setattr("session_manager.owner2fa.verify", lambda o: False)
+
+    await conn._start_resume("s7", {"session_id": "abc", "inplace": True, "grace": "g-ok", "skip": True})
+    task = conn.streams["s7"]
+    for _ in range(3):
+        await asyncio.sleep(0)
+    assert urls and "/api/v1/resume-inplace/abc?" in urls[0]
+
+    await conn._on_frame(json.dumps({"v": 1, "type": "stream_close", "id": "s7"}))
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, 5)    # 못 끊으면 매달리지 않고 TimeoutError 로 실패
+    assert closed["v"] is True             # 로컬 재개 WS 닫힘 → Host 가 claude -p 종료
+    assert "s7" not in conn.streams and "s7" not in conn.stream_in
