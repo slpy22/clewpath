@@ -1511,6 +1511,7 @@ async function loadList(q){
     SESSIONS=data.sessions||[];
     if(typeof data.now==='number') CLOCK_SKEW=data.now-Date.now()/1000;
     rerender();
+    fbRetryAfterList();            // 목록 전에 연 파일 탭의 '세션을 찾지 못했습니다'를 굳히지 않는다(quick-switch §4-2)
     if(paneDetail().classList.contains('term-mode')) renderTabBarSoon();   // 살아있는 탭 스트립의 상태 갱신
     consumePendingOpen();          // 알림 클릭으로 진입한 경우 해당 세션 자동 열기
     restoreTabsOnce();             // 저장된 터미널 탭 워킹셋 복원(1회, 화면 탈취 없이 목록만)
@@ -3840,6 +3841,15 @@ function fbRestoreState(){ if(FB.restored) return; FB.restored=true;
   FB.open=new Set((st&&st.open)||[]); FB.sort=(st&&st.sort)==='mtime'?'mtime':'name';
   FB.tabs=((st&&st.tabs)||[]).slice(0,20).filter(t=>t&&t.root&&t.path).map(t=>fbNewTab(t.root,t.path,t.pinned));
   FB.active=(st&&st.active&&FB.tabs.some(t=>t.id===st.active))?st.active:(FB.tabs[0]?FB.tabs[0].id:null); }
+// 목록을 받기 전에 연 탭은 뿌리(세션)를 못 찾아 '세션을 찾지 못했습니다'로 남는다 — 목록이 오면 뿌리를 새로 셈해, 이제 찾을 수 있는
+// 탭만 오류를 지우고 한 번 다시 받는다(굳지 않게, quick-switch §4-2). 여전히 그 폴더 세션이 없으면 오류 그대로(다시 받지 않음).
+function fbRetryAfterList(){
+  if(!FB.tabs.length) return;
+  fbRoots();
+  let again=false;
+  for(const t of FB.tabs){ if(t.err&&t.err.error==='no_session'&&fbRootSid(t.root)){ t.err=null; if(t.id===FB.active) again=true; } }
+  if(again&&paneDetail().classList.contains('fb-mode')) fbRenderActive();
+}
 // 세션 상세의 📂 파일 보기 → 그 세션 폴더를 펼쳐서 보여 준다
 function fbUseSession(s){ if(!s||!s.cwd) return; fbRestoreState();
   const id=fbId(s.cwd.toLowerCase(),''); FB.open.add(id); FB.sel=id; FB.reveal=id; FB.q=''; fbSaveState(); }

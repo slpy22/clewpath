@@ -452,3 +452,17 @@ test("T18 터미널을 짓는 사이(xterm 첫 로드) 다른 화면으로 가�
                      termMode: pd.classList.contains("term-mode"), viewerLive: ev(ctx, "_liveViewer !== null"), kind: ev(ctx, "PANE_NOW.kind") },
                    { termConns: 0, main: null, onWin: null, ro: null, termMode: false, viewerLive: true, kind: "viewer" });
 });
+
+test("T19 파일: 목록이 와도 그 폴더를 쓰는 세션이 없으면 오류 그대로(다시 받지 않음), 생기면 한 번만 다시 받는다", async () => {
+  const { ctx } = await bootFiles({ withSessions: false });
+  ev(ctx, "fbRestoreState(); fbShowEditor()"); await tick(); await tick();
+  const now = () => ({ err: ev(ctx, "(FB.tabs.find((t) => t.id === FB.active).err || {}).error || null"),
+                       fetched: ev(ctx, "__calls.filter((c) => c[1].endsWith('/file')).length") });
+  ev(ctx, "T.list = async () => ({ sessions: [{ session_id: 's9', title: 'Z', cwd: 'F:\\\\other', mtime: 5 }] })");
+  await ev(ctx, "loadList()"); await tick(RENDER);               // 다른 폴더 세션만 있는 목록
+  const still = now();
+  ev(ctx, `T.list = async () => ({ sessions: [${S1}] })`);
+  await ev(ctx, "loadList()"); await tick(RENDER);
+  await ev(ctx, "loadList()"); await tick(RENDER);               // 이미 받은 탭은 다시 받지 않는다
+  assert.deepEqual({ still, after: now() }, { still: { err: "no_session", fetched: 0 }, after: { err: null, fetched: 1 } });
+});
