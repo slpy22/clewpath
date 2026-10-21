@@ -2,7 +2,8 @@
 // 두 관점(화면·기존 흐름 / 단축키·터미널·폰)에서 재현된 것만 고친다. 재현은 고치기 전에 이 파일로 옮겨 실패를 먼저 확인했다.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { load, ev, stubEl } from "./harness.mjs";
+import { readFileSync } from "node:fs";
+import { load, ev, stubEl, INDEX } from "./harness.mjs";
 
 const A = "aaaaaaaa-1111-2222-3333-444444444444";
 const B = "bbbbbbbb-1111-2222-3333-444444444444";
@@ -363,4 +364,22 @@ test("T102 접근성: 제목(#qs-title)은 PC 에선 글자 — 막힌 단추(�
     pcAgain: PC,
     ov: [null, "true", "false"],
   });
+});
+
+// ---------------------------------------------------------------- 폰 머리 줄 폭(검토 hdr-cmp)
+// 제목 ▾(약 11px)와 사이 4px 만큼 제목·PC 고르기 칸이 함께 줄어 0.30.0 에서 다 보이던 짧은 제목이 '세…'로 잘렸다(360·390·412px, 릴레이 🖧 +
+// PC 고르기). ▾ 를 작게(.7em, 사이 2px) 하고 폰 머리 줄 사이 간격을 10→8px 로 줄여 그 폭을 돌려준다. 배치는 헤드리스 크롬으로 0.30.0 과 견줘
+// 쟀다(320~430px × 릴레이·로컬 × 제목 5 × PC 이름 2 = 120가지: 0.30.0 에서 다 보이던 제목이 잘리는 경우 7 → 0, 넘침 0, ▾ 늘 보임 —
+// qs31-fix/hdr-measure.cjs). 여기서는 그 규칙이 그대로 있는지만 지킨다(T87 처럼 CSS 문자열).
+test("T103 폰 머리 줄: 제목 ▾ 가 짧은 제목을 자르지 않게 ▾ 는 작게(.7em·사이 2px), 폰 머리 줄 사이 간격은 8px — PC 머리 줄(10px)·사고 구역 규칙은 그대로", () => {
+  const html = readFileSync(INDEX, "utf8").replace(/\r/g, "");
+  const sec = html.slice(html.indexOf("/* ---- 화면 바로가기(quick-switch"), html.indexOf("/* ---- 화면 바로가기 끝 ---- */"));
+  const flat = html.replace(/\s+/g, " ");
+  assert.deepEqual({
+    caret: sec.includes("#qs-title .qs-caret{flex:none;font-size:.7em;"),
+    titleGap: sec.includes("#qs-title{gap:2px;"),
+    phoneGap: sec.includes("@media (max-width:879px){ header{gap:8px} }"),
+    pcHeader: flat.includes("header{display:flex;align-items:center;gap:10px;"),
+    newRulesOnly: !/#main|#paneDetail|!important|side-off|term-mode/.test(sec),
+  }, { caret: true, titleGap: true, phoneGap: true, pcHeader: true, newRulesOnly: true });
 });

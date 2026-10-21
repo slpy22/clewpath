@@ -76,10 +76,10 @@
   /* ---- 화면 바로가기(quick-switch §3-4·§3-5·§5) — 상세 칸 화면만 바꾼다(목록 칸만 바꾸는 탭 막대의 짝) ----
      PC(880px~) = 머리 줄 오른쪽 단추 4개(880~1099px 는 그림만, 마우스를 올리면 이름) · 폰 = 제목 ▾ → 아래 시트.
      새 규칙만 더한다 — 칸 배치 격자·상세 칸 모드 규칙·터미널 격자·◧ 규칙은 그대로(0.22.13·0.27.2 '칸 사라짐' 사고 구역) */
-  #qs-title{gap:4px;padding:4px 6px;margin:-4px -6px;border-radius:9px;text-align:left;line-height:inherit}
+  #qs-title{gap:2px;padding:4px 6px;margin:-4px -6px;border-radius:9px;text-align:left;line-height:inherit}
   #qs-title:active{background:var(--surface2)}
   #head{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  #qs-title .qs-caret{flex:none;font-size:.78em;color:var(--muted)}   /* 제목이 길어도 ▾ 는 잘리지 않게 */
+  #qs-title .qs-caret{flex:none;font-size:.7em;color:var(--muted)}   /* 제목이 길어도 ▾ 는 잘리지 않게 */
   #qs{display:none}
   .qtag{flex:none;font-size:.74rem;color:var(--muted);white-space:nowrap}
   .qtag.now{color:var(--accent);font-weight:650}
@@ -88,6 +88,9 @@
   .popbg.qs-sheet{z-index:61}
   .pop.qs-sheet{z-index:62}   /* 폰 관제 덮개(z 60) 머리 ▾ 로 열어도 덮개 위에 */
   .backbar .vtitle{flex:1;min-width:0;padding:0 4px;font-weight:650;font-size:.9rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* 폰: ▾ 가 먹는 폭(약 11px)만큼 머리 줄 사이 간격을 줄인다(10→8px) — 0.30.0 에서 다 보이던 짧은 제목('세션')이 '세…'로 잘렸다
+     (검토 실측 360·390·412px, 릴레이 🖧 + PC 고르기). PC 는 ▾ 가 없어 그대로 */
+  @media (max-width:879px){ header{gap:8px} }
   @media (min-width:880px){
     #qs-title{pointer-events:none;cursor:default}   /* PC 제목은 글자 그대로 — 입구는 단추 4개 */
     #qs-title .qs-caret{display:none}
