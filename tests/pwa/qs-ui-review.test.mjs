@@ -135,7 +135,7 @@ test("T95 PC 전환 뒤 🎬 단추·폰 시트·빈 칸 '최근 화면'은 새 
     // 이전 PC 의 팀 목록을 받는 사이 PC 를 바꿨다 — 늦게 온 그 목록이 새 PC 의 받아 둔 팀 목록이 되지 않는다
     const tickPath = p.endsWith("(20초 갱신)");
     const { ctx, nav } = await boot({ room: "roomA", mem: NONE, more: { roomB: { ...NONE, monitor: { team: "TM", gid: "gB", name: "B 개발팀" } } },
-      setup: (sb) => sb.localStorage.setItem("sm_list_view", "groups"), ready: !tickPath ? false : true,
+      setup: (sb) => sb.localStorage.setItem("sm_list_view", "groups"), ready: tickPath,
       pre: `__teams = ${JSON.stringify([team("TM", "A 영업팀", "gA", A)])};` });
     ev(ctx, `__teams = () => new Promise((r) => { globalThis.__lateA = () => r(${JSON.stringify([team("TM", "A 영업팀", "gA", A)])}); });`);
     if (tickPath) { ctx.listTick(); await tick(); } else { ev(ctx, "loadList()"); await tick(); }
@@ -181,17 +181,17 @@ test("T96 목록에 아직 없는 터미널(방금 연 🧑‍💼 비서): 보�
       r.lists = ev(ctx, "__lists");
     }
     Object.assign(r, { at: at(ctx), tabs: ev(ctx, "TABS.list.map((t) => sessLabel(t.s)).join(',')"), toast: ev(ctx, "__toasts.join('|')"),
-                       closedLive: ev(ctx, "__tc.filter((h) => !h.closed).length") });
+                       liveStreams: ev(ctx, "__tc.filter((h) => !h.closed).length") });
     return r;
   });
   const TIP = "터미널 — 🧑‍💼 비서 · Alt+1";
   assert.deepEqual(got, {
-    "릴레이|보는 중": { btn: ["on", TIP], same: true, at: "terminal:d", tabs: "🧑‍💼 비서", toast: "", closedLive: 1 },
-    "로컬|보는 중": { btn: ["on", TIP], same: true, at: "terminal:d", tabs: "🧑‍💼 비서", toast: "", closedLive: 0 },   // 로컬은 터미널 창(iframe)
-    "릴레이|떠났다 돌아옴": { btn: ["", TIP], lists: 1, at: "terminal:d", tabs: "🧑‍💼 비서", toast: "", closedLive: 1 },
-    "로컬|떠났다 돌아옴": { btn: ["", TIP], lists: 1, at: "terminal:d", tabs: "🧑‍💼 비서", toast: "", closedLive: 0 },
+    "릴레이|보는 중": { btn: ["on", TIP], same: true, at: "terminal:d", tabs: "🧑‍💼 비서", toast: "", liveStreams: 1 },
+    "로컬|보는 중": { btn: ["on", TIP], same: true, at: "terminal:d", tabs: "🧑‍💼 비서", toast: "", liveStreams: 0 },   // 로컬은 터미널 창(iframe)
+    "릴레이|떠났다 돌아옴": { btn: ["", TIP], lists: 1, at: "terminal:d", tabs: "🧑‍💼 비서", toast: "", liveStreams: 1 },
+    "로컬|떠났다 돌아옴": { btn: ["", TIP], lists: 1, at: "terminal:d", tabs: "🧑‍💼 비서", toast: "", liveStreams: 0 },
     "릴레이|떠났다 돌아옴(새 목록에도 없음)": { btn: ["", TIP], lists: 1, at: "files:a.py", tabs: "",
-      toast: "열어 둔 터미널이 없습니다 — 세션 줄의 🖥/▶ 로 여세요", closedLive: 0 },
+      toast: "열어 둔 터미널이 없습니다 — 세션 줄의 🖥/▶ 로 여세요", liveStreams: 0 },
   });
 });
 
