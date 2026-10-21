@@ -262,3 +262,31 @@ test("T99 첫 목록 전 폰 관제 덮개 ▾ 에서 다른 화면을 고르면
     "🎬 끊긴 덮개": { log: SAID, overlay: false, monClosed: 1 },
   });
 });
+
+// ---------------------------------------------------------------- 빈 칸 '최근 화면' 키보드 커서(검토 s7)
+// 💬 칸 보조 글의 '본 시각'(방금 → 1분 전 → …)이 매분 바뀌어 20초 갱신이 단추를 통째로 새로 만들었다 — Tab 으로 둔 커서가 body 로 빠지고
+// Enter 가 먹지 않았다(헤드리스 크롬 실측). '모습이 같으면 다시 그리지 않는다(포커스 유지)'의 뜻대로 글자만 고친다.
+test("T100 빈 상세 칸 '최근 화면': 글자만 바뀌면(방금 → 1분 전) 단추를 새로 만들지 않고 글자만 고친다(키보드 커서 유지) — 차례가 바뀌어 새로 그릴 때는 커서가 있던 칸의 새 단추로 커서를 옮긴다", async () => {
+  const pane = (m) => JSON.stringify(m);
+  const { ctx, pd } = await boot({ mem: NONE,
+    setup: (sb) => sb.localStorage.setItem("sm_pane_relay", pane({ viewer: { sid: B, kind: "viewer", name: "B", at: Date.now() - 50000 } })) });
+  const buttons = () => pd.children[0].children[1].children[1].children;
+  const label = (b) => b.dataset.k + ":" + b.children[1].children[0].textContent + " · " + b.children[1].children[1].textContent;
+  const before = buttons().map(label), b0 = buttons()[0];
+  ctx.document.activeElement = b0;                                      // Tab 으로 💬 단추에 커서
+  ctx.localStorage.setItem("sm_pane_relay", pane({ viewer: { sid: B, kind: "viewer", name: "B", at: Date.now() - 61000 } }));   // 1분이 지났다
+  await ctx.__intervals.find((x) => x.ms === 20000).f(); await tick(QS);   // 20초 갱신 한 번
+  const minute = { same: buttons()[0] === b0, texts: buttons().map(label), tip: buttons()[0].title };
+  // 관제 기억이 새로 생기고 그것이 마지막 화면(맨 앞) — 차례가 바뀌어 새로 그린다. 커서는 💬 칸의 새 단추로
+  const mk = ctx.document.createElement;
+  ctx.document.createElement = (t) => { const e = mk(t); if (t === "button") e.focus = () => { ctx.__focused = e; }; return e; };
+  ctx.localStorage.setItem("sm_qs_last_relay", "monitor");
+  ev(ctx, "paneMemSet('monitor', { team: 'T1', gid: 'g1', name: '팀1', at: Date.now() })"); await tick(QS);
+  const rebuilt = { texts: buttons().map((b) => b.dataset.k), focused: ctx.__focused ? ctx.__focused.dataset.k : null,
+                    fresh: ctx.__focused === buttons()[1] && buttons()[1] !== b0 };
+  assert.deepEqual({ before, minute, rebuilt }, {
+    before: ["viewer:B · 뷰어 · 방금"],
+    minute: { same: true, texts: ["viewer:B · 뷰어 · 1분 전"], tip: "뷰어 — B · 1분 전 · Alt+3" },
+    rebuilt: { texts: ["monitor", "viewer"], focused: "viewer", fresh: true },
+  });
+});

@@ -1596,7 +1596,7 @@ function showDetailPane(){ $('#app').setAttribute('data-view','detail'); }
 // 빈 상세 칸 — 안내 한 줄 + (PC) '최근 화면' 단추(renderEmptyPane, quick-switch §3-6). 바깥 상자는 그대로 'detail-empty' 하나
 let EMPTY_BOX=null;
 function detailPlaceholder(txt){ paneEnter('empty'); const p=paneDetail(); closeInlineMonitor(); p.classList.remove('term-mode','fb-mode','mon-mode'); p.innerHTML='';
-  const box=el('div','detail-empty'); box._txt=txt||''; EMPTY_BOX=box; p.appendChild(box); renderEmptyPane(); }
+  const box=el('div','detail-empty'); box._txt=txt||''; box._shape=''; box._btns=[]; EMPTY_BOX=box; p.appendChild(box); renderEmptyPane(); }
 function highlightSelected(){ document.querySelectorAll('.srow').forEach(r=>
   r.classList.toggle('sel', r.dataset.sid===SELECTED_ID)); }
 // ---- 화면 진입 기록(quick-switch §8 2단계) ----
@@ -6709,7 +6709,8 @@ function renderQuick(){
 }
 // 빈 상세 칸(§3-6) — 안내 + '최근 화면'(갈 수 있는 기억만 = 흐림 빼고, 마지막 화면이 맨 앞·나머지는 단추 순서). 첫 목록 전엔 기억을 확인하지
 // 못해 모두 흐림(quickTargets)이라 단추가 없다. 목록 칸이 접혀 있으면 '왼쪽에서 …'는 틀린 말이라 ◧ 안내로 바꾼다. 폰은 빈 안내 자체가
-// 숨어 있다(CSS). 모습이 같으면 다시 그리지 않는다(포커스 유지)
+// 숨어 있다(CSS). 모습(안내·단추 차례)이 같으면 글자만 고친다 — 💬 칸의 '방금 → 1분 전'처럼 매분 바뀌는 글자로 20초 갱신이 단추를 새로
+// 만들면 Tab 으로 둔 키보드 커서가 빠졌다(검토). 차례가 바뀌어 새로 그릴 때는 커서가 있던 칸의 새 단추로 커서를 옮긴다
 function renderEmptyPane(list){
   const box=EMPTY_BOX;
   if(!box||PANE_NOW.kind!=='empty'||paneDetail().children[0]!==box) return;
@@ -6717,18 +6718,25 @@ function renderEmptyPane(list){
   const recent=(list||quickTargets()).filter(o=>o.has&&!o.dim).sort((a,b)=>(b.kind===last)-(a.kind===last));
   const app=$('#app'), off=!!app&&app.classList.contains('side-off'), txt=box._txt||'왼쪽에서 세션을 선택하세요';
   const msg=(off&&/^왼쪽에서 /.test(txt))?(recent.length?'◧ 로 목록 칸을 펼치거나 최근 화면으로 가세요':txt.replace(/^왼쪽에서 /,'◧ 로 목록 칸을 펼쳐 ')):txt;
-  const sig=JSON.stringify([msg, recent.map(o=>[o.kind, o.icon, o.name, o.sub, o.label, o.taken])]);
-  if(box._sig===sig) return; box._sig=sig;
+  const shape=JSON.stringify([msg, recent.map(o=>o.kind)]);
+  if(box._shape===shape){ recent.forEach((o,i)=>quickRecentFill(box._btns[i],o)); return; }
+  const a=document.activeElement, had=(box._btns||[]).includes(a)?a.dataset.k:'';
+  box._shape=shape; box._btns=[];
   box.innerHTML='';
   box.appendChild(el('div','de-msg',msg));
   if(!recent.length) return;
   const wrap=el('div','qs-recent'); wrap.appendChild(el('div','qs-rh','최근 화면'));
   const grid=el('div','qs-rg');
-  for(const o of recent){ const b=el('button','qs-rb'); b.type='button'; b.dataset.k=o.kind; b.title=quickTip(o);
-    b.appendChild(el('span','qi',o.icon)); const t=el('span','qt'); t.appendChild(el('span','qn',o.name||o.label));
-    t.appendChild(el('small',null,[o.label, o.sub].filter(Boolean).join(' · '))); b.appendChild(t);
-    b.onclick=()=>quickGo(o.kind); grid.appendChild(b); }
+  for(const o of recent){ const b=el('button','qs-rb'); b.type='button'; b.dataset.k=o.kind;
+    b.appendChild(el('span','qi')); const t=el('span','qt'); t.appendChild(el('span','qn')); t.appendChild(el('small')); b.appendChild(t);
+    quickRecentFill(b,o); b.onclick=()=>quickGo(o.kind); grid.appendChild(b); box._btns.push(b); }
   wrap.appendChild(grid); box.appendChild(wrap);
+  const nb=had&&box._btns.find(b=>b.dataset.k===had); if(nb) try{ nb.focus(); }catch(e){}
+}
+// '최근 화면' 단추 하나의 글자 — 그림 · 이름 · (칸 · 보조 글) · 툴팁
+function quickRecentFill(b, o){
+  b.title=quickTip(o); b.children[0].textContent=o.icon; const t=b.children[1];
+  t.children[0].textContent=o.name||o.label; t.children[1].textContent=[o.label, o.sub].filter(Boolean).join(' · ');
 }
 // 폰 화면 바로가기 시트(§5-1) — 제목 ▾ 와 관제 덮개 머리 ▾(§5-3)가 연다. 4줄 고정 순서: 지금 화면 '지금', 숨겨 둔 화면 '바로 돌아가기',
 // 기억 없음은 흐리게 '고르기…', 다른 기기가 보는 터미널은 '👀 가져오기'(누르면 인계 확인창). 덮개(z 60) 위에서도 보이게 위 층으로(qs-sheet)
