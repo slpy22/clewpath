@@ -88,6 +88,24 @@ def test_log_tail_stops_at_last_launcher_mark(fake_claude_home):
     assert liveness.log_tail(10) == ["no mark a", "no mark b"]
 
 
+def test_log_tail_reads_the_rotated_log_when_the_mark_opens_the_file(fake_claude_home):
+    """맥·리눅스 런처는 5MB 회전을 기동 직전(구분줄 바로 앞)에 한다 — 그러면 host.log 는 구분줄로 시작하고 죽은 Host 의 꼬리는
+    host.log.1 에 있다. 구분줄 앞이 비었을 때만 .1 을 본다(구분줄이 없는 Windows 로그는 .1 이 있어도 그대로)."""
+    d = config.data_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "host.log.1").write_text("=== launcher start 2026-10-19 09:00:00 ===\nold 1\nold 2: Traceback 마지막\n\n",
+                                  encoding="utf-8")
+    _log(["=== launcher start 2026-10-20 10:00:00 ===", "[config] 새 프로세스 첫 줄"])
+    assert liveness.log_tail(10) == ["=== launcher start 2026-10-19 09:00:00 ===", "old 1", "old 2: Traceback 마지막"]
+    assert liveness.log_tail(1) == ["old 2: Traceback 마지막"]
+    _log(["old 3", "=== launcher start 2026-10-20 10:00:00 ===", "new"])   # 구분줄 앞에 꼬리가 있으면 그것
+    assert liveness.log_tail(10) == ["old 3"]
+    _log(["no mark a"])                                                     # Windows(구분줄 없음)
+    assert liveness.log_tail(10) == ["no mark a"]
+    (d / "host.log").write_bytes(b"")                                       # 구분줄 없는 빈 로그도 .1 을 보지 않는다
+    assert liveness.log_tail(10) == []
+
+
 def test_notify_incident_payload(fake_claude_home, monkeypatch):
     from session_manager import push
     sent = []

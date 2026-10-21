@@ -161,6 +161,21 @@ def test_write_config_reports_the_port_the_host_will_use(home, capsys, body, wan
     assert rc == 0 and kv["config"] == "kept" and kv["port"] == want and conf.read_text(encoding="utf-8") == body
 
 
+def test_write_config_kept_warns_when_given_values_differ(home, capsys, monkeypatch):
+    """유지(kept)할 때 인자의 주소·env 토큰을 말없이 버렸다 — 다르면 설정 파일 값을 쓴다고 알린다(토큰 값은 찍지 않는다)."""
+    monkeypatch.setenv("CLEWPATH_CLIENT_TOKEN", "tok-OLD-1")
+    urls = ["--relay-url", "wss://r.example/ws", "--app-url", "https://a.example/app"]
+    assert run(capsys, "write-config", "--cp-url", "https://cp.example/cp", *urls)[1]["config"] == "created"
+    rc, kv, err = run(capsys, "write-config", "--cp-url", "https://cp.example/cp/", *urls)   # 끝 / 만 다른 것은 같은 값
+    assert rc == 0 and kv["config"] == "kept" and "[WARN]" not in err, err
+    monkeypatch.setenv("CLEWPATH_CLIENT_TOKEN", "tok-NEW-2")
+    monkeypatch.setenv("CLEWPATH_AGENT_TOKEN", "agt-NEW-3")
+    rc, kv, err = run(capsys, "write-config", "--cp-url", "http://127.0.0.1:9/cp", *urls)
+    assert rc == 0 and kv["config"] == "kept"
+    assert "cp_url" in err and "https://cp.example/cp" in err and "http://127.0.0.1:9/cp" in err
+    assert "client_token" in err and "agent_token" in err and "tok-" not in err and "agt-" not in err
+
+
 @pytest.mark.parametrize("argv", [["write-config", "--port", "0"], ["write-config", "--port", "70000"],
                                   ["write-config", "--port", "05100"], ["write-config", "--client-token", "x"],
                                   ["write-config", "--agent-token", "x"], ["render-launcher", "--root", "/x"],
@@ -317,6 +332,20 @@ def test_provision_unreachable_cp(home, capsys):
     assert rc == 0 and kv["creds"] == "failed" and kv["reason"].startswith("provision_error:")
 
 
+def test_provision_uses_the_cp_in_the_config_file(home, capsys, cp):
+    """설정 파일이 있으면 Host 는 그 파일의 cp_url 로 붙는다 — 발급도 같은 규칙(env > 설정 파일)이어야 한다. 전엔 인자
+    (install.sh 의 기본값 = 운영 CP)로 발급해, 시험·자체 CP 설정을 재설치하면 운영 CP 에 익명 커넥터가 등록되고 '다른
+    컨트롤플레인 것' 거짓 경고가 떴다. 인자는 설정 파일이 없을 때만 쓴다."""
+    assert run(capsys, "write-config", "--cp-url", cp.url)[1]["config"] == "created"
+    wrong = f"http://127.0.0.1:{_closed_port()}/cp"
+    rc, kv, err = run(capsys, "provision", "--cp-url", wrong)
+    assert rc == 0 and kv["creds"] == "created" and [p for p, _ in cp.calls] == ["/cp/provision/anonymous"], err
+    f = home / ".claude" / "session_manager" / "cp_credentials.json"
+    assert json.loads(f.read_text(encoding="utf-8"))["cp_url"] == cp.url
+    rc, kv, err = run(capsys, "provision", "--cp-url", wrong)
+    assert kv["creds"] == "kept" and "다른 컨트롤플레인" not in err and len(cp.calls) == 1
+
+
 # ---------------------------------------------------------------- wait-ready — 가짜 Host
 
 class _FakeHost:
@@ -352,7 +381,7 @@ def _closed_port() -> int:
 def test_wait_ready_follows_runtime_port(home, capsys, tmp_path):
     data = tmp_path / "data"
     data.mkdir()
-    h = _FakeHost({"mode": "fallback"}, {"ok": True, "session_count": 3, "claude_home": "/h/.claude",
+    h = _FakeHost({"mode": "fallback"}, {"ok": True, "session_count": 3, "claude_home": str(home / ".claude"),
                                          "claude_exe_found": False})
     try:
         (data / "runtime.json").write_text(json.dumps({"port": h.port, "pid": 1}), encoding="utf-8")
@@ -364,6 +393,21 @@ def test_wait_ready_follows_runtime_port(home, capsys, tmp_path):
                               "claude_exe_found": "0"}
     assert f"{asked} 가 사용 중이라 {h.port} 번 포트로 열렸습니다" in err
     assert "세션 인식됨: 3 개" in err and "claude 실행파일을 못 찾았습니다" in err and "공유토큰" in err
+
+
+def test_wait_ready_does_not_take_another_users_host(home, capsys, tmp_path):
+    """맥 두 계정 — 그 포트에서 답하는 다른 사용자의 ClewPath 를 '이 설치본이 떴다'로 받아들였다. 진단의 클로드 폴더가 이
+    설치본의 것과 다르면 경고하고 down 으로 둔다."""
+    data = tmp_path / "data"
+    data.mkdir()
+    other = str(PurePosixPath("/Users/someone-else/.claude"))
+    h = _FakeHost({"mode": "cp"}, {"ok": True, "session_count": 9, "claude_home": other, "claude_exe_found": True})
+    try:
+        rc, kv, err = run(capsys, "wait-ready", "--port", str(h.port), "--tries", "2", "--data-dir", str(data))
+    finally:
+        h.close()
+    assert rc == 0 and kv["state"] == "down" and kv["port"] == str(h.port), err
+    assert "다른 사용자의 ClewPath" in err and other in err and "서비스 기동 확인" not in err
 
 
 def test_wait_ready_down_shows_the_right_log(home, capsys, tmp_path):

@@ -12,19 +12,22 @@
 #
 # 순서: 인자 확인 → 잠금(updates/runner.lock.d)·표식(update.inprogress) → 본체 종료 대기(안 죽으면 TERM, 10초 뒤 KILL)
 #   → 지난 교체 잔재 복구 → 백업(.tmp 에 다 만든 뒤 rename) → 교체(설치 루트 안 .clewpath-swap.<pid>/ 로 rename, 저널)
-#   → uv sync(안 되면 uv pip install -e, 둘 다 실패면 곧바로 롤백) → 재기동(런처, CLEWPATH_UPDATER=1) → 헬스(기대 버전)
-#   → 커밋 | 롤백(실패본 보관 → 실패한 Host 정지 → 저널 되돌림 → uv sync → 옛 버전 재기동·헬스)
+#   → uv sync(안 되면 uv pip install -e, 둘 다 실패면 곧바로 롤백) → 재기동(런처, CLEWPATH_UPDATER=1)
+#   → 헬스(방금 띄운 Host·같은 claude_home·기대 버전) → 커밋 | 보류(maintenance.flag — 롤백하지 않고 커밋)
+#   | 롤백(실패본 보관 → 실패한 Host 정지 → 저널 되돌림 → uv sync → 옛 버전 재기동·헬스)
 #
 # 지키는 것:
 #  - 스스로 죽지 않는다(set -e·set -u 없음). 교체는 rename·저널이라 어디서 죽어도 다음 런처·러너가 -RecoverOnly 로
 #    되돌린다. 되돌림도 rename 이라 되돌리다 죽어도 다시 돌리면 같은 결과다. 헬스를 통과하면 committed 표식을 남긴다
-#  - 설치 폴더의 항목은 지우지 않고 옮기기만 한다. rm -rf 는 정해 둔 자리(백업·교체 저널·러너 잠금)에만
+#  - 설치 폴더의 항목은 지우지 않고 옮기기만 한다. rm -rf 는 정해 둔 자리(백업·교체 저널·휴지통·러너 잠금)에만.
+#    끝난 교체 저널은 휴지통(.clewpath-trash.<pid>)으로 옮긴 뒤 지운다 — 못 지워도 경고만(런처를 막지 않는다)
+#  - 대기 마감은 반초 수로 센다(벽시계 아님 — NTP 가 시계를 뒤로 돌려도 더 기다리지 않는다)
 #  - 터미널 관리 프로세스(브로커, session_manager.ptyd)는 건드리지 않는다. 프로세스는 명령줄(설치 경로·모듈)로 알아본다
 #  - 재기동한 Host 는 사용자의 umask·env 를 그대로 물려받는다. HUP·INT 는 무시('')가 아니라 빈 처리(:) — 무시는 exec
 #    로 자식(uv·런처·재기동 Host·그 Host 가 띄우는 브로커와 claude)까지 물려가, 브로커가 죽어도 claude 가 안 끝난다
 #  - TERM 은 표시만 한다: 교체 전이면 중단(옛 버전으로 계속), 교체가 시작됐으면 끝까지
 #  - 로그 문구는 ps1 과 같다(release.ps1 -Apply 가 꼬리를 보여 준다). set -x·env 덤프 금지(Host 의 SM_* 를 물려받는다)
-# 종료코드: 0 성공 / 1 실패(롤백·중단·복구 실패) / 2 인자·사전 조건 오류(설치 폴더 무변경) / 3 다른 러너·설치가 진행 중
+# 종료코드: 0 성공(보류 포함) / 1 실패(롤백·중단·복구 실패) / 2 인자·사전 조건 오류(설치 폴더 무변경) / 3 다른 러너·설치가 진행 중
 
 # 교체 대상. updater.py 의 PAYLOAD 와 같은 순서·같은 이름(test_updater.test_payload_lists_agree)
 PAYLOAD="session_manager pwa pyproject.toml uv.lock install.ps1 install.sh uninstall.sh README.md LICENSE"
@@ -40,52 +43,61 @@ esac
 # <<< clewpath-home
 
 # 헬스 확인(파이썬이 있을 때) — 표준 라이브러리만(-I -S), 설치 폴더 코드를 import 하지 않는다. 프록시는 쓰지 않는다.
-# -Port 와 runtime.json 의 포트(폴백으로 다른 포트에 떴을 때)를 함께 본다. 진단에 claude_home 이 있고 version 이 없거나
-# 기대와 같으면 통과. 출력 "ok <port> <ver>" | "mismatch <port> <ver>" | "none" (종료코드 0 / 2 / 1)
+# '방금 띄운 그 Host' 의 대답만 본다: runtime.json 의 pid 가 제외 목록(옛 Host·재기동 직전 runtime.json 의 pid)에 없고 살아
+# 있을 때 그 runtime.json 의 port 로 묻는다(Host 는 포트를 열기 전에 runtime.json 을 쓴다). 진단의 claude_home 이 이 데이터
+# 폴더의 부모와 같고 version 이 없거나 기대와 같으면 통과. version 은 Host 가 디스크(dist-info)에서 그때그때 읽으므로 같은
+# 설치본의 다른(옛 코드) Host 도 uv sync 뒤엔 새 버전을 말한다 — 그래서 대답한 프로세스를 묶는다. 그 pid 의 명령줄은 셸이
+# 본다(is_our_host). 인자: health RUNTIME HOME EXPECT SECONDS EXCL(쉼표). 시간은 monotonic.
+# 출력 "ok <port> <ver> <pid>" | "mismatch <port> <ver>" | "none" (종료코드 0 / 2 / 1)
 HELPER_PY='
-import json, sys, time, urllib.request
+import json, os, sys, time, urllib.request
 
 
-def ports_of(port, runtime):
-    out = [port]
+def bound(runtime, excl):
     try:
         with open(runtime, encoding="utf-8-sig") as f:
-            rp = json.load(f).get("port")
-        if type(rp) is int and 0 < rp < 65536 and rp != port:
-            out.append(rp)
+            rt = json.load(f)
+        pid, port = rt.get("pid"), rt.get("port")
     except Exception:
-        pass
-    return out
+        return None
+    if type(pid) is not int or type(port) is not int or pid <= 0 or pid in excl or not 0 < port < 65536:
+        return None
+    try:
+        os.kill(pid, 0)
+    except Exception:
+        return None
+    return pid, port
 
 
 def clean(v):
     return "".join(c for c in str(v) if c.isascii() and (c.isalnum() or c in ".+-"))[:40] or "?"
 
 
-def health(port, runtime, expect, seconds):
+def health(runtime, home, expect, seconds, excl):
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     end = time.monotonic() + seconds
     last = "none"
     while True:
-        for p in ports_of(port, runtime):
+        b = bound(runtime, excl)
+        if b:
             try:
-                with opener.open("http://127.0.0.1:%d/api/owner/diagnostics" % p, timeout=3) as r:
+                with opener.open("http://127.0.0.1:%d/api/owner/diagnostics" % b[1], timeout=3) as r:
                     body = json.loads(r.read(1 << 20))
             except Exception:
-                continue
-            if not (isinstance(body, dict) and body.get("claude_home")):
-                continue
-            v = body.get("version")
-            if not expect or not v or v == expect:
-                return "ok %d %s" % (p, clean(v) if v else "-")
-            last = "mismatch %d %s" % (p, clean(v))
+                body = None
+            if isinstance(body, dict) and body.get("claude_home") == home:
+                v = body.get("version")
+                if not expect or not v or v == expect:
+                    return "ok %d %s %d" % (b[1], clean(v) if v else "-", b[0])
+                last = "mismatch %d %s" % (b[1], clean(v))
         if time.monotonic() >= end:
             return last
         time.sleep(0.7)
 
 
 if sys.argv[1] == "health":
-    res = health(int(sys.argv[2]), sys.argv[3], sys.argv[4], float(sys.argv[5]))
+    excl = {int(x) for x in sys.argv[6].split(",") if x.isdigit()}
+    res = health(sys.argv[2], sys.argv[3], sys.argv[4], float(sys.argv[5]), excl)
     print(res)
     sys.exit(0 if res.startswith("ok ") else 2 if res.startswith("mismatch ") else 1)
 sys.exit(64)
@@ -219,11 +231,17 @@ host_pids() {   # 이 설치본의 Host 로 보이는 프로세스(나·부모 �
   fi
 }
 
+# 대기 마감은 벽시계(date +%s)가 아니라 쉰 반초 수(NAP_T)로 센다 — 마감 시각으로 재면 NTP 가 시계를 뒤로 돌린 만큼(수 시간)
+# 더 기다리고, 그동안 apply.lock 하트비트가 이어져 수동 적용도 거부된다. 소수 sleep 이 없으면 1초(= 2)
+nap() {
+  if sleep 0.5 2>/dev/null; then NAP_T=$((NAP_T + 1)); else sleep 1; NAP_T=$((NAP_T + 2)); fi
+}
+
 wait_gone() {   # $1=pid $2=초 — 그 안에 사라지면 0
-  WG_END=$(( $(date +%s) + $2 ))
+  NAP_T=0
   while pid_alive "$1"; do
-    [ "$(date +%s)" -ge "$WG_END" ] && return 1
-    sleep 0.5 2>/dev/null || sleep 1
+    [ "$NAP_T" -ge $(( $2 * 2 )) ] && return 1
+    nap
   done
   return 0
 }
@@ -351,7 +369,7 @@ finish() {   # $1=true|false $2=종료코드 — 정리 후 끝(10. 정리)
 
 # ---------------------------------------------------------------- 파일
 
-rm_guarded() {   # rm -rf 는 여기로만 — 정해 둔 자리(백업·실패본·교체 저널·러너 잠금)가 아니면 거부한다
+rm_guarded() {   # rm -rf 는 여기로만 — 정해 둔 자리(백업·실패본·교체 저널·휴지통·러너 잠금)가 아니면 거부한다
   G_T=$1
   G_OK=0
   if [ "$LOG_OK" = 1 ] && path_ok "$G_T" && [ "$G_T" != / ] && [ "$G_T" != "$HOME" ] && [ "$G_T" != "$HOME/" ]; then
@@ -360,7 +378,7 @@ rm_guarded() {   # rm -rf 는 여기로만 — 정해 둔 자리(백업·실패�
       case "$G_T" in "$BackupDir"|"$BackupDir".tmp.*|"$BackupDir"-failed-*) G_OK=1 ;; esac
     fi
     if [ "$ROOT_OK" = 1 ]; then
-      case "$G_T" in "$InstallRoot"/.clewpath-swap.*) G_OK=1 ;; esac
+      case "$G_T" in "$InstallRoot"/.clewpath-swap.*|"$InstallRoot"/.clewpath-trash.*) G_OK=1 ;; esac
     fi
   fi
   if [ "$G_OK" != 1 ]; then
@@ -384,11 +402,11 @@ mv_new() {   # rename — 대상이 이미 있으면 거부(있는 폴더로 mv 
   mv "$1" "$2" 2>>"$LogFile"
 }
 
-write_result() {   # 9. $1=true|false [$2=버전] — last_apply.json(BOM 없는 UTF-8, 임시 파일 → mv). updater.recently_failed 가 읽는다
-  _rv=${2:-$Version}
+write_result() {   # 9. $1=true|false [$2=버전] [$3=덧붙일 키 — ,"k":v 고정 문자열만(held·deps_fallback)] — last_apply.json(BOM
+  _rv=${2:-$Version}   # 없는 UTF-8, 임시 파일 → mv). updater.recently_failed 가 읽는다(version·ok 만 — 덧붙인 키는 모른다)
   _rt="$WORK/.last_apply.$$.tmp"
-  if { printf '{"version":"%s","ok":%s,"finished_at":%s,"log":"%s"}\n' "$(json_esc "$_rv")" "$1" "$(date +%s)" \
-         "$(json_esc "$LogFile")" >"$_rt"; } 2>/dev/null && mv -f "$_rt" "$WORK/last_apply.json" 2>/dev/null; then
+  if { printf '{"version":"%s","ok":%s,"finished_at":%s,"log":"%s"%s}\n' "$(json_esc "$_rv")" "$1" "$(date +%s)" \
+         "$(json_esc "$LogFile")" "${3:-}" >"$_rt"; } 2>/dev/null && mv -f "$_rt" "$WORK/last_apply.json" 2>/dev/null; then
     return 0
   fi
   rm -f "$_rt" 2>/dev/null
@@ -517,10 +535,29 @@ swap_undo() {   # $1=교체 저널 폴더 — 저널을 거꾸로 읽어 rename 
   return 0
 }
 
-swap_drop() {   # 교체 저널 폴더를 지운다 — 저널 파일부터(지우다 죽어도 다음 복구가 되돌리지 않게)
+trash_name() {   # 비어 있는 휴지통 이름 → TRASH: 설치 루트 안 .clewpath-trash.<pid>(있으면 .<n> 을 붙인다). 설치 폴더 안의
+  TRASH="$InstallRoot/.clewpath-trash.$$"   # 일시 이름은 .clewpath-swap.* .clewpath-old.* .clewpath-trash.* 셋(install·uninstall 도 안다)
+  _tn=0
+  while exists "$TRASH"; do
+    _tn=$((_tn + 1))
+    [ "$_tn" -le 99 ] || return 1
+    TRASH="$InstallRoot/.clewpath-trash.$$.$_tn"
+  done
+  return 0
+}
+
+# 끝난 교체 저널 폴더(커밋됨·되돌림 끝·옮긴 것 없음 — 부르는 쪽이 보장)를 치운다. 저널 파일부터 지우고(지우다 죽어도 다음
+# 복구가 되돌리지 않게), 같은 폴더 안 휴지통 이름으로 rename 해 저널 이름 공간(.clewpath-swap.*) 밖으로 뺀 뒤 지운다. 못 지운
+# 것(root 소유 __pycache__ 등)이 남아도 런처·복구가 잔재로 보지 않는다 — 경고만, 다음 러너·복구가 다시 지워 본다(trash_sweep).
+# 전엔 남은 .clewpath-swap.* 때문에 런처 start 가 '잔재 복구 실패'로 영구히 막혔다. 0 = 저널 이름에서 빠짐 / 1 = 그대로 남음
+swap_drop() {
   [ -n "$1" ] || return 0
   exists "$1" || return 0
   rm -f "$1/journal" "$1/journal.rev" 2>/dev/null
+  if trash_name && mv "$1" "$TRASH" 2>>"$LogFile"; then
+    rm_guarded "$TRASH"
+    return 0
+  fi
   if exists "$1/journal"; then
     log "  [WARN] 저널을 지우지 못했습니다: $1/journal"
     return 1
@@ -528,7 +565,14 @@ swap_drop() {   # 교체 저널 폴더를 지운다 — 저널 파일부터(지�
   rm_guarded "$1"
 }
 
-commit_swap() {   # 헬스 통과 — 커밋 표식을 먼저(여기서 죽어도 다음 복구가 되돌리지 않게), 그다음 저널을 치운다
+trash_sweep() {   # 지난 러너·복구가 못 지운 휴지통(.clewpath-trash.*)을 다시 지워 본다 — 안 되면 경고만(rm_guarded)
+  for _ts in "$InstallRoot"/.clewpath-trash.*; do
+    exists "$_ts" && rm_guarded "$_ts"
+  done
+  return 0
+}
+
+commit_swap() {   # 헬스 통과 — 커밋 표식을 먼저(여기서 죽어도 다음 복구가 되돌리지 않게), 그다음 저널을 치운다(휴지통으로)
   # true(일반 명령) — ':'(특수 내장)는 리디렉션이 실패하면 dash·bash --posix 가 스크립트를 통째로 끝낸다
   { true >"$SWAP/committed"; } 2>/dev/null || log "  [WARN] 커밋 표식을 쓰지 못했습니다: $SWAP"
   swap_drop "$SWAP" || log "  [WARN] 교체 저널을 다 지우지 못했습니다: $SWAP"
@@ -542,8 +586,9 @@ swap_dirs_left() {   # 설치 루트에 교체 저널(.clewpath-swap.*)이 있�
   return 1
 }
 
-recover_leftovers() {   # 지난 러너가 남긴 .clewpath-swap.* — 커밋된 것·옮긴 것 없는 것은 치우기만, 나머지는 되돌린 뒤
-  RV_DONE=0             # uv sync(dist-info)·last_apply(그 버전 ok=false). 0 됨·없음 / 1 실패(잔재를 남긴다)
+recover_leftovers() {   # 지난 러너가 남긴 .clewpath-swap.* — 커밋된 것·옮긴 것 없는 것은 치우기만(되돌릴 것이 없으니 못 치워도
+  RV_DONE=0             # 막지 않는다), 나머지는 되돌린 뒤 uv sync(dist-info)·last_apply(그 버전 ok=false). 먼저 지난 휴지통을 다시
+  trash_sweep           # 지워 본다. 0 됨·없음 / 1 실패(잔재를 남긴다)
   for RV_SD in "$InstallRoot"/.clewpath-swap.*; do
     exists "$RV_SD" || continue
     if [ -L "$RV_SD" ] || [ ! -d "$RV_SD" ]; then
@@ -552,7 +597,7 @@ recover_leftovers() {   # 지난 러너가 남긴 .clewpath-swap.* — 커밋된
     fi
     if [ -e "$RV_SD/committed" ] || [ ! -s "$RV_SD/journal" ]; then
       log "지난 교체 저널을 치웁니다(커밋됨 또는 옮긴 것 없음): ${RV_SD##*/}"
-      swap_drop "$RV_SD" || return 1
+      swap_drop "$RV_SD" || log "  [WARN] 지난 교체 저널을 치우지 못했습니다(되돌릴 것은 없음): ${RV_SD##*/}"
       RV_DONE=1
       continue
     fi
@@ -571,12 +616,12 @@ recover_leftovers() {   # 지난 러너가 남긴 .clewpath-swap.* — 커밋된
 
 # ---------------------------------------------------------------- 의존성·재기동·헬스
 
-find_uv() {   # 설치 기록(uv=) → 공통 경로의 $CLEWPATH_HOME/bin/uv → PATH. launchd·분리 기동엔 XDG 변수가 없을 수 있어 기록이 먼저
-  UV=
+find_uv() {   # 설치 기록(uv=) → 공통 경로의 $CLEWPATH_HOME/bin/uv → PATH. launchd·분리 기동엔 XDG 변수가 없을 수 있어 기록이 먼저.
+  UV=          # CLEWPATH_HOME 이 절대 경로가 아니면 뺀다 — 있는지는 지금 폴더에서 보고 실행은 아래 cd 뒤라 다른 파일이 된다
   _fu=$(rec_get uv)
   if path_ok "$_fu" && [ -f "$_fu" ] && [ -x "$_fu" ]; then
     UV=$_fu
-  elif [ -f "$CLEWPATH_HOME/bin/uv" ] && [ -x "$CLEWPATH_HOME/bin/uv" ]; then
+  elif path_ok "$CLEWPATH_HOME" && [ -f "$CLEWPATH_HOME/bin/uv" ] && [ -x "$CLEWPATH_HOME/bin/uv" ]; then
     UV="$CLEWPATH_HOME/bin/uv"
   else
     UV=$(command -v uv 2>/dev/null) || UV=
@@ -589,15 +634,22 @@ find_uv() {   # 설치 기록(uv=) → 공통 경로의 $CLEWPATH_HOME/bin/uv �
   return 0
 }
 
-sync_deps() {   # 5. $1=까닭. 파일을 바꾼 뒤엔 꼭 — 의존성뿐 아니라 설치 메타데이터(dist-info) 때문이다(롤백 뒤에도 새 버전을
-  find_uv       # 말하면 다시는 업데이트를 받지 않는다). 0 됨(uv·venv 가 없어 건너뜀 포함) / 1 uv sync·pip 둘 다 실패
+# 5. $1=까닭. 파일을 바꾼 뒤엔 꼭 — 의존성뿐 아니라 설치 메타데이터(dist-info) 때문이다(롤백 뒤에도 새 버전을 말하면 다시는
+# 업데이트를 받지 않는다). 0 됨(uv·venv 가 없어 건너뜀 포함) / 1 uv sync·pip 둘 다 실패. SYNC_VIA = none|uv|pip(잠금 밖 폴백).
+# uv 에는 Host 를 띄운 셸의 가상 환경 표식(VIRTUAL_ENV·CONDA_PREFIX·UV_PYTHON)을 주지 않는다 — install.sh 의 uv_run 과 같다
+# (UV_PYTHON=3.12 셸에서 띄운 Host 의 업데이트가 .venv 를 다른 파이썬으로 다시 만들었다)
+sync_deps() {
+  find_uv
+  SYNC_VIA=none
   if [ -z "$UV" ] || [ ! -x "$VENV_PY" ]; then
     log "uv 나 venv 를 못 찾아 의존성 동기화를 건너뜁니다 ($1)"
     return 0
   fi
   beat
+  SYNC_VIA=uv
   _so="$WORK/.runner-uv.$$.out"
   (
+    unset VIRTUAL_ENV CONDA_PREFIX UV_PYTHON
     cd "$InstallRoot" || exit 1
     [ -n "$REC_PREF" ] && export UV_PYTHON_PREFERENCE="$REC_PREF"
     [ -n "$REC_PYDIR" ] && export UV_PYTHON_INSTALL_DIR="$REC_PYDIR"
@@ -607,7 +659,9 @@ sync_deps() {   # 5. $1=까닭. 파일을 바꾼 뒤엔 꼭 — 의존성뿐 아
   { LC_ALL=C sed 's/^/  uv: /' "$_so" >>"$LogFile"; } 2>/dev/null
   if [ "$_src" != 0 ]; then
     log "  uv sync 실패(종료코드 $_src) — pyproject 기준으로 다시: uv pip install -e"
+    SYNC_VIA=pip
     (
+      unset VIRTUAL_ENV CONDA_PREFIX UV_PYTHON
       cd "$InstallRoot" || exit 1
       [ -n "$REC_PREF" ] && export UV_PYTHON_PREFERENCE="$REC_PREF"
       [ -n "$REC_PYDIR" ] && export UV_PYTHON_INSTALL_DIR="$REC_PYDIR"
@@ -659,36 +713,59 @@ helper_py() {   # 헬퍼를 돌릴 파이썬(그때그때 — 업데이트 중 v
   return 0
 }
 
-health_curl() {   # 파이썬이 없을 때 — curl 과 문자열 검사(프록시 무시). $1=기대 버전
-  _he=$(( $(date +%s) + HealthSeconds ))
+host_bound() {   # $1=runtime.json 의 pid — '방금 띄운 그 Host' 인가: 옛 Host(WaitPid)도 재기동 직전 runtime.json 의 pid(H_PRE)도
+  case "${1:-}" in ''|*[!0-9]*) return 1 ;; esac   # 아니고, 이 설치본의 Host 명령줄로 살아 있다
+  [ "$1" != "$WaitPid" ] && [ "$1" != "$H_PRE" ] && is_our_host "$1"
+}
+
+health_curl() {   # 파이썬이 없을 때 — curl 과 문자열 검사(프록시 무시). $1=기대 버전. 헬퍼와 같은 묶음(방금 띄운 Host 의
+  _hj=$(json_esc "$H_HOME")   # runtime.json port 에만, claude_home 이 같을 때). 마감은 반초 수 — -m 3 을 다 쓴 시도는 3초로 센다
+  _hl=$((HealthSeconds * 2))
+  NAP_T=0
   while :; do
-    _hrp=$(runtime_port)
-    [ "$_hrp" = "$Port" ] && _hrp=
-    for _hp in "$Port" $_hrp; do
-      _hb=$(curl --noproxy '*' -s -m 3 "http://127.0.0.1:$_hp/api/owner/diagnostics" 2>/dev/null) || continue
-      case "$_hb" in *'"claude_home":"'[!'"']*|*'"claude_home": "'[!'"']*) ;; *) continue ;; esac
-      _hv=$(printf '%s' "$_hb" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([0-9A-Za-z.+-]*\)".*/\1/p' | head -n 1)
-      if [ -z "$1" ] || [ -z "$_hv" ] || [ "$_hv" = "$1" ]; then
-        H_RES="ok $_hp ${_hv:--}"
-        return 0
+    _hk=$(json_pid "$DATA/runtime.json")
+    _hp=$(runtime_port)
+    if [ -n "$_hp" ] && host_bound "$_hk"; then
+      _hb=$(curl --noproxy '*' -s -m 3 "http://127.0.0.1:$_hp/api/owner/diagnostics" 2>/dev/null)
+      _hc=$?
+      [ "$_hc" = 28 ] && NAP_T=$((NAP_T + 6))
+      if [ "$_hc" = 0 ]; then
+        case "$_hb" in
+          *"\"claude_home\":\"$_hj\""*|*"\"claude_home\": \"$_hj\""*)
+            _hv=$(printf '%s' "$_hb" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([0-9A-Za-z.+-]*\)".*/\1/p' | head -n 1)
+            if [ -z "$1" ] || [ -z "$_hv" ] || [ "$_hv" = "$1" ]; then
+              H_RES="ok $_hp ${_hv:--} $_hk"
+              return 0
+            fi
+            H_RES="mismatch $_hp $_hv" ;;
+        esac
       fi
-      H_RES="mismatch $_hp $_hv"
-    done
-    [ "$(date +%s)" -ge "$_he" ] && return 0
-    sleep 1
+    fi
+    [ "$NAP_T" -ge "$_hl" ] && return 0
+    nap
   done
 }
 
-health_check() {   # 7. $1=기대 버전(비면 아무 버전) → H_RES. 0 통과 / 2 응답은 있지만 버전이 다름 / 1 응답 없음
+# 7. $1=기대 버전(비면 아무 버전) → H_RES. 0 통과 / 2 방금 띄운 Host 가 답했지만 버전이 다름 / 1 응답 없음.
+# 통과는 '방금 띄운 그 Host' 의 대답만: runtime.json 의 pid 가 옛 Host·재기동 직전 pid(H_PRE — 부르는 쪽이 재기동 직전에
+# 적는다)가 아니고 이 설치본의 Host 명령줄로 살아 있으며, 진단의 claude_home 이 이 데이터 폴더의 부모(H_HOME)와 같다.
+# 전엔 claude_home 이 비었는지만 봤고 -Port 에 누가 답해도 통과라, 같은 설치본의 다른 Host(디스크의 dist-info 를 읽어 새
+# 버전을 말한다)·같은 claude_home 의 개발 서버의 대답으로 새 코드가 한 번도 답하지 않았는데 커밋했다. 롤백 헬스도 같다
+health_check() {
   H_RES=none
   if helper_py; then
-    H_RES=$("$HPY" -I -S "$HELPER" health "$Port" "$DATA/runtime.json" "$1" "$HealthSeconds" </dev/null 2>/dev/null)
+    H_RES=$("$HPY" -I -S "$HELPER" health "$DATA/runtime.json" "$H_HOME" "$1" "$HealthSeconds" "$WaitPid,${H_PRE:-0}" \
+              </dev/null 2>/dev/null)
   elif command -v curl >/dev/null 2>&1; then
     health_curl "$1"
   else
     log "  헬스체크 수단이 없습니다(파이썬·curl 없음)"
   fi
-  case "$H_RES" in "ok "*) return 0 ;; "mismatch "*) return 2 ;; esac
+  case "$H_RES" in
+    "ok "*) host_bound "${H_RES##* }" && return 0
+            log "  runtime.json 의 pid ${H_RES##* } 는 방금 띄운 이 설치본의 Host 가 아닙니다 — 그 대답으로는 통과시키지 않습니다" ;;
+    "mismatch "*) return 2 ;;
+  esac
   H_RES=none
   return 1
 }
@@ -703,13 +780,13 @@ stop_failed_hosts() {   # 8b. 실패한 Host — 이 설치본의 Host 명령줄
   case "$_sp" in *[0-9]*) ;; *) return 0 ;; esac
   log "실패한 Host 를 멈춥니다(SIGTERM):$(printf ' %s' $_sp)"
   for _p in $_sp; do kill -TERM "$_p" 2>/dev/null; done
-  _se=$(( $(date +%s) + 5 ))
+  NAP_T=0
   while :; do
     _sl=
     for _p in $_sp; do is_our_host "$_p" && _sl="$_sl $_p"; done
     [ -z "$_sl" ] && return 0
-    [ "$(date +%s)" -ge "$_se" ] && break
-    sleep 0.5 2>/dev/null || sleep 1
+    [ "$NAP_T" -ge 10 ] && break
+    nap
   done
   log "  5초 뒤에도 남아 SIGKILL:$_sl"
   for _p in $_sl; do kill -KILL "$_p" 2>/dev/null; done
@@ -763,11 +840,11 @@ stop_point() {   # TERM 은 교체 전까지만 듣는다
 
 wait_host() {   # 2. 본체 종료 대기 — 안 죽으면 이 설치본의 Host 인지(명령줄) 확인한 뒤에만 TERM, 10초 뒤 KILL
   log "본체(PID $WaitPid) 종료 대기..."
-  _we=$(( $(date +%s) + WaitSeconds ))
-  while pid_alive "$WaitPid" && [ "$(date +%s)" -lt "$_we" ]; do
+  NAP_T=0
+  while pid_alive "$WaitPid" && [ "$NAP_T" -lt $(( WaitSeconds * 2 )) ]; do
     stop_point
     beat
-    sleep 0.5 2>/dev/null || sleep 1
+    nap
   done
   stop_point
   if pid_alive "$WaitPid"; then
@@ -825,6 +902,28 @@ restore_from_backup() {   # 8c. 교체 저널이 없을 때(밖에서 지워졌�
   return 0
 }
 
+deps_note() {   # 커밋할 때 — 새 버전 의존성을 잠금 밖(uv pip install -e)으로 맞췄으면 경고하고 last_apply 에 새 키로(S11) → RES_X
+  RES_X=
+  [ "$NEW_DEPS" = pip ] || return 0
+  log "  [WARN] 새 버전 의존성은 uv.lock 밖(uv pip install -e)으로 설치했습니다 — 고정 버전과 다를 수 있습니다(sh \"$InstallRoot/install.sh\" 로 다시 맞출 수 있음)"
+  RES_X=',"deps_fallback":"pip"'
+  return 0
+}
+
+# 사용자가 멈춤(maintenance.flag — stop --hold): 재기동 직전에, 또는 띄운 뒤 헬스가 응답 없이 끝났을 때 표식이 있으면 롤백하지
+# 않는다. 롤백하면 멀쩡할 수 있는 새 버전을 버리고 last_apply ok=false 로 그 버전을 계속 건너뛴다(옛 버전 재기동도 표식에
+# 막혀 Host 는 어차피 꺼져 있다). 교체·의존성 동기화는 끝났으니 커밋하고 '보류'로 끝낸다 — last_apply 는 ok=true·held=true
+# (updater.recently_failed 는 ok=false 만 본다). 다시 켜면(resume) 새 버전이 뜬다. 헬스를 거치지 않았으니 새 버전이 못 뜨면
+# 자동 롤백은 없다(백업은 $BackupDir 에 남는다 — install.sh 로 다시 설치). 버전이 어긋난 대답(2)·런처 실패는 그대로 롤백
+hold_commit() {
+  log "maintenance.flag 가 있어(사용자가 멈춤 — stop --hold) 롤백하지 않고 새 버전으로 둡니다 — 다시 켜기: resume"
+  commit_swap
+  deps_note
+  write_result true "" "$RES_X,\"held\":true"
+  log "업데이트 적용 - 보류(헬스체크 없이 커밋, $Version)"
+  finish true 0
+}
+
 rollback() {   # 8. 실패한 새 버전을 되돌린다 — 돌아오지 않는다
   log "롤백합니다."
   write_result false                              # 먼저 — 다시 띄운 옛 Host 의 재기동 자동 적용이 같은 버전을 또 받지 않게
@@ -857,6 +956,7 @@ rollback() {   # 8. 실패한 새 버전을 되돌린다 — 돌아오지 않는
   fi
   launcher_forget "$Version"
   _rb=1                                           # e. 옛 버전 재기동·헬스 — 옛 버전을 기대(옛 코드가 새 버전을 말하는 어긋남도 잡는다)
+  H_PRE=$(json_pid "$DATA/runtime.json")          #    (재기동 직전 runtime.json 의 pid — 실패한 새 Host — 의 대답은 치지 않는다)
   if restart_host 1; then
     health_check "$OLD_VER"
     _rb=$?
@@ -990,9 +1090,17 @@ main() {
   DATA=''
   HELPER=''
   SWAP=''
+  TRASH=''
   OLD_VER=''
+  NAP_T=0
+  H_PRE=''
+  H_RES=none
+  SYNC_VIA=none
+  NEW_DEPS=none
+  RES_X=''
   parse_args "$@"
   check_args
+  H_HOME=$(dirname "$DATA")                         # Host 의 claude_home(데이터 폴더 = claude_home/session_manager) — 헬스가 대조
 
   take_lock_and_mark                                # 1.
 
@@ -1037,8 +1145,13 @@ main() {
     log "[FAIL] 의존성 동기화 실패(새 버전 $Version)"
     rollback
   fi
-  M_HC=1                                            # 6. 재기동 → 7. 헬스
+  NEW_DEPS=$SYNC_VIA
+  [ -e "$DATA/maintenance.flag" ] && hold_commit     # 6. 재기동 → 7. 헬스. 그새 사용자가 멈췄으면(stop --hold) 보류(돌아오지 않는다)
+  M_HC=1
+  M_UP=0
+  H_PRE=$(json_pid "$DATA/runtime.json")            # 재기동 직전 runtime.json 의 pid — 그 pid 의 대답은 통과로 치지 않는다
   if restart_host 1; then
+    M_UP=1
     health_check "$Version"
     M_HC=$?
   else
@@ -1046,10 +1159,14 @@ main() {
   fi
   if [ "$M_HC" = 0 ]; then
     commit_swap
+    deps_note
     log "헬스체크 통과 - 업데이트 성공 ($Version)"
-    write_result true
+    write_result true "" "$RES_X"
     [ "$STOP_REQ" = 1 ] && log "(교체가 시작된 뒤 TERM 을 받아 끝까지 진행했습니다)"
     finish true 0
+  fi
+  if [ "$M_UP" = 1 ] && [ "$M_HC" = 1 ] && [ -e "$DATA/maintenance.flag" ]; then
+    hold_commit                                     # 헬스 대기 중에 멈췄다(응답 없음) — 롤백하지 않는다
   fi
   log "헬스체크 실패 (port=$Port, runtime.json port=$(runtime_port))"
   [ "$M_HC" = 2 ] && log "  응답한 버전이 다릅니다: ${H_RES##* } (기대 $Version)"

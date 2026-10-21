@@ -294,6 +294,42 @@ def runner_script() -> Path:
     return Path(__file__).resolve().parent / osdep.UPDATE_RUNNER
 
 
+def _marker_holder() -> str | None:
+    """맥·리눅스: 데이터 폴더의 update.inprogress(install.sh·러너가 쥔다)가 살아 있으면 그 by(install·runner·…), 아니면 None.
+
+    러너의 marker_live 와 같은 규칙 — pid 가 그 프로그램(명령줄에 install.sh·update_runner)으로 살아 있고 at 이 30분 안.
+    pid·at 이 없으면 막 쓰는 중일 수 있어 1분은 산 것으로, 명령줄을 못 읽으면 산 것으로 본다. Windows 는 이 표식을 쓰지 않는다.
+    """
+    import re
+    from session_manager import osdep
+    if osdep.NAME == "win":
+        return None
+    p = config.data_dir() / "update.inprogress"
+    try:
+        lines = p.read_text(encoding="utf-8", errors="replace").split("\n")
+        age = time.time() - p.stat().st_mtime
+    except OSError:
+        return None
+
+    def first(rx: str) -> str | None:                   # sed -n 's/^…$/\1/p' | head -n 1 와 같게
+        return next((m.group(1) for m in (re.fullmatch(rx, ln) for ln in lines) if m), None)
+    pid, at, by = first(r"pid=([0-9]{1,10})\s*"), first(r"at=([0-9]{1,12})\s*"), first(r"by=([a-z]*)\s*")
+    if not pid or not at:
+        return (by or "?") if age < 60 else None
+    if not osdep.pid_alive(int(pid)) or time.time() - int(at) >= 1800:
+        return None
+    want = {"runner": "update_runner", "install": "install.sh"}.get(by or "")
+    if want:
+        try:
+            import psutil
+            cmd = " ".join(psutil.Process(int(pid)).cmdline())
+        except Exception:  # noqa: BLE001
+            cmd = ""
+        if cmd and want not in cmd:
+            return None                                 # pid 를 다른 프로그램이 받았다(재사용)
+    return by or "?"
+
+
 def apply(manifest: dict[str, Any], staged: Path, restart_cmd: str | None = None) -> dict:
     """분리된 updater 를 띄우고 우리가 죽을 준비를 한다.
 
@@ -307,6 +343,13 @@ def apply(manifest: dict[str, Any], staged: Path, restart_cmd: str | None = None
                           "표식을 지운 뒤 다시 하세요.")
     if not supports_this_os(manifest):                  # check() 가 걸렀어도 마지막 관문에서 한 번 더
         raise UpdateError(_unsupported_msg(manifest))
+    # 맥·리눅스: sh install.sh 재실행 중(옛 Host 가 [1/6]~[5/6] 동안 떠 있다)에 적용하면 Host 는 내려가고 러너는 설치 표식을
+    # 보고 종료코드 3 으로 끝난다(재기동 없음) — 설치가 중간에 실패하면 Host 가 꺼진 채 남는다. 잠금 전에 거부한다.
+    holder = _marker_holder()
+    if holder == "install":
+        raise UpdateError("설치(install.sh)가 진행 중이라 적용하지 않습니다 — 설치가 끝난 뒤 다시 하세요.")
+    if holder:
+        raise UpdateError("다른 업데이트가 진행 중이라(update.inprogress) 적용하지 않습니다 — 끝난 뒤 다시 하세요.")
     # ★ 동시 실행 방지 잠금(실사고 2026-09-04): 사용자가 업데이트를 연달아 누르거나
     #   재기동 자동적용이 겹치면 runner 가 2개 이상 동시에 돌아 포트 경합으로 서비스가
     #   완전히 죽는다. 5분 내 진행 중인 apply 가 있으면 거부한다(만료 시 자기치유).

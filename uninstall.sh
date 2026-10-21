@@ -1,20 +1,24 @@
 #!/bin/sh
 # ClewPath Host — 제거 스크립트(맥·리눅스). README 의 수동 제거 절차를 스크립트로 — docs/designs/posix-install.md 3.5
 #
-#   sh uninstall.sh                  확인을 묻고(터미널) 멈춤 → 설치 폴더 삭제. 데이터(기기·자격증명)와 uv 는 남긴다
+#   sh uninstall.sh                  확인을 묻고(터미널) 멈춤 → 설치 폴더의 ClewPath 항목 삭제. 데이터(기기·자격증명)와 uv 는 남긴다
 #   sh uninstall.sh --yes            묻지 않고
 #   sh uninstall.sh --purge-data     데이터 폴더(~/.claude/session_manager — 기기 페어링·자격증명·설정)도 지운다
 #   sh uninstall.sh --purge-uv       ClewPath 가 받은 uv·파이썬 런타임($CLEWPATH_HOME/bin·python)도 지운다
 #   sh uninstall.sh --purge          둘 다
 #
 # 순서: 확인 → maintenance.flag(감시가 다시 띄우지 않게) → 감시(watch)·Host·터미널 관리 프로세스(브로커) 정지
-#   → 설치 폴더 삭제 → (선택) uv·데이터 삭제 → 남은 것 보고
+#   → 설치 폴더의 우리 항목 삭제(비면 폴더도) → (선택) uv·데이터 삭제 → 남은 것 보고
 #
 # 지키는 것:
 #  - 클로드의 파일은 건드리지 않는다: ~/.claude/projects 는 어떤 경우에도 그대로, settings.json 은 읽기만 한다 —
 #    ClewPath 가 등록한 훅이 남아 있으면 개수와 지우는 방법만 알려 준다(사장님 결정 2026-10-20)
-#  - 지우는 자리는 정해 둔 것뿐(설치 루트·그 기록의 uv·파이썬 폴더·이름이 session_manager 인 데이터 폴더). 개발 체크아웃
-#    (.git·ops)·/·홈은 거부한다. 업데이트·설치가 진행 중이면 멈춘다(러너가 끝에 Host 를 다시 띄운다)
+#  - 지우는 자리는 정해 둔 것뿐(설치 폴더 안의 우리 이름 — our_name, 그 기록의 uv·파이썬 폴더, 이름이 session_manager 인
+#    데이터 폴더). 설치 폴더에 남의 파일이 있으면 그것과 폴더는 남긴다(zip 을 ~/Downloads 에 풀고 설치했어도).
+#    개발 체크아웃(.git·ops)·/·홈·클로드 폴더(와 그 위 — 물리 경로로도)는 거부한다. 업데이트·설치가 진행 중이면
+#    멈춘다(러너가 끝에 Host 를 다시 띄운다)
+#  - 지우다 끊기면(Ctrl+C·창 닫힘) maintenance.flag 를 남기고, 같은 명령으로 다시 실행해 마저 지운다 — 판정·다시 실행에
+#    쓰는 것(session_manager·pyproject.toml·uninstall.sh·.clewpath-install)을 맨 끝에 지운다
 #  - 이 파일이 설치 폴더 안에 있으므로 임시 사본으로 다시 실행한 뒤 지운다(지우는 동안 스크립트를 읽지 않게)
 #  - 대화형 입력은 이 확인 하나뿐이고 /dev/tty 로 묻는다(curl | sh 처럼 표준 입력이 파이프여도)
 # 종료코드: 0 다 지움 / 1 남은 것이 있음·중단·취소 / 2 인자 오류·확인할 터미널 없음
@@ -56,8 +60,65 @@ path_ok() {   # 절대 경로 — 제어문자·. ·.. 조각이 없다
   return 0
 }
 
-safe_target() {   # $1=지울 자리 — 절대 경로이고 / 도 홈도 아니다(rm -rf 앞의 마지막 가드)
-  path_ok "$1" && [ "$1" != / ] && [ "$1" != "$HOME" ] && [ "$1" != "$HOME/" ]
+phys_pwd() { if [ -x /bin/pwd ]; then /bin/pwd -P; else pwd -P; fi; }
+# ↑ 지금 폴더의 물리 경로 — 다섯 스크립트가 같은 본문. 맥 APFS 는 대소문자를 무시하고 bash 3.2 의 내장(-P)은 친 글자를
+#   그대로 두므로 /bin/pwd(getcwd — 디스크의 글자)를 먼저 쓴다
+
+under() {   # $1=자리 $2=경로 — $2 가 $1 자체이거나 그 아래인가(글자로, 끝의 / 하나는 없는 것으로)
+  case "${2%/}/" in "${1%/}/"*) return 0 ;; esac
+  return 1
+}
+
+safe_target() {   # $1=지울 자리 — 절대 경로이고 / 도, 홈이나 그 위도 아니다(글자로, 그리고 홈의 물리 경로로 — 끝의 /·
+  path_ok "$1" || return 1   # 심볼릭 링크 홈·맥의 대소문자). rm -rf 앞의 마지막 가드
+  case "$1" in /|"$HOME"|"$HOME/") return 1 ;; esac
+  under "$1" "$HOME" && return 1
+  under "$1" "${HOME_P:-$HOME}" && return 1
+  return 0
+}
+
+root_guard() {   # 설치 폴더가 클로드 폴더·데이터 폴더(글자·물리 경로)이거나 그 위면 거부 — 우리 이름 session_manager 가
+  _gc=$(dirname "$DATA_DIR")   # 곧 데이터 폴더가 된다(클로드 폴더에 zip 을 풀었을 때)
+  for _g in "$DATA_DIR" "$_gc" "$(CDPATH='' cd "$DATA_DIR" 2>/dev/null && phys_pwd)" \
+            "$(CDPATH='' cd "$_gc" 2>/dev/null && phys_pwd)"; do
+    [ -n "$_g" ] && under "$ROOT" "$_g" && die "설치 폴더가 클로드 폴더·데이터 폴더이거나 그 위입니다 — 지우지 않습니다: $ROOT"
+  done
+  return 0
+}
+
+our_name() {   # $1=설치 폴더 바로 아래 이름 — ClewPath 가 놓거나 만드는 것(PAYLOAD 9개·설치가 만드는 것·일시 이름, 맥
+  case "$1" in   # Finder 의 .DS_Store). install.sh 가 '남의 폴더'를 가리는 목록과 같다 — 바꾸면 둘 다
+    session_manager|pwa|pyproject.toml|uv.lock|install.ps1|install.sh|uninstall.sh|README.md|LICENSE) return 0 ;;
+    .venv|clewpath_host.egg-info|start-connector.sh|.clewpath-install) return 0 ;;
+    .clewpath-swap.*|.clewpath-old.*|.clewpath-trash.*|.clewpath-install.*|.DS_Store) return 0 ;;
+  esac
+  return 1
+}
+
+ours_left() {   # 0 = 설치 폴더에 우리 이름이 아직 있다
+  for _e in "$ROOT"/* "$ROOT"/.[!.]* "$ROOT"/..?*; do
+    exists "$_e" && our_name "${_e##*/}" && return 0
+  done
+  return 1
+}
+
+foreign_names() {   # 설치 폴더의 우리 것이 아닌 이름들 — 쉼표로, 앞의 10개(나머지는 개수만)
+  _fl='' _fn=0
+  for _e in "$ROOT"/* "$ROOT"/.[!.]* "$ROOT"/..?*; do
+    exists "$_e" || continue
+    our_name "${_e##*/}" && continue
+    _fn=$((_fn + 1))
+    [ "$_fn" -le 10 ] && _fl="$_fl${_fl:+, }${_e##*/}"
+  done
+  [ "$_fn" -gt 10 ] && _fl="$_fl 외 $((_fn - 10))개"
+  printf '%s' "$_fl"
+}
+
+is_install_root() {   # 1. ClewPath 설치 폴더인가 — 설치 기록의 첫 줄 표식(지우다 끊겨 session_manager 가 먼저 없어졌어도),
+  case "$(sed -n '1p' "$ROOT/.clewpath-install" 2>/dev/null)" in   # 또는 session_manager + 이름이 clewpath-host 인 pyproject
+    "# clewpath-install v1"*) return 0 ;;
+  esac
+  [ -d "$ROOT/session_manager" ] && grep -q '^name[[:space:]]*=[[:space:]]*"clewpath-host"' "$ROOT/pyproject.toml" 2>/dev/null
 }
 
 rec_get() {   # 설치 기록(.clewpath-install)의 key= 값 — sed 로만 읽는다(소스로 실행하지 않는다)
@@ -142,10 +203,10 @@ term_then_kill() {   # $1=pid $2=초 $3=이름 — SIGTERM, 그 안에 안 끝�
 proc_pids() {   # 명령줄에 $1 이 든 프로세스(나·부모·내 하위 셸 제외) — 한 줄에 pid 하나. 후보를 다 모은 뒤 하나씩
   if [ -d /proc/self ]; then                    # 다시 본다: 찾는 grep 자신도 그 글자를 인자로 가져 후보에 든다(끝나면 사라진다)
     _pc=$(grep -l -F -e "$1" /proc/[0-9]*/cmdline 2>/dev/null)
-  else
+  else                                          # 맥 — $( ) 안의 case 패턴은 ( 로 연다: bash 3.2 는 짝 없는 ) 에서 끝낸다
     _pc=$(ps -A -ww -o pid= -o command= 2>/dev/null | while IFS= read -r _pl; do
             _pl=${_pl#"${_pl%%[! ]*}"}
-            case "$_pl" in *"$1"*) printf '%s\n' "${_pl%% *}" ;; esac
+            case "$_pl" in (*"$1"*) printf '%s\n' "${_pl%% *}" ;; esac
           done)
   fi
   _pme=$(cmdline_of "$$")                       # 하위 셸 안에서도 $$ 는 본 셸 — 하위 셸(같은 명령줄)은 명령줄로 거른다
@@ -194,14 +255,27 @@ runner_live() {   # 업데이트 러너가 잠금(updates/runner.lock.d)을 쥐�
 
 # ---------------------------------------------------------------- 단계
 
-stop_watch() {   # 5. 감시(watch) — 잠금의 pid 가 런처의 watch 일 때만 TERM
-  _wl="$DATA_DIR/watch.lock.d"
+stop_watch() {   # 5. 감시(watch) — 잠금의 pid 가 런처의 watch 이고 이 설치본의 것일 때만 TERM(데이터 폴더를 같이 쓰는
+  _wl="$DATA_DIR/watch.lock.d"   # 다른 설치본의 watch 는 둔다)
   [ -d "$_wl" ] || return 0
   _wp=$(sed -n '1s/^\([0-9]\{1,10\}\)[[:space:]]*$/\1/p' "$_wl/pid" 2>/dev/null)
   pid_alive "$_wp" || return 0
   _wc=$(cmdline_of "$_wp")
   case "$_wc" in *start-connector*) ;; *) return 0 ;; esac
   case "$_wc" in *watch*) ;; *) return 0 ;; esac
+  if [ -f "$_wl/root" ]; then                    # 런처가 적어 둔 그 watch 의 설치 폴더(물리 경로)
+    _wr=$(sed -n '1p' "$_wl/root" 2>/dev/null)
+    if [ "$_wr" != "$ROOT" ]; then
+      ok "감시(watch)는 다른 설치본의 것이라 두었습니다(pid $_wp): $_wr"
+      return 0
+    fi
+  else                                           # 옛 런처(root 없음) — 명령줄에 이 설치본의 런처 경로가 있을 때만
+    case "$_wc" in
+      *"$ROOT/start-connector.sh"*) ;;
+      *) warn "감시(watch)가 이 설치본의 것인지 알 수 없어 두었습니다(pid $_wp) — 이 설치본의 것이면 직접 멈추세요: kill $_wp"
+         return 0 ;;
+    esac
+  fi
   term_then_kill "$_wp" 5 "감시(watch)"
 }
 
@@ -245,20 +319,46 @@ sweep() {   # 남은 Host·브로커(같은 설치본의 venv) — ptyd.json·ru
   done
 }
 
+left_pid() {   # 14. $1=pid(정지 전 runtime.json·ptyd.json 의 것) $2=이름 $3=server|ptyd — 아직 살아 있으면 알린다.
+  pid_alive "$1" || return 0   # 명령줄이 그 모듈이고 그 venv 가 이제 없으면(이 설치본을 다른 글자로 가리킨 것 — 맥 대소문자)
+  _lc=$(cmdline_of "$1")       # 남은 것. 명령줄을 못 읽거나 venv 가 아직 있는 다른 설치본이면 경고만
+  if [ -z "$_lc" ]; then
+    warn "$2(pid $1)가 아직 살아 있습니다 — 명령줄을 읽지 못해 이 설치본의 것인지 확인하지 못했습니다"
+    return 0
+  fi
+  case "$3:$_lc" in
+    server:*session_manager.server*|server:*/clewpath-host*|ptyd:*session_manager.ptyd*) ;;
+    *) return 0 ;;                               # pid 를 다른 프로그램이 다시 쓴다
+  esac
+  _lv=$(printf '%s\n' "$_lc" | sed -n 's|/\.venv/bin/.*||p' | head -n 1)
+  _lo=$(printf '%s' "$_lc" | tr '\n' ' ' | cut -c 1-160)
+  if [ -n "$_lv" ] && [ -d "$_lv/.venv" ]; then
+    warn "$2(pid $1)는 다른 설치본의 것으로 보여 두었습니다: $_lo"
+    return 0
+  fi
+  U_LEFT=1
+  warn "$2(pid $1)가 아직 살아 있습니다 — 이 설치본의 것인데 멈추지 못했습니다: $_lo"
+}
+
 purge_uv() {   # 10. ClewPath 가 받은 uv·파이썬 런타임 — 우리가 둔 것만(CLEWPATH_HOME 이 남과 같이 쓰는 폴더여도 안전하게)
   _ch=$CLEWPATH_HOME
-  safe_target "$_ch" || { warn "CLEWPATH_HOME 이 이상해 uv·파이썬을 지우지 않습니다: $_ch"; return 0; }
-  for _f in "$_ch/bin/uv" "$_ch/bin/uvx" "$_ch"/bin/.uv.tmp.*; do
-    exists "$_f" && rm -f "$_f"
-  done
-  [ -d "$_ch/bin" ] && rmdir "$_ch/bin" 2>/dev/null
-  if exists "$_ch/bin/uv"; then warn "uv 를 지우지 못했습니다: $_ch/bin/uv"; else ok "uv 삭제: $_ch/bin"; fi
+  safe_target "$_ch" || { warn "CLEWPATH_HOME 이 이상해 uv·파이썬을 지우지 않습니다: $_ch"; UV_SKIP=1; return 0; }
+  if [ "$REC_UV" = "$_ch/bin/uv" ]; then         # 설치 기록이 이 자리 uv 를 썼다고 할 때만(--system-uv·남이 둔 uv 는 남긴다)
+    UV_OURS=1
+    for _f in "$_ch/bin/uv" "$_ch/bin/uvx" "$_ch"/bin/.uv.tmp.*; do
+      exists "$_f" && rm -f "$_f"
+    done
+    [ -d "$_ch/bin" ] && rmdir "$_ch/bin" 2>/dev/null
+    if exists "$_ch/bin/uv"; then warn "uv 를 지우지 못했습니다: $_ch/bin/uv"; else ok "uv 삭제: $_ch/bin"; fi
+  elif exists "$_ch/bin/uv"; then
+    warn "설치 기록의 uv(${REC_UV:-없음})가 이 자리가 아니어서 남깁니다: $_ch/bin/uv"
+  fi
   _py="$_ch/python"
   if [ -d "$_py" ]; then
-    _pok=1                                       # uv 관리 런타임 폴더의 모양(cpython-… 와 uv 의 잠금·임시)만 있을 때 통째로
-    for _pe in "$_py"/* "$_py"/.[!.]* "$_py"/..?*; do
+    _pok=1                                       # uv 관리 런타임 폴더의 모양(cpython-… 와 부 버전 링크, uv 가 늘 두는
+    for _pe in "$_py"/* "$_py"/.[!.]* "$_py"/..?*; do   # .gitignore('*')·잠금·임시)만 있을 때 통째로
       exists "$_pe" || continue
-      case "${_pe##*/}" in cpython-*|pypy-*|graalpy-*|.lock|.temp|.cache|.tmp*|bin) ;; *) _pok=0 ;; esac
+      case "${_pe##*/}" in cpython-*|pypy-*|graalpy-*|.gitignore|.lock|.temp|.cache|.tmp*|bin) ;; *) _pok=0 ;; esac
     done
     if [ "$_pok" != 1 ]; then
       warn "다른 파일이 섞여 있어 파이썬 폴더는 남깁니다: $_py"
@@ -301,7 +401,10 @@ confirm() {   # 3. /dev/tty 로 묻는다 — 표준 입력이 파이프여도 �
   fi
   say ""
   say "  다음을 지웁니다:"
-  say "    - 설치 폴더: $ROOT"
+  say "    - 설치 폴더의 ClewPath 항목: $ROOT"
+  say "      (ClewPath 가 놓는 이름만 — session_manager·pwa·.venv·start-connector.sh 등. 다른 파일은 지우지 않습니다)"
+  _cf=$(foreign_names)
+  [ -n "$_cf" ] && say "      ClewPath 것이 아닌 항목이 있어 그것과 폴더는 남깁니다: $_cf"
   [ "$PURGE_UV" = 1 ] && say "    - uv·파이썬 런타임: $CLEWPATH_HOME/bin, $CLEWPATH_HOME/python"
   [ "$PURGE_DATA" = 1 ] && say "    - 데이터 폴더: $DATA_DIR"
   say "  열린 ClewPath 터미널(그 안의 claude)이 모두 끝납니다."
@@ -317,7 +420,56 @@ confirm() {   # 3. /dev/tty 로 묻는다 — 표준 입력이 파이프여도 �
   exit 1
 }
 
-on_exit() {   # 임시 사본(clewpath-uninstall.XXXXXX)만 치운다
+remove_root() {   # 9. 설치 폴더 — 우리 이름만 지운다. 판정·다시 실행에 쓰는 넷은 맨 끝에(중간에 끊겨도 같은 명령으로 마저
+  for _e in "$ROOT"/* "$ROOT"/.[!.]* "$ROOT"/..?*; do   # 지우게). 비면 폴더도, 남의 것이 있으면 그것과 폴더는 남긴다
+    exists "$_e" || continue
+    case "${_e##*/}" in session_manager|pyproject.toml|uninstall.sh|.clewpath-install) continue ;; esac
+    our_name "${_e##*/}" && rm -rf "$_e" 2>/dev/null
+  done
+  for _n in session_manager pyproject.toml uninstall.sh .clewpath-install; do
+    exists "$ROOT/$_n" && rm -rf "${ROOT:?}/$_n" 2>/dev/null
+  done
+  rmdir "$ROOT" 2>/dev/null
+  if ! exists "$ROOT"; then
+    ok "설치 폴더 삭제: $ROOT"
+  elif ! ours_left; then
+    warn "설치 폴더에 ClewPath 것이 아닌 항목이 있어 그것과 폴더는 남겼습니다: $ROOT"
+    say "         남긴 것: $(foreign_names)"
+  fi
+  return 0
+}
+
+after_root() {   # 9 의 끝(또는 9 에서 끊김) — 우리 것이 남았으면 표식을 남기고(반쪽 설치본으로 Host 가 뜨지 않게) 다시
+  if ours_left; then   # 실행을 안내한다. 다 지웠으면 표식을 거둔다 — 남겨 두면 다시 설치했을 때 첫 기동이 막힌다. $1=알림
+    warn "$1"
+    [ "$FLAG_MADE" = 1 ] && say "         maintenance.flag 는 남겨 둡니다 — 반쯤 지운 설치본으로 Host 가 뜨지 않게"
+    if exists "$ROOT/uninstall.sh"; then
+      say "         같은 명령을 다시 실행하면 마저 지웁니다: sh \"$ROOT/uninstall.sh\" --yes$U_OPTS"
+    else
+      say "         다시 설치(get.sh)한 뒤 제거하거나, 남은 것과 $DATA_DIR/maintenance.flag 를 직접 지우세요"
+    fi
+  elif [ "$FLAG_MADE" = 1 ]; then
+    rm -f "$DATA_DIR/maintenance.flag"
+  fi
+  U_PHASE=finished
+}
+
+flag_undo() {   # 4 의 표식을 거둔다 — 아무것도 지우기 전에 멈췄을 때. 먼저 있던 것(stop --hold 등)이면 그 내용으로 되돌린다
+  if [ "$FLAG_PRE" = 1 ]; then
+    { printf '%s\n' "$FLAG_OLD" >"$DATA_DIR/maintenance.flag"; } 2>/dev/null
+  else
+    rm -f "$DATA_DIR/maintenance.flag"
+  fi
+}
+
+on_exit() {   # 끝까지 못 간 제거의 표식 정리(U_PHASE: stopping = 표식 뒤 정지 중, removing = 설치 폴더를 지우는 중), 그리고 임시 사본
+  case "${U_PHASE:-}" in
+    stopping)
+      [ "$FLAG_MADE" = 1 ] && flag_undo
+      [ "$U_SIG" = 1 ] && warn "제거를 멈췄습니다 — 설치 폴더는 지우지 않았습니다(Host 를 멈췄으면 다시 띄우세요: sh \"$ROOT/start-connector.sh\" start)" ;;
+    removing)
+      after_root "제거가 중간에 끊겼습니다 — 설치 폴더에 ClewPath 항목이 남았습니다: $ROOT" ;;
+  esac
   if [ -n "$SELF_TMP" ]; then
     case "${SELF_TMP##*/}" in clewpath-uninstall.*) rm -rf "$SELF_TMP" ;; esac
   fi
@@ -332,6 +484,12 @@ main() {
   PURGE_UV=0
   ROOT_ARG=''
   SELF_TMP=''
+  U_PHASE=''
+  U_SIG=0
+  FLAG_MADE=0
+  UV_SKIP=0
+  UV_OURS=0
+  REC_UV=''
   while [ $# -gt 0 ]; do
     case "$1" in
       --yes|-y) ASSUME_YES=1 ;;
@@ -345,23 +503,26 @@ main() {
     shift
   done
 
-  # 1. 확인 — 설치 루트(물리 경로)가 ClewPath 설치본이어야 한다
+  U_OPTS=''                                     # 다시 실행 안내에 붙일 선택
+  [ "$PURGE_DATA" = 1 ] && U_OPTS="$U_OPTS --purge-data"
+  [ "$PURGE_UV" = 1 ] && U_OPTS="$U_OPTS --purge-uv"
+
+  # 1. 확인 — 설치 루트(물리 경로 — 맥은 디스크의 대소문자)가 ClewPath 설치본이어야 한다
   if [ -n "$ROOT_ARG" ]; then
-    ROOT=$(CDPATH='' cd "$ROOT_ARG" 2>/dev/null && pwd -P) || die "설치 폴더가 없습니다: $ROOT_ARG"
-    _sd=$(CDPATH='' cd "$(dirname "$0")" 2>/dev/null && pwd -P) || _sd=
+    ROOT=$(CDPATH='' cd "$ROOT_ARG" 2>/dev/null && phys_pwd) || die "설치 폴더가 없습니다: $ROOT_ARG"
+    _sd=$(CDPATH='' cd "$(dirname "$0")" 2>/dev/null && phys_pwd) || _sd=
     case "${_sd##*/}" in clewpath-uninstall.*) SELF_TMP=$_sd ;; esac
   else
-    ROOT=$(CDPATH='' cd "$(dirname "$0")" && pwd -P) || die "설치 폴더를 찾지 못했습니다: $0"
+    ROOT=$(CDPATH='' cd "$(dirname "$0")" && phys_pwd) || die "설치 폴더를 찾지 못했습니다: $0"
   fi
   trap 'on_exit' EXIT
-  trap 'exit 1' INT TERM HUP
-  safe_target "$ROOT" || die "설치 폴더가 / 나 홈이거나 이상한 경로입니다: $ROOT"
+  trap 'U_SIG=1; exit 1' INT TERM HUP
+  HOME_P=$(CDPATH='' cd "$HOME" 2>/dev/null && phys_pwd) || HOME_P=$HOME
+  safe_target "$ROOT" || die "설치 폴더가 / 나 홈(또는 그 위)이거나 이상한 경로입니다 — 지우지 않습니다: $ROOT"
   if [ -e "$ROOT/.git" ] || [ -d "$ROOT/ops" ]; then
     die "개발 체크아웃(.git·ops)입니다 — 소스 트리는 지우지 않습니다: $ROOT"
   fi
-  if [ ! -d "$ROOT/session_manager" ] || ! grep -q '^name[[:space:]]*=[[:space:]]*"clewpath-host"' "$ROOT/pyproject.toml" 2>/dev/null; then
-    die "ClewPath 설치 폴더가 아닙니다(session_manager·pyproject.toml 이 안 보임): $ROOT"
-  fi
+  is_install_root || die "ClewPath 설치 폴더가 아닙니다(설치 기록·session_manager·pyproject.toml 이 안 보임): $ROOT"
   if [ -z "$ROOT_ARG" ]; then                    # 이 파일은 지울 폴더 안에 있다 — 임시 사본으로 다시 실행한다
     command -v mktemp >/dev/null 2>&1 || die "mktemp 가 없습니다"
     _t=$(mktemp -d "${TMPDIR:-/tmp}/clewpath-uninstall.XXXXXX") || die "임시 폴더를 만들 수 없습니다(TMPDIR)"
@@ -383,8 +544,10 @@ main() {
   path_ok "$DATA_DIR" || DATA_DIR=$(rec_get data_dir)
   path_ok "$DATA_DIR" || DATA_DIR="${SESSION_MANAGER_CLAUDE_HOME:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}/session_manager"
   path_ok "$DATA_DIR" || die "데이터 폴더를 정하지 못했습니다: $DATA_DIR"
+  root_guard
   _rh=$(rec_get home)
   path_ok "$_rh" && CLEWPATH_HOME=$_rh
+  REC_UV=$(rec_get uv)                           # 설치 폴더를 지운 뒤(10.)에는 기록을 못 읽는다 — 지금 읽어 둔다
 
   say ""
   say "=== ClewPath Host 제거 ==="
@@ -398,14 +561,27 @@ main() {
   [ "$ASSUME_YES" = 1 ] || confirm              # 3.
   cd / || die "/ 로 옮겨 가지 못했습니다"         # 지울 폴더 안에 머물지 않게
 
-  # 4. 감시가 다시 띄우지 못하게(업데이트 적용도 이 표식을 보면 거부한다)
-  FLAG_MADE=0
+  # 4. 감시가 다시 띄우지 못하게(업데이트 적용도 이 표식을 보면 거부한다). 여기부터 끊기면 on_exit 가 표식을 정리한다
+  FLAG_PRE=0
+  FLAG_OLD=''
+  HP0=''
+  BP0=''
+  U_PHASE=stopping
   if [ -d "$DATA_DIR" ]; then
-    if { printf 'by=uninstall\nat=%s\n' "$(date +%s)" >"$DATA_DIR/maintenance.flag"; } 2>/dev/null; then
-      FLAG_MADE=1
-    else
+    if [ -f "$DATA_DIR/maintenance.flag" ]; then  # 먼저 있던 표식(stop --hold 등) — 멈추면 되돌린다
+      FLAG_PRE=1
+      FLAG_OLD=$(cat "$DATA_DIR/maintenance.flag" 2>/dev/null)
+    fi
+    FLAG_MADE=1
+    if ! { printf 'by=uninstall\nat=%s\n' "$(date +%s)" >"$DATA_DIR/maintenance.flag"; } 2>/dev/null; then
+      FLAG_MADE=0
       warn "maintenance.flag 를 만들지 못했습니다 — 감시(watch)가 다시 띄울 수 있습니다"
     fi
+    if runner_live || marker_busy; then         # 묻는 사이 업데이트·설치가 시작됐다 — 표식을 거두고(on_exit) 멈춘다
+      die "업데이트·설치가 진행 중입니다(pid ${MK_PID:-?}) — 끝난 뒤 다시 실행하세요"
+    fi
+    HP0=$(json_pid "$DATA_DIR/runtime.json")     # 14 에서 아직 살아 있나 본다
+    BP0=$(json_pid "$DATA_DIR/ptyd.json")
     stop_watch                                   # 5.
     stop_host                                    # 6.
     stop_broker                                  # 7.
@@ -413,11 +589,10 @@ main() {
   sweep
   # 8. 자동 시작 해제 자리 — 다음 단계에서 [mac] launchctl bootout + plist 삭제, [linux] systemctl --user disable --now
 
-  # 9. 설치 폴더
-  if safe_target "$ROOT" && [ -d "$ROOT/session_manager" ]; then
-    rm -rf "$ROOT" 2>/dev/null
-    if exists "$ROOT"; then warn "설치 폴더를 다 지우지 못했습니다: $ROOT"; else ok "설치 폴더 삭제: $ROOT"; fi
-  fi
+  # 9. 설치 폴더 — 여기부터 끊기면 표식을 남긴다(반쯤 지운 설치본으로 Host 가 뜨지 않게)
+  U_PHASE=removing
+  safe_target "$ROOT" && remove_root
+  after_root "설치 폴더의 ClewPath 항목을 다 지우지 못했습니다: $ROOT"
   [ "$PURGE_UV" = 1 ] && purge_uv               # 10.
   if [ "$PURGE_DATA" = 1 ]; then                # 11. 이름이 session_manager 이고 클로드 폴더 자체가 아닐 때만
     case "$DATA_DIR" in
@@ -428,23 +603,33 @@ main() {
         fi ;;
       *) warn "데이터 폴더 이름이 session_manager 가 아니어서 지우지 않습니다: $DATA_DIR" ;;
     esac
-  elif [ "$FLAG_MADE" = 1 ]; then               # 남겨 두면 다시 설치했을 때 첫 기동이 막힌다
-    rm -f "$DATA_DIR/maintenance.flag"
-  fi
+  fi                                            # (표식은 9 의 끝에서 거뒀다)
   # 12. ~/.claude/projects 는 어떤 경우에도 건드리지 않는다
   hooks_notice                                  # 13.
 
-  # 14. 남은 것
+  # 14. 남은 것 — 설치 폴더의 우리 항목을 쓰는 프로세스(남긴 남의 파일을 연 프로그램은 빼고), 정지 전 runtime.json·
+  #     ptyd.json 이 가리키던 Host·브로커, 우리 항목, (purge 때) 데이터·uv·파이썬
   U_LEFT=0
-  _lp=$(proc_pids "$ROOT/")
-  if [ -n "$_lp" ]; then
+  _lf=''
+  for _p in $(proc_pids "$ROOT/"); do
+    _qc=$(cmdline_of "$_p")
+    _qn=${_qc#*"$ROOT/"}
+    _qn=${_qn%%"$NL"*}
+    _qn=${_qn%%/*}
+    our_name "${_qn%% *}" && _lf="$_lf $_p"
+  done
+  if [ -n "$_lf" ]; then
     U_LEFT=1
     warn "설치 폴더를 쓰는 프로세스가 남아 있습니다:"
-    for _p in $_lp; do say "         pid $_p: $(cmdline_of "$_p" | tr '\n' ' ' | cut -c 1-120)"; done
+    for _p in $_lf; do say "         pid $_p: $(cmdline_of "$_p" | tr '\n' ' ' | cut -c 1-120)"; done
   fi
-  exists "$ROOT" && U_LEFT=1
+  left_pid "$HP0" "Host" server
+  left_pid "$BP0" "터미널 관리 프로세스(브로커)" ptyd
+  ours_left && U_LEFT=1
   [ "$PURGE_DATA" = 1 ] && exists "$DATA_DIR" && U_LEFT=1
-  [ "$PURGE_UV" = 1 ] && exists "$CLEWPATH_HOME/bin/uv" && U_LEFT=1
+  if [ "$PURGE_UV" = 1 ]; then
+    { [ "$UV_SKIP" = 1 ] || { [ "$UV_OURS" = 1 ] && exists "$CLEWPATH_HOME/bin/uv"; } || exists "$CLEWPATH_HOME/python"; } && U_LEFT=1
+  fi
   say ""
   if [ "$U_LEFT" = 0 ]; then
     say "=== 제거 완료 ==="

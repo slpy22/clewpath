@@ -5,8 +5,8 @@
   ensure_launcher 로 렌더한 start-connector.sh + 설치 기록(.clewpath-install, uv= 가짜 uv). 경로에 공백·한글·
   작은따옴표(R⑧). 재기동은 진짜 런처가 한다(러너 + 런처 통합).
 - 스테이지(새 트리 1.1.0). 트리마다 session_manager/fake.json 이 가짜 Host 의 동작을 정한다(tag·report_version·
-  exit_now·ignore_term) — 교체되면 동작도 함께 바뀐다.
-- 가짜 Host(session_manager/server.py): toml 의 포트로 /api/health·/api/owner/diagnostics 를 서빙한다. version 은
+  exit_now·ignore_term·claude_home·listen_after) — 교체되면 동작도 함께 바뀐다.
+- 가짜 Host(session_manager/server.py): toml 의 포트로 /api/health·/api/owner/diagnostics 를 서빙한다. version 은 부를 때마다
   .venv/clewpath-version(dist-info 흉내 — 가짜 uv 가 sync 때 그 트리의 pyproject 버전으로 맞춘다). runtime.json 을 쓰고,
   받은 env·SigIgn 을 fake-<pid>.json 에 남긴다.
 - 가짜 uv: 부른 모양(인자·cwd·env)을 calls.jsonl 에 적는다. uv.json 으로 실패·지연을 넣는다.
@@ -63,10 +63,16 @@ CONF = Path(os.environ["CLEWPATH_CONFIG"])
 DATA = CONF.parent
 FAKE = json.loads((HERE / "fake.json").read_text(encoding="utf-8"))
 PORT = int(tomllib.loads(CONF.read_text(encoding="utf-8"))["server"]["port"])
-try:
-    VERSION = (ROOT / ".venv" / "clewpath-version").read_text(encoding="utf-8").strip()
-except OSError:
-    VERSION = None
+
+
+def _venv_version():
+    try:
+        return (ROOT / ".venv" / "clewpath-version").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+
+
+VERSION = _venv_version()
 REPORT = FAKE.get("report_version", VERSION)
 SIGIGN = "0"
 try:
@@ -104,8 +110,9 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/api/health":
             body, code = {"status": "ok"}, 200
-        elif self.path == "/api/owner/diagnostics":
-            body, code = {"claude_home": str(DATA.parent), "version": REPORT}, 200
+        elif self.path == "/api/owner/diagnostics":    # version 은 부를 때마다 디스크에서(진짜 Host 의 current_version 처럼)
+            body, code = {"claude_home": FAKE.get("claude_home", str(DATA.parent)),
+                          "version": FAKE.get("report_version", _venv_version())}, 200
         else:
             body, code = {"error": "nope"}, 404
         raw = json.dumps(body).encode()
@@ -119,10 +126,17 @@ class H(BaseHTTPRequestHandler):
         pass
 
 
+def _runtime():
+    (DATA / "runtime.json").write_text(json.dumps({
+        "host": "127.0.0.1", "port": PORT, "url": f"http://127.0.0.1:{PORT}/", "pid": os.getpid(),
+        "started_at": int(time.time())}, indent=2), encoding="utf-8")
+
+
+if FAKE.get("listen_after"):      # 진짜 Host 처럼 runtime.json 을 먼저 쓰고 늦게 연다(기동이 느린 Host)
+    _runtime()
+    time.sleep(FAKE["listen_after"])
 srv = ThreadingHTTPServer(("127.0.0.1", PORT), H)
-(DATA / "runtime.json").write_text(json.dumps({
-    "host": "127.0.0.1", "port": PORT, "url": f"http://127.0.0.1:{PORT}/", "pid": os.getpid(),
-    "started_at": int(time.time())}, indent=2), encoding="utf-8")
+_runtime()
 srv.serve_forever()
 '''
 
@@ -145,7 +159,8 @@ from pathlib import Path
 ctl = Path(os.environ["FAKE_UV_CTL"])
 conf = json.loads((ctl / "uv.json").read_text(encoding="utf-8")) if (ctl / "uv.json").is_file() else {}
 args = sys.argv[1:]
-keep = ("UV_PROJECT_ENVIRONMENT", "UV_SYSTEM_CERTS", "UV_PYTHON_PREFERENCE", "UV_PYTHON_INSTALL_DIR", "CLEWPATH_UPDATER")
+keep = ("UV_PROJECT_ENVIRONMENT", "UV_SYSTEM_CERTS", "UV_PYTHON_PREFERENCE", "UV_PYTHON_INSTALL_DIR", "CLEWPATH_UPDATER",
+        "VIRTUAL_ENV", "CONDA_PREFIX", "UV_PYTHON")
 call = {"exe": sys.argv[0], "args": args, "cwd": os.getcwd(), "env": {k: os.environ.get(k) for k in keep}}
 if args[:1] == ["sync"]:
     kind, tree, venv = "sync", Path.cwd(), Path(os.environ["UV_PROJECT_ENVIRONMENT"])
@@ -196,6 +211,15 @@ printf '%s\\n' "$n" >"$CRASH_COUNT"
 exit 0
 """
 SWAP_RENAMES = 13             # 스테이지 7 항목 — 옛 것이 있는 6 개는 old·new 두 번, install.sh 는 new 한 번
+
+# 시계가 9시간 앞서 있다가(CLOCK_AHEAD 파일이 있는 동안) NTP 가 제자리로 되돌린 흉내 — date +%s 만 바꾼다(R3)
+FAKE_DATE = """#!/bin/sh
+if [ "$1" = "+%s" ] && [ -e "$CLOCK_AHEAD" ]; then
+  echo $(( $(/bin/date +%s) + 32400 ))
+else
+  exec /bin/date "$@"
+fi
+"""
 
 PYPROJECT = """# 가짜 — 러너는 [project] 의 version 을 읽는다
 [build-system]
@@ -318,8 +342,11 @@ class Upd:
         self.runner.write_bytes(t.replace("/proc/", "/nonexistent-proc/").encode("utf-8"))
 
     def env(self, **extra) -> dict:
+        # 데이터 폴더를 정하는 env(conftest 가 SESSION_MANAGER_CLAUDE_HOME 을 넣는다)도 뺀다 — 설치 때처럼 HOME 아래 기본값.
+        # 런처는 이 env 로 뜰 Host 의 데이터 폴더가 자기 DATA_DIR 과 다르면 띄우지 않는다
         e = {k: v for k, v in os.environ.items()
-             if k not in ("CLAUDECODE", "CLAUDE_PID", "CLAUDE_EFFORT", "CLEWPATH_UPDATER", "XDG_DATA_HOME")
+             if k not in ("CLAUDECODE", "CLAUDE_PID", "CLAUDE_EFFORT", "CLEWPATH_UPDATER", "XDG_DATA_HOME",
+                          "SESSION_MANAGER_CLAUDE_HOME", "CLAUDE_CONFIG_DIR")
              and not k.upper().startswith(("CLAUDE_CODE_", "UV_"))}
         e.update(HOME=str(self.home), FAKE_UV_CTL=str(self.ctl), CLEWPATH_HOME=str(self.chome))
         e.update({k: str(v) for k, v in extra.items()})
@@ -456,6 +483,9 @@ class Upd:
     def swaps(self) -> list[str]:
         return sorted(p.name for p in self.root.glob(".clewpath-swap.*"))
 
+    def trash(self) -> list[Path]:
+        return sorted(self.root.glob(".clewpath-trash.*"))
+
     def tree(self, root: Path | None = None) -> dict:
         root = root or self.root
         out = {}
@@ -470,7 +500,8 @@ class Upd:
         """끝난 뒤 남으면 안 되는 것 — 표식·러너 잠금·apply.lock·교체 저널·헬퍼·임시 파일."""
         left = [p.name for p in (self.data / "update.inprogress", self.work / "runner.lock.d",
                                  self.work / "apply.lock") if p.exists()]
-        left += self.swaps() + [p.name for p in self.work.glob(".*")] + [p.name for p in self.data.glob(".update*")]
+        left += self.swaps() + [p.name for p in self.trash()]
+        left += [p.name for p in self.work.glob(".*")] + [p.name for p in self.data.glob(".update*")]
         left += [p.name for p in self.work.glob("backup-*.tmp.*")]
         assert not left, f"남은 것: {left}\n" + self.diag()
 
@@ -593,6 +624,7 @@ def test_update_succeeds_and_leaves_nothing_behind(upd, shell, as_data_dir):
     assert (upd.backup / "install.ps1").exists() and not list(upd.work.glob("*-failed-*"))
     last = upd.last()
     assert last["version"] == NEW and last["ok"] is True and isinstance(last["finished_at"], int)
+    assert "held" not in last and "deps_fallback" not in last
     assert last["log"] == str(upd.log), "공백·한글·작은따옴표 경로도 JSON 으로 그대로"
     assert updater.recently_failed(NEW) is False
     calls = upd.uv_calls()
@@ -600,7 +632,8 @@ def test_update_succeeds_and_leaves_nothing_behind(upd, shell, as_data_dir):
     assert calls[0]["cwd"] == str(upd.root) and calls[0]["version"] == NEW and calls[0]["exe"] == str(upd.uv)
     assert calls[0]["env"] == {"UV_PROJECT_ENVIRONMENT": str(upd.root / ".venv"), "UV_SYSTEM_CERTS": "1",
                                "UV_PYTHON_PREFERENCE": "only-system", "UV_PYTHON_INSTALL_DIR": str(upd.chome / "python"),
-                               "CLEWPATH_UPDATER": None}, "설치 기록의 파이썬 선택을 uv 에 그대로"
+                               "CLEWPATH_UPDATER": None, "VIRTUAL_ENV": None, "CONDA_PREFIX": None,
+                               "UV_PYTHON": None}, "설치 기록의 파이썬 선택을 uv 에 그대로"
     log = upd.logtext()
     for needle in (f"=== 업데이트 적용 시작 -> {NEW} ===", f"  설치폴더 : {upd.root}", f"본체(PID {old}) 종료 대기...",
                    f"백업 완료: {upd.backup}", "파일 교체 완료", "  uv: Resolved 9 packages", f"의존성 동기화 완료 (새 버전 {NEW})",
@@ -726,7 +759,12 @@ def test_uv_sync_failure_falls_back_to_pip(upd):
     assert upd.run(upd.argv(wait_pid=old), stop_host=old) == 0, upd.diag()
     assert [c["args"][0] for c in upd.uv_calls()] == ["sync", "pip"]
     assert upd.running_tag() == "new" and upd.fake(upd.runtime()["pid"])["version"] == NEW
-    assert "uv sync 실패(종료코드 1)" in upd.logtext()
+    log = upd.logtext()
+    assert "uv sync 실패(종료코드 1)" in log
+    assert "[WARN] 새 버전 의존성은 uv.lock 밖(uv pip install -e)으로 설치했습니다" in log, "잠금 밖 폴백은 경고(S11)"
+    last = upd.last()
+    assert last["ok"] is True and last["deps_fallback"] == "pip", "last_apply 에도 새 키로(기존 소비자는 그대로)"
+    assert updater.recently_failed(NEW) is False
 
 
 # ---------------------------------------------------------------- R④ 본체 대기·강제 종료·pid 재사용
@@ -869,6 +907,36 @@ def test_health_follows_the_runtime_json_port(upd):
     assert f"헬스체크 통과 - 업데이트 성공 ({NEW})" in upd.logtext()
 
 
+def test_health_needs_the_restarted_host_not_another_one(upd):
+    """같은 설치본·같은 claude_home 의 두 번째 Host(다른 포트)가 runtime.json 을 쥐고 있으면 런처는 '이미 실행 중'으로 보고 새
+    코드를 띄우지 않는다. 그 Host 는 버전을 디스크(dist-info)에서 읽어 uv sync 뒤엔 새 버전을 말한다 — 전엔 그 대답으로
+    커밋했다(새 코드는 한 번도 답하지 않았다). 이제 runtime.json 의 pid 가 옛 Host·재기동 직전의 pid 가 아니고 이 설치본의
+    Host 로 살아 있을 때만, 그 포트의 대답만 본다(R4)."""
+    old = upd.start_old()
+    conf2 = upd.data / "clewpath-2.toml"
+    conf2.write_text(f"[server]\nport = {_free_port()}\n", encoding="utf-8")
+    second = upd.popen([str(upd.py), "-m", "session_manager.server"], cwd=str(upd.root), start_new_session=True,
+                       env=upd.env(CLEWPATH_CONFIG=conf2))
+    assert _wait(lambda: upd.runtime().get("pid") == second.pid and not _gone(second.pid), 20), upd.diag()
+    rc = upd.run(upd.argv(wait_pid=old, health_seconds=3), stop_host=old)
+    assert rc == 1, upd.diag()
+    assert "new" not in [tag for _, tag in upd.fakes()], "새 코드는 뜨지 않았다"
+    assert "롤백 후 정상 동작 확인" in upd.logtext() and upd.running_tag() == "old"
+    assert upd.last()["ok"] is False
+    upd.clean_after()
+
+
+def test_health_checks_the_claude_home_too(upd):
+    """대답한 Host 의 claude_home 이 이 데이터 폴더의 부모($(dirname DATA))여야 통과 — 비었는지만 보면 다른 claude_home 의
+    Host 대답으로도 커밋한다(R4). 롤백 헬스도 같은 묶음."""
+    upd.set_fake(upd.stage, claude_home=str(upd.base / "other" / ".claude"))
+    old = upd.start_old()
+    rc = upd.run(upd.argv(wait_pid=old, health_seconds=3), stop_host=old)
+    assert rc == 1, upd.diag()
+    assert "롤백 후 정상 동작 확인" in upd.logtext() and upd.running_tag() == "old"
+    upd.clean_after()
+
+
 # ---------------------------------------------------------------- R⑪ 개발 체크아웃
 
 @pytest.mark.parametrize("marker", [".git", "ops"])
@@ -1009,6 +1077,53 @@ def test_recover_only_with_nothing_to_do(upd):
     assert r.returncode == 0 and "교체 잔재가 없습니다" in upd.text(upd.work / "recover.log")
 
 
+# ---------------------------------------------------------------- 못 지우는 것이 든 교체 저널(R2)
+
+def _launcher_start(upd: Upd) -> subprocess.CompletedProcess:
+    return subprocess.run(["/bin/sh", str(upd.launcher), "start"], env=upd.env(), capture_output=True, timeout=60,
+                          cwd=str(upd.home))
+
+
+def test_undeletable_swap_leftover_never_blocks_the_launcher(upd):
+    """root 소유 __pycache__ 처럼 사용자가 못 지우는 것이 옛 트리에 있으면 커밋 뒤 교체 저널이 다 지워지지 않는다. 전엔
+    .clewpath-swap.* 가 남아 그 뒤 런처 start 가 '잔재 복구 실패'로 영구히 막혔다 — 이제 저널 이름 공간 밖
+    (.clewpath-trash.<pid>)으로 옮긴 뒤 지우고, 못 지우면 경고만 남긴다. 남은 휴지통은 다음 러너·복구가 다시 지워 본다."""
+    old = upd.start_old()
+    stuck = upd.root / "session_manager" / "__pycache__"
+    stuck.mkdir(exist_ok=True)
+    (stuck / "root-owned.pyc").write_text("x", encoding="utf-8")
+    os.chmod(stuck, 0o555)                       # 일반 사용자가 안의 파일을 못 지운다(root 소유 폴더 흉내)
+    assert upd.run(upd.argv(wait_pid=old), stop_host=old) == 0, upd.diag()
+    trash = upd.trash()
+    assert upd.swaps() == [] and len(trash) == 1, upd.diag()
+    assert "[WARN] 다 지우지 못했습니다" in upd.logtext() and upd.running_tag() == "new"
+    for pid in upd.hosts():                      # 재부팅 흉내 — Host 를 내리고 다시 start
+        os.kill(pid, signal.SIGKILL)
+        assert _wait(lambda pid=pid: _gone(pid), 10)
+    r = _launcher_start(upd)
+    assert r.returncode == 0 and upd.running_tag() == "new", upd.diag(r.stderr.decode("utf-8", "replace"))
+    assert "blocked" not in upd.text(upd.data / "launcher.log")
+    r = upd.recover()                            # 다음 복구도 막히지 않는다(휴지통은 다시 지워 보고 경고만)
+    assert r.returncode == 0 and trash[0].exists(), upd.diag()
+    os.chmod(trash[0] / "old" / "session_manager" / "__pycache__", 0o755)
+    r = upd.recover()
+    assert r.returncode == 0 and upd.trash() == [], upd.diag()
+
+
+@pytest.mark.parametrize("committed", [True, False], ids=["committed", "nothing-moved"])
+def test_undeletable_finished_leftover_is_moved_aside(upd, committed):
+    """지난 러너가 남긴 '커밋됨'·'옮긴 것 없음' 저널에 못 지우는 것이 있어도 복구는 실패(1)로 막지 않는다 — 휴지통으로 옮긴다."""
+    sd = _leftover(upd, 99 if committed else 0, committed=committed)
+    stuck = sd / ("old" if committed else "new") / "pwa"
+    os.chmod(stuck, 0o555)
+    r = upd.recover()
+    assert r.returncode == 0, upd.diag(r.stderr.decode("utf-8", "replace"))
+    assert upd.swaps() == [] and len(upd.trash()) == 1
+    assert "[WARN]" in upd.text(upd.work / "recover.log") and upd.uv_calls() == []
+    r = _launcher_start(upd)
+    assert r.returncode == 0 and upd.running_tag() == ("new" if committed else "old"), upd.diag()
+
+
 @pytest.mark.parametrize("broken", ["format", "name", "torn-last-line", "no-root-module"])
 def test_recover_only_refuses_what_it_does_not_understand(upd, broken):
     if broken == "format":
@@ -1131,6 +1246,32 @@ def test_uv_is_found_from_the_record_then_clewpath_home_then_path(upd):
     assert "uv 나 venv 를 못 찾아 의존성 동기화를 건너뜁니다 (복구)" in upd.text(upd.work / "recover.log")
 
 
+def test_relative_clewpath_home_is_not_a_uv_candidate(upd):
+    """공통 경로 블록이 준 CLEWPATH_HOME 이 상대 경로면 bin/uv 후보에서 뺀다 — 있는지는 러너의 작업 폴더에서 보고, 실행은
+    설치 폴더로 cd 한 뒤라 다른 파일(또는 없는 파일)을 부르게 된다(X8)."""
+    upd.record(uv=None)
+    rel = upd.home / "rel clew" / "bin"
+    rel.mkdir(parents=True)
+    shutil.copy2(upd.uv, rel / "uv")
+    _leftover(upd, 1)
+    r = upd.recover(env=upd.env(CLEWPATH_HOME="rel clew", PATH=f"{upd.tools}:/usr/bin:/bin"))   # (작업 폴더 = home)
+    assert r.returncode == 0, upd.diag()
+    assert [c["exe"] for c in upd.uv_calls()] == [str(upd.uv)], "상대 CLEWPATH_HOME 은 건너뛰고 PATH 의 uv"
+
+
+def test_uv_gets_no_virtualenv_markers_from_the_host(upd):
+    """Host 를 띄운 셸의 가상 환경 표식(VIRTUAL_ENV·CONDA_PREFIX·UV_PYTHON)이 uv 로 새면 .venv 를 다른 파이썬으로 다시
+    만든다 — install.sh 의 uv_run 처럼 sync·pip 둘 다에서 뺀다(X6)."""
+    upd.uv_conf(fail_sync=[OLD])                 # pip 폴백까지
+    _leftover(upd, 1)
+    r = upd.recover(env=upd.env(VIRTUAL_ENV=upd.base / "other venv", CONDA_PREFIX=upd.base / "conda", UV_PYTHON="3.12"))
+    assert r.returncode == 0, upd.diag()
+    calls = upd.uv_calls()
+    assert [c["args"][0] for c in calls] == ["sync", "pip"]
+    for c in calls:
+        assert [c["env"][k] for k in ("VIRTUAL_ENV", "CONDA_PREFIX", "UV_PYTHON")] == [None, None, None], c
+
+
 # ---------------------------------------------------------------- R⑭ TERM
 
 def test_term_before_the_swap_aborts_and_keeps_the_old_version(upd):
@@ -1161,6 +1302,40 @@ def test_term_after_the_swap_started_runs_to_the_end(upd):
     upd.clean_after()
 
 
+# ---------------------------------------------------------------- 업데이트 중 stop --hold(X3)
+
+@pytest.mark.parametrize("when", ["before-restart", "during-health"])
+def test_hold_during_the_update_keeps_the_new_version(upd, when, as_data_dir):
+    """업데이트 중에 사용자가 stop --hold 하면(maintenance.flag) 런처는 새 버전을 띄우지 않는다. 전엔 헬스 실패로 멀쩡한 새
+    버전을 롤백하고 last_apply ok=false 로 그 버전을 계속 건너뛰었다 — 이제 롤백하지 않고 커밋한 채 '보류'로 끝낸다(ok=false
+    를 쓰지 않는다). 다시 켜면(resume) 새 버전이 뜬다."""
+    if when == "before-restart":
+        upd.uv_conf(sleep_sync=3)                # uv sync 중에 멈춘다(옛 Host 는 이미 내려갔다)
+    else:
+        upd.set_fake(upd.stage, listen_after=60)  # runtime.json 을 쓰고 늦게 여는 새 Host — 헬스 대기 중에 멈춘다
+    old = upd.start_old()
+    p = upd.spawn(upd.argv(wait_pid=old, health_seconds=10), stop_host=old)
+    if when == "before-restart":
+        assert _wait(lambda: (upd.ctl / "syncing").exists(), 30), upd.diag()
+    else:
+        assert _wait(lambda: upd.runtime().get("pid") in [pid for pid, tag in upd.fakes() if tag == "new"], 60), upd.diag()
+    r = subprocess.run(["/bin/sh", str(upd.launcher), "stop", "--hold"], env=upd.env(), capture_output=True, timeout=60,
+                       cwd=str(upd.home))
+    assert r.returncode == 0 and (upd.data / "maintenance.flag").exists(), upd.diag(r.stderr.decode("utf-8", "replace"))
+    assert p.wait(timeout=120) == 0, upd.diag()
+    assert upd.hosts() == [] and upd.read("pwa/index.html") == "new pwa"
+    last = upd.last()
+    assert last["version"] == NEW and last["ok"] is True and last["held"] is True
+    assert updater.recently_failed(NEW) is False, "그 버전을 실패로 건너뛰지 않는다"
+    log = upd.logtext()
+    assert "롤백합니다." not in log and "maintenance.flag 가 있어" in log
+    upd.clean_after()
+    upd.set_fake(upd.root, listen_after=0)
+    r = subprocess.run(["/bin/sh", str(upd.launcher), "resume"], env=upd.env(), capture_output=True, timeout=60,
+                       cwd=str(upd.home))
+    assert r.returncode == 0 and upd.running_tag() == "new", upd.diag(r.stderr.decode("utf-8", "replace"))
+
+
 # ---------------------------------------------------------------- S24·S31 도는 동안: 표식·잠금·하트비트, 감독자는 기다린다
 
 def test_supervisor_waits_while_the_runner_works(upd):
@@ -1187,24 +1362,31 @@ def test_supervisor_waits_while_the_runner_works(upd):
 
 # ---------------------------------------------------------------- 파이썬이 없을 때(헬스는 curl)
 
-@pytest.mark.parametrize("report", [NEW, "9.9.9"])
-def test_health_without_python_uses_curl(upd, report):
-    """venv 파이썬도 python3 도 없다 — 의존성 동기화는 건너뛰고(로그), 헬스는 curl 문자열 검사로 본다(버전까지).
-    재기동은 시험용 스크립트가 진짜 파이썬으로 가짜 Host 를 띄운다 — 이 Host 는 설치본 venv 로 뜨지 않아 롤백이
-    멈추지 못하므로, 버전이 어긋나면 롤백 뒤에도 그 Host 가 답해 '버전 표기가 어긋납니다' 로 끝난다."""
+def _without_python(upd: Upd) -> tuple[Path, str, str]:
+    """venv 파이썬도 python3 도 없는 PC — 헬스는 curl 길. → (가짜 도구 폴더, PATH, 재기동 스크립트). 재기동은 시험용 스크립트가
+    진짜 파이썬으로 가짜 Host 를 띄운다. 명령줄은 이 설치본의 Host 모양(인자에 설치본 venv 경로와 session_manager.server)
+    이라 헬스가 '방금 띄운 Host' 로 알아보고, 롤백도 멈출 수 있다(venv 는 없어도 명령줄 글자로)."""
     shutil.rmtree(upd.root / ".venv")
-    upd.set_fake(upd.stage, report_version=report)
     fakebin = upd.base / "fakebin"
     fakebin.mkdir()
     (fakebin / "curl").write_text(FAKE_CURL.replace("@PYTHON@", sys.executable), encoding="utf-8")
     os.chmod(fakebin / "curl", 0o755)
     restart = upd.base / "restart.sh"
-    restart.write_text("#!/bin/sh\nCLEWPATH_CONFIG=%s %s %s </dev/null >/dev/null 2>&1 &\n" % (
-        shlex.quote(str(upd.conf)), shlex.quote(sys.executable), shlex.quote(str(upd.root / "session_manager" / "server.py"))),
-        encoding="utf-8")
+    restart.write_text("#!/bin/sh\n(cd %s && CLEWPATH_CONFIG=%s exec %s -m session_manager.server %s) </dev/null >/dev/null 2>&1 &\n" % (
+        shlex.quote(str(upd.root)), shlex.quote(str(upd.conf)), shlex.quote(sys.executable),
+        shlex.quote(str(upd.root / ".venv" / "bin" / "clewpath-host"))), encoding="utf-8")
     path = f"{fakebin}:/usr/bin:/bin"
     assert subprocess.run(["sh", "-c", "command -v python3"], env={"PATH": path}).returncode != 0, "PATH 에 python3 가 없어야"
-    rc = upd.run(upd.argv(wait_pid=DEAD_PID, restart=str(restart), health_seconds=5), env=upd.env(PATH=path))
+    return fakebin, path, str(restart)
+
+
+@pytest.mark.parametrize("report", [NEW, "9.9.9"])
+def test_health_without_python_uses_curl(upd, report):
+    """venv 파이썬도 python3 도 없다 — 의존성 동기화는 건너뛰고(로그), 헬스는 curl 문자열 검사로 본다(버전·claude_home·
+    방금 띄운 Host 의 pid 까지). 버전이 어긋나면 롤백하고 옛 트리로 다시 띄운다."""
+    _, path, restart = _without_python(upd)
+    upd.set_fake(upd.stage, report_version=report)
+    rc = upd.run(upd.argv(wait_pid=DEAD_PID, restart=restart, health_seconds=5), env=upd.env(PATH=path))
     log = upd.logtext()
     assert f"uv 나 venv 를 못 찾아 의존성 동기화를 건너뜁니다 (새 버전 {NEW})" in log
     calls = upd.text(upd.ctl / "curl-calls")
@@ -1215,6 +1397,54 @@ def test_health_without_python_uses_curl(upd, report):
     else:
         assert rc == 1, upd.diag()
         assert f"응답한 버전이 다릅니다: 9.9.9 (기대 {NEW})" in log and upd.read("pwa/index.html") == "old pwa"
-        assert ("[FAIL] 롤백 후에도 응답이 없습니다 - 수동 확인이 필요합니다. 버전 표기가 어긋납니다(응답 9.9.9, "
-                f"기대 {OLD})") in log
+        assert "실패한 Host 를 멈춥니다(SIGTERM)" in log and "롤백 후 정상 동작 확인" in log
+        assert upd.running_tag() == "old"
+    upd.clean_after()
+
+
+# ---------------------------------------------------------------- 시계가 뒤로 가도 대기는 정해 둔 만큼(R3)
+
+def _clock_ahead(upd: Upd, fakebin: Path | None = None) -> tuple[Path, Path]:
+    """date +%s 가 9시간 앞선 가짜 date — (도구 폴더, 표지 파일). 표지를 지우면 시계가 제자리로(NTP 보정)."""
+    fakebin = fakebin or upd.base / "fakebin"
+    fakebin.mkdir(exist_ok=True)
+    (fakebin / "date").write_text(FAKE_DATE, encoding="utf-8")
+    os.chmod(fakebin / "date", 0o755)
+    ahead = upd.base / "clock-ahead"
+    ahead.write_text("", encoding="utf-8")
+    return fakebin, ahead
+
+
+def _wait_runner(upd: Upd, p: subprocess.Popen, timeout: float) -> int:
+    try:
+        return p.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        pytest.fail("시계가 뒤로 간 만큼(9시간) 더 기다린다\n" + upd.diag())
+
+
+def test_host_wait_does_not_follow_the_clock_back(upd):
+    """대기 마감을 벽시계(date +%s)로 재면 NTP 가 시계를 뒤로 돌린 만큼 더 기다린다 — 그동안 apply.lock 하트비트가 이어져
+    수동 적용도 거부된다. 반초 수로 센다(재기동 자동 적용 모양: Host 가 스스로 안 내려가 -WaitSeconds 뒤 TERM)."""
+    fakebin, ahead = _clock_ahead(upd)
+    old = upd.start_old()
+    p = upd.spawn(upd.argv(wait_pid=old, wait_seconds=3),
+                  env=upd.env(PATH=f"{fakebin}:{os.environ['PATH']}", CLOCK_AHEAD=ahead))
+    assert _wait(lambda: f"본체(PID {old}) 종료 대기..." in upd.logtext(), 30), upd.diag()
+    time.sleep(0.5)
+    ahead.unlink()                               # 시계 보정(-9시간)
+    assert _wait_runner(upd, p, 60) == 0, upd.diag()
+    assert "시간 내에 안 죽어서 강제 종료합니다." in upd.logtext() and upd.running_tag() == "new"
+    upd.clean_after()
+
+
+def test_curl_health_does_not_follow_the_clock_back(upd):
+    """파이썬이 없을 때의 curl 헬스도 반초 수로 센다(파이썬 헬퍼는 monotonic 이라 그대로)."""
+    fakebin, path, restart = _without_python(upd)
+    _, ahead = _clock_ahead(upd, fakebin)
+    upd.set_fake(upd.stage, report_version="9.9.9")              # 버전이 어긋나 헬스 마감까지 기다린다
+    p = upd.spawn(upd.argv(wait_pid=DEAD_PID, restart=restart, health_seconds=4), env=upd.env(PATH=path, CLOCK_AHEAD=ahead))
+    assert _wait(lambda: (upd.ctl / "curl-calls").exists() or p.poll() is not None, 60), upd.diag()
+    ahead.unlink()
+    assert _wait_runner(upd, p, 90) == 1, upd.diag()
+    assert "롤백 후 정상 동작 확인" in upd.logtext() and upd.read("pwa/index.html") == "old pwa"
     upd.clean_after()

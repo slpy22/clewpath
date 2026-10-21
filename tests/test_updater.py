@@ -313,6 +313,42 @@ def test_apply_refuses_while_maintenance_flag(fake_claude_home, monkeypatch):
     assert not (updater.work_dir() / "apply.lock").exists(), "거절은 잠금 전에 — 다음 시도를 5분 막지 않는다"
 
 
+@pytest.mark.parametrize("case,refused", [
+    ("install", True), ("runner", True), ("stale", False), ("dead", False), ("other-program", False), ("windows", False)])
+def test_apply_refuses_while_an_install_holds_the_marker(fake_claude_home, monkeypatch, case, refused):
+    """맥·리눅스: sh install.sh 가 도는 동안(update.inprogress by=install) 폰에서 적용하면 Host 는 내려가고 러너는 표식을
+    보고 3 으로 끝나 다시 띄우지 않는다 — 설치가 중간에 실패하면 Host 가 꺼진 채 남는다. 러너의 marker_live 와 같은 규칙
+    (pid 가 그 프로그램으로 살아 있고 30분 안)으로 잠금 전에 거부한다. Windows 는 이 표식을 쓰지 않는다(그대로)."""
+    import subprocess
+    import sys
+    from session_manager import config, osdep
+    prog = {"runner": "update_runner.sh", "other-program": "something-else.sh"}.get(case, "install.sh")
+    holder = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", prog])
+    try:
+        pid = 4_194_999 if case == "dead" else holder.pid
+        at = int(time.time()) - (1801 if case == "stale" else 0)
+        d = config.data_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "update.inprogress").write_text(f"pid={pid}\nat={at}\nby={'runner' if case == 'runner' else 'install'}\n",
+                                             encoding="utf-8")
+        monkeypatch.setattr(osdep, "NAME", "win" if case == "windows" else "linux")
+        calls = []
+        monkeypatch.setattr(updater.subprocess, "Popen", lambda *a, **k: calls.append(a))
+        staged = fake_claude_home / "stage"
+        staged.mkdir()
+        m = {"ver": "9.9.9", "platforms": ["win", "mac", "linux"]}
+        if refused:
+            with pytest.raises(updater.UpdateError, match="진행 중"):
+                updater.apply(m, staged, restart_cmd="")
+            assert calls == [] and not (updater.work_dir() / "apply.lock").exists(), "거절은 잠금 전에"
+        else:
+            updater.apply(m, staged, restart_cmd="")
+            assert len(calls) == 1
+    finally:
+        holder.kill()
+        holder.wait()
+
+
 def test_manual_apply_reports_unsupported_reason(fake_claude_home, monkeypatch):
     from fastapi.testclient import TestClient
     for k in ("SM_RELAY_URL", "SM_RELAY_ROOM", "SM_RELAY_AGENT_TOKEN", "SM_CP_URL"):

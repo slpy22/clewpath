@@ -791,11 +791,14 @@ _DARWIN = '#!/bin/sh\ncase "$1" in -m) echo arm64 ;; *) echo Darwin ;; esac\n'
 @need_curl
 @need_unzip
 def test_mac_path_installs_under_application_support(gbox):
-    """[mac] 흉내(uname): 기본 위치 ~/Library/Application Support/ClewPath/app(공백 경로), 리눅스 경고 없음."""
+    """[mac] 흉내(uname): 기본 위치 ~/Library/Application Support/ClewPath/app(공백 경로), 리눅스 경고 없음.
+    맥은 ASCII 경로만 받으므로(C5) 홈도 ASCII 로(공백은 그대로)."""
     gbox.publish()
-    r = gbox.run(*gbox.base_args, env=gbox.env(PATH=gbox.tools(shims={"uname": _DARWIN})))
+    home = gbox.base / "mac home" / "user"
+    home.mkdir(parents=True)
+    r = gbox.run(*gbox.base_args, env=gbox.env(HOME=home, PATH=gbox.tools(shims={"uname": _DARWIN})))
     assert r.rc == 0, str(r)
-    want = gbox.home / "Library" / "Application Support" / "ClewPath" / "app"
+    want = home / "Library" / "Application Support" / "ClewPath" / "app"
     rec = gbox.rec()
     assert rec["arg"][rec["arg"].index("--dir") + 1] == str(want) and "리눅스는 시험용" not in r.out
     assert Path(rec["self"]).parent.parent.parent == want.parent
@@ -809,7 +812,7 @@ def test_mac_never_runs_python(gbox):
     log = gbox.base / "python3-called"
     path = gbox.tools(drop=("unzip",), shims={"uname": _DARWIN,
                                                "python3": f'#!/bin/sh\necho called >>"{log}"\nexit 1\n'})
-    r = gbox.run(*gbox.base_args, env=gbox.env(PATH=path))
+    r = gbox.run(*gbox.base_args, "--dir", str(gbox.base / "mac-app"), env=gbox.env(PATH=path))   # 맥은 ASCII 경로(C5)
     assert r.rc == 1 and "unzip" in r.out and not log.exists(), str(r)
 
 
@@ -862,3 +865,174 @@ def test_hash_and_base64_fallbacks(gbox):
             shutil.rmtree(p)
         r = gbox.run(*gbox.base_args, env=gbox.env(PATH=gbox.tools(drop=("sha256sum", "base64"))))
         assert r.rc == 0, str(r)
+
+
+# ---------------------------------------------------------------- 2회차 검토 반영(G1·G2·C1·C2·C5)
+
+# busybox unzip(Alpine 기본) 흉내 — 목록 모드(-Z·-Z1)를 모른다. 그 밖의 호출은 오지 않아야 한다
+_BUSYBOX_UNZIP = ('#!/bin/sh\ncase "$1" in -Z*) echo "unzip: unrecognized option: Z" >&2; exit 1 ;; esac\n'
+                  'echo "unexpected unzip call" >&2\nexit 99\n')
+
+
+def _no_get_tmp(gbox) -> bool:
+    """설치 폴더 옆 stage(.clewpath-get.*)가 가짜 홈 밖(설치 폴더를 바꾼 시험)에도 남지 않았나."""
+    return gbox.leftovers() == [] and not list(gbox.base.rglob(".clewpath-get.*"))
+
+
+@posix
+@need_curl
+def test_unzip_without_zipinfo_mode_falls_back_to_python(gbox):
+    """G1 — [linux] PATH 의 unzip 이 목록 모드(-Z)를 모르면(busybox) '손상'으로 끝내지 않고 python3 대역으로 간다.
+    python3 도 없으면 받기 전에 원인(Info-ZIP unzip 을 설치하라)을 알린다."""
+    if not sys.platform.startswith("linux"):
+        pytest.skip("리눅스 길")
+    zb = gbox.publish()
+    r = gbox.run(*gbox.base_args, env=gbox.env(PATH=gbox.tools(shims={"unzip": _BUSYBOX_UNZIP})))
+    assert r.rc == 0, str(r)
+    assert _stage_files(Path(gbox.rec()["self"]).parent) == _zip_files(zb)
+    for p in gbox.chome.glob(".clewpath-get.*"):
+        shutil.rmtree(p)
+    gbox.cp.requests.clear()
+    r = gbox.run(*gbox.base_args, env=gbox.env(PATH=gbox.tools(drop=("python3",), shims={"unzip": _BUSYBOX_UNZIP})))
+    assert r.rc == 1 and "unzip(Info-ZIP)" in r.out and "apk add unzip" in r.out and "손상" not in r.out, str(r)
+    assert gbox.cp.requests == [] and _no_get_tmp(gbox)
+
+
+@posix
+@need_curl
+def test_mac_refuses_unzip_without_zipinfo_mode(gbox):
+    """G1 — [mac] 은 python3 대역이 없으므로 목록 모드가 없는 unzip 이면 받기 전에 원인을 알리고 끝낸다(python3 는 부르지 않는다)."""
+    gbox.publish()
+    log = gbox.base / "python3-called"
+    path = gbox.tools(shims={"uname": _DARWIN, "unzip": _BUSYBOX_UNZIP,
+                             "python3": f'#!/bin/sh\necho called >>"{log}"\nexit 1\n'})
+    r = gbox.run(*gbox.base_args, "--dir", str(gbox.base / "mac-app"), env=gbox.env(PATH=path))
+    assert r.rc == 1 and "unzip(Info-ZIP)" in r.out and "손상" not in r.out and not log.exists(), str(r)
+    assert gbox.cp.requests == []
+
+
+@posix
+@need_curl
+@pytest.mark.parametrize("extra,rc,said", [
+    pytest.param({"CLAUDE_CONFIG_DIR": "claude-alt"}, 1, "클로드 폴더가 절대 경로가 아닙니다", id="config-dir-relative"),
+    pytest.param({"SESSION_MANAGER_CLAUDE_HOME": "/x/../y"}, 1, "클로드 폴더가 절대 경로가 아닙니다", id="sm-home-dotdot"),
+    # 빈 값은 없는 것과 같다(install.sh 의 ${…:-…}) — 다음 후보인 CLAUDE_CONFIG_DIR 을 본다
+    pytest.param({"SESSION_MANAGER_CLAUDE_HOME": "", "CLAUDE_CONFIG_DIR": "/c/./d"}, 1, "클로드 폴더가 절대 경로가 아닙니다",
+                 id="empty-sm-home-then-config-dot"),
+    pytest.param({"CLEWPATH_AGENT_TOKEN": "agent-SECRET\r"}, 2, "제어문자", id="agent-token-cr"),
+    pytest.param({"CLEWPATH_AGENT_TOKEN": "agent-SECRET\nx"}, 2, "제어문자", id="agent-token-newline"),
+])
+def test_refuses_what_install_sh_refuses_before_download(gbox, extra, rc, said):
+    """G2 — install.sh 가 정리(on_exit)를 걸기 전에 거절하는 것(클로드 폴더 env — claude_home_guess 순서·path_ok, agent 토큰의
+    제어문자 — CR 포함)을 받기 전에 같은 규칙으로 거절한다. 받은 뒤 거절되면 .clewpath-get.*/stage 가 시도마다 남는다."""
+    gbox.publish()
+    r = gbox.run(*gbox.base_args, env=gbox.env(**extra))
+    assert r.rc == rc and said in r.out, str(r)
+    assert "SECRET" not in r.out + r.err and gbox.cp.requests == [] and _no_get_tmp(gbox) and not gbox.chome.exists()
+
+
+@posix
+@need_curl
+@need_unzip
+def test_claude_home_follows_install_sh_order(gbox):
+    """G2 대조군 — SESSION_MANAGER_CLAUDE_HOME 이 있으면 그것만 본다(install.sh 의 claude_home_guess). 뒤 후보는 보지 않는다."""
+    gbox.publish()
+    r = gbox.run(*gbox.base_args, env=gbox.env(SESSION_MANAGER_CLAUDE_HOME=gbox.base / "ch", CLAUDE_CONFIG_DIR="rel"))
+    assert r.rc == 0, str(r)
+
+
+_PHYS_PWD = "phys_pwd() { if [ -x /bin/pwd ]; then /bin/pwd -P; else pwd -P; fi; }"
+
+
+def test_physical_paths_come_from_phys_pwd():
+    """C1 — 물리 경로는 phys_pwd 한 곳에서(/bin/pwd -P 는 맥 APFS 에서 디스크의 대소문자를 준다 — 셸 내장 pwd -P 는 친
+    글자 그대로). 다섯 스크립트가 같은 이름·같은 본문을 쓴다."""
+    lines = GET_SH.read_text(encoding="utf-8").split("\n")
+    assert _PHYS_PWD in lines
+    stray = [ln for ln in lines if ln != _PHYS_PWD and "pwd -P" in ln.split(" #")[0] and not ln.lstrip().startswith("#")]
+    assert not stray, stray
+
+
+@posix
+@need_curl
+@pytest.mark.parametrize("case", ["home-parent", "grandparent", "physical-home", "home-missing"])
+def test_refuses_home_and_its_ancestors(gbox, case):
+    """C2 — 설치 폴더가 / 이거나 홈(물리 경로) 자신·그 조상이면 받기 전에 거부한다. 홈의 물리 경로를 못 얻으면 $HOME 글자로."""
+    gbox.publish()
+    env = gbox.env()
+    if case == "home-parent":
+        d = gbox.home.parent
+    elif case == "grandparent":
+        d = gbox.base
+    elif case == "physical-home":                 # HOME 이 링크 — 글자로는 홈이 아니지만 물리 경로가 홈(빈 폴더)
+        link = gbox.base / "home-link"
+        link.symlink_to(gbox.home)
+        env = gbox.env(HOME=link)
+        d = gbox.home
+    else:                                         # 홈이 없다 — $HOME 글자의 조상
+        env = gbox.env(HOME=gbox.base / "gone" / "user")
+        d = gbox.base / "gone"
+    r = gbox.run(*gbox.base_args, "--dir", str(d), env=env)
+    assert r.rc == 2 and "/ 나 홈" in r.out, str(r)
+    assert gbox.cp.requests == [] and _no_get_tmp(gbox) and not gbox.record.exists()
+
+
+@posix
+@need_curl
+@need_unzip
+def test_refuses_a_link_to_home_after_resolving(gbox):
+    """C2 — --dir 가 홈을 가리키는 링크면(글자로는 홈이 아니다) 물리 경로로 바꾼 뒤, stage 를 만들기 전에 거부한다."""
+    gbox.publish()
+    link = gbox.base / "app-link"
+    link.symlink_to(gbox.home)
+    r = gbox.run(*gbox.base_args, "--dir", str(link))
+    assert r.rc == 2 and "/ 나 홈" in r.out, str(r)
+    assert not gbox.record.exists() and _no_get_tmp(gbox) and sorted(gbox.home.iterdir()) == []
+
+
+@posix
+@need_curl
+@need_unzip
+def test_mac_refuses_non_ascii_install_paths(gbox):
+    """C5 — [mac] ps 는 ASCII 밖 바이트를 이스케이프해 보여 런처·러너가 Host 를 명령줄로 알아보지 못한다. 그래서 맥에서는 설치
+    폴더 경로(글자, 그리고 물리 경로)에 ASCII 밖 바이트가 있으면 거부한다. 리눅스는 그대로다(한글 홈으로 도는 위 시험들)."""
+    gbox.publish()
+    mac = gbox.env(PATH=gbox.tools(shims={"uname": _DARWIN}))
+    for args in ([], ["--dir", str(gbox.base / "앱" / "app")]):          # 기본 위치(한글 홈 아래)·--dir
+        r = gbox.run(*gbox.base_args, *args, env=mac)
+        assert r.rc == 2 and "ASCII" in r.out, (args, str(r))
+        assert gbox.cp.requests == [] and _no_get_tmp(gbox), args
+    real = gbox.base / "앱 폴더"                                          # 글자는 ASCII, 물리 경로는 한글(링크)
+    real.mkdir()
+    link = gbox.base / "ascii-link"
+    link.symlink_to(real)
+    r = gbox.run(*gbox.base_args, "--dir", str(link), env=mac)
+    assert r.rc == 2 and "ASCII" in r.out, str(r)
+    assert not gbox.record.exists() and _no_get_tmp(gbox) and list(real.iterdir()) == []
+
+
+@posix
+@with_matrix_shells
+def test_dir_guard_rules(shell, lib, tmp_path):
+    """C2·C5 규칙을 셸마다(맥 /bin/sh 에 가까운 bash --posix 포함, UTF-8 로캘) — / ·홈·홈의 조상(물리 경로, 못 얻으면 글자)은
+    2, [mac] 은 ASCII 밖 바이트가 있으면 2, 리눅스는 한글을 받는다. 이름이 홈과 앞부분만 같은 폴더는 조상이 아니다."""
+    real = tmp_path / "real" / "u"
+    real.mkdir(parents=True)
+    link = tmp_path / "link-home"
+    link.symlink_to(real)
+    gone = "/nonexistent-get-sh/home/u"
+    cases = [
+        (gone, "linux", "/", 2), (gone, "linux", gone, 2), (gone, "linux", "/nonexistent-get-sh/home", 2),
+        (gone, "linux", "/nonexistent-get-sh/hom", 0), (gone, "linux", gone + "/app", 0),
+        (gone, "linux", "/x/한글/app", 0), (gone, "mac", "/x/한글/app", 2), (gone, "mac", "/x/caf\u00e9", 2),
+        (gone, "mac", "/x/a b/app", 0),
+        (str(link), "linux", str(real), 2), (str(link), "linux", str(tmp_path / "real"), 2),
+        (str(link), "linux", str(real) + "/app", 0), (str(link), "linux", str(link) + "/app", 0),
+    ]
+    got = []
+    for home, os_, d, _ in cases:
+        r = subprocess.run([*shell, "-c", '. "$1" || exit 99; OS=$2; HOME=$3; ( dir_guard "$4" x >/dev/null ); echo $?',
+                            "sh", lib, os_, home, d], capture_output=True, timeout=60,
+                           env={**os.environ, "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"})
+        got.append(int(r.stdout.decode().strip() or -1))
+    assert got == [c[3] for c in cases], list(zip([c[:3] for c in cases], got))

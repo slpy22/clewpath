@@ -36,6 +36,7 @@ esac
 UV_DEFAULT="0.12.1"
 NL='
 '
+CLEWPATH_HOME_GIVEN=${CLEWPATH_HOME:-}           # 사용자가 준 값인가 — 아래 공통 블록이 기본값을 채운다(uv_ours 가 본다)
 
 # >>> clewpath-home (get.sh·install.sh·uninstall.sh·update_runner.sh 공통 — 바꾸면 넷 다)
 case "$(uname -s)" in
@@ -44,6 +45,22 @@ case "$(uname -s)" in
           CLEWPATH_HOME="${CLEWPATH_HOME:-$_xdg/clewpath}" ;;
 esac
 # <<< clewpath-home
+
+phys_pwd() { if [ -x /bin/pwd ]; then /bin/pwd -P; else pwd -P; fi; }
+
+# CLEWPATH_HOME 은 절대 경로이고 / 나 홈 그 자체가 아니어야 한다 — 그 아래 bin/uv·python 을 두고 제거(--purge-uv)가 지운다.
+# 상대 경로면 지금 폴더에 uv 를 깔려다 엉뚱하게 실패했고, 홈이면 사용자의 ~/bin/uv 를 덮어썼다
+case "$CLEWPATH_HOME" in
+  *[[:cntrl:]]*) printf '  [FAIL] %s\n' "CLEWPATH_HOME 에 줄바꿈·제어문자가 있습니다"; exit 1 ;;
+  /*) ;;
+  *) printf '  [FAIL] %s\n' "CLEWPATH_HOME 은 절대 경로여야 합니다: '$CLEWPATH_HOME'"; exit 1 ;;
+esac
+_chp=$(CDPATH='' cd "$CLEWPATH_HOME" 2>/dev/null && phys_pwd) || _chp=$CLEWPATH_HOME
+_hmp=$(CDPATH='' cd "$HOME" 2>/dev/null && phys_pwd) || _hmp=$HOME
+if [ "$_chp" = / ] || [ "${_chp%/}" = "${_hmp%/}" ]; then
+  printf '  [FAIL] %s\n' "CLEWPATH_HOME 이 / 나 홈 폴더입니다: '$CLEWPATH_HOME' — ClewPath 전용 폴더를 주세요(비워 두면 기본 위치)"
+  exit 1
+fi
 
 # uv 배포본 해시 — 소스에 박아 두는 이유는 install.ps1 과 같다(내려받는 서버가 뚫려도 바뀐 파일을 안다).
 # 값은 공식 릴리스의 .sha256 과 직접 내려받아 계산한 값이 같을 때만 적는다(2026-10-20, 0.12.1 네 대상 확인).
@@ -123,10 +140,22 @@ run_quiet() {   # $1=로그 파일, 나머지=명령 — 출력은 로그로(실
   "$@" </dev/null >"$RQ_LOG" 2>&1
 }
 
-show_tail() {   # $1=로그 $2=제목
+show_tail() {   # $1=로그 $2=제목 [$3=줄 수(기본 25)]
   [ -s "$1" ] || return 0
   say "  -- $2 --"
-  tail -n 25 "$1" | sed 's/^/    /'
+  tail -n "${3:-25}" "$1" | sed 's/^/    /'
+}
+
+phys_of() {   # $1=경로 → PO_OUT: 폴더가 있으면 물리 경로, 없으면 겹친 / 와 끝 / 를 걷어 낸 글자(같은 폴더를 달리 쓴 것을 같게 본다)
+  PO_OUT=$(CDPATH='' cd "$1" 2>/dev/null && phys_pwd) && [ -n "$PO_OUT" ] && return 0
+  PO_OUT=$(printf '%s\n' "$1" | sed 's#//*#/#g; s#\(.\)/$#\1#')
+  return 0
+}
+
+covers() {   # $1 이 $2 와 같거나 그 조상인가(둘 다 phys_of 로 맞춘 절대 경로)
+  [ "$1" = / ] && return 0
+  case "$2/" in "$1"/*) return 0 ;; esac
+  return 1
 }
 
 sha256_of() {   # $1=파일 → 소문자 64자(도구가 없거나 실패하면 빈 출력). 표준 입력으로 넘긴다 — 파일 이름이 출력에 안 섞이게
@@ -318,11 +347,96 @@ on_exit() {
 
 claude_home_guess() { printf '%s' "${SESSION_MANAGER_CLAUDE_HOME:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}"; }
 
-data_dir_guess() {   # $1=설치 루트 — 그 루트의 런처가 있으면 그 말(paths)을, 없으면 셸 규칙(config.data_dir 과 같은 식)
-  _dg=
-  [ -f "$1/start-connector.sh" ] && _dg=$(/bin/sh "$1/start-connector.sh" paths </dev/null 2>/dev/null | sed -n 's/^data_dir=//p' | head -n 1)
-  path_ok "$_dg" || _dg="$(claude_home_guess)/session_manager"
-  printf '%s' "$_dg"
+launcher_paths() {   # $1=설치 루트 → LP_DD·LP_CF: 그 루트의 기존 런처가 쓰는 데이터 폴더·설정 파일(런처가 없거나 말이 이상하면 빈 값)
+  LP_DD=
+  LP_CF=
+  [ -f "$1/start-connector.sh" ] || return 0
+  _lpo=$(/bin/sh "$1/start-connector.sh" paths </dev/null 2>/dev/null)
+  LP_DD=$(printf '%s\n' "$_lpo" | sed -n 's/^data_dir=//p' | head -n 1)
+  LP_CF=$(printf '%s\n' "$_lpo" | sed -n 's/^conf_file=//p' | head -n 1)
+  path_ok "$LP_DD" && path_ok "$LP_CF" || { LP_DD=; LP_CF=; }
+  return 0
+}
+
+data_dir_guess() {   # $1=설치 루트 → DATA_DIR: 그 루트의 런처가 있으면 그 말(paths)을, 없으면 셸 규칙(config.data_dir 과 같은 식)
+  launcher_paths "$1"
+  DATA_DIR=${LP_DD:-$(claude_home_guess)/session_manager}
+}
+
+root_guard() {   # $1=설치 루트(물리 경로) — / ·홈(이나 그 위)·클로드 폴더·데이터 폴더(나 그 위)는 설치 루트가 아니다. 거기서 돌면
+  # 남의 .venv 를 정확 동기화(uv sync)로 바꾸고, 제거가 홈·클로드 폴더째 지울 수 있다
+  [ "$1" = / ] && die "설치 폴더가 / 입니다 — ClewPath 전용 빈 폴더에 zip 을 풀어 다시 실행하세요"
+  phys_of "$HOME"
+  covers "$1" "$PO_OUT" && die "설치 폴더가 홈 폴더이거나 그 위입니다: $1 — ClewPath 전용 빈 폴더에 zip 을 풀어 다시 실행하세요"
+  phys_of "$CLAUDE_HOME"
+  covers "$1" "$PO_OUT" && die "설치 폴더가 클로드 폴더($CLAUDE_HOME)이거나 그 위입니다: $1 — ClewPath 전용 빈 폴더에 zip 을 풀어 다시 실행하세요"
+  if [ -n "$DATA_DIR" ]; then
+    phys_of "$DATA_DIR"
+    covers "$1" "$PO_OUT" && die "설치 폴더가 데이터 폴더($DATA_DIR)이거나 그 위입니다: $1 — ClewPath 전용 빈 폴더에 zip 을 풀어 다시 실행하세요"
+  fi
+  return 0
+}
+
+mac_ascii_guard() {   # $1=설치 루트 — [mac] ps 는 명령줄의 ASCII 밖 바이트를 바꿔(\xxx) 보여 준다. 그러면 런처·러너·설치가 명령줄로
+  # Host 를 알아보지 못한다(멈추지 못하고 겹쳐 띄운다). 리눅스는 /proc 에서 바이트 그대로 읽으므로 그대로 둔다
+  [ "$OS" = mac ] || return 0
+  [ -z "$(printf '%s' "$1" | LC_ALL=C tr -d ' -~')" ] && return 0
+  fail "맥에서는 설치 폴더 경로에 한글 등 ASCII 밖의 글자를 쓸 수 없습니다: $1"
+  say "         (맥의 ps 가 그 글자를 바꿔 보여 줘 ClewPath 가 자기 Host 를 알아보지 못합니다)"
+  say "         영문 경로의 빈 새 폴더에 zip 을 풀어 다시 실행하세요"
+  exit 1
+}
+
+our_entry() {   # $1=설치 루트의 최상위 이름 — 우리 설치 항목인가(PAYLOAD 9개·설치가 만드는 것·일시 이름 — uninstall.sh 와 같은
+  # 목록). 맥 Finder 의 .DS_Store 는 셈하지 않는다
+  case "$1" in
+    session_manager|pwa|pyproject.toml|uv.lock|install.ps1|install.sh|uninstall.sh|README.md|LICENSE) return 0 ;;
+    .venv|clewpath_host.egg-info|start-connector.sh|.clewpath-install) return 0 ;;
+    .clewpath-swap.*|.clewpath-old.*|.clewpath-trash.*|.clewpath-install.*|.DS_Store) return 0 ;;   # 일시 이름(기록 임시 파일 포함)
+  esac
+  return 1
+}
+
+foreign_entries() {   # $1=폴더 → FE_N(우리 것이 아닌 최상위 항목 수)·FE_LIST(앞 5개 이름)
+  FE_N=0
+  FE_LIST=
+  for _fe in "$1"/* "$1"/.[!.]* "$1"/..?*; do
+    exists "$_fe" || continue
+    our_entry "${_fe##*/}" && continue
+    FE_N=$((FE_N + 1))
+    [ "$FE_N" -le 5 ] && FE_LIST="$FE_LIST${FE_LIST:+, }${_fe##*/}"
+  done
+  [ "$FE_N" -gt 5 ] && FE_LIST="$FE_LIST 외 $((FE_N - 5))개"
+  return 0
+}
+
+refuse_foreign() {   # $1=설치 폴더 — 설치 기록이 없는(첫 설치) 폴더에 남의 항목이 있으면 멈춘다. 남의 파일이 섞인 폴더(~/Downloads 등)에
+  # 설치하면 제거가 그것까지 지울 수 있었다
+  [ -f "$1/.clewpath-install" ] && return 0
+  foreign_entries "$1"
+  [ "$FE_N" = 0 ] && return 0
+  fail "설치 폴더에 ClewPath 것이 아닌 항목이 있습니다: $FE_LIST"
+  say "         빈 새 폴더에 zip 을 풀어 다시 실행하세요(남의 파일과 섞인 폴더에는 설치하지 않습니다): $1"
+  exit 1
+}
+
+check_root_items() {   # 바로 실행한 설치 루트 — 첫 설치는 우리 항목만 있는 폴더에서만, 재설치(기록 있음)는 모르는 항목을 알리기만
+  [ "$DEV_TREE" = 1 ] && return 0              # 개발 체크아웃은 위에서 따로 경고했다(제거는 개발 체크아웃을 거부한다)
+  refuse_foreign "$ROOT"
+  foreign_entries "$ROOT"
+  [ "$FE_N" = 0 ] || warn "설치 폴더에 ClewPath 가 모르는 항목이 있습니다(그대로 둡니다): $FE_LIST"
+  return 0
+}
+
+check_venv_owner() {   # 설치 기록이 없는 폴더의 .venv 는 남의 가상 환경일 수 있다 — 재사용해 uv sync(정확 동기화)를 걸면 그 안의 패키지를
+  # 지운다. 우리가 만든 것(설치 기록, 또는 .venv 안의 표지 — 첫 설치가 의존성에서 멈춘 뒤 다시 칠 때)만 잇는다
+  exists "$ROOT/.venv" || return 0
+  if [ -f "$ROOT/.clewpath-install" ] || [ -f "$ROOT/.venv/$VENV_MARK" ]; then return 0; fi
+  [ "$REINSTALL" = 1 ] && return 0              # 지우고 다시 만들라는 뜻 — [4/6] 이 가드를 거쳐 지운다
+  fail "설치 기록이 없는 폴더에 .venv 가 있습니다(ClewPath 가 만든 것이 아닐 수 있어 쓰지 않습니다): $ROOT/.venv"
+  say "         다른 곳에 쓰던 가상 환경이면 옮긴 뒤, ClewPath 용이면 --reinstall 을 붙여 다시 실행하세요(지우고 새로 만듭니다):"
+  say "         sh $(shq "$ROOT/install.sh") --reinstall"
+  exit 1
 }
 
 swap_left() {   # $1=설치 루트 — 중단된 업데이트의 교체 잔재(러너 저널)
@@ -382,10 +496,16 @@ check_stage() {   # $1=stage — 최상위 이름을 다시 본다(get.sh 가 �
   return 0
 }
 
+mv_held() {   # mv 를 INT·TERM·HUP 을 무시한 채로 — 터미널의 Ctrl+C·HUP 는 프로세스 그룹 전체(mv 자식 포함)로 가서, 셸만 미뤄서는
+  # mv 가 죽어 새것·옛것이 섞인다. 무시('')는 exec 로 mv 에 넘어가고, mv 는 곧 끝나며 다른 것을 띄우지 않는다
+  ( trap '' INT TERM HUP; exec mv "$@" )
+}
+
 place_stage() {   # $1=stage $2=설치 루트 — 최상위 항목마다 옛 것을 옆(설치 루트 안 .clewpath-old.<pid>)으로 rename 한 뒤 새 것을
   # 제자리로 rename(같은 파일 시스템). 항목이 비는 틈은 rename 두 번 사이뿐이다(전엔 rm -rf 동안 — 큰 폴더면 몇 초). 옮기는
-  # 동안 INT·TERM·HUP 은 미뤘다가 다 옮긴 뒤 끝낸다 — 도중에 끝나면 설치 폴더에 session_manager 가 빠진 채 남아 install.sh·
-  # uninstall.sh 둘 다 거부하고, 아직 안 옮긴 새 항목은 on_exit 가 임시 폴더째 지운다. zip 에 없는 기존 항목은 남긴다.
+  # 동안 INT·TERM·HUP 은 미뤘다가 다 옮긴 뒤 끝낸다(셸은 미루고, mv 자식은 무시 — mv_held) — 도중에 끝나면 설치 폴더에
+  # session_manager 가 빠진 채(또는 새것·옛것이 섞인 채) 남고, 아직 안 옮긴 새 항목은 on_exit 가 임시 폴더째 지운다.
+  # zip 에 없는 기존 항목은 남긴다.
   # 지난번에 전원이 꺼져 남은 옛 사본(.clewpath-old.*)은 먼저 치운다 — 받은 파일이 그 항목을 모두 새로 덮는다
   for _po in "$2"/.clewpath-old.*; do
     exists "$_po" || continue
@@ -399,12 +519,12 @@ place_stage() {   # $1=stage $2=설치 루트 — 최상위 항목마다 옛 것
   for _ps in "$1"/*; do
     exists "$_ps" || continue
     _pn=${_ps##*/}
-    if exists "$2/$_pn" && ! mv "$2/$_pn" "$PS_OLD/$_pn"; then
+    if exists "$2/$_pn" && ! mv_held "$2/$_pn" "$PS_OLD/$_pn"; then
       PS_FAIL="기존 항목을 옮기지 못했습니다: $2/$_pn"
       break
     fi
-    if ! mv "$_ps" "$2/$_pn"; then
-      exists "$PS_OLD/$_pn" && mv "$PS_OLD/$_pn" "$2/$_pn"     # 옛 것을 제자리로
+    if ! mv_held "$_ps" "$2/$_pn"; then
+      exists "$PS_OLD/$_pn" && mv_held "$PS_OLD/$_pn" "$2/$_pn"     # 옛 것을 제자리로
       PS_FAIL="옮기지 못했습니다: $_pn"
       break
     fi
@@ -416,9 +536,24 @@ place_stage() {   # $1=stage $2=설치 루트 — 최상위 항목마다 옛 것
   return 0
 }
 
+stage_temp() {   # --from-stage → GET_TMP: get.sh 의 임시 폴더(설치 루트 옆 .clewpath-get.*)를 인자 해석 바로 뒤에 알아 둔다 —
+  # 서막의 어떤 거절(인자·root·경로 검사…)에도 on_exit 가 치운다(남기면 같은 명령을 다시 칠 때마다 쌓인다). 그 모양일 때만:
+  # stage 가 이 install.sh 의 폴더이고, 그 부모 이름이 .clewpath-get.* 이고, 그 옆이 --dir 의 부모(물리 경로)
+  GET_TMP=
+  _gs=$(CDPATH='' cd "$FROM_STAGE" 2>/dev/null && phys_pwd) || return 0
+  [ "$_gs" = "$ROOT" ] || return 0
+  trim_slash "$DIR"
+  path_ok "$T_OUT" || return 0
+  _gp=$(CDPATH='' cd "$(dirname "$T_OUT")" 2>/dev/null && phys_pwd) || return 0
+  _gt=$(dirname "$_gs")
+  case "${_gt##*/}" in .clewpath-get.?*) ;; *) return 0 ;; esac
+  [ "$(dirname "$_gt")" = "$_gp" ] && GET_TMP=$_gt
+  return 0
+}
+
 prelude() {   # --from-stage: 옮긴 뒤 설치 루트의 install.sh 로 이어 간다(exec — pid 가 그대로라 표식도 그대로 유효)
   [ "$DRY_RUN" = 1 ] && usage_die "--dry-run 은 --from-stage 와 함께 쓸 수 없습니다"
-  P_ST=$(CDPATH='' cd "$FROM_STAGE" 2>/dev/null && pwd -P) || die "stage 폴더가 없습니다: $FROM_STAGE"
+  P_ST=$(CDPATH='' cd "$FROM_STAGE" 2>/dev/null && phys_pwd) || die "stage 폴더가 없습니다: $FROM_STAGE"
   [ "$P_ST" = "$ROOT" ] || die "--from-stage 는 이 install.sh 가 있는 폴더여야 합니다: $FROM_STAGE"
   [ -f "$P_ST/session_manager/__init__.py" ] && [ -f "$P_ST/install.sh" ] \
     || die "stage 에 session_manager·install.sh 가 없습니다: $P_ST"
@@ -427,20 +562,20 @@ prelude() {   # --from-stage: 옮긴 뒤 설치 루트의 install.sh 로 이어 
   DIR=$T_OUT
   path_ok "$DIR" || usage_die "--dir 는 절대 경로여야 합니다: $DIR"
   if [ "$DIR" = / ] || [ "$DIR" = "$HOME" ]; then die "--dir 가 / 나 홈입니다: $DIR"; fi
+  mac_ascii_guard "$DIR"
   case "$DIR/" in "$P_ST"/*) die "--dir 가 stage 안입니다: $DIR" ;; esac
   if exists "$DIR" && [ ! -d "$DIR" ]; then die "--dir 가 폴더가 아닙니다: $DIR"; fi
   if [ -e "$DIR/.git" ] || [ -d "$DIR/ops" ]; then die "개발 체크아웃(.git·ops) 위에는 설치하지 않습니다: $DIR"; fi
   if [ -d "$DIR" ] && [ -n "$(ls -A "$DIR" 2>/dev/null)" ] && ! is_clewpath_tree "$DIR"; then
     die "설치 폴더가 비어 있지 않고 ClewPath 설치본도 아닙니다(덮어쓰지 않습니다): $DIR"
   fi
+  [ -d "$DIR" ] && refuse_foreign "$DIR"         # 설치본처럼 보여도 기록이 없고 남의 파일이 섞였으면 — 옮기기 전에
   mkdir -p "$DIR" || die "설치 폴더를 만들 수 없습니다: $DIR"
-  DIR=$(CDPATH='' cd "$DIR" && pwd -P) || die "설치 폴더를 찾지 못했습니다: $DIR"   # 이어 갈 install.sh 의 ROOT 와 같은 물리 경로
-  GET_TMP=$(dirname "$P_ST")                    # get.sh 의 임시 폴더(설치 루트 옆) — 그 모양일 때만. 이제부터는 성공하면 옮긴 뒤,
-  case "${GET_TMP##*/}" in                      # 실패하면 on_exit 가 지운다
-    .clewpath-get.*) [ "$(dirname "$GET_TMP")" = "$(dirname "$DIR")" ] || GET_TMP='' ;;
-    *) GET_TMP='' ;;
-  esac
-  DATA_DIR=$(data_dir_guess "$DIR")
+  DIR=$(CDPATH='' cd "$DIR" && phys_pwd) || die "설치 폴더를 찾지 못했습니다: $DIR"   # 이어 갈 install.sh 의 ROOT 와 같은 물리 경로
+  mac_ascii_guard "$DIR"
+  root_guard "$DIR"                             # 홈·클로드 폴더(나 그 위) — 그 폴더의 런처를 부르기 전에
+  data_dir_guess "$DIR"
+  root_guard "$DIR"                             # 이제 데이터 폴더까지
   take_marker "$DATA_DIR"
   stop_host "$DIR"
   place_stage "$P_ST" "$DIR"
@@ -475,11 +610,35 @@ uv_version_of() {   # $1=uv 실행 파일 → "0.12.1"(못 읽으면 빈 출력)
   printf '%s' "${_uv%% *}"
 }
 
-is_musl() {
+uv_min_ok() {   # $1=버전 — 고정 버전(UV_VERSION)과 같은 부 버전 이상인가(0.12.1 고정이면 0.12.0 이상)
+  _vm=${1%%.*}
+  _vn=${1#*.}
+  _vn=${_vn%%.*}
+  _wm=${UV_VERSION%%.*}
+  _wn=${UV_VERSION#*.}
+  _wn=${_wn%%.*}
+  case "$_vm" in ''|*[!0-9]*) return 1 ;; esac
+  case "$_vn" in ''|*[!0-9]*) return 1 ;; esac
+  case "$_wm$_wn" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$_vm" -gt "$_wm" ] && return 0
+  [ "$_vm" -eq "$_wm" ] && [ "$_vn" -ge "$_wn" ]
+}
+
+uv_ours() {   # $CLEWPATH_HOME/bin 의 uv 를 쓰거나 바꿔도 되나 — ClewPath 전용 기본 위치(CLEWPATH_HOME 을 주지 않음)이거나, 설치 기록의
+  # uv= 가 그것일 때만. 남과 같이 쓰는 폴더(예: CLEWPATH_HOME=~/.local)의 사용자 uv 를 덮어쓰거나 제 것으로 적지 않게(제거가 지운다)
+  [ -z "$CLEWPATH_HOME_GIVEN" ] && return 0
+  [ "$(kv uv "$ROOT/.clewpath-install")" = "$CLEWPATH_HOME/bin/uv" ]
+}
+
+is_musl() {   # glibc 가 보이면 musl 이 아니다 — glibc 배포판에도 musl 패키지가 /lib/ld-musl-* 를 둘 수 있다
+  getconf GNU_LIBC_VERSION >/dev/null 2>&1 && return 1
+  case "$(ldd --version 2>&1)" in
+    *GLIBC*|*"GNU libc"*|*"GNU C Library"*) return 1 ;;
+    *musl*) return 0 ;;
+  esac
   for _m in /lib/ld-musl-*; do
     [ -e "$_m" ] && return 0
   done
-  case "$(ldd --version 2>&1)" in *musl*) return 0 ;; esac
   return 1
 }
 
@@ -557,7 +716,7 @@ install_uv() {   # 고정 버전 uv 를 받아(또는 CLEWPATH_UV_ARCHIVE) 해�
     fail "uv 를 둘 수 없습니다: $CLEWPATH_HOME/bin/uv"
     return 1
   fi
-  if [ -n "$_ux" ]; then
+  if [ -n "$_ux" ] && { ! exists "$CLEWPATH_HOME/bin/uvx" || uv_ours; }; then
     { cp "$_ux" "$_ut" && chmod 755 "$_ut" && mv -f "$_ut" "$CLEWPATH_HOME/bin/uvx"; } || rm -f "$_ut"
   fi
   UV="$CLEWPATH_HOME/bin/uv"
@@ -573,9 +732,15 @@ step_uv() {
     [ -n "$UV" ] || die "--system-uv 를 줬지만 PATH 에 uv 가 없습니다."
     case "$UV" in
       /*) ;;
-      *) UV="$(CDPATH='' cd "$(dirname "$UV")" && pwd -P)/${UV##*/}" ;;   # PATH 의 상대 경로 — cd 뒤에도 찾게
+      *) UV="$(CDPATH='' cd "$(dirname "$UV")" && phys_pwd)/${UV##*/}" ;;   # PATH 의 상대 경로 — cd 뒤에도 찾게
     esac
+    _sv=$(uv_version_of "$UV")                   # 해시는 못 보지만 너무 옛 uv(모르는 옵션·잠금 형식)는 막는다
+    uv_min_ok "$_sv" || die "PATH 의 uv 가 너무 옛 버전입니다(uv ${_sv:-?}, $UV) — uv ${UV_VERSION%.*} 이상이 필요합니다(--system-uv 를 빼면 고정 버전을 받습니다)"
     warn "PATH 의 uv 사용: $UV (--system-uv — 버전·해시를 검증하지 않습니다)"
+  elif exists "$CLEWPATH_HOME/bin/uv" && ! uv_ours; then
+    fail "$CLEWPATH_HOME/bin/uv 는 ClewPath 가 둔 것이 아닙니다(CLEWPATH_HOME=$CLEWPATH_HOME) — 쓰거나 덮어쓰지 않습니다."
+    say "         ClewPath 전용 폴더를 CLEWPATH_HOME 으로 주거나(비워 두면 기본 위치), 그 uv 를 쓰려면 --system-uv 를 붙이세요"
+    exit 1
   elif [ -f "$CLEWPATH_HOME/bin/uv" ] && [ -x "$CLEWPATH_HOME/bin/uv" ] \
        && [ "$(uv_version_of "$CLEWPATH_HOME/bin/uv")" = "$UV_VERSION" ]; then
     UV="$CLEWPATH_HOME/bin/uv"
@@ -723,6 +888,8 @@ step_deps() {
       show_tail "$I_TMP/venv.log" "uv 출력(마지막 25줄)"
       exit 1
     fi
+    # 우리가 만든 .venv 라는 표지 — 설치 기록을 쓰기 전에 멈춰도(의존성 실패) 다시 실행하면 잇는다(check_venv_owner)
+    { printf 'clewpath-install\n' >"$ROOT/.venv/$VENV_MARK"; } 2>/dev/null || warn ".venv 표지를 쓰지 못했습니다: $ROOT/.venv"
     ok "venv 생성"
   else
     ok "기존 venv 재사용"
@@ -740,13 +907,21 @@ step_deps() {
       ok "의존성 설치 완료 (uv.lock 고정 버전)"
       _deps=1
     else
-      warn "잠금 파일로 설치 실패 — pyproject 기준으로 재시도합니다."
+      # 잠금 밖 폴백(S11) — 성공해도 원인이 임시 폴더째 사라지지 않게 데이터 폴더(있으면 updates/)에 남긴다
+      _sd=$DATA_DIR
+      [ -d "$DATA_DIR/updates" ] && _sd="$DATA_DIR/updates"
+      _sl="$_sd/install-sync-$(date +%Y%m%d-%H%M%S).log"
+      if [ -d "$_sd" ] && cp "$I_TMP/sync.log" "$_sl" 2>/dev/null; then
+        warn "잠금 파일로 설치 실패 — pyproject 기준으로 재시도합니다(원인 기록: $_sl)"
+      else
+        warn "잠금 파일로 설치 실패 — pyproject 기준으로 재시도합니다."
+      fi
+      show_tail "$I_TMP/sync.log" "uv sync 출력(마지막 10줄)" 10
     fi
   fi
   if [ "$_deps" != 1 ]; then
     if ! run_quiet "$I_TMP/pip.log" uv_run "$ROOT" pip install --python "$VPY" -e "$ROOT"; then
       fail "의존성 설치 실패"
-      show_tail "$I_TMP/sync.log" "uv sync 출력(마지막 25줄)"
       show_tail "$I_TMP/pip.log" "uv pip 출력(마지막 25줄)"
       say "  대개 원인:"
       say "   1) 이전 설치의 .venv 손상 → --reinstall 로 다시: sh $(shq "$ROOT/install.sh") --reinstall"
@@ -760,10 +935,12 @@ step_deps() {
 
 # ---------------------------------------------------------------- hostctl(경로·설정·런처·자격증명·기동 확인)
 
-hostctl() {   # $1=결과 파일, 나머지=hostctl 인자 — key=value 는 파일로, 사람에게 하는 말(표준오류)은 화면으로
+hostctl() {   # $1=결과 파일, 나머지=hostctl 인자 — key=value 는 파일로, 사람에게 하는 말(표준오류)은 화면으로.
+  # 설정 파일은 HC_CONF(사용자의 CLEWPATH_CONFIG → 기존 런처가 쓰는 것 → paths 가 정한 것)로 고정한다 — Host 가 볼 것과 같게
   HC_OUT=$1
   shift
   ( unset CLEWPATH_CLIENT_TOKEN CLEWPATH_AGENT_TOKEN
+    if [ -n "$HC_CONF" ]; then export CLEWPATH_CONFIG="$HC_CONF"; fi
     cd "$ROOT" || exit 1
     exec "$VPY" -I -m session_manager.hostctl "$@" ) </dev/null 2>&1 >"$HC_OUT"
 }
@@ -773,6 +950,7 @@ hostctl_tokens() {   # 토큰을 env 로만 넘긴다(write-config) — 인자�
   shift
   ( if [ -n "$CLIENT_TOKEN" ]; then export CLEWPATH_CLIENT_TOKEN="$CLIENT_TOKEN"; else unset CLEWPATH_CLIENT_TOKEN; fi
     if [ -n "$AGENT_TOKEN" ]; then export CLEWPATH_AGENT_TOKEN="$AGENT_TOKEN"; else unset CLEWPATH_AGENT_TOKEN; fi
+    if [ -n "$HC_CONF" ]; then export CLEWPATH_CONFIG="$HC_CONF"; fi
     cd "$ROOT" || exit 1
     exec "$VPY" -I -m session_manager.hostctl "$@" ) </dev/null 2>&1 >"$HC_OUT"
 }
@@ -783,13 +961,26 @@ step_paths() {   # I7 — 경로는 파이썬 규칙(Host 가 볼 데이터 폴�
   _dd=$(kv data_dir "$I_TMP/paths.out")
   _cf=$(kv conf_file "$I_TMP/paths.out")
   path_ok "$_dd" && path_ok "$_cf" || die "hostctl paths 결과가 이상합니다: data_dir=$_dd conf_file=$_cf"
-  if [ "$_dd" != "$DATA_DIR" ]; then
-    warn "데이터 폴더가 셸 추정($DATA_DIR)과 다릅니다(설정 파일의 [claude] config_dir 등) — $_dd 를 씁니다"
+  phys_of "$_dd"
+  _dp=$PO_OUT
+  phys_of "$DATA_DIR"
+  if [ "$_dp" = "$PO_OUT" ]; then              # 같은 폴더(겹친 / ·끝 / 만 다를 수 있다) — 파이썬이 정리한 글자로 적는다. 표식은 그 자리 그대로
+    DATA_DIR=$_dd
+  elif [ -n "$LP_DD" ]; then                    # 재설치 — 기존 런처가 쓰던 데이터 폴더(페어링·자격증명)를 버리고 갈아타지 않는다
+    fail "데이터 폴더가 기존 설치와 다릅니다 — 갈아타지 않고 멈춥니다(페어링·자격증명은 기존 폴더에 있습니다)"
+    say "         기존 런처   : $DATA_DIR"
+    say "         지금 설정   : $_dd"
+    say "         (지금 셸의 CLAUDE_CONFIG_DIR·SESSION_MANAGER_CLAUDE_HOME·CLEWPATH_CONFIG, 또는 설정 파일 $_cf 의 [claude] config_dir)"
+    say "         처음 설치할 때와 같은 env 로 다시 실행하세요. 데이터 폴더를 옮기려면 sh $(shq "$ROOT/uninstall.sh") 로 지운 뒤 새로 설치하세요"
+    exit 1
+  else                                          # 첫 설치 — 셸 추정은 설정 파일을 읽지 못한다
+    warn "데이터 폴더가 셸 추정($DATA_DIR)과 다릅니다 — 설정 파일($_cf)의 [claude] config_dir 를 따릅니다: $_dd"
     mark_release
     DATA_DIR=$_dd
     take_marker "$DATA_DIR"
   fi
   CONF_FILE=$_cf
+  HC_CONF=$_cf
   if [ -n "${SESSION_MANAGER_CLAUDE_HOME:-}" ]; then
     warn "SESSION_MANAGER_CLAUDE_HOME 은 시험 격리용 변수입니다 — 기동할 때도 같은 값이 필요합니다"
   fi
@@ -877,6 +1068,12 @@ step_start() {
   _lc="$ROOT/start-connector.sh"
   /bin/sh "$_lc" status </dev/null >"$I_TMP/status.out" 2>/dev/null
   _hp=$(kv pid "$I_TMP/status.out")
+  # 제거가 중간에 끊겨 남은 표식(by=uninstall) — install.sh 를 다시 돌린 것은 다시 켜겠다는 뜻이다. 다른 표식(stop --hold 등)은 그대로
+  if [ -f "$DATA_DIR/maintenance.flag" ] && [ "$(kv by "$DATA_DIR/maintenance.flag")" = uninstall ]; then
+    if rm -f "$DATA_DIR/maintenance.flag"; then
+      ok "끊긴 제거가 남긴 maintenance.flag(by=uninstall)를 지웠습니다 — 다시 켭니다"
+    fi
+  fi
   if [ -e "$DATA_DIR/maintenance.flag" ]; then
     warn "maintenance.flag 가 있어 기동하지 않습니다 — 다시 켜기: sh $(shq "$_lc") resume"
     [ -n "$_hp" ] && warn "떠 있는 Host(pid $_hp)는 그대로 둡니다 — 새 설치는 다음 재기동부터 반영됩니다"
@@ -1035,7 +1232,18 @@ main() {
   DATA_DIR=''
   CONF_FILE=''
   EFF_PORT=''
+  LP_DD=''
+  LP_CF=''
+  HC_CONF=''
+  DEV_TREE=0
+  VENV_MARK=.clewpath-venv
   parse_args "$@"
+  ROOT=$(CDPATH='' cd "$(dirname "$0")" && phys_pwd) || die "설치 폴더를 찾지 못했습니다: $0"
+  if [ -n "$FROM_STAGE" ]; then                 # get.sh 의 임시 stage 를 먼저 알아 둔다 — 서막의 어떤 거절에도 on_exit 가 치운다
+    stage_temp
+    trap 'on_exit' EXIT
+    trap 'exit 1' INT TERM HUP
+  fi
   check_args
   if [ "$TOKEN_ARGV" = 1 ]; then                # 경고는 한 번(다시 실행한 쪽엔 토큰 인자가 없다)
     warn "--client-token·--agent-token 은 같은 PC 의 다른 사용자에게 보입니다(ps) — 환경변수로 넘기세요:"
@@ -1053,7 +1261,6 @@ main() {
   if [ "$(id -u)" = 0 ] && [ "$ALLOW_ROOT" != 1 ]; then
     die "root(관리자)로는 설치하지 않습니다 — 일반 사용자로 실행하세요(sudo 없이)"
   fi
-  ROOT=$(CDPATH='' cd "$(dirname "$0")" && pwd -P) || die "설치 폴더를 찾지 못했습니다: $0"
   path_ok "$ROOT" || die "설치 폴더 경로에 쓸 수 없는 글자가 있습니다: $ROOT"
   [ -d "$ROOT/session_manager" ] \
     || die "이 스크립트는 ClewPath Host 폴더 안에서 실행해야 합니다(session_manager 폴더가 안 보임)."
@@ -1070,6 +1277,7 @@ main() {
     say "=== ClewPath Host 설치 준비 — 받은 파일을 설치 폴더로: $DIR ==="
     prelude
   fi
+  mac_ascii_guard "$ROOT"
 
   say ""
   say "=== ClewPath Host 설치 ==="
@@ -1082,11 +1290,22 @@ main() {
   [ "$DRY_RUN" = 1 ] && warn "DryRun — 점검만 하고 아무것도 변경하지 않습니다."
 
   if [ -e "$ROOT/.git" ] || [ -d "$ROOT/ops" ]; then
+    DEV_TREE=1
     warn "개발 체크아웃 — 자동 업데이트는 꺼진 채로 동작합니다: $ROOT"
   fi
+  root_guard "$ROOT"                            # 홈·클로드 폴더(나 그 위)면 — 그 폴더의 런처(paths)를 부르기 전에 멈춘다
+  # 경로 — 기존 런처가 있으면 그 말(데이터 폴더·설정 파일)을 따른다(재설치를 다른 env 의 셸에서 해도 같은 폴더로)
+  data_dir_guess "$ROOT"
+  if [ -n "$LP_DD" ] && [ -z "${SESSION_MANAGER_CLAUDE_HOME:-}${CLAUDE_CONFIG_DIR:-}" ]; then
+    case "$LP_DD" in */session_manager) CLAUDE_HOME=${LP_DD%/session_manager} ;; esac
+  fi
+  HC_CONF=${CLEWPATH_CONFIG:-$LP_CF}
+  CONF_FILE=${HC_CONF:-$DATA_DIR/clewpath.toml}
+  # 설치 폴더 — 데이터 폴더(나 그 위)도 아니고, 첫 설치면 우리 항목만, .venv 는 우리가 만든 것만
+  root_guard "$ROOT"
+  check_root_items
+  check_venv_owner
   # I2. 표식 — 업데이트·다른 설치와 겹치지 않게, 감독자가 그동안 띄우지 않게
-  DATA_DIR=$(data_dir_guess "$ROOT")
-  CONF_FILE=${CLEWPATH_CONFIG:-$DATA_DIR/clewpath.toml}
   if [ "$DRY_RUN" = 1 ]; then
     swap_left "$ROOT" && warn "중단된 업데이트 잔재가 있습니다($ROOT/.clewpath-swap.*) — 실제 설치 때 되돌립니다"
     marker_busy "$DATA_DIR" && warn "업데이트·설치가 진행 중입니다(pid ${MK_PID:-?}) — 실제 설치는 거부됩니다"

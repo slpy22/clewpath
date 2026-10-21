@@ -23,8 +23,8 @@
 #  - 본문 전체가 main() 안에 있고 맨 끝 줄이 main "$@" 다 — curl | sh 가 중간에 끊겨도 반쪽 스크립트가 돌지 않는다.
 #    맨 위에는 함수 정의와 값 대입뿐이다(test_posix_scripts 가 묶는다)
 #  - https 만(리다이렉트로 http 로 내려가지 않게, TLS 1.2 이상). jq·venv 가 아직 없으므로 매니페스트(압축된 ASCII JSON)는
-#    sed·awk 로 읽고 키가 한 번씩인지·값의 모양까지 본다. zip 은 unzip 으로, [linux] 에 unzip 이 없을 때만 python3 -I 의
-#    zipfile 로 푼다 — [mac] 은 python3 를 부르지 않는다(CLT 설치 대화상자가 뜰 수 있다)
+#    sed·awk 로 읽고 키가 한 번씩인지·값의 모양까지 본다. zip 은 Info-ZIP unzip 으로, [linux] 에 그것이 없을 때만(busybox
+#    unzip 은 목록 모드 -Z 가 없다) python3 -I 의 zipfile 로 푼다 — [mac] 은 python3 를 부르지 않는다(CLT 설치 대화상자)
 #  - 항목 이름(절대 경로·..·역슬래시·제어문자·점으로 시작하는 최상위·런처 이름·심볼릭 링크·같은 이름)을 풀기 전에 보고,
 #    푼 뒤에 디스크에서 다시 본다. 받는 동안 설치 폴더는 건드리지 않는다(옮기기·Host 정지는 install.sh 가)
 #  - root 로는 설치하지 않는다. 토큰은 출력하지 않는다. set -x·env 덤프 금지. umask·env 는 그대로 install.sh 로 간다
@@ -32,7 +32,7 @@
 
 set -u
 
-# zipfile 대역 — [linux] 에 unzip 이 없을 때만. list: 이름을 한 줄에 하나(제어문자 3, 심볼릭 링크 4), extract: 푼다
+# zipfile 대역 — [linux] 에 Info-ZIP unzip 이 없을 때만. list: 이름을 한 줄에 하나(제어문자 3, 심볼릭 링크 4), extract: 푼다
 ZIP_PY='
 import stat, sys, zipfile
 with zipfile.ZipFile(sys.argv[2]) as z:
@@ -75,6 +75,9 @@ path_ok() {   # 절대 경로 — 제어문자·. ·.. 조각이 없다
   case "$1/" in */./*|*/../*) return 1 ;; esac
   return 0
 }
+
+# 물리 경로 — /bin/pwd -P 는 맥 APFS 에서 디스크의 대소문자를 준다(셸 내장 pwd -P 는 친 글자 그대로). 다섯 스크립트 같은 본문
+phys_pwd() { if [ -x /bin/pwd ]; then /bin/pwd -P; else pwd -P; fi; }
 
 trim_slash() {   # 끝의 / 를 걷어 낸 값 → T_OUT("/" 는 그대로)
   T_OUT=$1
@@ -354,6 +357,24 @@ dir_check() {   # 설치 폴더로 쓸 수 있나 — install.sh 서막과 같�
   return 0
 }
 
+dir_guard() {   # $1=설치 폴더 $2=무엇(말) — 설치 폴더로 둘 수 없는 자리(다섯 스크립트 같은 규칙). 받기 전에, 물리 경로로 다시
+  path_ok "$1" || usage_die "$2 는 절대 경로여야 합니다(제어문자·. ·.. 조각 없이): $1"
+  if [ "$1" = / ] || [ "$1" = "$HOME" ]; then usage_die "$2 가 / 나 홈입니다: $1"; fi
+  # 홈(물리 경로) 자신이나 그 조상도 — 링크로 이름만 다른 홈까지. 물리 경로를 못 얻으면 $HOME 글자로
+  DG_HOME=$(CDPATH='' cd "$HOME" 2>/dev/null && phys_pwd) || DG_HOME=$HOME
+  case "$DG_HOME/" in "$1"/*) usage_die "$2 가 / 나 홈(또는 홈을 품은 폴더)입니다: $1" ;; esac
+  # [mac] ps 는 ASCII 밖 바이트를 이스케이프해 보여 준다 — 런처·러너가 명령줄로 Host 를 알아보지 못한다(리눅스는 그대로)
+  if [ "$OS" = mac ] && [ "$(printf '%s' "$1" | LC_ALL=C tr -d ' -~' | wc -c | tr -d ' ')" != 0 ]; then
+    usage_die "맥에서는 $2 에 ASCII 밖 글자(한글 등)를 쓸 수 없습니다 — 맥 ps 가 그 글자를 바꿔 보여 Host 를 알아보지 못합니다. --dir 나 CLEWPATH_HOME 으로 ASCII 경로를 고르세요: $1"
+  fi
+  return 0
+}
+
+zipinfo_ok() {   # PATH 의 unzip 이 Info-ZIP 의 목록 모드(-Z·-Z1)를 하나 — 인자 없는 -Z 는 ZipInfo 사용법을 낸다.
+  case "$(unzip -Z </dev/null 2>&1)" in *ZipInfo*) return 0 ;; esac   # busybox unzip(Alpine 기본)은 -Z 를 모른다
+  return 1
+}
+
 need_tools() {   # 없으면 무엇을 설치하라고 말하고 1 → ZIPT(unzip|python) B64_TOOL
   NT_MISS=
   for NT_T in curl mktemp tr sed awk wc find dirname sort uniq; do
@@ -365,15 +386,24 @@ need_tools() {   # 없으면 무엇을 설치하라고 말하고 1 → ZIPT(unzi
   fi
   pick_b64 || NT_MISS="$NT_MISS base64(coreutils)"
   ZIPT=
-  if command -v unzip >/dev/null 2>&1; then
+  NT_ZIP=
+  if zipinfo_ok; then
     ZIPT=unzip
   elif [ "$OS" = linux ] && command -v python3 >/dev/null 2>&1; then
-    ZIPT=python
+    ZIPT=python                                 # unzip 이 없거나, 있어도 목록 모드가 없다(busybox)
+  elif command -v unzip >/dev/null 2>&1; then
+    NT_MISS="$NT_MISS unzip(Info-ZIP)"          # 이 unzip 으로는 풀기 전에 이름·링크를 볼 수 없다('손상'이 아니다)
+    NT_ZIP=1
   else
     NT_MISS="$NT_MISS unzip"
   fi
   [ -z "$NT_MISS" ] && return 0
   fail "필요한 도구가 없습니다:$NT_MISS"
+  if [ "$NT_ZIP" = 1 ] && [ "$OS" = linux ]; then
+    say "         PATH 의 unzip 은 목록 모드(-Z)가 없습니다(busybox 등) — Info-ZIP unzip 을 설치하세요(예: sudo apk add unzip)"
+  elif [ "$NT_ZIP" = 1 ]; then
+    say "         PATH 의 unzip 은 목록 모드(-Z)가 없습니다 — 맥 기본 /usr/bin/unzip(Info-ZIP)이 먼저 오게 하세요"
+  fi
   if [ "$OS" = linux ]; then
     say "         먼저 설치하세요(예: sudo apt install curl unzip coreutils / sudo dnf install curl unzip)"
   else
@@ -426,12 +456,15 @@ check_args() {
   [ -z "$APP_URL" ] || check_url "$APP_URL" https --app-url
   case "$PORT" in ''|0*|*[!0-9]*) usage_die "--port 는 1-65535 입니다: $PORT" ;; esac
   if [ "${#PORT}" -gt 5 ] || [ "$PORT" -gt 65535 ]; then usage_die "--port 는 1-65535 입니다: $PORT"; fi
-  case "$CLIENT_TOKEN" in *[[:cntrl:]]*) usage_die "토큰에 줄바꿈·제어문자가 있습니다" ;; esac
+  # agent 토큰은 env 로만 그대로 넘어간다 — install.sh 가 같이 보는 것을 여기서 먼저(받은 뒤 거절되면 stage 가 남는다)
+  case "$CLIENT_TOKEN${CLEWPATH_AGENT_TOKEN:-}" in *[[:cntrl:]]*) usage_die "토큰에 줄바꿈·제어문자가 있습니다" ;; esac
   if [ "$DIR_GIVEN" = 1 ]; then CA_WHAT="--dir"; else CA_WHAT="설치 위치(CLEWPATH_HOME)"; fi
   trim_slash "$DIR"
   DIR=$T_OUT
-  path_ok "$DIR" || usage_die "$CA_WHAT 는 절대 경로여야 합니다(제어문자·. ·.. 조각 없이): $DIR"
-  if [ "$DIR" = / ] || [ "$DIR" = "$HOME" ]; then usage_die "$CA_WHAT 가 / 나 홈입니다: $DIR"; fi
+  dir_guard "$DIR" "$CA_WHAT"
+  # 클로드 폴더 — install.sh 가 정리를 걸기 전에 거절하는 값(claude_home_guess 와 같은 순서, path_ok)
+  CA_CH=${SESSION_MANAGER_CLAUDE_HOME:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}
+  path_ok "$CA_CH" || die "클로드 폴더가 절대 경로가 아닙니다(SESSION_MANAGER_CLAUDE_HOME·CLAUDE_CONFIG_DIR): $CA_CH"
 }
 
 # ---------------------------------------------------------------- 흐름
@@ -534,13 +567,14 @@ main() {
   check_names "$G_W/names" || die "받은 파일에 둘 수 없는 항목이 있습니다: $CN_WHY"
   G_PARENT=$(dirname "$DIR")
   mkdir -p "$G_PARENT" 2>/dev/null || die "폴더를 만들 수 없습니다: $G_PARENT"
-  if [ -d "$DIR" ]; then                         # 물리 경로로 — install.sh 가 pwd -P 로 맞춰 보는 자리와 같게
-    DIR=$(CDPATH='' cd "$DIR" 2>/dev/null && pwd -P) || die "설치 폴더를 찾지 못했습니다: $DIR"
+  if [ -d "$DIR" ]; then                         # 물리 경로로 — install.sh 가 phys_pwd 로 맞춰 보는 자리와 같게
+    DIR=$(CDPATH='' cd "$DIR" 2>/dev/null && phys_pwd) || die "설치 폴더를 찾지 못했습니다: $DIR"
     G_PARENT=$(dirname "$DIR")
   else
-    G_PARENT=$(CDPATH='' cd "$G_PARENT" 2>/dev/null && pwd -P) || die "폴더를 찾지 못했습니다: $G_PARENT"
+    G_PARENT=$(CDPATH='' cd "$G_PARENT" 2>/dev/null && phys_pwd) || die "폴더를 찾지 못했습니다: $G_PARENT"
     case "$G_PARENT" in /) DIR="/${DIR##*/}" ;; *) DIR="$G_PARENT/${DIR##*/}" ;; esac
   fi
+  dir_guard "$DIR" "설치 폴더(물리 경로)"       # 링크 너머가 홈·[mac] ASCII 밖이면 — stage 를 만들기 전에
   G_TMP=$(mktemp -d "$G_PARENT/.clewpath-get.XXXXXX") || die "임시 폴더를 만들 수 없습니다: $G_PARENT"
   mkdir "$G_TMP/stage" || die "임시 폴더를 만들 수 없습니다: $G_TMP"
   zip_extract "$G_ZIP" "$G_TMP/stage" || die "압축을 풀지 못했습니다(디스크 공간·권한을 확인하세요)"

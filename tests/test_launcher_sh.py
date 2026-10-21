@@ -24,8 +24,10 @@ import stat
 import subprocess
 import sys
 import sysconfig
+import threading
 import time
 import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -188,8 +190,10 @@ class Inst:
         self.conf.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     def env(self, **extra) -> dict:
+        # 데이터 폴더를 정하는 env(conftest 가 SESSION_MANAGER_CLAUDE_HOME 을 넣는다)도 뺀다 — 설치 때처럼 HOME 아래 기본값
         e = {k: v for k, v in os.environ.items()
-             if k not in ("CLAUDECODE", "CLAUDE_PID", "CLAUDE_EFFORT", "CLEWPATH_UPDATER")
+             if k not in ("CLAUDECODE", "CLAUDE_PID", "CLAUDE_EFFORT", "CLEWPATH_UPDATER",
+                          "SESSION_MANAGER_CLAUDE_HOME", "CLAUDE_CONFIG_DIR")
              and not k.upper().startswith("CLAUDE_CODE_")}
         e["HOME"] = str(self.home)
         e.update({k: str(v) for k, v in extra.items()})
@@ -647,8 +651,8 @@ def lock_race(work: Path, funcs: str, contender: str, lock: str, trials: int, n:
 def test_stale_lock_is_taken_over_by_exactly_one(tmp_path):
     """시체 잠금을 여럿이 동시에 치우면 늦게 지운 쪽이 먼저 잡은 쪽의 새 잠금을 지워 둘 다 잡았다고 믿었다(감독자·사람·러너가
     겹치면 Host 둘). 치우는 권리(옆 폴더 mkdir)를 쥔 하나만 다시 보고 지우고 새로 잡는다."""
-    funcs = "DATA_DIR=\"$D\"\n" + _shell_funcs(TEMPLATE, ("pid_alive", "cmdline_of", "cmd_has", "lock_live", "lock_drop",
-                                                         "lock_reclaim", "lock_acquire"))
+    funcs = "DATA_DIR=\"$D\"\n" + _shell_funcs(TEMPLATE, ("pid_alive", "cmdline_of", "cmd_has", "boot_id", "lock_live",
+                                                         "lock_drop", "lock_reclaim", "lock_acquire"))
     funcs += "lock_try() { lock_acquire \"$1\" start-connector.sh; }\n"
     counts = lock_race(tmp_path, funcs, "start-connector.sh", "launcher.lock", 30, 8)
     assert counts == [1] * len(counts), f"시도마다 잡은 수: {counts}"
@@ -866,3 +870,239 @@ def test_foreground_becomes_the_host(inst):
     (inst.data / "maintenance.flag").write_text("by=test\n", encoding="utf-8")
     r = inst.run("foreground", timeout=30)
     assert r.returncode == 0 and inst.host_pids() == [], "보류 중이면 띄우지 않고 0(감독자가 다시 부르지 않게)"
+
+
+# ---------------------------------------------------------------- 2회차 검토(L1~L6·C1·C4)
+
+def _slow_port() -> socket.socket:
+    """연결은 받지만(대기열) 답하지 않는 포트 — 런처의 health 가 3초 timeout 까지 붙잡힌다(첫 판정이 도는 사이를 벌린다)."""
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    s.listen(16)
+    return s
+
+
+def _foreign_server(port: int) -> ThreadingHTTPServer:
+    """남의 서버 — /api/health 에 {"status":"ok"} 로 답하지만 이 설치본의 Host 가 아니다."""
+    class H(BaseHTTPRequestHandler):
+        def do_GET(self):
+            raw = json.dumps({"status": "ok"}).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def log_message(self, *a):
+            pass
+    srv = ThreadingHTTPServer(("127.0.0.1", port), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
+
+def _boot_id() -> str:
+    """런처가 잠금에 적는 부팅 식별자(템플릿의 boot_id 를 그대로 돌린다). 못 얻는 환경이면 빈 문자열."""
+    r = subprocess.run(["/bin/sh", "-c", _shell_funcs(TEMPLATE, ("boot_id",)) + "boot_id\n"], capture_output=True,
+                       timeout=10)
+    return r.stdout.decode().strip()
+
+
+def test_slow_first_boot_is_tracked_by_the_spawn_record(inst):
+    """[L1] 첫 기동(.pyc 없음)·느린 PC 에서 Host 가 15초 안에 runtime.json 을 못 쓰면 start 는 잠금을 놓는다. 그 사이 status 는
+    stopped, stop 은 'not running', 다음 start(watch·사람)는 두 번째 Host 를 띄웠다 — 런처가 띄운 pid(launcher.spawn)도 본다."""
+    inst.conf_write(delay=40)
+    r = inst.run("start", timeout=60)
+    assert r.returncode == 0 and "runtime.json 아직 없음" in inst.llog(), inst.diag(r)
+    pids = inst.host_pids()
+    assert len(pids) == 1 and not inst.runtime(), (pids, inst.diag(r))
+    st = _kv(inst.run("status").stdout.decode())
+    assert st["state"] == "starting" and st["pid"] == str(pids[0]), st
+    r = inst.run("start")
+    assert r.returncode == 0 and inst.host_pids() == pids, inst.diag(r)
+    assert len(list(inst.data.glob("fake-*.json"))) == 1 and f"skip: pid {pids[0]} 살아 있음" in inst.llog()
+    r = inst.run("stop")
+    assert r.stdout.decode().strip() == f"stopped (pid {pids[0]})", inst.diag(r)
+    assert (inst.data / f"term-{pids[0]}").is_file() and inst.host_pids() == []
+
+
+def test_dead_pid_in_runtime_json_does_not_hide_the_live_host(inst):
+    """[L1] 겹쳐 뜬 쪽(진 쪽)이 runtime.json 을 나중에 덮어쓰고 죽으면 runtime.json 은 죽은 pid — 그 뒤로 살아 있는 Host 를
+    런처로 멈출 수 없었다. 런처가 띄운 pid 가 살아 있으면 그것이 Host 다."""
+    pid = inst.started(inst.run("start"))
+    (inst.data / "runtime.json").write_text(json.dumps({"port": inst.port, "pid": DEAD_PID}), encoding="utf-8")
+    st = _kv(inst.run("status").stdout.decode())
+    assert st["state"] == "running" and st["pid"] == str(pid), st
+    assert inst.run("start").returncode == 0 and inst.host_pids() == [pid]
+    r = inst.run("stop")
+    assert r.stdout.decode().strip() == f"stopped (pid {pid})", inst.diag(r)
+    assert inst.host_pids() == []
+
+
+def test_stop_waits_for_the_start_in_progress(inst):
+    """[L2] stop 이 진행 중인 start(launcher.lock)를 보지 않아, stop --hold 직후에도 그 start 가 띄운 Host 가 남았다 — 표식을
+    쓴 뒤 그 start 가 끝나기를 기다렸다가 판정한다."""
+    inst.conf_write(delay=3)
+    first = inst.popen(["/bin/sh", str(inst.launcher), "start"], env=inst.env(), cwd=str(inst.home))
+    assert _wait(lambda: list(inst.data.glob("fake-*.json")), 10), inst.diag()
+    pids = inst.host_pids()
+    assert len(pids) == 1
+    r = inst.run("stop", "--hold")
+    assert r.returncode == 0 and r.stdout.decode().strip() == f"stopped (pid {pids[0]})", inst.diag(r)
+    assert first.wait(timeout=30) == 0
+    assert inst.host_pids() == [] and (inst.data / "maintenance.flag").is_file()
+    assert inst.run("start").returncode == 0 and inst.host_pids() == []
+
+
+@pytest.mark.parametrize("marker", ["maintenance", "update", "swap"])
+def test_start_rechecks_markers_inside_the_lock(inst, marker):
+    """[L2] 잠금 안 재판정이 health·pid 만 다시 봤다 — 첫 판정(여기선 health 3초) 사이에 생긴 보류 표식·업데이트 표식·교체
+    잔재를 못 보고 띄웠다(러너가 표식을 쓰고 Host 를 내린 순간 늦은 start 가 Host 를 띄우던 자리)."""
+    slow = _slow_port()
+    try:
+        (inst.data / "runtime.json").write_text(json.dumps({"port": slow.getsockname()[1], "pid": DEAD_PID}),
+                                                encoding="utf-8")
+        p = inst.popen(["/bin/sh", str(inst.launcher), "start"], env=inst.env(), cwd=str(inst.home))
+        time.sleep(1)
+        assert p.poll() is None, "아직 첫 판정 중(health 3초)"
+        if marker == "maintenance":
+            (inst.data / "maintenance.flag").write_text("by=test\n", encoding="utf-8")
+        elif marker == "update":
+            inst.marker(inst.holder("update_runner.sh").pid)
+        else:
+            lock = inst.data / "updates" / "runner.lock.d"
+            lock.mkdir(parents=True)
+            (lock / "pid").write_text(f"{inst.holder('update_runner.sh').pid}\n", encoding="utf-8")
+            (inst.root / ".clewpath-swap.99").mkdir()
+        assert p.wait(timeout=30) == 0, inst.diag()
+    finally:
+        slow.close()
+    assert inst.host_pids() == [] and not list(inst.data.glob("fake-*.json")), inst.diag()
+    assert "잠금 안 재확인" in inst.llog()
+
+
+@pytest.mark.parametrize("runtime", ["none", "dead-pid"])
+def test_foreign_server_on_the_port_is_reported(inst, runtime):
+    """[L3] health 가 {"status":"ok"} 이면 그 포트에 누가 있든 '떠 있음'으로 봐서, 남의 서버가 포트를 차지하면 start 는 조용히
+    아무것도 안 하고 watch 도 영영 되살리지 않았다 — 이 설치본의 Host 가 아니면 실패(rc≠0)와 안내."""
+    if runtime == "dead-pid":
+        (inst.data / "runtime.json").write_text(json.dumps({"port": inst.port, "pid": DEAD_PID}), encoding="utf-8")
+    srv = _foreign_server(inst.port)
+    try:
+        r = inst.run("start")
+        assert r.returncode == 1 and "다른 프로그램" in r.stderr.decode(), inst.diag(r)
+        assert not list(inst.data.glob("fake-*.json")) and f"fail: 포트 {inst.port}" in inst.llog()
+        st = inst.run("status")
+        got = _kv(st.stdout.decode())
+        assert st.returncode == 1 and got["state"] == "stopped" and got["pid"] == "", got
+        assert inst.run("stop").stdout.decode().strip() == "not running"
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    inst.started(inst.run("start"))                                       # 포트가 비면 띄운다
+
+
+def test_rotated_host_log_keeps_the_incident_tail(inst, monkeypatch):
+    """[L4] 5MB 회전은 기동 직전(구분줄 바로 앞)에 한다 — 새 Host 가 읽는 사고 꼬리(host.log 의 마지막 구분줄 앞)가 비었다.
+    그때는 host.log.1 의 꼬리가 죽은 Host 의 마지막 말이다."""
+    from session_manager import config, liveness
+    p1 = inst.started(inst.run("start"))
+    with (inst.data / "host.log").open("ab") as f:
+        f.write(b"x" * 5_300_000 + b"\nTraceback ... MemoryError (H1 last words)\n")
+    os.kill(p1, signal.SIGKILL)
+    assert _wait(lambda: _gone(p1), 10)
+    inst.started(inst.run("start"))
+    assert (inst.data / "host.log.1").is_file() and inst.text("host.log").startswith("=== launcher start")
+    monkeypatch.setattr(config, "data_dir", lambda: inst.data)
+    assert liveness.log_tail(10)[-1] == "Traceback ... MemoryError (H1 last words)"
+
+
+@pytest.mark.parametrize("cmd", ["start", "watch"])
+def test_corpse_lock_holding_my_own_pid_is_taken_over(inst, cmd):
+    """[L5] 시체 잠금의 pid 를 (재부팅 뒤) 나 자신이 받으면 '살아 있고 명령줄에 런처 이름' 이라 산 잠금으로 보고 영영
+    건너뛰었다 — 내 pid 면 시체(나는 아직 안 잡았다)."""
+    lock = "launcher.lock" if cmd == "start" else "watch.lock.d"
+    args = "start" if cmd == "start" else "watch 10"
+    script = f'mkdir "$D/{lock}" && printf "%s\\n" "$$" >"$D/{lock}/pid" && exec /bin/sh "$L" {args}'
+    p = inst.popen(["/bin/sh", "-c", script], env=inst.env(D=inst.data, L=inst.launcher), cwd=str(inst.home))
+    if cmd == "start":
+        assert p.wait(timeout=60) == 0, inst.diag()
+        assert len(inst.host_pids()) == 1 and inst.health(), inst.diag()
+        assert not (inst.data / lock).exists()
+    else:
+        assert _wait(inst.health, 20), inst.diag()
+        assert _kv(inst.run("status").stdout.decode())["watch_pid"] == str(p.pid)
+        p.send_signal(signal.SIGTERM)
+        assert p.wait(timeout=10) == 0
+
+
+def test_lock_from_another_boot_is_a_corpse(inst):
+    """[L5] 전원 차단 뒤 재부팅하면 잠금이 시체로 남고, 그 pid 를 명령줄에 런처 이름이 든 프로세스(로그인 때 뜨는 watch)가 받을 수
+    있다 — 잠금에 부팅 식별자를 함께 적어 다른 부팅의 잠금은 시체로 본다. 같은 부팅이면(또는 식별자가 없으면) 지금처럼."""
+    boot = _boot_id()
+    if not boot:
+        pytest.skip("부팅 식별자를 얻을 수 없는 환경")
+    lock = inst.data / "launcher.lock"
+    lock.mkdir()
+    holder = inst.holder(_posix.START_SCRIPT)
+    (lock / "pid").write_text(f"{holder.pid}\nboot={boot}\n", encoding="utf-8")
+    r = inst.run("start")
+    assert r.returncode == 0 and inst.host_pids() == [] and "skip: 다른 런처가 기동 중" in inst.llog(), inst.diag(r)
+    (lock / "pid").write_text(f"{holder.pid}\nboot=0000-another-boot\n", encoding="utf-8")
+    inst.started(inst.run("start"))
+    assert not lock.exists()
+
+
+def test_watch_lock_records_its_root_and_boot(inst):
+    """[C4] watch 는 잠금 안에 자기 설치 루트(물리 경로 한 줄, tmp 뒤 mv)를 남긴다 — 제거(uninstall)가 자기 설치본의 watch 만
+    멈추게. [L5] 잠금 pid 파일의 둘째 줄은 부팅 식별자."""
+    w = inst.popen(["/bin/sh", str(inst.launcher), "watch", "10"], env=inst.env(), cwd=str(inst.home))
+    lock = inst.data / "watch.lock.d"
+    assert _wait(lambda: (lock / "root").is_file(), 10), inst.diag()
+    assert (lock / "root").read_text(encoding="utf-8") == f"{inst.root}\n"
+    assert sorted(x.name for x in lock.iterdir()) == ["pid", "root"]
+    lines = (lock / "pid").read_text(encoding="utf-8").splitlines()
+    boot = _boot_id()
+    assert lines == [str(w.pid)] + ([f"boot={boot}"] if boot else []), lines
+    w.send_signal(signal.SIGTERM)
+    assert w.wait(timeout=10) == 0 and not lock.exists()
+
+
+def test_root_is_the_physical_path_from_bin_pwd(inst, tmp_path):
+    """[C1] ROOT 는 /bin/pwd -P 로 — 맥 APFS(대소문자 무시)에서 셸 내장 pwd -P 는 cd 에 준 글자를 그대로 두고, /bin/pwd 는
+    디스크의 글자를 준다. 다섯 스크립트가 같은 phys_pwd 를 쓴다. 심볼릭 링크로 불러도 물리 경로."""
+    t = TEMPLATE.read_text(encoding="utf-8")
+    assert "\nphys_pwd() { if [ -x /bin/pwd ]; then /bin/pwd -P; else pwd -P; fi; }\n" in t
+    assert "\nROOT=$(CDPATH='' cd \"$(dirname \"$0\")\" && phys_pwd) || exit 1\n" in t
+    link = tmp_path / "link-root"
+    link.symlink_to(inst.root, target_is_directory=True)
+    r = subprocess.run(["/bin/sh", str(link / _posix.START_SCRIPT), "paths"], env=inst.env(), capture_output=True,
+                       timeout=30, cwd=str(inst.home))
+    assert r.returncode == 0 and r.stdout.decode("utf-8").splitlines()[0] == f"root={inst.root}", r.stderr.decode()
+
+
+@pytest.mark.parametrize("how", ["CLAUDE_CONFIG_DIR", "SESSION_MANAGER_CLAUDE_HOME", "toml"])
+def test_data_dir_mismatch_is_refused(inst, how):
+    """[L6] Host 의 데이터 폴더는 SESSION_MANAGER_CLAUDE_HOME > CLAUDE_CONFIG_DIR(env, 없으면 설정 파일 [claude] config_dir) >
+    ~/.claude 로 정해진다(config.py·appconfig.apply_env). 설치 때와 다른 값이 든 셸에서 띄우면 runtime.json 이 딴 폴더에 생겨
+    stop 은 'not running' 인데 Host 는 계속 돌았다 — 띄우지 않고 알린다."""
+    other = inst.home / "other-profile"
+    env = inst.env()
+    if how == "toml":
+        inst.conf.write_text(f"[server]\nport = {inst.port}\n\n[claude]\nconfig_dir = {json.dumps(str(other))}\n",
+                             encoding="utf-8")
+    else:
+        env[how] = str(other)
+    r = inst.run("start", env=env)
+    assert r.returncode == 1 and "데이터 폴더" in r.stderr.decode(), inst.diag(r)
+    assert inst.host_pids() == [] and not list(inst.data.glob("fake-*.json"))
+    assert f"{other}/session_manager" in inst.llog()
+    r = inst.run("foreground", env=env, timeout=30)
+    assert r.returncode == 1 and inst.host_pids() == [], inst.diag(r)
+
+
+def test_data_dir_named_differently_but_same_is_fine(inst):
+    """같은 폴더를 다른 이름(심볼릭 링크·기본값을 그대로 적은 값)으로 가리키는 env 는 막지 않는다."""
+    link = inst.home / "claude-link"
+    link.symlink_to(inst.home / ".claude", target_is_directory=True)
+    inst.started(inst.run("start", env=inst.env(CLAUDE_CONFIG_DIR=link)))
+    assert inst.run("stop").returncode == 0
+    inst.started(inst.run("start", env=inst.env(SESSION_MANAGER_CLAUDE_HOME=inst.home / ".claude")))

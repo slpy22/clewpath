@@ -7,7 +7,8 @@ hostctl.py·tests/posix_e2e 는 명세 1.4 의 차례로 하나씩 생긴다. �
 
 스크립트가 지킬 약속(새 스크립트를 쓰는 사람이 볼 곳):
 - 형식: LF, BOM 없음, 1행 `#!/bin/sh`. 런처 템플릿 2행에 `clewpath-launcher v2`. 실행 비트에 기대지 않는다.
-- POSIX sh 만(_BASHISMS), 금지 명령(_FORBIDDEN — 맥에 없는 도구·GNU 전용 옵션·set -x·env 덤프·trap '' 신호 무시·
+- POSIX sh 만(_BASHISMS), 금지 명령(_FORBIDDEN — 맥에 없는 도구·GNU 전용 옵션·set -x·env 덤프·trap '' 신호 무시(곧 끝나는
+  mv 를 exec 하는 하위 셸만 예외)·
   `:` 에 리디렉션 — 특수 내장이라 리디렉션이 실패하면 dash·bash --posix 가 스크립트를 통째로 끝낸다. `true >f` 를 쓴다).
   `umask` 는 하위 셸 `( umask 077; … )` 꼴만(S38: Host 를 띄우는 경로는 사용자의 umask 를 바꾸지 않는다).
 - 인라인 파이썬은 맨 앞 칸의 `NAME_PY='` 한 줄로 열고 `'` 한 줄로 닫는 셸 변수에 둔다. 안에 작은따옴표 금지,
@@ -266,8 +267,9 @@ _FORBIDDEN = [
     ("cp -T/mv -T(GNU 전용)", _C + r"(?:cp|mv)\s+(?:-[A-Za-z]+\s+)*-[A-Za-z]*T"),
     ("flock/setsid/timeout(맥에 없음)", _C + r"(?:flock|setsid|timeout)(?![\w=-])"),
     # 무시('')한 신호는 exec 로 자식에게 물려간다 — 재기동한 Host·브로커·claude 가 HUP 를 못 받으면 브로커가 죽어도
-    # claude 가 끝나지 않는다. 막기만 하려면 빈 처리(trap ':' HUP)를 쓴다
-    ("trap '' 신호 무시(자식에게 물려간다)", _C + r"trap\s+(?:''|\"\")\s"),
+    # claude 가 끝나지 않는다. 막기만 하려면 빈 처리(trap ':' HUP)를 쓴다. 예외는 곧 끝나는 mv 하나를 exec 하는 하위 셸
+    # `( trap '' INT TERM HUP; exec mv … )` 뿐 — 터미널 신호는 프로세스 그룹 전체로 가서 옮기던 mv 가 죽으면 설치가 섞인다
+    ("trap '' 신호 무시(자식에게 물려간다)", _C + r"trap\s+(?:''|\"\")\s(?![A-Z \t]+;[ \t]*exec[ \t]+mv[ \t])"),
     # ':' 는 특수 내장 — 리디렉션이 실패하면(쓸 수 없는 자리) dash·bash --posix 는 `|| …` 로 넘어가지 않고 스크립트를
     # 끝낸다(test_colon_redirect_failure_ends_the_script). 파일을 비우거나 만들 땐 일반 명령 `true >f` 를 쓴다
     (": 에 리디렉션(특수 내장 — 실패하면 셸이 끝난다)", _C + r":[ \t]*[0-9]*[<>]"),
@@ -348,6 +350,7 @@ n=$((1 + 2)); [ "$n" -eq 3 ] && [ "$a" = "b" ] && printf '%s %s %s\n' "${x:-d}" 
 { true >"$SWAP/committed"; } 2>/dev/null || printf '%s\n' "쓰지 못함"
 trap ':' HUP INT
 trap 'STOP_REQ=1' TERM
+( trap '' INT TERM HUP; exec mv "$a" "$b" )
 cat <<'EOF'
 local x; [[ $a == b ]]; source y; timeout 5 z
 EOF
@@ -366,7 +369,7 @@ _BAD = [
     "trap 'cleanup' ERR", "set -x", "set -eux", "printenv", "env", "export -p", "sed -i 's/a/b/' f",
     "sed -n -i.bak 's/a/b/' f", "readlink -f .", "stat -c %Y f", "date -d yesterday", "cp -T a b", "flock f cmd",
     "setsid cmd", "x=$(timeout 5 cmd)", "umask 077", "( umask 022; : )", "cmd |& tee f",
-    "trap '' HUP INT", 'trap "" TERM', ': >"$f"', '{ : >"$SWAP/committed"; } 2>/dev/null || log x', ": 2>/dev/null",
+    "trap '' HUP INT", 'trap "" TERM', "( trap '' HUP; exec \"$HOST\" )", ': >"$f"', '{ : >"$SWAP/committed"; } 2>/dev/null || log x', ": 2>/dev/null",
 ]
 
 
@@ -508,6 +511,68 @@ def test_script_shellcheck(name, tmp_path):
     target = _parse_targets(name, tmp_path)
     r = subprocess.run(["shellcheck", "-s", "sh", "-S", "warning", str(target)], capture_output=True, timeout=60)
     assert r.returncode == 0, r.stdout.decode("utf-8", "replace")
+
+
+def _comsub_case_hits(src: str) -> list[str]:
+    """맥의 /bin/sh(bash 3.2)는 $( … ) 의 끝을 괄호 수만 세어 찾는다(따옴표·역슬래시만 건너뛴다 — parse_matched_pair).
+    안에 든 case 의 패턴이 `pat)` 이면 그 `)` 에서 명령 치환이 끝난 것으로 읽어 파일 전체가 문법 오류다(dash·새 bash 는
+    통과해 리눅스에선 안 보인다). 그렇게 센 끝까지에 case 가 esac 보다 많으면 걸린다 — 패턴은 `(pat)` 로 연다."""
+    hits, i, n = [], 0, len(src)
+    while (j := src.find("$(", i)) >= 0:
+        i = j + 2
+        if src.startswith("$((", j) or src[src.rfind("\n", 0, j) + 1:j].lstrip().startswith("#"):
+            continue
+        k, depth, code = j + 2, 1, []
+        while k < n and depth:
+            c = src[k]
+            if c == "\\":
+                k += 2
+            elif c == "'":
+                e = src.find("'", k + 1)
+                k = n if e < 0 else e + 1
+            elif c == '"':                                  # 큰따옴표 안의 괄호는 세지 않는다(안의 $( … ) 는 따로 짝)
+                k, dq = k + 1, 0
+                while k < n and not (src[k] == '"' and dq == 0):
+                    if src[k] == "\\":
+                        k += 1
+                    elif src.startswith("$(", k):
+                        dq, k = dq + 1, k + 1
+                    elif src[k] == ")" and dq:
+                        dq -= 1
+                    k += 1
+                k += 1
+            else:
+                depth += (c == "(") - (c == ")")
+                code.append(c)
+                k += 1
+        words = re.findall(r"\b(?:case|esac)\b", "".join(code))
+        if words.count("case") > words.count("esac"):
+            hits.append(f"{src.count(chr(10), 0, j) + 1}: {src[j:k].splitlines()[0][:80]}")
+    return hits
+
+
+@pytest.mark.parametrize("name", SCRIPTS)
+def test_case_patterns_inside_command_substitution_open_with_paren(name):
+    bad = 'x=$(ps | while read -r l; do\n  case "$l" in *"$1"*) echo y ;; esac\ndone)\n'
+    good = ['x=$(ps | while read -r l; do\n  case "$l" in (*"$1"*) echo y ;; esac\ndone)\n',
+            'case "$p" in *b*) x=$(echo "$(date) )") ;; esac\n', 'n=$((1 + 2)); y="$(printf \'%s)\' "a")"\n']
+    assert _comsub_case_hits(bad) and not [g for g in good if _comsub_case_hits(g)], "검사 도구 자체"
+    hits = _comsub_case_hits(_text(name))
+    assert not hits, f"{name}: $( ) 안의 case 패턴은 ( 로 시작해야 한다(맥 bash 3.2):\n  " + "\n  ".join(hits)
+
+
+PHYS_PWD = "phys_pwd() { if [ -x /bin/pwd ]; then /bin/pwd -P; else pwd -P; fi; }"
+
+
+@pytest.mark.parametrize("name", ("get.sh", "install.sh", "uninstall.sh", "start-connector.template.sh"))
+def test_physical_paths_use_the_shared_phys_pwd(name):
+    """물리 경로는 /bin/pwd -P(맥 APFS 에서 디스크의 대소문자) — 셸 내장 pwd -P 는 친 글자를 그대로 둬, 대소문자만 다르게
+    부르면 명령줄 판정(설치 경로 접두)이 빗나갔다(2회차 검토). 네 스크립트가 같은 본문을 쓰고, 그 밖에서 내장 pwd -P 를 부르지 않는다.
+    러너는 -InstallRoot(파이썬 resolve·런처 phys_pwd 결과)를 그대로 써서 스스로 계산하지 않는다."""
+    lines = _text(name).splitlines()
+    assert [ln for ln in lines if ln.startswith("phys_pwd()")] == [PHYS_PWD], f"{name}: phys_pwd 본문이 약속과 다르다"
+    stray = [ln for ln in lines if "pwd -P" in ln and not ln.startswith("phys_pwd()") and not ln.lstrip().startswith("#")]
+    assert not stray, f"{name}: phys_pwd 밖에서 pwd -P:\n  " + "\n  ".join(stray)
 
 
 @pytest.mark.parametrize("name", HOME_SCRIPTS)

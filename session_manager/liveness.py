@@ -86,21 +86,30 @@ def log_tail(n: int = 10) -> list[str]:
     """host.log 마지막 n 줄(ANSI 제거, 줄당 200자). 새 프로세스의 출력이 섞이기 전에 읽는다.
 
     마지막 런처 구분줄이 있으면 그 앞까지만 — 새 Host 가 이미 찍은 첫 줄들이 죽은 Host 의 꼬리에 섞이지 않게.
+    그 앞이 비었으면 런처가 기동 직전(구분줄 바로 앞)에 5MB 회전을 한 것 — 죽은 Host 의 꼬리는 host.log.1 에 있다.
+    구분줄이 없는 로그(Windows)는 .1 을 보지 않는다.
     """
+    def tail_of(p: Path) -> bytes | None:
+        try:
+            with p.open("rb") as f:
+                f.seek(0, 2)
+                size = f.tell()
+                f.seek(max(0, size - 20_000))
+                return f.read()
+        except OSError:
+            return None
+
+    def lines_of(raw: bytes) -> list[str]:
+        return [_ANSI.sub("", ln).strip()[:200] for ln in raw.decode("utf-8", "replace").splitlines() if ln.strip()]
+
     p = config.data_dir() / "host.log"
-    try:
-        with p.open("rb") as f:
-            f.seek(0, 2)
-            size = f.tell()
-            f.seek(max(0, size - 20_000))
-            raw = f.read()
-    except OSError:
+    raw = tail_of(p)
+    if raw is None:
         return []
     cut = raw.rfind(LAUNCHER_MARK)
-    if cut >= 0:
-        raw = raw[:cut]
-    lines = raw.decode("utf-8", "replace").splitlines()
-    out = [_ANSI.sub("", ln).strip()[:200] for ln in lines if ln.strip()]
+    out = lines_of(raw[:cut] if cut >= 0 else raw)
+    if cut >= 0 and not out:
+        out = lines_of(tail_of(p.with_name(p.name + ".1")) or b"")
     return out[-n:]
 
 

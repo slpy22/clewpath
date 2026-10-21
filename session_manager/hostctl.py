@@ -9,8 +9,10 @@
   secure-data-dir  데이터 폴더 0700, 그 아래 파일·폴더에서 group·other 권한을 뺀다(심볼릭 링크는 건너뜀) → changed=
   write-config     clewpath.toml 이 없을 때만 만든다(0600·BOM 없음·tomllib 검증·원자적) → config=created|kept path= port=
   render-launcher  start-connector.sh 를 템플릿으로(0755·원자적) → launcher=created|updated|unchanged
-  provision        CP 자격증명(있으면 그대로, 실패는 경고만 — fail-open) → creds=kept|created|failed connector= reason=
-  wait-ready       기동 확인(runtime.json 의 실제 포트를 따라간다) → state=up|down port= mode= session_count= claude_exe_found=
+  provision        CP 자격증명(있으면 그대로, 실패는 경고만 — fail-open. CP 는 Host 와 같은 규칙 — 설정 파일이 먼저)
+                   → creds=kept|created|failed connector= reason=
+  wait-ready       기동 확인(runtime.json 의 실제 포트를 따라간다. 클로드 폴더가 다른 남의 Host 는 down)
+                   → state=up|down port= mode= session_count= claude_exe_found=
 
 왜 파이썬인가: 경로 규칙(config·appconfig)·설정 템플릿·자격증명 저장(cp_client)은 Host 코드가 원본이다 — 셸에 셋째 사본을
 만들지 않는다. 토큰은 인자로 받지 않는다(같은 PC 의 다른 사용자에게 ps 로 보인다) — env CLEWPATH_CLIENT_TOKEN·
@@ -37,6 +39,10 @@ _HOST_DEFAULT_PORT = 5100            # server.main 의 SM_PORT 기본값 — 설
 
 class HostctlError(Exception):
     """사람에게 보일 실패 — [FAIL] 한 줄, 종료코드 1."""
+
+
+class _NoCP(Exception):
+    """provision — Host 가 쓸 컨트롤플레인 주소가 없다(발급할 곳이 없다)."""
 
 
 # ---------------------------------------------------------------- 출력
@@ -194,19 +200,43 @@ def _toml_port(conf: Path) -> int:
     return _HOST_DEFAULT_PORT
 
 
+def _warn_kept_differences(conf: Path, a, client: str | None, agent: str | None) -> None:
+    """유지(kept)할 때 버리는 인자·토큰이 설정 파일과 다르면 알린다 — 말없이 버리면 사용자는 준 값이 쓰인 줄 안다(토큰 값은 찍지 않는다)."""
+    import tomllib
+    try:
+        cloud = tomllib.loads(conf.read_text(encoding="utf-8-sig")).get("cloud", {})
+    except Exception:  # noqa: BLE001 — 읽지 못하는 파일은 _toml_port 가 이미 알렸다
+        return
+    if not isinstance(cloud, dict):
+        return
+    for key, opt, given in (("cp_url", "--cp-url", a.cp_url), ("relay_url", "--relay-url", a.relay_url),
+                            ("app_url", "--app-url", a.app_url)):
+        have = cloud.get(key)
+        if given and (not isinstance(have, str) or have.rstrip("/") != given.rstrip("/")):
+            shown = have if isinstance(have, str) and have else "(없음)"
+            warn(f"설정 파일의 {key}({shown})를 씁니다 — {opt} {given} 는 설정 파일을 새로 만들 때만 씁니다"
+                 f"(바꾸려면 설정 파일을 고친 뒤 재시작)")
+    for key, env, given in (("client_token", "CLEWPATH_CLIENT_TOKEN", client),
+                            ("agent_token", "CLEWPATH_AGENT_TOKEN", agent)):
+        if given and cloud.get(key) != given:
+            warn(f"설정 파일의 {key} 를 씁니다 — {env} 는 설정 파일을 새로 만들 때만 씁니다"
+                 f"(바꾸려면 설정 파일의 [cloud] {key} 를 고친 뒤 재시작)")
+
+
 def cmd_write_config(a) -> int:
     from session_manager import appconfig
     conf = Path(a.conf_file) if a.conf_file else _conf_path()
+    client = os.environ.get("CLEWPATH_CLIENT_TOKEN") or None
+    agent = os.environ.get("CLEWPATH_AGENT_TOKEN") or None
     if conf.exists() or conf.is_symlink():                         # 사용자가 고친 값을 지킨다 — 재설치도 덮지 않는다
         port = _toml_port(conf)
         ok(f"기존 설정 파일 유지: {conf}")
         if port != a.port:
             warn(f"설정 파일의 포트({port})를 씁니다 — --port {a.port} 는 설정 파일을 새로 만들 때만 씁니다"
                  f"(바꾸려면 [server] port 를 고친 뒤 재시작)")
+        _warn_kept_differences(conf, a, client, agent)
         _out(config="kept", path=conf, port=port)
         return 0
-    client = os.environ.get("CLEWPATH_CLIENT_TOKEN") or None
-    agent = os.environ.get("CLEWPATH_AGENT_TOKEN") or None
     for name, v in (("--cp-url", a.cp_url), ("--relay-url", a.relay_url), ("--app-url", a.app_url),
                     ("--claude-config-dir", a.claude_config_dir or ""), ("CLEWPATH_CLIENT_TOKEN", client or ""),
                     ("CLEWPATH_AGENT_TOKEN", agent or "")):
@@ -249,12 +279,18 @@ def cmd_render_launcher(a) -> int:
 # ---------------------------------------------------------------- 자격증명
 
 def cmd_provision(a) -> int:
-    """install.ps1 의 미리 발급과 같다 — 실패해도 설치는 계속(Host 가 뜬 뒤 다시 시도하고, 그동안 공유토큰으로 동작)."""
-    cp = a.cp_url.rstrip("/")
+    """install.ps1 의 미리 발급과 같다 — 실패해도 설치는 계속(Host 가 뜬 뒤 다시 시도하고, 그동안 공유토큰으로 동작).
+    컨트롤플레인은 Host 와 같은 규칙(env > 설정 파일)으로 정한다. --cp-url 은 설정 파일이 없을 때만 — 유지한 설정 파일을 두고
+    인자(install.sh 의 기본값 = 운영 CP)로 발급하면 Host 가 쓰지 않는 CP 에 익명 커넥터가 등록된다."""
     connector, reason, state = "", "", "failed"
     try:
         from session_manager import appconfig, cp_client, systls
-        with _host_env(SM_CP_URL=cp):
+        with _host_env() as conf:
+            if not cp_client.cp_url() and not (conf.exists() or conf.is_symlink()):
+                os.environ["SM_CP_URL"] = a.cp_url.rstrip("/")
+            cp = cp_client.cp_url()
+            if not cp:
+                raise _NoCP
             systls.use_system_trust()
             creds = cp_client.load_creds()
             if creds:
@@ -270,12 +306,16 @@ def cmd_provision(a) -> int:
                     state, connector, reason = "created", str(got.get("connector_id") or ""), "ok"
                 else:
                     reason = str(cp_client._state.get("reason") or "unknown")
+    except _NoCP:
+        state, reason = "failed", "no_cp_url"
     except Exception as e:  # noqa: BLE001 — 응답 모양이 이상해도 설치를 멈추지 않는다
         state, reason = "failed", f"provision_error:{type(e).__name__}"
     if state == "created":
         ok(f"자격증명 발급 완료 (connector {connector})")
     elif state == "failed":
-        if reason == "provision_rate_limited":
+        if reason == "no_cp_url":
+            warn("설정 파일에 컨트롤플레인 주소([cloud] cp_url)가 없어 발급하지 않습니다 — Host 도 컨트롤플레인 없이 동작합니다.")
+        elif reason == "provision_rate_limited":
             warn("발급 한도 초과(429). 잠시 후 다시 시도하세요 — 서비스는 공유토큰으로도 동작합니다.")
         else:
             warn(f"발급 실패: {reason}")
@@ -332,27 +372,48 @@ def _show_logs(data: Path) -> None:
             print(f"    > {line}", file=sys.stderr)
 
 
+def _same_dir(a: str, b: str) -> bool:
+    try:
+        return os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+    except (OSError, ValueError):
+        return False
+
+
 def cmd_wait_ready(a) -> int:
     """install.ps1 의 기동 확인과 같다 — 1초 간격으로 runtime.json 의 실제 포트를 따라가며 /api/owner/connection 을 본다.
-    늘 종료코드 0(경고만): 설치 자체는 끝났고, Host 가 늦게 뜨거나 실패해도 설치를 되돌릴 일은 아니다."""
+    답한 Host 의 진단(claude_home)이 이 설치본이 볼 클로드 폴더와 다르면 남의 Host(맥 두 계정 — 같은 포트의 다른 사용자)다 —
+    이 설치본의 것이 뜨기를 더 기다리고, 끝내 그러면 down. 늘 종료코드 0(경고만): 설치 자체는 끝났고, Host 가 늦게 뜨거나
+    실패해도 설치를 되돌릴 일은 아니다."""
     data = Path(a.data_dir) if a.data_dir else _host_paths()[1]
+    try:
+        expect = str(_host_paths()[2])
+    except HostctlError:
+        expect = None
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))      # 루프백은 프록시로 보내지 않는다
-    port, conn = a.port, None
+    port, conn, diag, foreign = a.port, None, {}, None
     for i in range(a.tries):
         port = _runtime_port(data / "runtime.json") or port
         conn = _get_json(opener, port, "/api/owner/connection", 3)
         if conn is not None:
-            break
+            diag = _get_json(opener, port, "/api/owner/diagnostics", 5) or {}
+            home = diag.get("claude_home")
+            if not (expect and isinstance(home, str) and home and not _same_dir(home, expect)):
+                break
+            foreign, conn, diag = (port, home), None, {}
         if i + 1 < a.tries:
             time.sleep(1)
     if conn is None:
-        warn(f"기동 확인 실패 — http://127.0.0.1:{port}/ 가 열리지 않습니다.")
+        if foreign:
+            warn(f"다른 사용자의 ClewPath 가 {foreign[0]} 번 포트를 쓰고 있습니다(그쪽 클로드 폴더: {foreign[1]}) — "
+                 f"이 설치본의 Host 가 아닙니다.")
+            warn("설정 파일의 [server] port 를 다른 값으로 바꾼 뒤 다시 시작하세요.")
+        else:
+            warn(f"기동 확인 실패 — http://127.0.0.1:{port}/ 가 열리지 않습니다.")
         _show_logs(data)
         _out(state="down", port=port, mode="", session_count="", claude_exe_found="")
         return 0
     if port != a.port:
         warn(f"{a.port} 가 사용 중이라 {port} 번 포트로 열렸습니다.")
-    diag = _get_json(opener, port, "/api/owner/diagnostics", 5) or {}
     count, found = diag.get("session_count"), bool(diag.get("claude_exe_found"))
     if diag:
         if diag.get("ok"):

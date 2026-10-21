@@ -572,9 +572,8 @@ def test_from_stage_refuses_odd_entries_and_foreign_targets(box):
             (st / odd).write_text("#!/bin/sh\n", encoding="utf-8")
         r = box.install_from(st)
         assert r.returncode == 1 and "stage 에" in r.stdout.decode("utf-8"), (odd, box.diag(r))
-        assert not box.root.exists() and (st / "session_manager").is_dir(), "하나도 옮기지 않았다"
-        shutil.rmtree(st.parent)
-    foreign = box.base / "남의 폴더"
+        assert not box.root.exists() and not st.parent.exists(), "하나도 옮기지 않았고, get.sh 의 임시 stage 는 치웠다"
+    foreign = box.base / "남의 폴더"                                          # 설치 루트 옆이 아닌 stage — 거절해도 지우지 않는다
     foreign.mkdir()
     (foreign / "README.md").write_text("mine", encoding="utf-8")
     st = box.stage()
@@ -880,6 +879,9 @@ def test_dependency_failure_reports_and_keeps_the_host_down(box):
     assert "--reinstall" in out and "PyPI" in out
     assert box.host_pids() == [] and not (box.data / "update.inprogress").exists()
     assert not st.parent.exists() and (box.root / "install.sh").is_file(), "옮기기는 끝났다 — 같은 명령으로 다시"
+    box.uv_conf()                                            # 원인을 해결한 뒤 같은 명령 — 우리가 만든 .venv 를 잇는다(기록 전이어도)
+    r = box.install_from(box.stage())
+    assert r.returncode == 0 and "기존 venv 재사용" in r.stdout.decode("utf-8"), box.diag(r)
 
 
 def test_managed_python_when_there_is_no_system_python(box):
@@ -946,6 +948,281 @@ def test_maintenance_flag_skips_the_start(box):
     assert box.host_pids() == [] and (box.data / "maintenance.flag").exists()
 
 
+# ---------------------------------------------------------------- 2회차 검토(설치) — 그룹 신호·설치 폴더·데이터 폴더·uv·기동 확인
+
+# 터미널의 Ctrl+C 처럼 프로세스 그룹 전체에 SIGINT — 설치 루트의 session_manager 를 옆으로 옮기려는 순간 한 번. 신호를 무시하지
+# 않았으면 이 가짜 mv 자신도 그 자리에서 죽는다(진짜 mv 와 같다)
+FAKE_GROUP_INT = """#!/bin/sh
+for a in "$@"; do
+  if [ "$a" = "$FAKE_TARGET" ] && [ ! -e "$FAKE_FIRED" ]; then
+    printf 'fired\\n' >"$FAKE_FIRED"
+    kill -INT 0
+    sleep 1
+  fi
+done
+exec /bin/mv "$@"
+"""
+
+
+def test_terminal_interrupt_to_the_whole_group_while_placing(box):
+    """터미널 신호(Ctrl+C·HUP)는 프로세스 그룹 전체로 간다 — 셸만 신호를 미루면 옮기던 mv 자식이 죽어 새것·옛것이 섞인 설치와
+    .clewpath-old.<pid> 가 남았다(그 상태로 감시가 Host 를 띄울 수 있다). mv 는 신호를 무시한 채 돌고, 다 옮긴 뒤 끝낸다."""
+    box.fresh()
+    tools = box.base / "그룹 신호"
+    tools.mkdir()
+    (tools / "mv").write_text(FAKE_GROUP_INT, encoding="utf-8")
+    os.chmod(tools / "mv", 0o755)
+    fired = box.base / "fired"
+    st = box.stage(readme="NEW README\n")
+    (st / "session_manager" / "_stage_mark.py").write_text("NEW = 1\n", encoding="utf-8")
+    with open(st / "uv.lock", "a", encoding="utf-8") as f:                 # session_manager 뒤에 옮기는 항목
+        f.write("# new\n")
+    env = box.env(PATH=f"{tools}:{os.environ['PATH']}", FAKE_FIRED=fired, FAKE_TARGET=box.root / "session_manager")
+    r = box.sh(st / "install.sh", "--from-stage", str(st), "--dir", str(box.root), *box.args(), env=env,
+               start_new_session=True)                                      # 새 프로세스 그룹 — 시험 프로세스는 받지 않는다
+    out = r.stdout.decode("utf-8")
+    assert fired.exists() and r.returncode == 1, (fired.exists(), box.diag(r))
+    assert (box.root / "session_manager" / "_stage_mark.py").is_file(), "session_manager 는 새것(" + out[-600:] + ")"
+    assert box.text(box.root / "README.md") == "NEW README\n" and box.text(box.root / "uv.lock").endswith("# new\n")
+    assert all((box.root / n).exists() for n in updater.PAYLOAD)
+    assert not list(box.root.glob(".clewpath-old.*")) and not list(box.chome.glob(".clewpath-get.*"))
+    assert "받은 파일은 다 옮겼습니다" in out and not (box.data / "update.inprogress").exists()
+    r = box.install()
+    assert r.returncode == 0 and "=== 설치 완료 ===" in r.stdout.decode("utf-8"), box.diag(r)
+    box.host_pid()
+
+
+def test_direct_run_refuses_home_and_folders_above_the_claude_folder(box):
+    """배포 zip 을 홈에 그대로 풀고 sh install.sh — 홈을 설치 루트로 받아 사용자의 ~/.venv 를 '기존 venv'로 재사용해
+    uv sync(정확 동기화 — 그 안의 패키지를 지운다)를 걸었다. 홈(이나 그 위)·클로드 폴더(나 그 위)는 설치 루트가 아니다."""
+    shutil.copytree(box.payload, box.home, dirs_exist_ok=True)
+    venv = box.home / ".venv"
+    subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(venv)], check=True)
+    (venv / "my_personal_pkg.py").write_text("mine", encoding="utf-8")
+    r = box.sh(box.home / "install.sh", *box.args())
+    out = r.stdout.decode("utf-8")
+    assert r.returncode == 1 and "홈 폴더" in out, box.diag(r)
+    assert box.text(venv / "my_personal_pkg.py") == "mine" and not box.calls() and not box.data.exists()
+    box.unpack()
+    inner = box.root / "claude"                                              # 클로드 폴더(CLAUDE_CONFIG_DIR)가 설치 루트 안
+    (inner / "projects" / "p").mkdir(parents=True)
+    r = box.install(env=box.env(CLAUDE_CONFIG_DIR=inner))
+    assert r.returncode == 1 and "클로드 폴더" in r.stdout.decode("utf-8"), box.diag(r)
+    assert not (inner / "session_manager").exists() and not (box.root / ".venv").exists() and not box.calls()
+
+
+def test_first_install_needs_a_folder_of_its_own(box):
+    """설치 기록이 없는 첫 설치는 ClewPath 항목만 있는 폴더에서만 — ~/Downloads 처럼 남의 파일이 섞인 곳에 풀어 설치하면 제거가
+    그 폴더를 통째로 지웠다. 기록이 있는 재설치에서 모르는 항목은 경고만 하고 그대로 둔다. 맥 Finder 의 .DS_Store 는 셈하지 않는다."""
+    box.unpack()
+    (box.root / "내 사진.jpg").write_text("photo", encoding="utf-8")
+    r = box.install()
+    out = r.stdout.decode("utf-8")
+    assert r.returncode == 1 and "내 사진.jpg" in out and "빈 새 폴더에 zip 을 풀어" in out, box.diag(r)
+    assert not box.data.exists() and not (box.root / ".venv").exists() and not box.calls()
+    (box.root / "내 사진.jpg").unlink()
+    (box.root / ".DS_Store").write_text("", encoding="utf-8")
+    (box.root / ".clewpath-install.4242.tmp").write_text("home=x\n", encoding="utf-8")   # 기록을 쓰다 끊긴 일시 파일 — 우리 것
+    r = box.install()
+    assert r.returncode == 0, box.diag(r)
+    (box.root / "my-notes.txt").write_text("keep", encoding="utf-8")
+    r = box.install()
+    out = r.stdout.decode("utf-8")
+    assert r.returncode == 0 and "[WARN]" in out and "my-notes.txt" in out, box.diag(r)
+    assert box.text(box.root / "my-notes.txt") == "keep"
+
+
+def test_from_stage_refuses_a_lookalike_folder_with_foreign_files(box):
+    """--dir 에 session_manager·pyproject(clewpath-host)가 있어 설치본처럼 보여도 설치 기록이 없고 남의 파일이 섞였으면 옮기기
+    전에 거부한다 — 옮긴 뒤 거부하면 남의 폴더에 받은 파일이 섞인 채 남는다."""
+    box.unpack()
+    (box.root / "photo.jpg").write_text("photo", encoding="utf-8")
+    r = box.install_from(box.stage(readme="NEW\n"))
+    assert r.returncode == 1 and "빈 새 폴더" in r.stdout.decode("utf-8"), box.diag(r)
+    assert box.text(box.root / "README.md") != "NEW\n" and box.text(box.root / "photo.jpg") == "photo"
+    assert not (box.root / ".venv").exists() and not box.data.exists()
+    assert not list(box.chome.glob(".clewpath-get.*")), "get.sh 의 임시 stage 는 치운다"
+
+
+def test_prelude_refusals_clear_the_get_sh_stage(box):
+    """서막이 get.sh 의 임시 폴더(설치 루트 옆 .clewpath-get.*)를 알아 두기 전에 거절하면 stage 가 남았다(다시 칠 때마다 쌓인다)
+    — stage 가 그 모양이면 인자 해석 바로 뒤에 알아 두어, 서막의 어떤 거절에도 치운다."""
+    tools = box.base / "tools"
+    tools.mkdir()
+    (tools / "id").write_text("#!/bin/sh\necho 0\n", encoding="utf-8")       # root 흉내
+    os.chmod(tools / "id", 0o755)
+    for env in (box.env(CLAUDE_CONFIG_DIR="rel/claude"), box.env(PATH=f"{tools}:{os.environ['PATH']}")):
+        st = box.stage()
+        r = box.install_from(st, env=env)
+        assert r.returncode == 1 and ("절대 경로" in r.stdout.decode("utf-8") or "root" in r.stdout.decode("utf-8")), \
+            box.diag(r)
+        assert not st.parent.exists() and not box.root.exists()
+
+
+def test_existing_venv_is_reused_only_when_it_is_ours(box):
+    """설치 기록이 없는 폴더의 .venv 는 남의 것일 수 있다 — 재사용해 uv sync(정확 동기화)를 걸면 그 안의 패키지를 지운다.
+    멈춰서 안내하고, --reinstall 이면(지워도 된다는 뜻) 지우고 새로 만든다."""
+    box.unpack()
+    venv = box.root / ".venv"
+    subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(venv)], check=True)
+    (venv / "someone.txt").write_text("x", encoding="utf-8")
+    r = box.install()
+    out = r.stdout.decode("utf-8")
+    assert r.returncode == 1 and "--reinstall" in out and str(venv) in out, box.diag(r)
+    assert (venv / "someone.txt").exists() and not box.calls()
+    r = box.install("--reinstall")
+    assert r.returncode == 0 and "기존 .venv 삭제 (--reinstall)" in r.stdout.decode("utf-8"), box.diag(r)
+    assert not (venv / "someone.txt").exists()
+
+
+def test_reinstall_keeps_the_data_folder_the_launcher_uses(box):
+    """첫 설치는 CLAUDE_CONFIG_DIR 가 있는 셸, 재설치는 없는 셸 — 설정 파일로 고정된 데이터 폴더를 버리고 홈의 새 폴더로
+    갈아타, 페어링·자격증명이 사라진 것처럼 보였다. 기존 런처가 쓰는 설정 파일을 넘기고, 그래도 다르면 갈아타지 않고 멈춘다."""
+    moved = box.base / "옮긴 claude"
+    (moved / "projects" / "p").mkdir(parents=True)
+    box.fresh(env=box.env(CLAUDE_CONFIG_DIR=moved))
+    data = moved / "session_manager"
+    r = box.install()
+    out = r.stdout.decode("utf-8")
+    assert r.returncode == 0, box.diag(r)
+    assert "셸 추정" not in out and not box.data.exists(), "홈의 데이터 폴더로 갈아타지 않는다"
+    assert _kv(box.sh(box.launcher, "paths").stdout.decode("utf-8"))["data_dir"] == str(data)
+    assert box.record()["data_dir"] == str(data) and box.record()["conf_file"] == str(data / "clewpath.toml")
+    pid = box.host_pid()
+    other = box.base / "다른 claude"                                         # 다른 클로드 폴더를 env 로 — 갈아타지 않고 멈춘다
+    (other / "projects" / "p").mkdir(parents=True)
+    r = box.install(env=box.env(CLAUDE_CONFIG_DIR=other))
+    out = r.stdout.decode("utf-8")
+    assert r.returncode == 1 and str(data) in out and "갈아타지 않" in out, box.diag(r)
+    assert not (other / "session_manager").exists() and box.record()["data_dir"] == str(data)
+    assert box.host_pids() == [pid]
+
+
+def test_same_data_folder_spelled_differently_is_not_a_switch(box):
+    """셸 추정과 hostctl paths 가 겹친 / ·끝 / 만 달라도 '다르다'고 경고하고 표식을 옮겼다 — 정규화해서 비교한다."""
+    moved = box.base / "moved claude"
+    (moved / "projects" / "p").mkdir(parents=True)
+    r = box.fresh(env=box.env(CLAUDE_CONFIG_DIR=str(box.base) + "//moved claude/"))
+    assert "셸 추정" not in r.stdout.decode("utf-8"), box.diag(r)
+    assert box.record()["data_dir"] == str(moved / "session_manager")
+
+
+def _sh_function(name: str) -> str:
+    src = (ROOT / "install.sh").read_text(encoding="utf-8")
+    i = src.index(f"\n{name}() {{") + 1
+    return src[i:src.index("\n}\n", i) + 3]
+
+
+def test_glibc_with_a_stray_musl_loader_is_not_musl(tmp_path):
+    """glibc 배포판에도 musl 패키지가 /lib/ld-musl-* 를 둘 수 있다 — 그것만 보고 musl 로 보아 설치를 거부했다. glibc 를 먼저 본다."""
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    (lib / "ld-musl-x86_64.so.1").write_text("", encoding="utf-8")
+    fn = _sh_function("is_musl").replace("/lib/ld-musl-", f"{lib}/ld-musl-")
+    probe = fn + 'if is_musl; then echo musl; else echo glibc; fi\n'
+
+    def verdict(path: str) -> str:
+        r = subprocess.run(["/bin/sh", "-c", probe], env={**os.environ, "PATH": path}, capture_output=True, timeout=30)
+        return r.stdout.decode().strip()
+    assert verdict(os.environ["PATH"]) == "glibc"                            # 이 컨테이너는 glibc(getconf·ldd 가 말한다)
+    musl = tmp_path / "musl tools"                                           # musl: getconf 는 모르고 ldd 는 musl 이라 한다
+    musl.mkdir()
+    (musl / "getconf").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    (musl / "ldd").write_text("#!/bin/sh\necho 'musl libc (x86_64)' >&2\nexit 1\n", encoding="utf-8")
+    for f in musl.iterdir():
+        os.chmod(f, 0o755)
+    assert verdict(f"{musl}:{os.environ['PATH']}") == "musl"
+    (musl / "ldd").write_text("#!/bin/sh\nexit 127\n", encoding="utf-8")   # 도구가 아무 말도 없으면 로더로 판단
+    assert verdict(f"{musl}:{os.environ['PATH']}") == "musl"
+
+
+@pytest.mark.parametrize("value,said", [("rel/clewpath", "절대 경로"), ("@HOME@/", "홈")])
+def test_clewpath_home_must_be_absolute_and_not_home(box, value, said):
+    """상대 경로를 주면 지금 폴더에 uv 를 깔려다 엉뚱하게 실패했고, 홈을 주면 사용자의 ~/bin/uv 를 덮어썼다."""
+    box.unpack()
+    r = box.install(env=box.env(CLEWPATH_HOME=value.replace("@HOME@", str(box.home))))
+    out = r.stdout.decode("utf-8")
+    assert r.returncode == 1 and "CLEWPATH_HOME" in out and said in out, box.diag(r)
+    assert not (box.home / "rel").exists() and not (box.home / "bin").exists() and not box.calls()
+    assert not box.data.exists()
+
+
+def test_uv_in_a_shared_folder_is_not_overwritten(box):
+    """CLEWPATH_HOME=~/.local 처럼 남과 같이 쓰는 폴더를 주면 사용자의 ~/.local/bin/uv 를 고정 버전으로 덮어썼다 — 그 자리 uv 는
+    우리가 둔 것(설치 기록의 uv=)이거나 ClewPath 전용 기본 위치일 때만 바꾼다."""
+    mine = box.home / ".local" / "bin" / "uv"
+    mine.parent.mkdir(parents=True, exist_ok=True)
+    body = "#!/bin/sh\necho 'uv 0.9.0'\n"
+    mine.write_text(body, encoding="utf-8")
+    os.chmod(mine, 0o755)
+    box.unpack()
+    r = box.install(env=box.env(CLEWPATH_HOME=box.home / ".local"))
+    out = r.stdout.decode("utf-8")
+    assert r.returncode == 1 and "덮어쓰지 않습니다" in out and "내려받는 중" not in out, box.diag(r)
+    assert box.text(mine) == body
+    box.uv_conf(version="0.11.0")                                            # 기본 위치의 옛 버전 — 다시 받는 길로 간다
+    arc = box.base / "uv-fake.tar.gz"
+    with tarfile.open(arc, "w:gz") as tf:
+        tf.add(str(box.ctl), arcname="uv-x86_64-unknown-linux-gnu")
+    r = box.install(env=box.env(CLEWPATH_UV_ARCHIVE=arc))
+    assert r.returncode == 1 and "uv 파일 해시가 다릅니다" in r.stdout.decode("utf-8"), box.diag(r)
+
+
+def test_fallback_install_keeps_the_lock_failure_log(box):
+    """uv sync --frozen 이 실패해 잠금 밖(uv pip install -e)으로 설치하면, 성공해도 실패 원인이 임시 폴더째 사라졌다(S11) —
+    꼬리를 보여 주고 데이터 폴더에 남긴다."""
+    box.uv_conf(fail=["sync"])
+    r = box.fresh()
+    out = r.stdout.decode("utf-8")
+    assert "잠금 파일로 설치 실패" in out and "fake sync" in out
+    logs = list(box.data.glob("install-sync-*.log")) + list(box.data.glob("updates/install-sync-*.log"))
+    assert len(logs) == 1 and "Failed to fetch (fake sync)" in box.text(logs[0]) and str(logs[0]) in out
+
+
+def test_system_uv_needs_the_pinned_minor_version(box):
+    tools = box.base / "tools"
+    tools.mkdir()
+    shutil.move(str(box.uv), str(tools / "uv"))
+    box.unpack()
+    box.uv_conf(version="0.11.9")
+    r = box.install("--system-uv", env=box.env(PATH=f"{tools}:{os.environ['PATH']}"))
+    out = r.stdout.decode("utf-8")
+    assert r.returncode == 1 and "0.11.9" in out and "0.12" in out, box.diag(r)
+    assert not (box.root / ".venv").exists()
+    box.uv_conf(version="0.13.0")                                            # 같은 부 버전 이상이면 쓴다
+    r = box.install("--system-uv", env=box.env(PATH=f"{tools}:{os.environ['PATH']}"))
+    assert r.returncode == 0, box.diag(r)
+
+
+def test_mac_refuses_non_ascii_install_paths(box):
+    """맥 ps 는 명령줄의 ASCII 밖 바이트를 이스케이프해 보여 준다 — 설치 경로가 그러면 런처·러너·설치가 Host 를 알아보지
+    못한다. 맥에서는 그런 경로를 거부하고 이유를 알린다(리눅스는 그대로 — 이 시험들의 홈은 늘 한글이다)."""
+    tools = box.base / "mac"
+    tools.mkdir()
+    (tools / "uname").write_text('#!/bin/sh\ncase "${1:-}" in -m) echo arm64 ;; *) echo Darwin ;; esac\n',
+                                 encoding="utf-8")
+    os.chmod(tools / "uname", 0o755)
+    box.unpack()
+    r = box.install(env=box.env(PATH=f"{tools}:{os.environ['PATH']}"))
+    out = r.stdout.decode("utf-8")
+    assert r.returncode == 1 and "ASCII" in out, box.diag(r)
+    assert not box.data.exists() and not box.calls() and not (box.home / "Library").exists()
+
+
+def test_reinstall_clears_a_flag_left_by_an_interrupted_uninstall(box):
+    """제거가 중간에 끊겨 maintenance.flag(by=uninstall)가 남으면 다시 설치해도 Host 가 뜨지 않았다 — install.sh 를 다시
+    돌리는 것은 다시 켜겠다는 뜻이므로 그 표식만 지운다(stop --hold 의 by=stop 은 그대로 — 위 시험)."""
+    box.fresh()
+    r = box.sh(box.launcher, "stop")
+    assert r.returncode == 0 and box.host_pids() == []
+    (box.data / "maintenance.flag").write_text(f"by=uninstall\nat={int(time.time())}\n", encoding="utf-8")
+    r = box.install()
+    out = r.stdout.decode("utf-8")
+    assert r.returncode == 0 and "by=uninstall" in out, box.diag(r)
+    assert not (box.data / "maintenance.flag").exists()
+    box.host_pid()
+
+
 # ---------------------------------------------------------------- 제거
 
 def _start_watch_and_broker(box) -> tuple[subprocess.Popen, int]:
@@ -1006,7 +1283,7 @@ def test_uninstall_purge_uv_keeps_foreign_files(box):
     (box.chome / "python" / "notes.txt").parent.mkdir(parents=True)
     (box.chome / "python" / "notes.txt").write_text("x", encoding="utf-8")
     r = box.uninstall("--purge-uv", "--yes")
-    assert r.returncode == 0, box.diag(r)
+    assert r.returncode == 1, box.diag(r)                                  # 남긴 파이썬 폴더는 '남은 것'(검토 2회차 X2)
     assert not box.uv.exists() and (box.chome / "bin" / "someone-else").exists()
     assert (box.chome / "python" / "notes.txt").exists() and "파이썬 폴더는 남깁니다" in r.stdout.decode("utf-8")
 
