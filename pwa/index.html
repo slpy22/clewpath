@@ -73,6 +73,47 @@
   .dot.on{background:var(--good)} .dot.off{background:var(--crit)}
   header button.icon{width:38px;height:38px;border-radius:10px;font-size:1.1rem;color:var(--ink2)}
   header button.icon:active{background:var(--surface2)}
+  /* ---- 화면 바로가기(quick-switch §3-4·§3-5·§5) — 상세 칸 화면만 바꾼다(목록 칸만 바꾸는 탭 막대의 짝) ----
+     PC(880px~) = 머리 줄 오른쪽 단추 4개(880~1099px 는 그림만, 마우스를 올리면 이름) · 폰 = 제목 ▾ → 아래 시트.
+     새 규칙만 더한다 — 칸 배치 격자·상세 칸 모드 규칙·터미널 격자·◧ 규칙은 그대로(0.22.13·0.27.2 '칸 사라짐' 사고 구역) */
+  #qs-title{gap:4px;padding:4px 6px;margin:-4px -6px;border-radius:9px;text-align:left;line-height:inherit}
+  #qs-title:active{background:var(--surface2)}
+  #head{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #qs-title .qs-caret{flex:none;font-size:.78em;color:var(--muted)}   /* 제목이 길어도 ▾ 는 잘리지 않게 */
+  #qs{display:none}
+  .qtag{flex:none;font-size:.74rem;color:var(--muted);white-space:nowrap}
+  .qtag.now{color:var(--accent);font-weight:650}
+  .qtag.warn{color:var(--warn);font-weight:650}
+  .pop .popi.qs-it.dim{opacity:.5}
+  .popbg.qs-sheet{z-index:61}
+  .pop.qs-sheet{z-index:62}   /* 폰 관제 덮개(z 60) 머리 ▾ 로 열어도 덮개 위에 */
+  .backbar .vtitle{flex:1;min-width:0;padding:0 4px;font-weight:650;font-size:.9rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  @media (min-width:880px){
+    #qs-title{pointer-events:none;cursor:default}   /* PC 제목은 글자 그대로 — 입구는 단추 4개 */
+    #qs-title .qs-caret{display:none}
+    #qs{display:flex;flex:none;gap:2px;padding:3px;border-radius:11px;background:var(--bg);border:1px solid var(--line)}
+    #qs button{display:flex;align-items:center;gap:6px;height:30px;padding:0 11px;border-radius:8px;color:var(--ink2);font-size:.82rem;white-space:nowrap}
+    #qs button:hover{background:var(--surface2);color:var(--ink)}
+    #qs button.on{background:var(--accent2);color:#fff;font-weight:650}
+    #qs button.dim{opacity:.45}                     /* 기억 없음·준비 중 — 누르면 안내 */
+    #qs button.wait{cursor:progress}
+    #qs .qi{font-size:.95rem;line-height:1}
+    /* 빈 상세 칸 '최근 화면'(§3-6) — 폰은 빈 안내 자체가 숨어 있다 */
+    .detail-empty{flex-direction:column;gap:16px}
+    .qs-recent{display:flex;flex-direction:column;gap:10px;width:min(560px,100%)}
+    .qs-rh{display:flex;align-items:center;gap:10px;font-size:.76rem;color:var(--muted)}
+    .qs-rh::before,.qs-rh::after{content:'';flex:1;height:1px;background:var(--line)}
+    .qs-rg{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px}
+    .qs-rb{display:flex;align-items:center;gap:10px;min-width:0;padding:10px 12px;border-radius:11px;border:1px solid var(--line);
+      background:var(--surface);color:var(--ink);text-align:left}
+    .qs-rb:hover{border-color:var(--accent);background:var(--surface2)}
+    .qs-rb .qi{flex:none;font-size:1.1rem}
+    .qs-rb .qt{display:flex;flex-direction:column;min-width:0}
+    .qs-rb .qn{font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .qs-rb small{color:var(--muted);font-size:.74rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  }
+  @media (min-width:880px) and (max-width:1099px){ #qs .ql{display:none} #qs button{padding:0 9px} }
+  /* ---- 화면 바로가기 끝 ---- */
   #main{flex:1;min-height:0;overflow:hidden}
   #paneList,#paneDetail{height:100%;overflow-y:auto;-webkit-overflow-scrolling:touch;
     padding-bottom:calc(16px + var(--safe-b))}
@@ -924,9 +965,10 @@
   <header>
     <button class="icon" id="btn-side" title="목록 칸 접기 (Ctrl+Shift+B)" aria-label="목록 칸 접기·펼치기" aria-pressed="false">◧</button>
     <span class="dot" id="status"></span>
-    <span class="title" id="head">세션</span>
+    <button class="title" id="qs-title" type="button" aria-haspopup="menu" title="화면 바로가기"><span id="head">세션</span><span class="qs-caret" aria-hidden="true">▾</span></button>
     <select class="pcname hidden" id="pcname" title="PC 선택 (localhost / 저장된 PC)"></select>
     <span class="grow"></span>
+    <nav id="qs" aria-label="화면 바로가기"></nav>
     <button class="icon hidden" id="btn-pcs" title="내 PC 전환 · 추가 · 페어링 해제">🖧</button>
     <button class="icon" id="btn-todo" title="할 일 — 승인·권한·입력 대기" aria-label="할 일">🔔<span class="tbadge hidden"></span></button>
     <button class="icon" id="btn-settings" title="설정">⚙</button>
@@ -1551,8 +1593,10 @@ let SELECTED_ID=null;
 const paneList=()=>$('#paneList'), paneDetail=()=>$('#paneDetail');
 function showListPane(){ $('#app').setAttribute('data-view','list'); }
 function showDetailPane(){ $('#app').setAttribute('data-view','detail'); }
+// 빈 상세 칸 — 안내 한 줄 + (PC) '최근 화면' 단추(renderEmptyPane, quick-switch §3-6). 바깥 상자는 그대로 'detail-empty' 하나
+let EMPTY_BOX=null;
 function detailPlaceholder(txt){ paneEnter('empty'); const p=paneDetail(); closeInlineMonitor(); p.classList.remove('term-mode','fb-mode','mon-mode'); p.innerHTML='';
-  p.appendChild(el('div','detail-empty',txt||'왼쪽에서 세션을 선택하세요')); }
+  const box=el('div','detail-empty'); box._txt=txt||''; EMPTY_BOX=box; p.appendChild(box); renderEmptyPane(); }
 function highlightSelected(){ document.querySelectorAll('.srow').forEach(r=>
   r.classList.toggle('sel', r.dataset.sid===SELECTED_ID)); }
 // ---- 화면 진입 기록(quick-switch §8 2단계) ----
@@ -1587,7 +1631,17 @@ function paneEnter(kind, ref){
     gid:kind==='monitor'?(r.gid||null):null, code:kind==='ledger'?(r.code||null):null};
   if(r.session_id&&(kind==='viewer'||kind==='detail'||kind==='resume'))   // 웹 재개는 그 세션 대화로 기억한다(§4-3)
     paneMemSet('viewer', {sid:r.session_id, kind:kind==='detail'?'detail':'viewer', name:sessLabel(r), at:Date.now()});
+  if(PANE_QUICK[kind]) quickLastSet(PANE_QUICK[kind]);         // 빈 칸 '최근 화면'의 맨 앞(§3-6) — 새로고침 뒤에도
+  renderQuickSoon();                                            // 머리 줄 단추 강조(5단계)
 }
+// 상세 칸 화면 → 바로가기 칸. 웹 재개는 그 세션 대화로 돌아간다(§4-3)
+const PANE_QUICK={terminal:'terminal', files:'files', viewer:'viewer', detail:'viewer', resume:'viewer', monitor:'monitor'};
+// 마지막으로 연 바로가기 화면(sm_qs_last_<PC>). 화면 기억(sm_pane_<PC>)과 따로 둔다 — 터미널·파일 진입이 뷰어·관제 기억을 다시 적지 않게
+function quickLast(){ try{ return LS.getItem(paneKey('sm_qs_last'))||''; }catch(e){ return ''; } }
+function quickLastSet(k){ try{ if(LS.getItem(paneKey('sm_qs_last'))!==k) LS.setItem(paneKey('sm_qs_last'),k); }catch(e){} }
+// 바로가기 단추·빈 칸 '최근 화면'을 다시 그린다 — 화면 진입·목록 끝·20초 갱신 끝·기억이 바뀔 때 100ms 로 모아 한 번(renderQuick)
+let _qsTimer=null;
+function renderQuickSoon(){ if(_qsTimer) return; _qsTimer=setTimeout(()=>{ _qsTimer=null; renderQuick(); },100); }
 // 화면 기억(§6-1) sm_pane_<PC> = {viewer:{sid, kind:'viewer'|'detail', name, at}, monitor:{team, gid, name, at}}. 기기·PC 마다 따로(§6-2).
 // PC 키는 로컬 화면 = local, 릴레이 = 그 PC 의 방 이름(sm_e2ee_<room> 과 같은 방식, hostVerKey 와 같은 구분) — 릴레이로 PC 를
 // 바꿔 써도 기억이 섞이지 않게. 터미널 탭(sm_tabs)·파일(sm_fb_state2)도 이 키를 쓴다(3단계). 저장이 막혀도(사생활 보호 창 등) 화면은 그대로 돈다.
@@ -1720,6 +1774,7 @@ async function loadList(q){
     restoreTabsOnce();             // 저장된 터미널 탭 워킹셋 복원(1회, 화면 탈취 없이 목록만)
     consumePendingMonitor();       // 관제 알림 클릭으로 진입한 경우 그 그룹 오버레이 열기
     if(PENDING_APPROVAL){ const a=PENDING_APPROVAL; PENDING_APPROVAL=''; openApprovalById(a); }
+    renderQuickSoon();             // 바로가기 단추 켜기(준비 중 → 기억대로) — 첫 목록 뒤 복원 순서의 마지막(quick-switch §6-2)
     LIST_CTX={rerender};
     refreshTodo();                 // 🔔 배지(승인 요청 수는 서버에서, 권한·입력 대기는 방금 받은 목록에서)           // 자동 갱신(뱃지 실시간화)이 쓸 컨텍스트
   }catch(e){ if(pc!==pcNow()) return;   // 받는 사이 PC 를 바꿨다 — 새 PC 의 loadList 가 따로 돈다
@@ -1749,6 +1804,7 @@ async function listTick(){
     if(Date.now()-TODO_AT>55000) refreshTodo(); else renderTodoBadge();
     // 터미널 탭 칩의 상태 밑줄도 같은 훅 상태를 쓴다 — 목록과 함께 갱신(term-mode 일 때만 의미)
     if(paneDetail().classList.contains('term-mode')) renderTabBarSoon();
+    renderQuickSoon();             // 바로가기 단추의 상태·보조 글(입력 대기·꺼짐·👀)도 같은 목록으로
   }catch(e){}
 }
 setInterval(listTick, 20000);
@@ -2912,6 +2968,7 @@ const termView={
     if(MODE==='local'){
       // 로컬: 탭별 iframe(terminal.html 무수정). 숨겨도 자기 WS 로 계속 붙어 있다.
       const frame=document.createElement('iframe'); frame.setAttribute('allow','clipboard-read; clipboard-write');
+      frame.onload=()=>quickKeyWatch(frame.contentWindow);   // 커서가 터미널 창 안이어도 Alt+1~4(바로가기) — 다시 읽을 때마다 새로 붙는다
       frame.src=`${APIBASE}/terminal?id=${encodeURIComponent(s.session_id)}&skip=${safe?0:1}`;
       host.appendChild(frame); t.frame=frame;
     } else {
@@ -2922,6 +2979,8 @@ const termView={
         theme:{background:'#0d1117',foreground:'#e6edf3',cursor:'#58a6ff'}});
       const fit=new FitAddon.FitAddon(); term.loadAddon(fit); term.open(host);
       t.term=term; t.fit=fit;
+      // Alt+1~4 는 화면 바로가기(결정 8) — claude 로 보내지 않는다. 받는 일은 창 감시(onQuickKey)가 한다
+      try{ term.attachCustomKeyEventHandler(e=>!quickKeyKind(e)); }catch(e){}
       // 모바일 터치 UX(탭별). 입력은 이 탭이 전경일 때만 보낸다 — 숨은 xterm 이 포커스를 얻어도 유실/오전송 없음
       t.ux=attachMobileTermUX(host, term, {
         send:(d)=>{ if(this.active===key) this.send({type:'input',data:d}); },
@@ -3056,6 +3115,7 @@ function saveTabs(){
   try{ LS.setItem(paneKey('sm_tabs'),JSON.stringify({active:TABS.active,
     list:TABS.list.map(t=>({key:t.key,sid:t.s.session_id,safe:!!t.safe})),
     mru:TABS.mru.filter(k=>findTab(k))})); }catch(e){}
+  renderQuickSoon();                       // 🖥 단추의 탭 수·기억 있음/없음
 }
 // 부팅 후 SESSIONS 가 준비된 시점에 1회. 탭 '목록'만 복원하고 터미널은 열지 않는다 — 자동으로
 // 붙이면 다른 기기가 쥔 화면을 탈취한다(세션당 화면 1개, webterm 점유 규칙). live_terminal 이
@@ -3530,6 +3590,8 @@ async function loadViewer(s){
   paneEnter('viewer', s); const gen=PANE_NOW.gen;   // 칸을 비우기 바로 앞. gen: 응답을 기다리는 사이 다른 화면으로 가면 늦게 그리지 않게(T5)
   const main=paneDetail(); closeInlineMonitor(); main.classList.remove('term-mode','fb-mode','mon-mode'); main.innerHTML=''; $('#head').textContent='뷰어';
   const bar=listBack();
+  // 무엇을 보는지 — 바로가기로 들어오면 목록 줄을 거치지 않아 화면에 세션 이름이 없었다(quick-switch §4-3)
+  const vt=el('span','vtitle',sessLabel(s)); vt.title=sessLabel(s)+(s.cwd?' · '+s.cwd:''); bar.appendChild(vt);
   const badge=el('div','vlive off'); badge.appendChild(el('span','vdot'));
   const bt=el('span',null,'실시간 연결 중…'); badge.appendChild(bt); bar.appendChild(badge);
   main.appendChild(bar);
@@ -4172,7 +4234,8 @@ function fbSaveState(){ if(!FB.restored||FB.migrate) return;
   try{ const tabs=FB.tabs.slice(), i=tabs.findIndex(t=>t.id===FB.active);
   if(i>=FB_KEEP) tabs.splice(FB_KEEP-1, 0, tabs.splice(i,1)[0]);
   LS.setItem(paneKey(FB_STATE), JSON.stringify({open:[...FB.open], sort:FB.sort,
-  tabs:tabs.map(t=>({root:t.root,path:t.path,pinned:!!t.pinned})), active:FB.active})); }catch(e){} }
+  tabs:tabs.map(t=>({root:t.root,path:t.path,pinned:!!t.pinned})), active:FB.active})); }catch(e){}
+  renderQuickSoon(); }   // 📄 단추의 마지막 파일·파일 수
 function fbRestoreState(){ if(FB.restored) return; FB.restored=true;
   const m=pcMemLoad(FB_STATE), st=m.v;
   // 옛 키(PC 구분 없던 값)를 처음 옮겨 올 때는 다른 PC 의 폴더가 섞였을 수 있다 — 이 PC 목록에 있는 폴더의 탭·펼침만 남겨 새 키에
@@ -5100,6 +5163,10 @@ function openMonitor(ids, manager, labels, opts){
   const live=el('div','mon-live off'); live.appendChild(el('span','dot2'));
   const lt=el('span',null,'연결 중…'); live.appendChild(lt); head.appendChild(live);
   const vtoggle=el('button','mon-vtoggle','◨'); vtoggle.title='뷰어 패널 접기/펼치기'; head.appendChild(vtoggle);
+  // 폰 덮개는 머리 줄까지 가려 제목 ▾ 가 안 보인다 — 관제 머리에도 같은 시트를 여는 ▾(결정 10, quick-switch §5-3).
+  // 다른 화면을 고르면 quickGo 가 덮개를 닫고 간다. 상세 칸 관제(PC)는 머리 줄 단추 4개가 보인다
+  if(!inline){ const qb=el('button','mon-vtoggle qs-ov','▾'); qb.title='화면 바로가기'; qb.setAttribute('aria-label','화면 바로가기');
+    qb.setAttribute('aria-haspopup','menu'); qb.onclick=()=>showQuickSheet(qb); head.appendChild(qb); }
   const x=el('button','x','✕'); head.appendChild(x);
   const legend=el('div','mon-legend');
   const fbar=el('div','mon-filter');   // 타임라인 필터(종류 + 세션별 숨김)
@@ -5720,6 +5787,7 @@ function setSideOff(off){
   const b=$('#btn-side');
   if(b){ b.title=off?'목록 칸 펼치기 (Ctrl+Shift+B)':'목록 칸 접기 (Ctrl+Shift+B)'; b.setAttribute('aria-pressed', off?'true':'false'); }
   try{ if(off) LS.setItem(SIDE_KEY,'1'); else LS.removeItem(SIDE_KEY); }catch(e){}
+  renderEmptyPane();                       // 빈 상세 칸 안내 — 접혀 있으면 '왼쪽에서 …'는 틀린 말(quick-switch §3-6)
 }
 function toggleSide(){ const app=$('#app'); setSideOff(!(app&&app.classList.contains('side-off'))); }
 (function initSide(){
@@ -5804,9 +5872,9 @@ function renderPairPcs(){
 //       브라우저에 저장된 '접속 자격'만 지운다.
 const PAIR_KEYS_ACTIVE=['sm_room','sm_token','sm_cs','sm_cp','sm_devtoken','sm_cjwt','sm_grace'];
 const PAIR_KEYS_ALL=PAIR_KEYS_ACTIVE.concat(['sm_pcs','sm_hint_done']);
-// PC 별 화면 기억(quick-switch §6-1: 터미널 탭·파일·화면 = <키>_<PC>) — 그 PC 의 파일 경로·세션 제목·팀 이름이 든다.
+// PC 별 화면 기억(quick-switch §6-1: 터미널 탭·파일·화면 = <키>_<PC>, 마지막 바로가기 화면 sm_qs_last) — 그 PC 의 파일 경로·세션 제목·팀 이름이 든다.
 // 페어링 해제는 그 PC 것을, 이 기기 초기화는 모든 PC 것과 PC 구분 없던 옛 키(sm_tabs·sm_fb_state2)까지 지운다.
-const PC_MEM_KEYS=['sm_tabs','sm_fb_state2','sm_pane'];
+const PC_MEM_KEYS=['sm_tabs','sm_fb_state2','sm_pane','sm_qs_last'];
 function forgetPcMem(room){ if(room) PC_MEM_KEYS.forEach(b=>LS.removeItem(b+'_'+room)); }
 function clearPairing(all){
   (all?PAIR_KEYS_ALL:PAIR_KEYS_ACTIVE).forEach(k=>LS.removeItem(k));
@@ -6588,6 +6656,97 @@ async function quickGoMonitor(live){
   if(!can.length) return say('관제할 팀이 없습니다');
   say('관제할 팀을 고르세요 — 팀 ⋯ → 🎬 관제 열기'); return quickPickIn('groups');
 }
+
+// ---- 화면 바로가기 화면(quick-switch §8 5단계) — PC 머리 줄 단추 4개 · 폰 제목 ▾ 시트 · 폰 관제 덮개 머리 ▾ · Alt+1~4 · 빈 칸 '최근 화면' ----
+// 그리기만 한다: 모습은 quickTargets(), 누르면 quickGo(kind). 강조는 renderQuickSoon(화면 진입·목록 끝·20초 갱신 끝, 100ms 로 모아)
+const QUICK_KEYS={terminal:'Alt+1', files:'Alt+2', viewer:'Alt+3', monitor:'Alt+4'};
+// 무엇이 열릴지 한 줄(이름 · 보조 글) — 툴팁·시트·빈 칸이 같이 쓴다
+function quickLine(o){ return [o.name, o.sub].filter(Boolean).join(' · '); }
+function quickTip(o){
+  return o.label+' — '+(o.wait?'준비 중(목록을 받는 중)':quickLine(o))+' · '+QUICK_KEYS[o.kind]
+    +(o.taken?'\n👀 다른 기기에서 보는 중 — 누르면 가져오기 확인':'');
+}
+// PC 머리 줄 단추 4개(.grow 뒤·🔔 앞) — 파랑 = 지금 상세 칸 화면, 보통 = 기억 있음, 흐림 = 기억 없음·준비 중(첫 목록 전).
+// 단추는 한 번만 만들고 모습만 바꾼다(20초마다 다시 만들면 누르던 단추의 포커스를 잃는다). 폰은 CSS 가 숨긴다(제목 ▾ 시트)
+function renderQuick(){
+  const nav=$('#qs'), list=quickTargets();
+  if(nav){
+    if(nav.children.length!==list.length){ nav.innerHTML='';
+      for(const o of list){ const b=el('button'); b.type='button'; b.dataset.k=o.kind;
+        b.appendChild(el('span','qi')); b.appendChild(el('span','ql')); b.onclick=()=>quickGo(o.kind); nav.appendChild(b); } }
+    list.forEach((o,i)=>{ const b=nav.children[i];
+      b.className=[o.cur&&'on', o.dim&&!o.cur&&'dim', o.wait&&'wait', o.taken&&'taken'].filter(Boolean).join(' ');
+      b.children[0].textContent=o.icon; b.children[1].textContent=o.kind==='monitor'?'관제':o.label;   // 결정 1: 💬 뷰어 ↔ ℹ 상세
+      b.title=quickTip(o); b.setAttribute('aria-label',o.label); b.setAttribute('aria-current',o.cur?'true':'false'); });
+  }
+  const tb=$('#qs-title'); if(tb) tb.tabIndex=innerWidth<880?0:-1;   // PC 제목은 글자 그대로(누를 수 없음) — 탭 키로도 멈추지 않게
+  renderEmptyPane(list);
+}
+// 빈 상세 칸(§3-6) — 안내 + '최근 화면'(갈 수 있는 기억만 = 흐림 빼고, 마지막 화면이 맨 앞·나머지는 단추 순서). 첫 목록 전엔 기억을 확인하지
+// 못해 모두 흐림(quickTargets)이라 단추가 없다. 목록 칸이 접혀 있으면 '왼쪽에서 …'는 틀린 말이라 ◧ 안내로 바꾼다. 폰은 빈 안내 자체가
+// 숨어 있다(CSS). 모습이 같으면 다시 그리지 않는다(포커스 유지)
+function renderEmptyPane(list){
+  const box=EMPTY_BOX;
+  if(!box||PANE_NOW.kind!=='empty'||paneDetail().children[0]!==box) return;
+  const last=quickLast();
+  const recent=(list||quickTargets()).filter(o=>o.has&&!o.dim).sort((a,b)=>(b.kind===last)-(a.kind===last));
+  const app=$('#app'), off=!!app&&app.classList.contains('side-off'), txt=box._txt||'왼쪽에서 세션을 선택하세요';
+  const msg=(off&&/^왼쪽에서 /.test(txt))?(recent.length?'◧ 로 목록 칸을 펼치거나 최근 화면으로 가세요':txt.replace(/^왼쪽에서 /,'◧ 로 목록 칸을 펼쳐 ')):txt;
+  const sig=JSON.stringify([msg, recent.map(o=>[o.kind, o.icon, o.name, o.sub, o.label, o.taken])]);
+  if(box._sig===sig) return; box._sig=sig;
+  box.innerHTML='';
+  box.appendChild(el('div','de-msg',msg));
+  if(!recent.length) return;
+  const wrap=el('div','qs-recent'); wrap.appendChild(el('div','qs-rh','최근 화면'));
+  const grid=el('div','qs-rg');
+  for(const o of recent){ const b=el('button','qs-rb'); b.type='button'; b.dataset.k=o.kind; b.title=quickTip(o);
+    b.appendChild(el('span','qi',o.icon)); const t=el('span','qt'); t.appendChild(el('span','qn',o.name||o.label));
+    t.appendChild(el('small',null,[o.label, o.sub].filter(Boolean).join(' · '))); b.appendChild(t);
+    b.onclick=()=>quickGo(o.kind); grid.appendChild(b); }
+  wrap.appendChild(grid); box.appendChild(wrap);
+}
+// 폰 화면 바로가기 시트(§5-1) — 제목 ▾ 와 관제 덮개 머리 ▾(§5-3)가 연다. 4줄 고정 순서: 지금 화면 '지금', 숨겨 둔 화면 '바로 돌아가기',
+// 기억 없음은 흐리게 '고르기…', 다른 기기가 보는 터미널은 '👀 가져오기'(누르면 인계 확인창). 덮개(z 60) 위에서도 보이게 위 층으로(qs-sheet)
+function showQuickSheet(anchor){
+  const box=el('div');
+  for(const o of quickTargets()){
+    const [tag,tc]=o.taken?['👀 가져오기','warn']:o.cur?['지금','now']:o.back?['바로 돌아가기','now']:o.wait?['준비 중','']:!o.has?['고르기…','']:['',''];
+    const b=popItem(o.icon, o.label, quickLine(o), ()=>quickGo(o.kind), 'qs-it'+(o.dim&&!o.cur&&!o.back?' dim':''));
+    b.dataset.k=o.kind;
+    if(tag) b.appendChild(el('span','qtag'+(tc?' '+tc:''),tag));
+    box.appendChild(b);
+  }
+  const p=openPop(anchor, box, '화면 바로가기');
+  try{ p.classList.add('qs-sheet'); POP.bg.classList.add('qs-sheet'); p.setAttribute('aria-label','화면 바로가기'); }catch(e){}
+  return p;
+}
+// 폰: 제목 ▾ → 시트. PC 는 제목이 글자 그대로라 누르지 않는다(입구는 단추 4개 — CSS 도 막는다)
+{ const tb=$('#qs-title'); if(tb) tb.onclick=()=>{ if(innerWidth<880) showQuickSheet(tb); }; }
+// 단축키 Alt+1~4(결정 8, §3-7) — 창 전체 감시(capture 라 터미널·편집기보다 먼저 받는다). 받지 않는 경우: 진짜 입력칸(검색·이름·한글 입력창)에
+// 커서가 있을 때, 설정·확인창·⋯ 팝이 열려 있을 때, Ctrl·Shift(·⌘)가 섞였을 때. 터미널(xterm 숨은 입력)·파일 편집기(Monaco) 안에서는 받는다.
+// 숫자는 윗줄만 — Alt+숫자 패드는 Windows 문자 입력(Alt 코드)이다
+const QUICK_KEY_CODES={Digit1:'terminal', Digit2:'files', Digit3:'viewer', Digit4:'monitor'};
+function quickKeyKind(e){
+  if(!e||!e.altKey||e.ctrlKey||e.shiftKey||e.metaKey||e.isComposing||e.keyCode===229) return null;
+  if(e.code) return QUICK_KEY_CODES[e.code]||null;
+  return QUICK_KINDS[['1','2','3','4'].indexOf(String(e.key))]||null;   // code 를 주지 않는 옛 브라우저
+}
+function quickKeyOk(t){
+  const app=$('#app'); if(!app||app.classList.contains('hidden')) return false;   // 페어링 화면
+  if(POP||document.getElementById('overlay')) return false;                      // 팝·모달(설정·확인창)이 열려 있다 — 그쪽 일
+  if(!t||typeof t.closest!=='function') return true;
+  if(t.closest('.xterm')||t.closest('.monaco-editor')) return true;               // 터미널·편집기 안 — 가장 필요한 곳
+  return !(/^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName||'')||t.isContentEditable===true);
+}
+function onQuickKey(e){
+  const kind=quickKeyKind(e); if(!kind||!quickKeyOk(e.target)) return;
+  try{ e.preventDefault(); e.stopPropagation(); }catch(_){}                       // claude·편집기·브라우저로 가지 않게
+  if(e.repeat) return;                                                           // 누르고 있는 동안 되풀이하지 않는다
+  quickGo(kind);
+}
+window.addEventListener('keydown', onQuickKey, true);
+// 로컬 터미널 창(iframe, 같은 출처)은 커서가 그 안에 있으면 키가 바깥 창으로 오지 않는다 — 창이 뜰 때마다 같은 감시를 그 창에 붙인다(§3-7)
+function quickKeyWatch(w){ try{ if(w&&typeof w.addEventListener==='function') w.addEventListener('keydown', onQuickKey, true); }catch(e){} }
 
 // ---- 🧑‍💼 개인 비서(단계 3, A-7) — 헤더 버튼: PC·폰 어디서든 비서 세션 터미널 ----
 async function openAssistant(){
