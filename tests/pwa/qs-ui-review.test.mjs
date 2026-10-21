@@ -217,3 +217,23 @@ test("T97 로컬 터미널 창(iframe)이 이미 떠 있을 때 🖥·Alt+1 은 
     "창 문서 없음": { focus: "창 요소,창", same: true, at: "terminal:a" },
   });
 });
+
+// ---------------------------------------------------------------- 기억을 지운 뒤 다시 그리기(검토 r5)
+test("T98 🎬·💬 를 눌러 그 기억을 지우면(팀 삭제·세션이 목록에 없음) 단추·빈 칸 '최근 화면'도 곧 다시 그린다 — 지운 이름이 남아 같은 단추가 다른 화면을 열지 않는다", async () => {
+  const got = await each(["🎬 팀 삭제", "💬 목록에 없는 세션"], async (p) => {
+    const mon = p.startsWith("🎬");
+    const { ctx, pd, nav } = await boot({ mem: mon ? { ...NONE, monitor: { team: "OLD", gid: "gOld", name: "지운 팀" } }
+                                                   : { ...NONE, viewer: { sid: X, kind: "viewer", name: "지운 세션" } },
+      pre: `__teams = ${JSON.stringify([team("NEW", "남은 팀", "gNew")])};` });
+    const i = mon ? 3 : 2;
+    const before = { btn: btn(nav, i), recent: recent(pd) };
+    await press(ctx, mon ? "monitor" : "viewer");
+    return { before, toast: ev(ctx, "__toasts.join('|')"), after: { btn: btn(nav, i), recent: recent(pd) } };
+  });
+  assert.deepEqual(got, {
+    "🎬 팀 삭제": { before: { btn: ["", "팀 관제 — 지운 팀 · Alt+4"], recent: ["monitor:지운 팀"] }, toast: "그 팀 관제를 열 수 없습니다",
+                   after: { btn: ["dim", "팀 관제 — 최근에 연 관제 없음 · Alt+4"], recent: [] } },
+    "💬 목록에 없는 세션": { before: { btn: ["dim", "뷰어 — 지운 세션 · 목록에 없음 · 방금 · Alt+3"], recent: [] }, toast: "그 세션은 목록에 없습니다",
+                   after: { btn: ["dim", "뷰어 — 최근에 본 대화 없음 · Alt+3"], recent: [] } },
+  });
+});

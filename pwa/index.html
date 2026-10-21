@@ -1647,7 +1647,9 @@ function renderQuickSoon(){ if(_qsTimer) return; _qsTimer=setTimeout(()=>{ _qsTi
 // 바꿔 써도 기억이 섞이지 않게. 터미널 탭(sm_tabs)·파일(sm_fb_state2)도 이 키를 쓴다(3단계). 저장이 막혀도(사생활 보호 창 등) 화면은 그대로 돈다.
 function paneKey(base){ return base+'_'+hostVerKey(); }
 function paneMem(){ const m=lsJson(paneKey('sm_pane'),{}); return (m&&typeof m==='object'&&!Array.isArray(m))?m:{}; }
-function paneMemSet(part, val){ const m=paneMem(); if(val) m[part]=val; else delete m[part]; lsSet(paneKey('sm_pane'), m); }
+// 바꾸면 바로가기 단추·빈 칸 '최근 화면'도 다시 그린다 — 🎬·💬 누름이 없어진 기억을 지운 뒤 지운 이름이 남아 같은 단추가 다른 화면을
+// 열었다(검토). 화면 진입(paneEnter)도 부르지만 100ms 로 모아 한 번만 그린다
+function paneMemSet(part, val){ const m=paneMem(); if(val) m[part]=val; else delete m[part]; lsSet(paneKey('sm_pane'), m); renderQuickSoon(); }
 // PC 별 기억 읽기(3단계) — 이 PC 의 새 키가 아직 없으면 옛 키(PC 구분이 없던 0.28 까지의 sm_tabs·sm_fb_state2)를 읽고 old:true 로
 // 알린다. 옛 키엔 다른 PC 의 탭이 섞였을 수 있어 부르는 쪽이 이 PC 목록으로 걸러 새 키에 한 번 옮긴다. 옛 버전으로 되돌려도
 // 깨지지 않게 옛 키는 지우지 않는다. 새 키가 깨졌으면 옛 키로 돌아가지 않고 빈 기억으로 본다.
