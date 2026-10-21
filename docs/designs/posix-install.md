@@ -1498,3 +1498,56 @@ pytest 연결: `tests/test_posix_e2e.py`(`@pytest.mark.posix_e2e`, docker가 없
 | Q19 | `--client-token` argv | 받되 경고 후 env로 옮김. 안내문은 env만 |
 | Q20 | install.ps1 데이터 폴더 규칙(`CLAUDE_CONFIG_DIR` 누락) 수정 | 별건(Windows) |
 | Q21 | 런처의 강제 stop 표식(`forced-stop`)을 사고로 볼지 | 정상으로 본다(사람이 명령함) |
+## 9. 2회차 검토 반영 (2026-10-21)
+
+다섯 스크립트와 hostctl, 1회차 수리 커밋을 검토자 6명이 다시 봤다. 스크립트별 5명이 보고, 1명은 스크립트 사이 연동과 맥(bash 3.2·BSD) 호환을 봤다.
+지적은 36건, 겹친 것을 빼면 약 30건이다. 모두 고치기 전에 실패하는 회귀 시험을 먼저 썼다(`tests/test_uninstall_sh.py`·`tests/test_update_watch.py` 는 새 파일).
+아래는 앞 절들과 달라진 약속이다. 앞 절의 본문과 다르면 이 절이 우선한다.
+
+### 9.1 다섯 스크립트 공통 약속
+- **물리 경로:** `phys_pwd() { if [ -x /bin/pwd ]; then /bin/pwd -P; else pwd -P; fi; }`(다섯 스크립트가 같은 본문). 맥 APFS 는 대소문자를 무시하고, bash 내장 `pwd -P` 는 친 글자를 그대로 둔다. 그래서 대소문자만 다르게 부르면 명령줄 판정이 빗나갔다. 외부 `/bin/pwd` 는 getcwd 로 디스크의 대소문자를 준다(맥 실기 확인 거리).
+- **홈 보호:** 설치 루트가 `/`·홈(글자와 물리 경로 모두)·홈의 조상·클로드 폴더나 데이터 폴더와 같거나 그 조상이면 거부한다(get·install·uninstall).
+- **우리 설치 항목(최상위 이름):** PAYLOAD 9개, `.venv clewpath_host.egg-info start-connector.sh .clewpath-install`, 일시 이름 `.clewpath-swap.* .clewpath-old.* .clewpath-trash.* .clewpath-install.*`, `.DS_Store`. uninstall 은 이 이름만 지우고 `rmdir` 한다. install 은 기록 없는 첫 설치에서 이 밖의 항목이 있으면 거부한다.
+- **맥 비ASCII 경로:** 맥 ps 는 비ASCII 바이트를 이스케이프해 Host 를 못 알아본다. 그래서 get.sh·install.sh 가 맥에서 출력 가능한 ASCII 밖의 설치 경로를 거부한다.
+- **bash 3.2:** `$( )` 안의 case 패턴은 `(` 로 연다. `$( )` 안에는 주석을 두지 않는다. 정적 시험 `test_case_patterns_inside_command_substitution_open_with_paren` 이 지킨다.
+- **잠금:** 잠금 파일 둘째 줄에 `boot=<id>`(리눅스 boot_id, 맥 `kern.bootsessionuuid` → `kern.boottime`)를 적는다. 내 pid(`$$`)나 다른 부팅의 잠금은 시체로 본다. `watch.lock.d/root` 에는 그 watch 의 설치 루트를 적는다.
+- **대기 마감:** 반초 수로 센다(`nap`). `date +%s` 는 기록 시각에만 쓴다(시계가 뒤로 보정되면 수 시간을 기다렸다).
+
+### 9.2 get.sh
+- zip 도구는 Info-ZIP unzip 이어야 한다. `unzip -Z` 출력에 ZipInfo 가 있는지로 확인한다. 없거나 busybox 이면 [linux] 만 python3 대역으로 가고, 둘 다 없으면 받기 전에 설치를 안내한다.
+- 설치 위치 거부(`dir_guard`)는 받기 전에 글자로 한 번, 물리 경로로 바꾼 뒤 stage 를 만들기 전에 한 번 더 본다.
+- install.sh 가 서막 전에 거절하는 두 가지도 받기 전에 같은 규칙으로 거절한다: 클로드 폴더 env 의 모양, `CLEWPATH_AGENT_TOKEN` 의 제어문자.
+
+### 9.3 install.sh·hostctl
+- `GET_TMP` 를 인자 해석 직후에 정해, 서막의 어떤 거절도 get.sh 의 stage 를 치운다.
+- 받은 파일을 옮기는 mv 는 `( trap '' INT TERM HUP; exec mv … )` 로 돈다. 터미널 신호는 프로세스 그룹 전체로 가서 mv 자식을 죽였다. 6.1 의 `trap ''` 금지 규칙의 유일한 예외다.
+- `.venv` 는 설치 기록이나 `.venv/.clewpath-venv` 표지가 있을 때만 재사용한다(남의 venv 에 정확 동기화를 걸지 않게).
+- `CLEWPATH_HOME` 은 절대 경로이고 `/`·홈이 아니어야 한다. bin/uv 는 기본 위치이거나 기록의 `uv=` 일 때만 쓰고 바꾼다. `--system-uv` 는 고정 버전과 같은 부 버전 이상만 받는다.
+- musl 판정은 glibc(getconf·ldd)를 먼저 본다. 잠금 밖 폴백 전에 sync.log 꼬리를 보여 주고 데이터 폴더에 `install-sync-<시각>.log` 로 남긴다(S11).
+- 기존 런처의 conf_file 을 모든 hostctl 호출에 `CLEWPATH_CONFIG` 로 넘긴다. 재설치에서 데이터 폴더가 달라지면 갈아타지 않고 멈춘다(갈아타기는 첫 설치에만). 비교는 정규화·물리 경로로 한다.
+- provision 은 Host 와 같은 규칙(env > 설정 파일)으로 CP 를 정한다. 설정 파일을 유지할 때 준 URL·토큰이 파일과 다르면 경고한다(값은 찍지 않음). wait-ready 는 진단의 claude_home 을 대조해 다른 사용자의 Host 를 내 것으로 받지 않는다.
+- 제거가 끊겨 남은 `maintenance.flag`(by=uninstall)는 재설치가 지우고 기동한다. 다른 by 는 그대로 둔다.
+
+### 9.4 start-connector(런처)·liveness
+- probe 상태는 `ok|busy|foreign|dead|none` 이다. pid 는 runtime.json, 없거나 죽었으면 `launcher.spawn`(띄운 pid, `{"pid","at"}`)에서 읽는다. foreground 도 exec 전에 제 pid 를 적는다. 그래서 runtime.json 을 쓰기 전(느린 첫 기동 15초 넘김)에도 두 번째 Host 를 띄우지 않고, stop 도 그 pid 를 멈춘다.
+- `foreign`(health 는 답하는데 이 설치본 Host 가 아님)이면 start·foreground 는 이유를 남기고 종료코드 1 로 끝나고, status 는 stopped 다.
+- S21 순서: 잠금 → 다시 probe → maintenance·업데이트 표식·교체 잔재 다시 보기 → 데이터 폴더 일치 → 회전 → 기동. stop 은 표식을 쓴 뒤 `launcher.lock` 이 풀릴 때까지(최대 25초) 기다렸다가 판정한다.
+- 데이터 폴더: 기동 직전에 Host 와 같은 규칙(config.py·appconfig.apply_env)으로 다시 계산해 DATA_DIR 과 다르면 거부한다(같은 폴더를 링크로 가리키는 것은 통과). env 는 빼지 않는다 — claude 자식이 `CLAUDE_CONFIG_DIR` 로 제 설정을 찾는다.
+- `liveness.log_tail` 은 구분줄 앞이 비었으면(기동 직전 5MB 회전) `host.log.1` 꼬리를 읽는다. 구분줄이 없는 Windows 로그는 예전과 같다.
+
+### 9.5 update_runner.sh·updater
+- 헬스 통과 조건: runtime.json 의 pid 가 WaitPid 도, 재기동 직전 runtime.json 의 pid 도 아니고 살아 있다 · 응답은 runtime.json 의 port 에서 받는다 · claude_home 이 데이터 폴더의 부모와 같다 · 셸이 그 pid 의 명령줄을 이 설치본 Host 로 확인한다. `-Port` 는 로그에만 쓴다. 롤백 헬스도 같다(S33).
+- 끝난 저널은 `.clewpath-trash.<pid>` 로 rename 한 뒤 지운다. 못 지우면 경고만 남긴다. 매 실행 남은 휴지통을 다시 지워 본다. 커밋됨·빈 저널을 못 치워도 복구는 0 이다(못 지운 저널이 런처를 영구히 막던 것).
+- 재기동 직전이나 헬스가 '응답 없음'으로 끝날 때 `maintenance.flag` 가 있으면 롤백하지 않고 커밋한다. last_apply 에 `"ok":true,"held":true`, 종료코드 0 이다. 사용자가 멈춘 것을 실패로 보지 않는다.
+- uv 하위 셸에서 `VIRTUAL_ENV`·`CONDA_PREFIX`·`UV_PYTHON` 을 뺀다. 상대 경로 `CLEWPATH_HOME` 은 uv 후보에서 뺀다. pip 폴백으로 커밋하면 [WARN] 과 last_apply `"deps_fallback":"pip"` 를 남긴다.
+- `updater.apply` 는 맥·리눅스에서 살아 있는 `update.inprogress`(러너의 marker_live 와 같은 규칙)를 보면 거부한다(S24). Windows 는 이 표식을 쓰지 않아 동작이 같다.
+- (Windows 포함) `server._update_watch` 의 auto_apply 도 `recently_failed` 를 본다. 재기동 확인만 보고 있어서, 롤백 직후 주기 루프 첫 바퀴가 같은 버전을 다시 적용해 2~3분마다 끝없이 돌았다.
+
+### 9.6 uninstall.sh
+- 판정은 `.clewpath-install` 첫 줄(`# clewpath-install v1`)만으로도 받는다. 판정·재실행에 필요한 넷(`session_manager`·`pyproject.toml`·`uninstall.sh`·`.clewpath-install`)은 맨 마지막에 지운다.
+- 표식을 만든 직후 업데이트·설치 진행 중을 다시 본다. 지우기 전에 끊기면 표식을 거둔다(전에 있던 표식은 원래 내용으로 되돌림). 지우는 중에 끊기면 표식을 남기고 '다시 실행하면 마저 지운다'고 안내한다.
+- watch 는 `watch.lock.d/root` 가 이 설치 루트일 때만 멈춘다. 옛 런처(root 파일 없음)는 명령줄에 런처 전체 경로가 있을 때만 멈춘다.
+- 마지막 확인은 멈추기 전에 적어 둔 Host·브로커 pid 도 본다. `--purge-uv` 는 uv 가 늘 두는 `.gitignore` 를 허용하고, 남긴 python 폴더를 남은 것으로 센다. bin/uv 는 설치 기록의 `uv=` 가 그 자리일 때만 지운다(`--system-uv`·남이 둔 uv 는 남긴다).
+
+### 9.7 이번에 고치지 않은 것 (TODOS 「멀티 OS」)
+셸 쪽 update.inprogress 원자적 잡기, `CLEWPATH_CONFIG` 의 브로커·claude 자식 유출(ptyd 해시), foreign 판정을 ClewPath 일 때로 좁히기, 런처 stop 대기의 벽시계 마감, held 커밋 뒤 첫 기동 실패 안내.

@@ -36,7 +36,11 @@
 - [ ] 사용 중인 실제 소켓 e2e 하네스(scratchpad qs-e2e)를 저장소 tests/ 로 옮겨 릴리스 전 회귀로 둘지 검토
 
 ## 진행중: 멀티 OS(Windows + macOS, 리눅스는 시험용) — docs/designs/multi-os.md (2026-10-15 사장님 결정)
-- [ ] **맥·리눅스를 platforms 에 넣기 전 필수:** 맥·리눅스 전용 스크립트(install.sh·uninstall.sh·get.sh·start-connector.template.sh·update_runner.sh)와 1회차 검토 수리 커밋(0111fde·f09a26e·c834a8b·7630da6·297c502)의 2회차 적대적 검토 — 2026-10-21 사용량 한도로 미룸. Windows 에 닿는 부분(공통 파이썬·출시 도구)은 같은 날 직접 검토·실행 시험함
+- [x] **맥·리눅스를 platforms 에 넣기 전 필수 — 2회차 적대적 검토(2026-10-21):** 다섯 스크립트·hostctl·1회차 수리 커밋을 검토자 6명(스크립트별 5 + 연동·맥 호환 1)이 일회용 컨테이너에서 재현하며 봤다. 지적 36건(겹침 빼면 약 30건)을 모두 회귀 시험을 먼저 쓰고 고쳤다 — 명세 9장. 큰 것: uninstall 이 설치 폴더를 통째 지워 zip 을 푼 폴더(~/Downloads 등)가 사라지던 것, 홈 가드가 글자 비교뿐이던 것, uninstall 이 맥 bash 3.2 에서 구문 오류로 시작도 못 하던 것(`$( )` 안 case), auto_apply 가 방금 롤백된 버전을 다시 적용해 끝없이 돌던 것(Windows 포함, server.py), 못 지운 교체 저널이 런처를 영구히 막던 것, 느린 첫 기동에 Host 가 둘 뜨던 것, Ctrl+C 가 mv 자식을 죽여 섞인 설치가 남던 것
+- [ ] (2회차 후속) 셸 쪽 update.inprogress 원자적 잡기 — install.sh·러너가 '확인 → 쓰기' 라 수 ms 경합 창이 있다(파이썬 apply 는 살아 있는 표식이면 거부하도록 고침). 둘이 같은 mkdir 잠금으로 확인·쓰기를 묶기. 시작점: `install.sh` 표식 잡기, `session_manager/update_runner.sh` mark_take. S
+- [ ] (2회차 후속) `CLEWPATH_CONFIG` 가 브로커·claude 자식으로 샌다 — `ptyd.clean_env` 에 넣으면 되지만 브로커 해시가 바뀌어 Windows 도 브로커 업데이트 대기 1회. 다른 ptyd 변경과 묶어서. S
+- [ ] (2회차 후속) 런처 '포트를 남이 씀'(foreign) 판정은 지금 그 프로그램이 ClewPath 가 아니어도 거부한다 — 진단의 claude_home 으로 ClewPath 일 때만 거부하고 아니면 Host 의 port_fallback 에 맡기기 검토. 런처 `cmd_stop` 의 대기 마감(K_END)도 벽시계라 러너처럼 반초 수로. S
+- [ ] (2회차 후속, 안내) 러너가 업데이트 중 `stop --hold` 를 보면 헬스 없이 커밋하고 끝낸다(held=true) — 그 새 버전이 resume 때 못 뜨면 자동 롤백이 없다(백업은 updates/backup-*). 런처 resume 이 held 커밋 뒤 첫 기동 실패면 안내하게. 진단 응답에 pid 를 넣어 헬스가 응답한 프로세스를 직접 확인하는 것도 검토. S
 - [x] 1단계(0.23.0): `session_manager/osdep/`(_win·_posix) 경계 — pty·자식 동반 종료·프로세스 목록/종료·DPAPI·런처·재개 창·경로·업데이트 러너. Windows 동작 불변, 가드 test_osdep.py
 - [x] 2단계(`macos` 브랜치, 2026-10-15 → **main 합침 0.28.0, 2026-10-20 재검증: 리눅스 컨테이너 612 통과·Windows 620 통과**): POSIX pty(ptyprocess)·pty 끊김 SIGHUP 동반 종료·브로커 유닉스 소켓(0600)·고아 판정 init 입양·범위 감시 POSIX 경로·테스트 OS 분기 — 리눅스 컨테이너 571 통과 + 브로커 통합 확인, Windows 579 통과. **main 배포 시 ptyd 해시가 바뀌어 브로커 업데이트 대기 1회**
 - [ ] (발견) extras `mcp>=1.0.0` 이 잠금에서 mcp 2.0.0 — 2.x 엔 `mcp.server.fastmcp` 가 없어 mcp_server 가 안 뜬다. 설치본엔 extra 가 안 들어가 운영 영향 없음. `<2` 고정 또는 2.x 대응(리눅스 컨테이너 pytest 에선 test_mcp_team 이 이 때문에 건너뛰어진다)
@@ -68,7 +72,12 @@
 - [ ] 맥에서 전체 pytest + 3a e2e 시나리오(명세 6.3) 반복 + 실제 claude 기동·재접속·업데이트 왕복 → 통과하면 릴리스 `platforms` 에 mac
 - [ ] CP `/get.sh` 공개(서비스 모니터 의뢰, 명세 7절): `ops/get.sh` 를 007 `control_plane/get.sh` 로 옮기고 `/get.sh` 라우트·007 `.gitattributes`·007 테스트·nginx `location = /get.sh` · 랜딩·README OS 별 한 줄(리눅스는 '시험용'으로 표시하거나 빼기) — 이때 tests/test_docs_multi_os.py 의 '공개 주소 없음' 시험도 함께 바꾼다
 - [ ] 맥 확인 거리: claude 설치 경로·pty 출력 차이, 터미널 앱 전체 디스크 접근 권한 필요 여부, Gatekeeper(curl 설치 시 격리 속성)
-- [ ] 맥 확인 거리(3a 가 리눅스로만 흉내 낸 것): bash 3.2 의 sh 모드(`[[:cntrl:]]`·`set -u` 와 빈 `"$@"`) · BSD unzip/zipinfo 목록·종료코드, BSD `find -name '*[[:cntrl:]]*'`(get.sh) · BSD `ps` 가 비ASCII 설치 경로를 vis 로 이스케이프하면 런처 stop·러너가 Host 를 못 알아본다(`CLEWPATH_HOME` 을 한글 경로로 바꾼 경우만 — 그러면 venv 파이썬 psutil 판정으로) · `sysctl hw.optional.arm64` 대상 선택 · uv 관리 런타임 실제 배치(`uv python install`, `--purge-uv` 의 지우기 패턴) — darwin uv 해시 둘은 공식 `.sha256` 과 대조만 했고 실행은 아직
+- [ ] 맥 확인 거리(3a 가 리눅스로만 흉내 낸 것) — 2회차 검토(2026-10-21)가 정적으로 판정했다. 실기에서는 확인만:
+  `[[:cntrl:]]`·`set -u` 와 빈 `"$@"`(bash 3.2 에서 괜찮음) · BSD unzip 은 Info-ZIP 6.00 이라 `-Z1`·`-Z` 같음(get.sh 는 이제 `unzip -Z` 출력의 ZipInfo 로 확인) ·
+  BSD find 의 문자 클래스(괜찮음) · ps 비ASCII vis → 맥에서는 비ASCII 설치 경로를 get.sh·install.sh 가 거부하는 것으로 처리 ·
+  `sysctl hw.optional.arm64`(괜찮음, PATH 에 /usr/sbin 이 없을 때를 위해 절대 경로로 바꾸기 — 작음) · uv 관리 런타임 배치(괜찮음, `--purge-uv` 는 .gitignore 허용으로 고침).
+  2회차 수리가 새로 기대는 것: `/bin/pwd -P` 가 디스크의 대소문자를 준다(`phys_pwd`) · `sysctl -n kern.bootsessionuuid` 가 있다(잠금의 부팅 식별자) ·
+  `$( )` 안 case 패턴을 `(` 로 연 모양과 주석 없는 `$( )` 가 bash 3.2 에서 파싱된다 · get.sh `dir_guard` 가 bash 3.2 sh 모드에서 같은 답
 
 ### 리눅스 정식 지원 — 결정 전(지금은 시험용, 설치 때 경고)
 - [ ] systemd `--user` 자동 시작(`systemd-run --scope` 포함)·정식 지원 여부 결정 · R8 시스템 파이썬 업그레이드가 `.venv` 를 깨뜨릴 수 있음(정식 지원 때 관리 런타임 고정 검토) · R11 curl 없는 배포판(slim)에선 상태 훅이 조용히 실패 · musl(Alpine)·FreeBSD 는 범위 밖
