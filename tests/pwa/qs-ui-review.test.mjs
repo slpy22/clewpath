@@ -3,7 +3,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { load, ev, stubEl, INDEX } from "./harness.mjs";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import vm from "node:vm";
+import { load, ev, stubEl, makeSandbox, INDEX } from "./harness.mjs";
 
 const A = "aaaaaaaa-1111-2222-3333-444444444444";
 const B = "bbbbbbbb-1111-2222-3333-444444444444";
@@ -382,4 +385,32 @@ test("T103 폰 머리 줄: 제목 ▾ 가 짧은 제목을 자르지 않게 ▾ 
     pcHeader: flat.includes("header{display:flex;align-items:center;gap:10px;"),
     newRulesOnly: !/#main|#paneDetail|!important|side-off|term-mode/.test(sec),
   }, { caret: true, titleGap: true, phoneGap: true, pcHeader: true, newRulesOnly: true });
+});
+
+// ---------------------------------------------------------------- 앱 아래 탭바(검토 s2)
+// 앱(Capacitor)의 아래 탭바 #cb-tabs(fixed bottom 0, z 900, 약 46px)가 폰 아래 시트(bottom 8px, z 41~62)의 4째 줄(🎬)과 안내 토스트(bottom 24px,
+// z 20)를 가렸다 — 390x844 실측: 🎬 줄 보조 글 88%·토스트 45% 가림, 그 줄 아랫부분을 누르면 탭바 단추가 눌림. ⋯·🔔 시트와 모든 토스트가 원래
+// 가진 문제다. 앱 전용 코드는 native-bridge.js 에만 둔다(캡슐화 규칙) — 탭바가 보일 때만 시트·토스트를 그 위로 올린다.
+const BRIDGE = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "pwa", "native-bridge.js");
+function bridgeCss(app) {
+  const sb = makeSandbox();
+  Object.assign(sb.location, { protocol: "capacitor:", host: "localhost", pathname: "/", href: "capacitor://localhost/", hash: "" });
+  sb.Storage = class { setItem() {} removeItem() {} };
+  if (app) sb.Capacitor = { isNativePlatform: () => true, Plugins: {
+    Preferences: { set: async () => {}, remove: async () => {}, get: async () => ({ value: null }), keys: async () => ({ keys: [] }) },
+    App: { addListener() {} }, CapacitorBarcodeScanner: { scanBarcode: async () => ({ ScanResult: "" }) } } };
+  vm.runInContext(readFileSync(BRIDGE, "utf-8"), vm.createContext(sb), { filename: "native-bridge.js" });
+  return sb.document.head.children.filter((c) => c.tagName === "STYLE").map((c) => c.textContent).join("\n");
+}
+test("T104 앱 아래 탭바가 보일 때 폰 아래 시트(⋯·🔔·화면 바로가기)와 안내 토스트를 탭바 위로 올린다 — 탭바가 숨는 터미널 화면·PC 폭 시트·웹(앱 아님)은 그대로", () => {
+  const css = bridgeCss(true), web = bridgeCss(false);
+  const html = readFileSync(INDEX, "utf8").replace(/\r/g, "").replace(/\s+/g, " ");
+  assert.deepEqual({
+    sheet: css.includes("@media (max-width:879px){body.cb-app:not(:has(#paneDetail.term-mode)) .pop{bottom:calc(54px + env(safe-area-inset-bottom))}}"),
+    toast: css.includes("body.cb-app:not(:has(#paneDetail.term-mode)) .toast{bottom:calc(70px + env(safe-area-inset-bottom))}"),
+    barSame: css.includes("#cb-tabs{position:fixed;left:0;right:0;bottom:0;display:flex;z-index:900;") && css.includes("body.cb-app #app{padding-bottom:calc(46px + env(safe-area-inset-bottom))}")
+      && css.includes("body:has(#paneDetail.term-mode) #cb-tabs{display:none}"),
+    webUntouched: web === "",
+    webCss: html.includes(".pop{left:8px;right:8px;top:auto;bottom:calc(8px + var(--safe-b));") && html.includes(".toast{position:fixed;left:50%;bottom:calc(24px + var(--safe-b));"),
+  }, { sheet: true, toast: true, barSame: true, webUntouched: true, webCss: true });
 });

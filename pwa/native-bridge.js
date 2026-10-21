@@ -281,6 +281,10 @@
       'body.cb-app #app{padding-bottom:calc(46px + env(safe-area-inset-bottom))}' +
       /* 터미널 전체화면(기획 §4): 터미널 표시 중엔 탭바 숨김(보조키바와 겹침 방지) */
       'body:has(#paneDetail.term-mode) #cb-tabs{display:none}' +
+      /* 폰 아래 시트(⋯·🔔·화면 바로가기)·안내 토스트를 탭바(약 46px) 위로 — 탭바가 맨 위 층이라 시트 끝 줄과 토스트를 가렸다
+         (바로가기 검토: 🎬 줄 보조 글 88%·토스트 45%). 탭바가 숨는 터미널 화면에선 그대로. PC 폭 시트는 단추 옆 작은 상자라 해당 없음 */
+      '@media (max-width:879px){body.cb-app:not(:has(#paneDetail.term-mode)) .pop{bottom:calc(54px + env(safe-area-inset-bottom))}}' +
+      'body.cb-app:not(:has(#paneDetail.term-mode)) .toast{bottom:calc(70px + env(safe-area-inset-bottom))}' +
       '#cb-pair{position:fixed;inset:0;z-index:1000;background:var(--bg,#12151b);' +
       'display:flex;align-items:center;justify-content:center;padding:24px}' +
       '#cb-pair .cb-card{max-width:420px;width:100%}' +
