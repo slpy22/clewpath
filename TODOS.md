@@ -98,10 +98,22 @@
 - [x] 0.19.0 「남아 있는 에이전트」 조사: 번역 스크립트의 claude -p 단발 기록 56개(프로세스 없음). claude 2.1.29x 가 -p 에도 stop_hook_summary system 줄을 남겨 대화형으로 오판 → 스캐너 `headless`(entrypoint sdk-*) + stop_hook_summary 제외, 목록에서 「🤖 자동 실행 기록 N개」로 접음, 파일 탐색기 뿌리 제외
 - [x] 0.19.2 사장님 결정: 끝난 claude -p 기록은 목록에서 아예 뺌(Host /api/v1/sessions·/api/sessions, 지금 도는 것만 🤖 칩, 진단용 ?include_headless=true). 0.19.0 접기·0.19.1 일괄 휴지통은 제거 · ⋯ 메뉴 🗑 삭제는 유지
 - [x] 0.19.3 목록 #라벨 칩 제거(위 필터는 유지) · 살아 있는 세션의 백그라운드 쉘·모니터 수 칩(🐚·📡, jsonl 시작/끝 표식 + 프로세스 시작 이후만) · 남아 있으면 「완료」 대신 「백그라운드」, 작업 완료 푸시 보류(bgtasks.py)
+- [x] 0.31.1(2026-10-21) 모니터 만료 알림도 끝으로 — `<status>` 없이 사건 맨 앞 `[Monitor expired after Nm …]`(옛 `timeout Nms` 모니터는 `[Monitor timed out …]`)로 와서
+  유령으로 남던 것(삼흥_데이터추출 모니터 9개: 보라 '백그라운드'·완료 푸시 보류·4시간 정리 건너뜀). 끝 판정은 알림 머리(첫 `<event>` 앞)만 보도록 함께 좁힘
+  — 감시 출력 속에 인용된 다른 알림의 `<status>`·`<task-id>` 로 끝내지 않게. 이 PC 기록 117개 재생: 새로 닫힘 20(모두 만료 근거), 새로 열림 0
+- [ ] (후속) 기록이 안 남는 끝 대비 — claude 화면에서 멈춤·에이전트 정리(orphan summary 가 'these leave no transcript marker' 라고 함)·만료 문구 변경 시 다시 유령.
+  jsonl 수 > 0 일 때만 살아 있는 claude pid 의 자손 중 Bash 도구 쉘(명령줄에 `.claude/shell-snapshots/snapshot-bash-`, 모니터도 같은 모양)이 0개면 0 으로 보기(psutil 읽기만, MCP 서버 자손은 무시)
+- [ ] (후속, 낮음) 하위 에이전트·워크플로가 띄운 쉘·모니터는 `<id>/subagents/**` 기록에만 있어 목록 수에 안 잡힘(본 턴이 끝나면 '완료'·완료 푸시) — 위 프로세스 확인과 함께
+- [ ] (후속, 낮음) 비서 브리핑 `worklog._live_state` 는 `bgtasks.hold_ready` 를 안 거쳐, 목록이 '백그라운드'인 세션을 비서는 '완료'로 봄
+- [ ] (후속, 낮음) monwatch: `run_in_background` 로 보낸 하위 호출의 실패(알림 `<status>failed</status>`, 첨부 포함)를 못 잡음 — pending 을 작업 id 로 옮겨 알림에서 판정
+- [ ] (검토) 모니터 만료 때 claude 가 bash 만 끝내고 `tail -F | grep` 손자 프로세스는 남김(삼흥 6쌍, 부모 없음·claude.exe 밖) — 정리 기능은 불가침 원칙(ClewPath 가 띄우지 않은 프로세스) 검토 뒤
 - [x] 0.19.4 세션 상세 머리에 태그(#칩 × 빼기 · ＋ 태그: 입력/기존 태그 골라 저장), 목록 위 태그 필터는 유지
 - [x] 0.20.0 정기 작업(docs/designs/housekeeping.md): 쉬는 세션 정리(4시간·세션 잠금 재확인·📌 항상 켜 두기) · 모델 목록 갱신(CP+실사용 합본) · 설정 🧹 화면
 - [ ] (간헐) 전체 테스트에서 test_update_safety::test_apply_concurrency_lock 가 다른 테스트의 배경 스레드 Popen 과 겹쳐 가끔 실패 — 단독·재실행 통과. 원인(posix-install 3·8단계 관찰): 시험이 `updater.subprocess.Popen`(= 표준 subprocess 모듈 그 자체)을 바꿔 끼우는 동안 앞 시험 앱의 orphan-sweep 스레드가 subprocess 를 불러 호출 수가 하나 늘어난다(assert 3 == 2). 고치는 길: updater 안에 Popen 참조를 따로 두거나, 앱 스레드를 멈춘 뒤 패치
 - [ ] (간헐, 2026-10-13) 전체 테스트가 바쁠 때 test_ptyd::test_webterm_start_restart_adopt_stop 의 adopt 가 0 (브로커 attach 시간 초과 추정), PWA node 테스트도 가끔 — 단독 25회 통과. 릴리스 스크립트가 첫 시도에 자주 멈춤 → 재시도 1회 또는 원인 제거 필요
+- [ ] (간헐, 2026-10-21) 전체 테스트가 5분을 넘으면 test_session_model::test_api_models_list_builtin_fallback 가 'merged' 로 실패 — `create_app()` 이 띄운 정기 작업 스레드(프로세스당 1개, `FIRST_DELAY_S`=300)가
+  5분 뒤 모델 목록 합본을 그때의 가짜 홈 `data_dir` 에 쓴다(627초 실행에서 재현, 299초 실행은 통과, 단독 통과). 고치는 길: 시험에선 `housekeeping.start` 를 막거나 conftest 에서 스레드를 멈춤.
+  같은 바쁜 실행에서 test_scanner_incremental::test_incremental_is_fast_on_big_file(시간 재기)도 한 번 실패 — 단독 3회 통과
 - [x] CP 내장 모델 목록 9개로(007 01edb9d, 서비스 모니터 재시작 17:56 완료)
 - [x] 0.20.1 모델 목록 갱신에 claude /model 화면 읽기(modelprobe.py, 사장님 승인 — CLAUDE.md 예외 등록)
 - [ ] (검토) 🔔 에 관제 알림(호출 실패) 이력 — 서버에 알림 기록이 없어 지금은 세션 상태(권한·입력 대기·완료)만

@@ -152,7 +152,8 @@ class _Fold:
     def _bg_feed(self, obj: dict, ts) -> None:
         """백그라운드 쉘·모니터의 시작/끝 표식(claude 가 jsonl 에 남기는 도구 결과·작업 알림, 실측 2.1.x).
         시작: Bash 결과 'Command running in background with ID: X' / '…moved to the background (ID: X)',
-              Monitor 결과 'Monitor started (task X, …'. 끝: '<task-notification>' 의 <status>, TaskStop 결과.
+              Monitor 결과 'Monitor started (task X, …'. 끝: '<task-notification>' 의 <status>, TaskStop 결과,
+              모니터 만료 알림(<status> 없이 사건 모양으로 온다 — _expired_task).
         문장 **앞머리**만 본다 — 다른 도구 출력에 같은 글귀가 인용돼도(이 파일을 grep 한 결과 등) 세지 않게."""
         for text, is_result in _bg_texts(obj):
             if is_result:
@@ -166,9 +167,17 @@ class _Fold:
                 if m:
                     self.bg.pop(m.group(1), None)
                     continue
-            if text.startswith("<task-notification>") and "<status>" in text:
-                for tid in _TASK_ID.findall(text):
-                    self.bg.pop(tid, None)
+            if text.startswith("<task-notification>"):
+                # 알림 머리(첫 <event> 앞)만 본다 — 감시 출력 속에 인용된 다른 알림의 <status>·<task-id> 로 끝내지 않게
+                i = text.find("<event>")
+                head = text if i < 0 else text[:i]
+                if "<status>" in head:
+                    for tid in _TASK_ID.findall(head):
+                        self.bg.pop(tid, None)
+                else:
+                    tid = _expired_task(text)
+                    if tid and self.bg.get(tid, ("",))[0] == "monitor":
+                        self.bg.pop(tid, None)
 
     def feed_bytes(self, chunk: bytes) -> int:
         """완성된 줄만 접고, 접은 바이트 수를 돌려준다(부분 줄은 접지 않음)."""
@@ -224,6 +233,19 @@ _BG_START = re.compile(r"(Command running in background with ID: (\w+)"
                        r"|Monitor started \(task (\w+))")
 _BG_STOPPED = re.compile(r'\{"message":"Successfully stopped task: (\w+)')
 _TASK_ID = re.compile(r"<task-id>(\w+)</task-id>")
+# 모니터 만료 문구(claude 가 붙인다): 2.1.27x~ '[Monitor expired after Nm with … Re-arm it …]'(N = 20·25·30 실측),
+# 그 전 'timeout Nms' 모니터는 '[Monitor timed out — re-arm if needed.]'(2026-10-21 이 PC 기록 전체 실측)
+_BG_EXPIRED = re.compile(r"\s*\[Monitor (?:expired after|timed out)\b")
+
+
+def _expired_task(text: str) -> str | None:
+    """모니터 만료 알림이면 그 모니터의 작업 id. 만료 문구가 첫 <event> **맨 앞**일 때만 끝으로 본다 —
+    감시 출력 줄 속에 같은 글귀·다른 작업 알림이 인용돼도 끝내지 않는다. id 는 그 사건 앞의 첫 <task-id>(알림 자신)."""
+    i = text.find("<event>")
+    if i < 0 or not _BG_EXPIRED.match(text, i + len("<event>")):
+        return None
+    m = _TASK_ID.search(text, 0, i)
+    return m.group(1) if m else None
 
 
 def _epoch(ts) -> float:

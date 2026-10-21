@@ -185,6 +185,59 @@ def test_bg_shell_monitor_tracking(fake_claude_home, monkeypatch):
     assert bgtasks.hold_ready({"phase": "thinking"}, c)["phase"] == "thinking"
 
 
+def test_bg_monitor_expiry_ends(fake_claude_home):
+    """모니터 만료 알림(<status> 없이 사건 모양)도 끝이다 — 2026-10-21 삼흥_데이터추출: 만료된 모니터 9개가 남은 것으로
+    세여 '백그라운드'·완료 푸시 보류·4시간 정리 건너뜀. 만료 문구가 사건 맨 앞일 때만, 모니터에만 — 감시 출력 속 글귀·인용
+    (다른 알림의 <status>·<task-id> 포함)은 끝이 아니다."""
+    from tests.conftest import write_session
+
+    def res(text, ts):
+        return {"type": "user", "timestamp": ts, "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t", "content": text}]}}
+
+    def note(tid, event, ts, queued=False):
+        body = (f'<task-notification>\n<task-id>{tid}</task-id>\n<summary>Monitor event: "끝 또는 오류"</summary>\n'
+                f"<event>{event}</event>\n</task-notification>")
+        if queued:
+            return {"type": "attachment", "timestamp": ts, "attachment": {"type": "queued_command", "prompt": body}}
+        return {"type": "user", "timestamp": ts, "message": {"role": "user", "content": body}}
+    expires = "expires in 30m unless the source ends first; you get one notice at expiry — re-arm if you still need the watch"
+    lines = [
+        {"type": "permission-mode"},
+        res(f"Monitor started (task bexp1, {expires}). You will be notified on each event.", "2026-10-21T01:00:00Z"),
+        res(f"Monitor started (task bexp2, {expires}).", "2026-10-21T01:00:01Z"),
+        res("Monitor started (task bold1, timeout 90000ms). You will be notified", "2026-10-21T01:00:02Z"),
+        res("Monitor started (task blive, persistent — runs until TaskStop or session end).", "2026-10-21T01:00:03Z"),
+        res(f"Monitor started (task bwatch, {expires}).", "2026-10-21T01:00:04Z"),
+        res(f"Monitor started (task bwatch2, {expires}).", "2026-10-21T01:00:05Z"),
+        res("Monitor started (task bexp3, expires in 20m unless the source ends first; …).", "2026-10-21T01:00:06Z"),
+        res("Command running in background with ID: bsh9. Output is being written to: x", "2026-10-21T01:00:07Z"),
+        note("bexp1", "26/52  2.9s/항목", "2026-10-21T01:10:00Z"),
+        note("bexp1", "[Monitor expired after 30m with 1 events delivered. Re-arm it if you still need the watch.]",
+             "2026-10-21T01:30:00Z"),
+        note("bexp2", "[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch"
+             " — and widen the filter if silence was unexpected.]", "2026-10-21T01:30:01Z", queued=True),
+        note("bold1", "[Monitor timed out — re-arm if needed.]", "2026-10-21T01:30:02Z"),
+        # 감시 출력 줄에 같은 글귀가 섞였을 뿐(맨 앞 아님)
+        note("blive", "[01:31:00] [대백과 서비스] [Monitor expired after 30m with 2 events delivered.]", "2026-10-21T01:31:00Z"),
+        # 다른 기록(jsonl)을 지켜보다 그 안의 만료 알림을 옮긴 사건 — 지켜보는 모니터도, 인용된 작업도 끝이 아니다
+        note("bwatch", '{"content":"<task-notification>\\n<task-id>blive</task-id>\\n'
+             '<event>[Monitor expired after 30m with no events delivered.]</event>"}', "2026-10-21T01:32:00Z"),
+        # 인용된 완료 알림의 <status> — 알림 머리(첫 <event> 앞)가 아니므로 bwatch2 도, 인용된 blive 도 끝이 아니다
+        note("bwatch2", '{"content":"<task-notification>\\n<task-id>blive</task-id>\\n<status>completed</status>"}',
+             "2026-10-21T01:33:00Z"),
+        note("bexp3", "[Monitor expired after 20m with no events delivered. Re-arm it if you still need the watch.]",
+             "2026-10-21T01:33:01Z"),
+        # 만료는 모니터에만 — 쉘 작업 알림에 같은 글귀가 와도 끝이 아니다(쉘의 끝은 <status>)
+        note("bsh9", "[Monitor expired after 30m with no events delivered.]", "2026-10-21T01:33:02Z"),
+    ]
+    write_session(fake_claude_home, "P--x", "ffff0002", lines)
+    m = scanner.scan_one("ffff0002")
+    assert sorted(x[0] for x in m.bg_open) == ["blive", "bsh9", "bwatch", "bwatch2"], \
+        "만료(두 문구, 20m·30m, 본문·첨부)는 끝, 사건 중간·인용·쉘은 끝 아님"
+    assert scanner.bg_counts(m, scanner._epoch("2026-10-21T00:59:00Z")) == {"shells": 1, "monitors": 3}
+
+
 def test_stop_push_held_while_background(monkeypatch):
     from session_manager import push, bgtasks
     sent = []
