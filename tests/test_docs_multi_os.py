@@ -219,7 +219,7 @@ def test_readme_windows_only_release_matches_release_tools():
 
 
 def test_readme_autostart_claim_matches_installer():
-    """자동 시작(launchd·systemd)은 다음 단계 — 설치 스크립트가 아직 없다고 말하는 동안만 README 도 그렇게 말한다."""
+    """리눅스 자동 시작(systemd)은 결정 전 — 설치 스크립트가 아직 없다고 말하는 동안만 README 도 그렇게 말한다(맥은 launchd 가 있다)."""
     installer_says_none = "자동 시작은 아직 없습니다" in _read(SCRIPTS["install.sh"])
     readme_says_none = re.search(r"자동 시작[^\n]*아직 없", _posix()) is not None
     assert installer_says_none == readme_says_none

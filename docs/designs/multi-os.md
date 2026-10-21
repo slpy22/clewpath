@@ -13,7 +13,7 @@
 | 1 | Windows PC | `session_manager/osdep/` 경계를 만들고 Windows 코드를 그 뒤로 옮긴다 | Windows 없음 | 완료 — 0.23.0 |
 | 2 | Windows PC + 리눅스 `*-test` 컨테이너 | POSIX 기본 구현(pty·프로세스 그룹·psutil·경로), 테스트를 OS 별로 나눔 | Windows 없음 | 완료 — main 합침 0.28.0(2026-10-20) |
 | 3a | Windows PC + 리눅스 `*-test` 컨테이너 | 맥·리눅스 공통 설치·업데이트: `get.sh`·`install.sh`·`uninstall.sh`·멱등 런처 `start-connector.sh`·`update_runner.sh`·`hostctl`, 매니페스트 `platforms`, 릴리스 게이트, 컨테이너 e2e 왕복 — 명세 `docs/designs/posix-install.md` | Windows 는 OS 무관 수정만(명세 Q14). 릴리스는 `platforms=["win"]` 이라 맥·리눅스 설치본은 아직 받지 않는다 | 구현·시험 완료 — `posix-install` 브랜치(2026-10-21), main 합침 대기 |
-| 3b | 맥 | launchd 자동 시작·자기 회복, 키체인, Terminal.app 재개, launchd 최소 환경(PATH·LANG), 맥 실기(3a 의 e2e 시나리오를 맥에서)·실제 claude 왕복, CP `/get.sh` 공개·랜딩 OS 별 한 줄(서비스 모니터 의뢰), 릴리스 `platforms` 에 mac | 맥 추가 | 대기 |
+| 3b | 맥 | launchd 자동 시작·자기 회복(구현됨 2026-10-21, 맥 실기 확인 중 — `docs/mac-host-tasks.md`), 키체인, Terminal.app 재개, launchd 최소 환경(PATH·LANG), 맥 실기(3a 의 e2e 시나리오를 맥에서)·실제 claude 왕복, CP `/get.sh` 공개·랜딩 OS 별 한 줄(서비스 모니터 의뢰), 릴리스 `platforms` 에 mac | 맥 추가 | 대기 |
 
 브랜치: 1단계는 main 에서 배포. 2단계는 `macos` 브랜치에서 하고 합쳤다(그동안 Windows 핫픽스 가능).
 2단계는 2026-10-20 main 에 합쳐 0.28.0 으로 배포(재검증: 리눅스 컨테이너 612 통과·Windows 620 통과). 터미널 관리 프로세스(ptyd) 코드가 바뀌어

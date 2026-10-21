@@ -215,7 +215,7 @@ Remove-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name 
 ## 맥·리눅스 (시험용 — 한 줄 설치는 아직 공개 전)
 
 > **아직 일반 사용자용이 아니다.** 맥·리눅스 설치·업데이트·제거 스크립트는 만들었지만 검증은 리눅스 시험 컨테이너에서만 했고,
-> 맥 실기 시험은 다음 단계다. 진행 상황은 `docs/designs/multi-os.md`, 설계는 `docs/designs/posix-install.md`.
+> 맥 실기 시험은 진행 중이다(맥 측 지시서 `docs/mac-host-tasks.md`). 진행 상황은 `docs/designs/multi-os.md`, 설계는 `docs/designs/posix-install.md`.
 >
 > - **한 줄 설치(`curl … | sh`)는 아직 공개되지 않았다.** 부트스트랩 스크립트 `ops/get.sh` 는 저장소에만 있고,
 >   컨트롤플레인의 `/get.sh` 주소는 맥 단계에서 연다.
@@ -229,10 +229,10 @@ Remove-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name 
 | 파이썬 | 서명된 시스템 파이썬, 없으면 uv 런타임 | 리눅스: 시스템 파이썬 3.11 이상, 없으면 uv 런타임 · 맥: uv 런타임만 |
 | 데이터 폴더 | `~/.claude/session_manager` | 같다. 폴더는 0700(설치할 때 안의 파일도 다른 사용자 권한을 뺀다), 설정 파일 0600 |
 | 켜기·끄기 | 예약 작업 | 설치 폴더의 `start-connector.sh` (아래 표) |
-| 자동 시작 | 로그온 + 5분마다 확인(예약 작업) | **아직 없다** — 맥 launchd 는 다음 단계(리눅스 systemd 는 정식 지원 여부와 함께 결정 전). 그동안 직접 켜거나 임시 감시(`watch`) |
+| 자동 시작 | 로그온 + 5분마다 확인(예약 작업) | 맥: launchd(`~/Library/LaunchAgents/com.clewpath.host.plist`) — 로그인할 때 켜고, 비정상 종료면 다시 켜고, 5분마다 확인(맥 실기 확인 중) · 리눅스: 자동 시작은 **아직 없다**(systemd 는 정식 지원 여부와 함께 결정 전). 그동안 직접 켜거나 임시 감시(`watch`) |
 | 업데이트 적용 | `update_runner.ps1` | `update_runner.sh` — 같은 순서(교체 → 의존성 → 재기동 → 헬스체크 → 실패하면 롤백) |
 | 제거 | 위 8절(손으로) | `uninstall.sh` |
-| 아직 안 되는 것 | — | 자동 시작, 키체인(비밀은 파일 권한으로 지킨다), PC 에서 '새 터미널 창으로 재개'(명령어만 알려 준다) |
+| 아직 안 되는 것 | — | 리눅스 자동 시작, 키체인(비밀은 파일 권한으로 지킨다), PC 에서 '새 터미널 창으로 재개'(명령어만 알려 준다) |
 
 **시험해 보기**
 
@@ -259,7 +259,7 @@ Remove-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name 
 | 지금 켜기 | `sh start-connector.sh` |
 | 상태 보기 | `sh start-connector.sh status` — `state=running` 이면 정상. `url=`·`pid=`·`watch_pid=` 도 나온다 |
 | 끄기 | `sh start-connector.sh stop` — 계속 꺼 두려면 `sh start-connector.sh stop --hold`(감시·업데이트가 다시 띄우지 않는다), 다시 켜기는 `sh start-connector.sh resume` |
-| 꺼지면 다시 띄우기(임시) | `nohup sh start-connector.sh watch >/dev/null 2>&1 &` — 자동 시작이 생기기 전까지. 끝내려면 `status` 의 `watch_pid` 를 `kill` |
+| 꺼지면 다시 띄우기(임시) | `nohup sh start-connector.sh watch >/dev/null 2>&1 &` — 리눅스용(맥은 launchd 가 한다). 끝내려면 `status` 의 `watch_pid` 를 `kill` |
 | 경로 보기 | `sh start-connector.sh paths` — 설치 폴더·데이터 폴더·설정 파일·파이썬 |
 | 로그 | `~/.claude/session_manager/host.log`(오류 `host.err.log`, 런처 기록 `launcher.log`) |
 

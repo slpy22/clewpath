@@ -1551,3 +1551,29 @@ pytest 연결: `tests/test_posix_e2e.py`(`@pytest.mark.posix_e2e`, docker가 없
 
 ### 9.7 이번에 고치지 않은 것 (TODOS 「멀티 OS」)
 셸 쪽 update.inprogress 원자적 잡기, `CLEWPATH_CONFIG` 의 브로커·claude 자식 유출(ptyd 해시), foreign 판정을 ClewPath 일 때로 좁히기, 런처 stop 대기의 벽시계 마감, held 커밋 뒤 첫 기동 실패 안내.
+
+## 10. 맥 자동 시작 launchd (3b 첫 작업, 2026-10-21)
+
+앞 절의 "다음 단계에서 [mac] launchd" 자리를 채웠다. 리눅스(systemd)는 여전히 결정 전이고 안내만 한다. 맥 실기 확인은 `docs/mac-host-tasks.md`.
+
+- **등록 파일:** `~/Library/LaunchAgents/com.clewpath.host.plist`, Label `com.clewpath.host`. hostctl `render-launchd` 가 plistlib 으로 0644·원자적으로 쓴다.
+  멱등 런처(v2)를 확인한 뒤에만 쓴다(S22). 다른 설치본의 등록을 덮을 때는 경고한다(설치본은 사용자당 하나 전제).
+  - `ProgramArguments`: `/bin/sh -c '[ -f "$1" ] || exit 0; exec /bin/sh "$1" foreground' clewpath-launchd <ROOT>/start-connector.sh`.
+    설치 폴더를 손으로 지웠을 때 0 으로 끝내, KeepAlive 가 30초마다 끝없이 다시 부르지 않게 한다. `WorkingDirectory` 는 두지 않는다(같은 경우 chdir 실패).
+  - `RunAtLoad` true · `KeepAlive {SuccessfulExit: false}` · `StartInterval` 300 · `ThrottleInterval` 30 · `AbandonProcessGroup` true · `ProcessType` Interactive.
+  - `EnvironmentVariables` 는 PATH(설치 때의 절대 경로 조각, 중복 없이 + 시스템 기본)와 LANG(UTF-8 이 아니면 en_US.UTF-8) 둘뿐이다. `Umask` 는 설치 때 셸의 값이다(S38).
+  - `StandardOutPath`·`StandardErrorPath`: `<DATA_DIR>/launchd.log`(foreground 셸 단계 출력. Host 출력은 host.log).
+- **동작:** 로그인할 때 켜고, 0 이 아닌 종료나 신호로 죽으면 30초 뒤 다시 켜고, 5분마다 foreground 를 한 번 돌려 확인한다.
+  - foreground 는 띄우지 않을 때 늘 0 으로 끝난다: 유지보수, 업데이트 중, 이미 떠 있음, 남의 서버, 데이터 폴더 불일치. 다시 보는 것은 5분 확인에 맡긴다.
+  - 9.4 에서 1 로 끝내던 경우도 0 으로 바꿨다. 0 이 아니면 launchd 가 30초마다 다시 불러 로그가 계속 자란다.
+  - foreground 도 `launcher.lock` 을 잡고 잠금 안에서 다시 판정한다(start 와 같은 S21). launchd·사람의 start·러너가 겹쳐도 Host 는 하나다.
+  - exec 직전에 stdin 은 /dev/null, stdout·stderr 는 host.log·host.err.log 이어 쓰기로 바꾼다. 회전과 구분줄은 start 와 같다.
+  - 러너가 업데이트 뒤 launchd 밖에서 띄운 Host 가 죽으면 5분 확인이 이어받는다. 그 뒤로는 launchd 작업 자신이 Host 다.
+  - `stop`(--hold 없음)은 5분 안에 다시 켜진다(Windows 예약 작업과 같다). 계속 끄려면 `stop --hold` 다.
+- **정상 종료 = 0(server.main, 맥·리눅스만):** uvicorn 은 정상 종료를 마친 뒤 받은 SIGTERM 을 다시 일으킨다. 기본 처리기면 -15 로 끝나 KeepAlive 가 stop 한 Host 를 30초 뒤 되살렸다. 그래서 SIGTERM 처리기를 `sys.exit(0)` 으로 둔다. Windows 는 그대로다.
+- **install.sh:** [mac] `--no-autostart` 가 아니면 런처 렌더 뒤 render-launchd → `launchctl bootout`(실패 무시) → `launchctl bootstrap gui/<uid>`(실패하면 1초 뒤 한 번 더) 순서로 등록한다.
+  - 실패해도(SSH 셸 등) 설치는 성공으로 끝내고 지금 켜는 방법을 안내한다.
+  - 설치 기록 `autostart=launchd|launchd-pending`. `--dry-run` 은 할 일만 보여 준다. `--no-autostart` 는 이미 있는 등록을 그대로 둔다.
+- **uninstall.sh 8단계:** `U_PHASE=removing` 뒤로 옮겼다. 우리 plist(venv 파이썬의 plistlib, 없으면 XML 이스케이프를 맞춘 grep)일 때만 처리하고, 남의 plist 는 남기고 경고한다.
+  - 처리 순서는 bootout → plist 삭제 → `launchctl print` 로 아직 올라 있는지 확인이다.
+  - 남은 것 확인에도 넣었다.

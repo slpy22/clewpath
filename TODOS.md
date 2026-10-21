@@ -67,7 +67,8 @@
 - [ ] (한계, 기록만) `curl | sh` 스트림이 마지막 줄 `main` 바로 뒤에서 끊기면 인자 없는 기본 설치가 된다 — 모든 `curl | sh` 설치기의 한계(명세 3.1 구현 메모)
 
 ### 3b 맥 실기 — 대기 (명세 1.2, R1: 맥에서 시나리오를 다시 돌리기 전에는 `platforms` 에 mac 을 넣지 않는다)
-- [ ] launchd 자동 시작·자기 회복(`~/Library/LaunchAgents/com.clewpath.host.plist`, RunAtLoad + KeepAlive → 런처 `foreground`) · install.sh `autostart_install` 자리 · launchd 최소 환경(PATH·LANG) 보강 · 제거 때 `launchctl bootout`
+- [x] launchd 자동 시작·자기 회복(2026-10-21, 명세 10장) — `com.clewpath.host.plist`(RunAtLoad·KeepAlive{SuccessfulExit=false}·StartInterval 300·AbandonProcessGroup), install 등록(bootout→bootstrap, 실패해도 설치 성공)·uninstall 해제, foreground 잠금·로그·늘 0, 정상 종료 0(server.main). 리눅스 컨테이너에서 launchctl·uname 흉내로 시험 — **맥 실기 확인은 `docs/mac-host-tasks.md`(맥 측 Claude)**
+- [ ] (launchd 후속) `osdep._posix.ensure_launcher` 가 plist 도 점검·재등록하게(지금은 런처만 다시 렌더) · `launchd.log` 회전 없음 · 맥 실기 결과(`mac-3b` 브랜치) 반영
 - [ ] 키체인(`osdep.protect`/`unprotect` — 지금은 None 이라 데이터 폴더 0700 안 파일) · Terminal.app 재개(`open_resume_terminal`) · Gatekeeper 격리 속성 확인
 - [ ] 맥에서 전체 pytest + 3a e2e 시나리오(명세 6.3) 반복 + 실제 claude 기동·재접속·업데이트 왕복 → 통과하면 릴리스 `platforms` 에 mac
 - [ ] CP `/get.sh` 공개(서비스 모니터 의뢰, 명세 7절): `ops/get.sh` 를 007 `control_plane/get.sh` 로 옮기고 `/get.sh` 라우트·007 `.gitattributes`·007 테스트·nginx `location = /get.sh` · 랜딩·README OS 별 한 줄(리눅스는 '시험용'으로 표시하거나 빼기) — 이때 tests/test_docs_multi_os.py 의 '공개 주소 없음' 시험도 함께 바꾼다
