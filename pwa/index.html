@@ -6484,6 +6484,9 @@ function quickTermTaken(t, s){
 // 꺼짐처럼 보이나 — 목록 줄 판정(tabGone)에 더해, 다른 기기가 가져간 탭은 화면이 떠 있어도 이 기기가 붙어 있지 않으니 목록대로 본다.
 // 가져간 뒤 claude 가 끝났는데 인계 확인을 거쳐 다시 붙으면 새 claude 가 뜬다
 function quickTabGone(t, s){ return tabGone(t,s)||(!!t.taken&&!s.live_terminal); }
+// 목록(20초)이 아직 모를 수 있는 탭인가 — 지금 상세 칸에 떠 있거나, 이 페이지가 그 목록 뒤에 살아 있음을 봤다(tabSeenLive). 방금 연
+// 🧑‍💼 비서가 그렇다: 목록은 claude -p 로 만든 세션을 살아 있을 때만 싣고, 비서는 목록 밖 세션 객체로 연다. 목록에 없다고 바로 내리지 않는다(검토)
+function quickTermFresh(t){ return (termView.active===t.key&&termView.mounted(paneDetail()))||tabSeenLive(t); }
 // 파일 기억 엿보기 — 이 페이지가 아직 읽지 않았으면(FB.restored 전) 저장값을 읽기만 한다. fbRestoreState 를 부르지 않는 까닭: PC 를
 // 바꾸는 사이(방 이름이 바뀌기 전) 불리면 이전 PC 기억을 읽어 들여 새 PC 키에 적게 된다. 옛 키는 이 PC 목록의 폴더만(fbRestoreState 와 같게)
 function quickFbPeek(){
@@ -6517,7 +6520,8 @@ function quickTargets(){
     if(kind==='monitor'){ o.cur=ov||(here&&!hid); o.back=!ov&&here&&hid; }   // 폰 관제는 화면 전체 덮개
     else { o.cur=here&&!ov&&!hid; o.back=here&&(ov||hid); }
     if(kind==='terminal'){
-      const ok=(t)=>!ready||!!find(t.s.session_id), t=quickTermTab(ok), n=TABS.list.filter(ok).length;   // 목록에서 빠진 탭은 누르면 내린다
+      // 목록에서 빠진 탭은 누르면 내린다 — 목록이 아직 모르는 탭(떠 있는 터미널·방금 본 터미널)은 그대로 보인다
+      const ok=(t)=>!ready||!!find(t.s.session_id)||quickTermFresh(t), t=quickTermTab(ok), n=TABS.list.filter(ok).length;
       if(t){ const s=find(t.s.session_id)||t.s, inst=termView.tabs&&termView.tabs[t.key];
         const off=!!(inst&&inst.ended)||(quickTabGone(t,s)&&!tabSeenLive(t)), bd=off?null:sessionBadge(s);
         o.has=true; o.name=sessLabel(s); o.sub=[off?'꺼짐':(bd?bd.text:''), n>1?'탭 '+n+'개':''].filter(Boolean).join(' · ');
@@ -6583,19 +6587,22 @@ async function quickGoTerminal(live){
   const ended=(t)=>{ const i=termView.tabs&&termView.tabs[t.key]; return !!(i&&i.ended); };   // claude 가 끝났다고 들었다(다시 붙으면 새로 뜬다)
   for(let n=TABS.list.length+1; n>0; n--){
     const t=quickTermTab(); if(!t) break;
-    let s=(SESSIONS||[]).find(x=>x.session_id===t.s.session_id);
-    if(!s){ left=quickDropTab(t)||left; continue; }              // 지워짐·이사 — 그 탭을 조용히 내리고 다음 최근 탭으로
-    // 이미 그 화면 — 다시 짓지 않고 커서만. 폰에서 '‹ 목록'으로 숨겼으면 다시 보여 주기만(재접속 없음, §5-2)
+    // 이미 그 화면 — 다시 짓지 않고 커서만(목록에 아직 없는 세션이어도 — 방금 연 🧑‍💼 비서 등). 폰에서 '‹ 목록'으로 숨겼으면 다시
+    // 보여 주기만(재접속 없음, §5-2). 전엔 목록에 없다고 먼저 내려 보던 터미널을 허물었다(검토)
     if(termView.mounted(paneDetail())&&termView.active===t.key&&!termView.disconnected&&!t.taken&&!ended(t)){ showDetailPane(); quickFocus('terminal'); return; }
-    if(!listed&&(ended(t)||quickTabGone(t,s))){
+    let s=(SESSIONS||[]).find(x=>x.session_id===t.s.session_id);
+    // 지워짐·이사 — 그 탭을 조용히 내리고 다음 최근 탭으로. 목록이 아직 모를 수 있는 탭(quickTermFresh)은 아래에서 한 번 새로 받아 판정한다
+    if(!s&&(listed||!quickTermFresh(t))){ left=quickDropTab(t)||left; continue; }
+    if(!listed&&(!s||ended(t)||quickTabGone(t,s))){
       const recent=tabSeenRecently(t)&&!ended(t);
-      const f=await freshSessShown(s.session_id);
+      const f=await freshSessShown(t.s.session_id);
       if(!live()) return;                                         // 기다리는 사이 다른 누름·다른 화면·PC 전환 — 이 누름은 화면을 바꾸지 않는다
       listed=true;                                                // 이번에 받은 목록으로 다음 탭도 판정한다(다시 기다리지 않게)
       if(!findTab(t.key)) continue;                               // 기다리는 사이 그 탭이 닫혔다
       if(f===null){ left=quickDropTab(t)||left; continue; }
       if(f===undefined){                                          // 목록을 받지 못했다(끊김·3초 넘김) — 목록 줄과 같게
         if(recent){ switchTab(t.key,{listed}); return; }          // 막 살아 있음을 본 탭 — 그 탭으로(끊겼으면 '연결 종료'로 열려 다시 연결될 때 붙는다)
+        if(!s){ toast('터미널 상태를 확인하지 못했습니다 — 연결을 확인하세요'); return; }   // 목록에 없는 탭 — 내리지도 열지도 않는다(지금 화면 그대로)
         loadDetail(s); toast('터미널 상태를 확인하지 못해 상세로 열었습니다'); return;   // 그사이 꺼졌을 수 있다 — 새 claude 를 띄우지 않게. 탭은 그대로
       }
       s=f;

@@ -54,6 +54,7 @@ async function boot({ width = 1400, local = false, room = null, mem = null, more
       if (p === '/api/owner/teams') { const t = typeof __teams === 'function' ? await __teams() : __teams;
         if (t === 'fail') throw new Error('agent_offline'); return { teams: JSON.parse(JSON.stringify(t)) }; }
       if (p === '/api/owner/monitor/groups') return { groups: [] };
+      if (p === '/api/owner/assistant') return { assistant: globalThis.__assistant || null };
       if (p.endsWith('/file')) return { path: o.query.path, name: o.query.path, size: 5, mtime: 1, kind: 'text', text: 'x' };
       return {}; };
     fetchRecentMessages = async () => [];
@@ -147,5 +148,45 @@ test("T95 PC 전환 뒤 🎬 단추·폰 시트·빈 칸 '최근 화면'은 새 
     "B 에 같은 팀 코드 기억": { onA: "A 영업팀", shown: "팀 관제 — B 개발팀 · Alt+4", opened: "gB", at: "monitor:gB" },
     "받는 중이던 A 팀 목록(👥 보기)": { teams: "B 개발팀", shown: "팀 관제 — B 개발팀 · Alt+4" },
     "받는 중이던 A 팀 목록(20초 갱신)": { teams: "B 개발팀", shown: "팀 관제 — B 개발팀 · Alt+4" },
+  });
+});
+
+// ---------------------------------------------------------------- 목록에 아직 없는 터미널(검토 r2)
+// 🧑‍💼 비서는 claude -p 로 만든 세션이라 목록(20초)이 살아 있을 때만 싣는다 — 처음 연 비서는 직전 목록에 없고, openAssistant 는 목록 밖
+// 세션 객체로 터미널을 연다. 그 터미널을 보는 중 🖥(Alt+1)를 누르면 '이미 그 화면'인데도 목록에 없다고 탭을 내리고 터미널을 허물었다.
+test("T96 목록에 아직 없는 터미널(방금 연 🧑‍💼 비서): 보는 중 🖥 는 그대로(커서만), 단추는 그 터미널 이름 — 떠났다 돌아오면 목록을 한 번 새로 받아 판정한다(있으면 그 탭, 새 목록에도 없으면 조용히 내림)", async () => {
+  const D = "d5d5d5d5-1111-2222-3333-444444444444";
+  const listed = `{ session_id: '${D}', title: '🧑‍💼 비서', live_terminal: true, cwd: 'E:/assistant', mtime: 3 }`;
+  const got = await each(["릴레이|보는 중", "로컬|보는 중", "릴레이|떠났다 돌아옴", "로컬|떠났다 돌아옴", "릴레이|떠났다 돌아옴(새 목록에도 없음)"], async (p) => {
+    const [mode, what] = p.split("|");
+    const { ctx, pd, nav } = await boot({ local: mode === "로컬", mem: { tabs: null }, pre: `globalThis.__assistant = { session_id: '${D}' };` });
+    await ev(ctx, "openAssistant()"); await tick(RENDER);
+    if (ev(ctx, "termView.active") !== D) throw new Error("비서 터미널이 뜨지 않음");
+    const r = {};
+    if (what === "보는 중") {
+      r.btn = btn(nav, 0);
+      const gen = ev(ctx, "PANE_NOW.gen"), first = pd.children[0];
+      await press(ctx, "terminal");
+      r.same = ev(ctx, "PANE_NOW.gen") === gen && pd.children[0] === first;
+    } else {
+      await press(ctx, "files");                                        // 떠남 — 터미널은 정리(연결 닫음)
+      r.btn = btn(nav, 0);
+      ev(ctx, `T.list = async () => { __lists++; return { sessions: [...SESSIONS.map((s) => ({ ...s })), ${p.endsWith("(새 목록에도 없음)") ? "" : listed}] }; };`);
+      ev(ctx, "__toasts.length = 0; __lists = 0;");
+      await press(ctx, "terminal");
+      r.lists = ev(ctx, "__lists");
+    }
+    Object.assign(r, { at: at(ctx), tabs: ev(ctx, "TABS.list.map((t) => sessLabel(t.s)).join(',')"), toast: ev(ctx, "__toasts.join('|')"),
+                       closedLive: ev(ctx, "__tc.filter((h) => !h.closed).length") });
+    return r;
+  });
+  const TIP = "터미널 — 🧑‍💼 비서 · Alt+1";
+  assert.deepEqual(got, {
+    "릴레이|보는 중": { btn: ["on", TIP], same: true, at: "terminal:d", tabs: "🧑‍💼 비서", toast: "", closedLive: 1 },
+    "로컬|보는 중": { btn: ["on", TIP], same: true, at: "terminal:d", tabs: "🧑‍💼 비서", toast: "", closedLive: 0 },   // 로컬은 터미널 창(iframe)
+    "릴레이|떠났다 돌아옴": { btn: ["", TIP], lists: 1, at: "terminal:d", tabs: "🧑‍💼 비서", toast: "", closedLive: 1 },
+    "로컬|떠났다 돌아옴": { btn: ["", TIP], lists: 1, at: "terminal:d", tabs: "🧑‍💼 비서", toast: "", closedLive: 0 },
+    "릴레이|떠났다 돌아옴(새 목록에도 없음)": { btn: ["", TIP], lists: 1, at: "files:a.py", tabs: "",
+      toast: "열어 둔 터미널이 없습니다 — 세션 줄의 🖥/▶ 로 여세요", closedLive: 0 },
   });
 });
