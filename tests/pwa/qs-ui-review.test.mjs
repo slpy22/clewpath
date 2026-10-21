@@ -334,3 +334,33 @@ test("T101 맥 Option+숫자가 글자를 만들면(¡™£¢·UK '#'·죽은 �
     win: { "터미널 Alt+3(AZERTY '\"')": { go: "viewer", prevented: 1, xtermSends: false }, "터미널 Alt+1": { go: "terminal", prevented: 1, xtermSends: false } },
   });
 });
+
+// ---------------------------------------------------------------- 접근성: PC 제목·aria-expanded(검토 s6)
+// PC 에서 제목(#qs-title)은 CSS(pointer-events)와 탭 키만 막았을 뿐 <button aria-haspopup="menu"> 그대로라 화면 읽기가 '세션, 메뉴 단추'로
+// 읽었는데 눌러도(보조기기 누름 = click) 아무 일이 없었다. 폰에서는 시트를 열고 닫아도 aria-expanded 가 한 번도 바뀌지 않았다.
+test("T102 접근성: 제목(#qs-title)은 PC 에선 글자 — 막힌 단추(커서 없음)·role=none·메뉴 표시 없음, 폰에선 '화면 바로가기' 메뉴 단추. 창 폭이 바뀌면 따라 바뀌고, 시트를 열고 닫으면 aria-expanded 를 맞춘다(관제 덮개 ▾ 도)", async () => {
+  // 하네스 스텁의 removeAttribute 는 아무것도 안 한다 — 제목 단추만 실제처럼 지우게
+  const fix = (b) => { b.removeAttribute = (k) => { b.setAttribute(k, null); }; return b; };
+  const resize = (ctx, w) => { ev(ctx, `innerWidth = ${w}`); for (const f of ctx.__winListeners.resize || []) f(); };
+  const { ctx, title } = await boot({ width: 1400, mem: {}, setup: (sb) => sb.document._register("qs-title", fix(sb.document.createElement("button"))) });
+  const attrs = () => ({ disabled: title.disabled, tab: title.tabIndex, role: title.getAttribute("role"), popup: title.getAttribute("aria-haspopup"),
+                         tip: title.getAttribute("title") || "", expanded: title.getAttribute("aria-expanded") });
+  const got = { pc: attrs() };
+  resize(ctx, 390); got.phone = attrs();
+  title.onclick(); got.open = title.getAttribute("aria-expanded");
+  ev(ctx, "closePop()"); got.closed = title.getAttribute("aria-expanded");
+  resize(ctx, 1400); got.pcAgain = attrs();
+  { const { ctx: c2 } = await boot({ width: 390, mem: {} });               // 폰 관제 덮개 머리 ▾
+    await press(c2, "monitor");
+    const qb = c2.document.body.children.filter((c) => String(c.className) === "mon-ov").at(-1).children[0].children.find((c) => String(c.className).includes("qs-ov"));
+    const before = qb.getAttribute("aria-expanded"); qb.onclick(); const open = qb.getAttribute("aria-expanded");
+    ev(c2, "closePop()"); got.ov = [before, open, qb.getAttribute("aria-expanded")]; }
+  const PC = { disabled: true, tab: -1, role: "none", popup: null, tip: "", expanded: null };
+  assert.deepEqual(got, {
+    pc: PC,
+    phone: { disabled: false, tab: 0, role: null, popup: "menu", tip: "화면 바로가기", expanded: "false" },
+    open: "true", closed: "false",
+    pcAgain: PC,
+    ov: [null, "true", "false"],
+  });
+});

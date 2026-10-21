@@ -6330,7 +6330,10 @@ function closePop(){
   if(!POP) return; const p=POP; POP=null;
   try{ p.bg.remove(); p.box.remove(); }catch(e){}
   try{ document.removeEventListener('keydown',p.onKey); }catch(e){}
+  popExpanded(p.anchor, false);
 }
+// 메뉴 단추(aria-haspopup)의 열림 표시 — 보조기기가 시트가 열렸는지 알게(바로가기 검토: 폰 제목 ▾ 가 한 번도 바뀌지 않았다)
+function popExpanded(a, on){ try{ if(a&&a.getAttribute&&a.getAttribute('aria-haspopup')) a.setAttribute('aria-expanded', on?'true':'false'); }catch(e){} }
 function popItem(icon,label,sub,fn,cls){
   const b=el('button','popi'+(cls?' '+cls:'')); b.setAttribute('role','menuitem');
   b.appendChild(el('span','pi',icon)); const t=el('span','pt'); t.appendChild(el('span',null,label));
@@ -6347,7 +6350,7 @@ function openPop(anchor,content,title){
   document.body.appendChild(bg); document.body.appendChild(box);
   const onKey=(e)=>{ if(e.key==='Escape') closePop(); };
   document.addEventListener('keydown',onKey);
-  POP={bg,box,anchor,onKey};
+  POP={bg,box,anchor,onKey}; popExpanded(anchor, true);
   // PC: 누른 버튼 바로 아래(화면 밖이면 위로). 폰은 CSS 가 아래 시트로 고정한다.
   try{ if(innerWidth>=880&&anchor&&anchor.getBoundingClientRect){ const r=anchor.getBoundingClientRect();
     const bw=box.offsetWidth||260, bh=box.offsetHeight||240;
@@ -6704,9 +6707,22 @@ function renderQuick(){
       b.children[0].textContent=o.icon; b.children[1].textContent=o.kind==='monitor'?'관제':o.label;   // 결정 1: 💬 뷰어 ↔ ℹ 상세
       b.title=quickTip(o); b.setAttribute('aria-label',o.label); b.setAttribute('aria-current',o.cur?'true':'false'); });
   }
-  const tb=$('#qs-title'); if(tb) tb.tabIndex=innerWidth<880?0:-1;   // PC 제목은 글자 그대로(누를 수 없음) — 탭 키로도 멈추지 않게
+  quickTitleSync();
   renderEmptyPane(list);
 }
+// 머리 줄 제목(#qs-title) — 폰(<880px)은 '화면 바로가기' 메뉴 단추(▾ 시트), PC 는 제목 글자일 뿐이다(입구는 단추 4개). PC 에서 CSS·탭 키만
+// 막으면 보조기기가 '세션, 메뉴 단추'로 읽는데 눌러도 아무 일이 없었다(검토) — 막힌 단추로 두어 커서를 받지 않게 하고(그래야 role=none 이
+// 먹는다) 메뉴 표시를 뗀다. 창 폭이 바뀌면(창 크기·태블릿 회전) 따라 바꾼다
+let _qsTitlePc=null;
+function quickTitleSync(){
+  const tb=$('#qs-title'); if(!tb) return;
+  const pc=innerWidth>=880; if(_qsTitlePc===pc) return; _qsTitlePc=pc;
+  tb.disabled=pc; tb.tabIndex=pc?-1:0; tb.title=pc?'':'화면 바로가기';
+  if(pc){ tb.setAttribute('role','none'); tb.removeAttribute('aria-haspopup'); tb.removeAttribute('aria-expanded'); }
+  else { tb.removeAttribute('role'); tb.setAttribute('aria-haspopup','menu'); tb.setAttribute('aria-expanded', POP&&POP.anchor===tb?'true':'false'); }
+}
+quickTitleSync();
+window.addEventListener('resize', quickTitleSync);
 // 빈 상세 칸(§3-6) — 안내 + '최근 화면'(갈 수 있는 기억만 = 흐림 빼고, 마지막 화면이 맨 앞·나머지는 단추 순서). 첫 목록 전엔 기억을 확인하지
 // 못해 모두 흐림(quickTargets)이라 단추가 없다. 목록 칸이 접혀 있으면 '왼쪽에서 …'는 틀린 말이라 ◧ 안내로 바꾼다. 폰은 빈 안내 자체가
 // 숨어 있다(CSS). 모습(안내·단추 차례)이 같으면 글자만 고친다 — 💬 칸의 '방금 → 1분 전'처럼 매분 바뀌는 글자로 20초 갱신이 단추를 새로
