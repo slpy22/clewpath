@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import plistlib
 import shutil
 import socket
 import stat
@@ -448,3 +449,182 @@ def test_cli_keeps_stdout_machine_readable(tmp_path):
         "data_dir", "conf_file", "claude_home", "projects_dir"]
     r = subprocess.run([*cmd, "nope"], cwd=ROOT, env=env, capture_output=True, timeout=60)
     assert r.returncode == 2 and r.stdout == b""
+
+
+# ---------------------------------------------------------------- render-launchd — [mac] 자동 시작 등록 파일(plistlib)
+
+MAC_ROOT = "/Users/u/Library/Application Support/ClewPath/app"
+MAC_DATA = "/Users/u/.claude/session_manager"
+
+
+def test_launchd_plist_contents():
+    """com.clewpath.host 의 내용 — 로그인할 때(RunAtLoad)·5분마다(StartInterval) foreground, 0 이 아닌 종료·신호로 죽었을 때만
+    다시(KeepAlive{SuccessfulExit:false}, 30초 간격), Host 가 끝나도 브로커·러너를 죽이지 않게(AbandonProcessGroup), QoS
+    제한 없이(Interactive). env 는 PATH·LANG 만. plistlib 로 쓰고 다시 읽어도 같다(launchd 가 읽는 키·형식 그대로)."""
+    d = hostctl.launchd_plist(MAC_ROOT, MAC_DATA, path_env="/opt/homebrew/bin:/Users/u/.local/bin:/usr/bin",
+                              lang="ko_KR.UTF-8", umask=0o022)
+    assert d == {
+        "Label": "com.clewpath.host",
+        "ProgramArguments": ["/bin/sh", "-c", '[ -f "$1" ] || exit 0; exec /bin/sh "$1" foreground', "clewpath-launchd",
+                             f"{MAC_ROOT}/start-connector.sh"],
+        "RunAtLoad": True, "KeepAlive": {"SuccessfulExit": False}, "StartInterval": 300, "ThrottleInterval": 30,
+        "AbandonProcessGroup": True, "ProcessType": "Interactive",
+        "EnvironmentVariables": {"PATH": "/opt/homebrew/bin:/Users/u/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+                                 "LANG": "ko_KR.UTF-8"},
+        "StandardOutPath": f"{MAC_DATA}/launchd.log", "StandardErrorPath": f"{MAC_DATA}/launchd.log", "Umask": 0o022}
+    assert plistlib.loads(plistlib.dumps(d, fmt=plistlib.FMT_XML)) == d
+    assert hostctl.LAUNCHD_PLIST == "Library/LaunchAgents/com.clewpath.host.plist"
+    trimmed = hostctl.launchd_plist(MAC_ROOT + "/", MAC_DATA + "/", path_env=None, lang=None, umask=None)
+    assert "Umask" not in trimmed
+    assert trimmed["ProgramArguments"][-1] == f"{MAC_ROOT}/start-connector.sh", "끝의 / 는 걷어 낸다"
+    assert trimmed["StandardOutPath"] == f"{MAC_DATA}/launchd.log"
+
+
+@pytest.mark.parametrize("given,want", [
+    (None, "/usr/bin:/bin:/usr/sbin:/sbin"),
+    ("", "/usr/bin:/bin:/usr/sbin:/sbin"),
+    ("rel/bin:.::~/bin:/opt/homebrew/bin/:/opt/homebrew/bin:/usr/bin:/a\tb:/Users/u/.local/bin",
+     "/opt/homebrew/bin:/usr/bin:/Users/u/.local/bin:/bin:/usr/sbin:/sbin"),
+    ("/sbin:/usr/local/bin:/bin", "/sbin:/usr/local/bin:/bin:/usr/bin:/usr/sbin"),
+    ("C:\\Windows;C:\\bin", "/usr/bin:/bin:/usr/sbin:/sbin"),
+])
+def test_launchd_path_keeps_absolute_unique_pieces(given, want):
+    """설치 때 PATH 에서 절대 경로 조각만(상대·빈 조각·~·제어문자는 버린다), 겹치지 않게(끝의 / 는 같은 것으로), 그 뒤에
+    launchd 기본 PATH 의 빠진 것만 — launchd 의 기본 PATH 로는 ~/.local/bin·/opt/homebrew/bin 의 claude 를 못 찾는다."""
+    assert hostctl.launchd_path(given) == want
+
+
+@pytest.mark.parametrize("given,want", [("ko_KR.UTF-8", "ko_KR.UTF-8"), ("en_US.utf8", "en_US.utf8"),
+                                        ("C.UTF-8", "C.UTF-8"), (None, "en_US.UTF-8"), ("", "en_US.UTF-8"),
+                                        ("C", "en_US.UTF-8"), ("ko_KR.eucKR", "en_US.UTF-8"), ("UTF-8", "en_US.UTF-8"),
+                                        ("ko_KR.UTF-8\nX=1", "en_US.UTF-8"), ("ko KR.UTF-8", "en_US.UTF-8")])
+def test_launchd_lang_is_utf8(given, want):
+    """launchd 는 LANG 을 주지 않는다 — 설치 때 값이 UTF-8 로캘이면 그대로, 아니면 en_US.UTF-8(claude·셸의 한글)."""
+    assert hostctl.launchd_lang(given) == want
+
+
+def test_launchd_plist_escapes_awkward_paths():
+    """경로의 & < > 는 plistlib 이 XML 로 이스케이프한다(셸로 XML 을 만들면 여기서 깨진다) — 다시 읽으면 원래 글자."""
+    root = "/Users/u/A & B <x> \"q\" it's/app"
+    data = "/Users/u/d & e/session_manager"
+    d = hostctl.launchd_plist(root, data, path_env="/opt/a&b/bin:/usr/bin", lang=None, umask=None)
+    raw = plistlib.dumps(d, fmt=plistlib.FMT_XML)
+    assert b"A &amp; B &lt;x&gt;" in raw and b"A & B" not in raw and b"<x>" not in raw
+    back = plistlib.loads(raw)
+    assert back == d and back["ProgramArguments"][-1] == root + "/start-connector.sh"
+    assert back["StandardOutPath"] == data + "/launchd.log"
+    assert back["EnvironmentVariables"]["PATH"].startswith("/opt/a&b/bin:")
+
+
+def _mac_root(tmp_path) -> Path:
+    """멱등 런처(v2)가 있는 설치 루트 — 공백·& 가 든 경로."""
+    root = tmp_path / "Application Support" / "Clew & Path" / "app"
+    root.mkdir(parents=True)
+    (root / "start-connector.sh").write_bytes(b"#!/bin/sh\n# clewpath-launcher v2 (posix) \xe2\x80\x94 test\n")
+    return root
+
+
+def _launchd_args(root: Path, data: Path, plist: Path) -> list[str]:
+    return ["render-launchd", "--root", str(root), "--data-dir", str(data), "--plist", str(plist)]
+
+
+@posix_only
+def test_render_launchd_writes_0644_atomically_once(home, capsys, monkeypatch, tmp_path):
+    root, data = _mac_root(tmp_path), home / ".claude" / "session_manager"
+    plist = home / "Library" / "LaunchAgents" / "com.clewpath.host.plist"
+    monkeypatch.setenv("PATH", f"rel:/opt/homebrew/bin:{home}/.local/bin:/usr/bin")
+    monkeypatch.setenv("LANG", "ko_KR.UTF-8")
+    old_umask = os.umask(0o027)                         # 설치 때 셸의 umask 를 그대로(S38)
+    try:
+        rc, kv, err = run(capsys, *_launchd_args(root, data, plist))
+        assert rc == 0 and kv == {"launchd": "created", "plist": str(plist), "label": "com.clewpath.host"}, err
+        assert stat.S_IMODE(plist.stat().st_mode) == 0o644, "launchd 는 남이 쓸 수 있는 plist 를 거부한다"
+        assert stat.S_IMODE(plist.parent.stat().st_mode) == 0o755
+        d = plistlib.loads(plist.read_bytes())
+        assert d["ProgramArguments"][-1] == f"{root}/start-connector.sh" and "WorkingDirectory" not in d
+        assert d["EnvironmentVariables"] == {
+            "PATH": f"/opt/homebrew/bin:{home}/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "ko_KR.UTF-8"}
+        assert d["StandardOutPath"] == d["StandardErrorPath"] == str(data / "launchd.log") and d["Umask"] == 0o027
+        assert sorted(p.name for p in plist.parent.iterdir()) == [plist.name], "임시 파일이 남지 않는다"
+        raw = plist.read_bytes()
+        rc, kv, _ = run(capsys, *_launchd_args(root, data, plist))
+        assert rc == 0 and kv["launchd"] == "unchanged" and plist.read_bytes() == raw
+        # 바꿔 쓰다 실패하면(교체 직전) 옛 파일 그대로, 임시 파일도 없다(원자적)
+        real_replace = os.replace
+
+        def boom(src, dst):
+            raise OSError("disk full")
+        monkeypatch.setattr(os, "replace", boom)
+        try:
+            rc, kv, err = run(capsys, *_launchd_args(root, home / "elsewhere", plist))
+        finally:
+            monkeypatch.setattr(os, "replace", real_replace)
+        assert rc == 1 and kv == {} and "[FAIL]" in err and plist.read_bytes() == raw
+        assert sorted(p.name for p in plist.parent.iterdir()) == [plist.name]
+        rc, kv, _ = run(capsys, *_launchd_args(root, home / "elsewhere", plist))
+        assert rc == 0 and kv["launchd"] == "updated"
+        assert plistlib.loads(plist.read_bytes())["StandardOutPath"] == str(home / "elsewhere" / "launchd.log")
+    finally:
+        os.umask(old_umask)
+
+
+@posix_only
+def test_render_launchd_replaces_another_installs_plist_with_a_warning(home, capsys, tmp_path):
+    """같은 사용자에 다른 설치본의 등록이 있으면 덮어쓴다(설치본은 사용자당 하나) — 말없이 덮지 않고 알린다."""
+    root, data = _mac_root(tmp_path), home / ".claude" / "session_manager"
+    plist = home / "Library" / "LaunchAgents" / "com.clewpath.host.plist"
+    plist.parent.mkdir(parents=True)
+    other = hostctl.launchd_plist("/Users/u/other/app", MAC_DATA, path_env=None, lang=None, umask=None)
+    plist.write_bytes(plistlib.dumps(other))
+    rc, kv, err = run(capsys, *_launchd_args(root, data, plist))
+    assert rc == 0 and kv["launchd"] == "updated" and "다른 설치본" in err and "/Users/u/other/app/start-connector.sh" in err
+    assert plistlib.loads(plist.read_bytes())["ProgramArguments"][-1] == f"{root}/start-connector.sh"
+    plist.write_text("not a plist", encoding="utf-8")
+    rc, kv, err = run(capsys, *_launchd_args(root, data, plist))
+    assert rc == 0 and kv["launchd"] == "updated" and "읽을 수 없는" in err
+    rc, kv, err = run(capsys, *_launchd_args(root, data, plist))                 # 이제 제 것 — 말없이 그대로
+    assert rc == 0 and kv["launchd"] == "unchanged" and "[WARN]" not in err
+    assert hostctl.plist_launcher(plist.read_bytes()) == f"{root}/start-connector.sh"
+    assert hostctl.plist_launcher(b"junk") is None and hostctl.plist_launcher(plistlib.dumps({"Label": "x"})) == ""
+
+
+@posix_only
+@pytest.mark.parametrize("launcher", [None, b"#!/bin/sh\n# clewpath-launcher v1\n", b"#!/bin/sh\n"])
+def test_render_launchd_needs_the_idempotent_launcher(home, capsys, tmp_path, launcher):
+    """반복 실행 주체(launchd)는 멱등 런처(v2)를 확인한 뒤에만 둔다(S22) — 런처가 없거나 v2 가 아니면 등록 파일을 쓰지 않는다."""
+    root = tmp_path / "app"
+    root.mkdir()
+    if launcher is not None:
+        (root / "start-connector.sh").write_bytes(launcher)
+    plist = home / "Library" / "LaunchAgents" / "com.clewpath.host.plist"
+    rc, kv, err = run(capsys, *_launchd_args(root, home / ".claude" / "session_manager", plist))
+    assert rc == 1 and kv == {} and "[FAIL]" in err and "런처" in err
+    assert not plist.exists() and not plist.parent.exists()
+
+
+@pytest.mark.parametrize("bad", ["root", "data", "plist", "ctrl"])
+def test_render_launchd_refuses_odd_paths(home, capsys, tmp_path, bad):
+    """plist 에 박는 값은 맥 절대 경로(/…)만, 제어문자 없이 — 상대 경로는 launchd 가 어디서 부를지 모른다."""
+    args = {"root": "/Users/u/app", "data": "/Users/u/.claude/session_manager", "plist": str(tmp_path / "x.plist")}
+    key = "root" if bad == "ctrl" else bad
+    args[key] = {"root": "rel/app", "data": "rel/data", "plist": "rel.plist", "ctrl": "/Users/u/a\npp"}[bad]
+    rc, kv, err = run(capsys, "render-launchd", "--root", args["root"], "--data-dir", args["data"],
+                      "--plist", args["plist"])
+    assert rc == 1 and kv == {} and "[FAIL]" in err
+    assert not (tmp_path / "x.plist").exists()
+
+
+@posix_only
+@pytest.mark.parametrize("present,rc", [(True, 7), (False, 0)])
+def test_launchd_wrapper_runs_the_launcher_or_quietly_ends(tmp_path, present, rc):
+    """launchd 가 부르는 명령 — 런처가 있으면 foreground 로(exec), 설치 폴더를 손으로 지워 런처가 없으면 0 으로 끝난다(0 이
+    아니면 KeepAlive 가 30초마다 다시 부른다 — 그대로 /bin/sh <런처> 였으면 sh 의 127 로 쉼 없이 돈다)."""
+    launcher = tmp_path / "app x" / "start-connector.sh"
+    if present:
+        launcher.parent.mkdir()
+        launcher.write_text('printf "%s\\n" "$0" "$@" >"$(dirname "$0")/argv"\nexit 7\n', encoding="utf-8")
+    argv = hostctl.launchd_plist(str(launcher.parent), "/d", path_env=None, lang=None, umask=None)["ProgramArguments"]
+    r = subprocess.run(argv, capture_output=True, timeout=30)
+    assert r.returncode == rc, r.stderr.decode("utf-8", "replace")
+    if present:
+        assert (launcher.parent / "argv").read_text(encoding="utf-8").splitlines() == [str(launcher), "foreground"]

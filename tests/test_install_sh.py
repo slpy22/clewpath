@@ -15,6 +15,7 @@ import hashlib
 import io
 import json
 import os
+import plistlib
 import select
 import shutil
 import signal
@@ -41,7 +42,7 @@ if sys.platform != "win32":
     import pty
 
 import session_manager
-from session_manager import updater
+from session_manager import hostctl, updater
 from session_manager.osdep import _posix
 
 REAL_PKG = Path(session_manager.__file__).resolve().parent
@@ -137,6 +138,66 @@ elif args[:2] == ["pip", "install"]:
 else:
     print(f"error: unknown fake uv call {args}", file=sys.stderr)
     sys.exit(64)
+'''
+
+
+# 가짜 launchctl — 받은 인자를 탭으로 이어 한 줄씩 적는다(맨 앞 칸: 그때 maintenance.flag 가 있었나 F/-). 올림 상태는 파일 하나.
+# FAKE_LAUNCHCTL: ok(기본) | fail(bootstrap 늘 실패 — SSH 셸처럼 GUI 세션이 없다) | fail-once(첫 bootstrap 만 — 막 내린 이름이
+# 정리 중) | fail-bootout(올라 있어도 내리지 못한다). FAKE_LAUNCHD_RUN=1 이면 올릴 때 RunAtLoad 처럼 그 작업을 한 번 돌린다
+FAKE_LAUNCHCTL = r"""#!/bin/sh
+st="$FAKE_LAUNCHCTL_LOG.loaded"
+{ if [ -e "${FAKE_FLAG:-/nonexistent}" ]; then printf '%s\t' F; else printf '%s\t' -; fi
+  for a in "$@"; do printf '%s\t' "$a"; done; printf '\n'; } >>"$FAKE_LAUNCHCTL_LOG"
+case "$1" in
+  bootout)
+    [ "${FAKE_LAUNCHCTL:-ok}" = fail-bootout ] && { echo "Boot-out failed: 125: Domain does not support specified action" >&2; exit 125; }
+    [ -e "$st" ] || { echo "Boot-out failed: 3: No such process" >&2; exit 3; }
+    rm -f "$st"; exit 0 ;;
+  bootstrap)
+    case "${FAKE_LAUNCHCTL:-ok}" in
+      fail) echo "Bootstrap failed: 125: Domain does not support specified action" >&2; exit 125 ;;
+      fail-once) if [ ! -e "$st.once" ]; then true >"$st.once"; echo "Bootstrap failed: 5: Input/output error" >&2; exit 5; fi ;;
+    esac
+    [ -f "$3" ] || { echo "Bootstrap failed: 2: No such file or directory" >&2; exit 2; }
+    [ -e "$st" ] && { echo "Bootstrap failed: 37: Operation already in progress" >&2; exit 37; }
+    cp "$3" "$st" || exit 1
+    if [ -n "${FAKE_LAUNCHD_RUN:-}" ]; then fake-launchd "$3"; fi
+    exit 0 ;;
+  print) [ -e "$st" ] && exit 0; echo "Bad request. Could not find service" >&2; exit 113 ;;
+esac
+echo "fake launchctl: unknown $1" >&2
+exit 64
+"""
+
+# launchd 흉내 — plist 대로 작업 하나를 돌린다(ProgramArguments·WorkingDirectory·EnvironmentVariables·StandardOutPath·
+# StandardErrorPath·Umask, 새 세션). env 는 launchd 처럼 HOME·USER·LOGNAME·TMPDIR 와 launchd 기본 PATH 위에 EnvironmentVariables.
+# 끝나기를(60초까지) 기다려 종료코드를 $FAKE_LAUNCHD_RC 에 이어 적는다. --pid 파일을 주면 띄운 pid 를 거기 먼저 적는다
+FAKE_LAUNCHD = r'''#!@PYTHON@
+import os, plistlib, subprocess, sys
+with open(sys.argv[1], "rb") as f:
+    d = plistlib.load(f)
+env = {k: os.environ[k] for k in ("HOME", "USER", "LOGNAME", "TMPDIR") if k in os.environ}
+env["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
+env.update(d.get("EnvironmentVariables", {}))
+
+
+def pre():
+    if "Umask" in d:
+        os.umask(d["Umask"])
+
+
+with open(d["StandardOutPath"], "ab") as out, open(d["StandardErrorPath"], "ab") as err:
+    p = subprocess.Popen(d["ProgramArguments"], cwd=d.get("WorkingDirectory", "/"), env=env, stdin=subprocess.DEVNULL,
+                         stdout=out, stderr=err, preexec_fn=pre, start_new_session=True)
+if len(sys.argv) > 3 and sys.argv[2] == "--pid":
+    with open(sys.argv[3], "w") as f:
+        f.write(str(p.pid))
+try:
+    rc = str(p.wait(timeout=float(os.environ.get("FAKE_LAUNCHD_WAIT", "60"))))
+except subprocess.TimeoutExpired:
+    rc = "running"
+with open(os.environ["FAKE_LAUNCHD_RC"], "a") as f:
+    f.write(rc + "\n")
 '''
 
 
@@ -244,12 +305,18 @@ class _FakeCP:
 
 
 class Box:
-    """가짜 홈 하나 — 설치 위치·클로드 폴더·가짜 uv·시험 TMPDIR."""
+    """가짜 홈 하나 — 설치 위치·클로드 폴더·가짜 uv·시험 TMPDIR. mac=True 면 맥 흉내(uname Darwin·가짜 launchctl, 맥 기본 설치
+    위치 ~/Library/Application Support/ClewPath, 맥은 비ASCII 설치 경로를 거부하므로 홈은 ASCII — 공백·& 는 든다)."""
 
-    def __init__(self, tmp: Path, payload: Path):
+    def __init__(self, tmp: Path, payload: Path, mac: bool = False):
         self.base = base = tmp.resolve()
-        self.home = base / "home x" / "홈"
-        self.chome = self.home / ".local" / "share" / "clewpath"
+        self.mac = mac
+        if mac:
+            self.home = base / "mac & home" / "u"
+            self.chome = self.home / "Library" / "Application Support" / "ClewPath"
+        else:
+            self.home = base / "home x" / "홈"
+            self.chome = self.home / ".local" / "share" / "clewpath"
         self.root = self.chome / "app"
         self.claude = self.home / ".claude"
         self.projects = self.claude / "projects"
@@ -270,17 +337,40 @@ class Box:
             encoding="utf-8")
         self.uv.write_text(FAKE_UV.replace("@PYTHON@", sys.executable), encoding="utf-8")
         os.chmod(self.uv, 0o755)
+        # 가짜 launchctl(리눅스 흉내에도 둔다 — 리눅스는 부르지 않아야 한다)·launchd 실행기, 맥 흉내면 uname 도
+        self.tools = base / "fake tools"
+        self.tools.mkdir()
+        self.plist = self.home / "Library" / "LaunchAgents" / "com.clewpath.host.plist"
+        self.lctl_log = base / "launchctl.log"
+        self.launchd_rc = base / "launchd.rc"
+        fakes = {"launchctl": FAKE_LAUNCHCTL, "fake-launchd": FAKE_LAUNCHD.replace("@PYTHON@", sys.executable)}
+        if mac:
+            fakes["uname"] = '#!/bin/sh\ncase "${1:-}" in -m) echo arm64 ;; *) echo Darwin ;; esac\n'
+        for name, body in fakes.items():
+            (self.tools / name).write_text(body, encoding="utf-8")
+            os.chmod(self.tools / name, 0o755)
 
     # ---- 준비
     def env(self, **extra) -> dict:
         drop = ("SESSION_MANAGER_CLAUDE_HOME", "XDG_DATA_HOME", "_SM_TEST_HOME_SET", "VIRTUAL_ENV", "PYTHONPATH",
                 "CONDA_PREFIX")
         e = {k: v for k, v in os.environ.items()
-             if k not in drop and not k.startswith(("SM_", "UV_", "CLEWPATH_", "CLAUDE"))}
+             if k not in drop and not k.startswith(("SM_", "UV_", "CLEWPATH_", "CLAUDE", "FAKE_LAUNCH"))}
         e.update(HOME=str(self.home), TMPDIR=str(self.tmpdir), FAKE_UV_CTL=str(self.ctl), LANG="C.UTF-8",
-                 FAKE_MARKER=str(self.data / "update.inprogress"))
+                 FAKE_MARKER=str(self.data / "update.inprogress"), PATH=f"{self.tools}:{os.environ['PATH']}",
+                 FAKE_LAUNCHCTL_LOG=str(self.lctl_log), FAKE_LAUNCHD_RC=str(self.launchd_rc),
+                 FAKE_FLAG=str(self.data / "maintenance.flag"))
+        if "PATH" in extra:                              # 시험이 준 도구 폴더도 앞에 — 가짜 launchctl·uname 은 늘 쓴다
+            extra = {**extra, "PATH": f"{self.tools}:{extra['PATH']}"}
         e.update({k: str(v) for k, v in extra.items()})
         return e
+
+    def launchctl(self) -> list[list[str]]:
+        """가짜 launchctl 이 받은 호출 — [표식 여부(F=maintenance.flag 있음 / -), 인자…]."""
+        try:
+            return [ln.rstrip("\t").split("\t") for ln in self.lctl_log.read_text(encoding="utf-8").splitlines()]
+        except OSError:
+            return []
 
     def uv_conf(self, **conf) -> None:
         (self.ctl / "uv.json").write_text(json.dumps(conf), encoding="utf-8")
@@ -410,6 +500,16 @@ class Box:
 @pytest.fixture
 def box(tmp_path, payload):
     b = Box(tmp_path, payload)
+    try:
+        yield b
+    finally:
+        b.cleanup()
+
+
+@pytest.fixture
+def mac(tmp_path, payload):
+    """맥 흉내 — uname 이 Darwin, 가짜 launchctl, 맥 기본 설치 위치(공백·& 가 든 ASCII 홈)."""
+    b = Box(tmp_path, payload, mac=True)
     try:
         yield b
     finally:
@@ -1221,6 +1321,150 @@ def test_reinstall_clears_a_flag_left_by_an_interrupted_uninstall(box):
     assert r.returncode == 0 and "by=uninstall" in out, box.diag(r)
     assert not (box.data / "maintenance.flag").exists()
     box.host_pid()
+
+
+# ---------------------------------------------------------------- [mac] 자동 시작(launchd) — uname·launchctl 흉내
+
+def _umask() -> int:
+    m = os.umask(0o022)
+    os.umask(m)
+    return m
+
+
+def test_mac_install_registers_launchd_after_the_launcher(mac):
+    """[mac] 런처를 렌더한 뒤 ~/Library/LaunchAgents/com.clewpath.host.plist(0644, plistlib)를 쓰고 옛 것을 내린 뒤(bootout)
+    올린다(bootstrap gui/<uid>). 올리자마자 도는 foreground(RunAtLoad)는 설치 표식 때문에 아무것도 띄우지 않고 0 — Host 는
+    지금처럼 런처 start 가 띄운 하나. 기록에 autostart=launchd. 다시 설치하면 같은 내용은 그대로 두고 다시 내렸다 올린다."""
+    r = mac.fresh(env=mac.env(FAKE_LAUNCHD_RUN=1))
+    out = r.stdout.decode("utf-8")
+    assert "[OK]   자동 시작 등록 (launchd com.clewpath.host" in out, mac.diag(r)
+    assert "자동 시작은 아직 없습니다" not in out and "리눅스는 시험용" not in out
+    assert _mode(mac.plist) == 0o644 and _mode(mac.plist.parent) == 0o755
+    d = plistlib.loads(mac.plist.read_bytes())
+    launcher = mac.root / _posix.START_SCRIPT
+    assert d["ProgramArguments"] == ["/bin/sh", "-c", hostctl.LAUNCHD_WRAPPER, "clewpath-launchd", str(launcher)]
+    assert d["StandardOutPath"] == d["StandardErrorPath"] == str(mac.data / "launchd.log")
+    assert d["EnvironmentVariables"] == {"PATH": hostctl.launchd_path(mac.env()["PATH"]), "LANG": "C.UTF-8"}
+    assert d["Umask"] == _umask() and d["RunAtLoad"] is True and d["StartInterval"] == 300
+    uid = str(os.getuid())
+    assert [c[1:] for c in mac.launchctl()] == [["bootout", f"gui/{uid}/com.clewpath.host"],
+                                                ["bootstrap", f"gui/{uid}", str(mac.plist)]], mac.launchctl()
+    assert mac.text(mac.launchd_rc) == "0\n", "RunAtLoad 의 foreground 는 곧 0 으로 끝났다"
+    assert "foreground: 업데이트 진행 중 — 띄우지 않음" in mac.text(mac.data / "launcher.log")
+    pid = mac.host_pid()
+    assert mac.record()["autostart"] == "launchd"
+    assert "자동 시작: launchd(com.clewpath.host)" in out and "watch >/dev/null" not in out
+    r = mac.install()
+    out = r.stdout.decode("utf-8")
+    assert r.returncode == 0 and "자동 시작 등록 파일 그대로(내용이 같음)" in out, mac.diag(r)
+    assert [c[1] for c in mac.launchctl()] == ["bootout", "bootstrap", "bootout", "bootstrap"]
+    assert mac.record()["autostart"] == "launchd" and mac.host_pid() != pid
+
+
+@pytest.mark.parametrize("mode", ["fail", "fail-once"])
+def test_mac_bootstrap_failure_still_installs(mac, mode):
+    """올리지 못해도(SSH 셸 — 로그인한 화면 세션이 없다) 설치는 성공이다 — 등록 파일은 두어 다음 로그인 때 올라가고, 지금 켜는
+    법을 알린다. 막 내린 같은 이름이 정리 중이라 첫 bootstrap 만 실패하는 경우는 1초 뒤 한 번 더 해서 올린다."""
+    r = mac.fresh(env=mac.env(FAKE_LAUNCHCTL=mode))
+    out = r.stdout.decode("utf-8")
+    assert r.returncode == 0 and "=== 설치 완료 ===" in out, mac.diag(r)
+    assert [c[1] for c in mac.launchctl()] == ["bootout", "bootstrap", "bootstrap"], "실패하면 1초 뒤 한 번 더"
+    assert mac.plist.is_file()
+    mac.host_pid()
+    if mode == "fail-once":
+        assert "[OK]   자동 시작 등록 (launchd" in out and mac.record()["autostart"] == "launchd"
+        return
+    assert "[WARN] 자동 시작을 지금 켜지 못했습니다" in out and "125: Domain does not support" in out
+    assert f"launchctl bootstrap gui/{os.getuid()} '{mac.plist}'" in out and "SSH" in out
+    assert mac.record()["autostart"] == "launchd-pending"
+
+
+def test_mac_dry_run_and_no_autostart_register_nothing(mac):
+    """--dry-run 은 무엇을 할지만 보여 주고(파일·launchctl 없음), --no-autostart 는 등록하지 않는다 — 이미 있던 등록은 그대로
+    두고(기록도 이어 적는다) 알린다."""
+    mac.unpack()
+    before = _tree_hash(mac.home)
+    r = mac.install("--dry-run")
+    out = r.stdout.decode("utf-8")
+    assert r.returncode == 0 and "DryRun: 자동 시작(launchd) 등록 건너뜀" in out and str(mac.plist) in out, mac.diag(r)
+    assert "launchctl bootstrap gui/" in out and _tree_hash(mac.home) == before and mac.launchctl() == []
+    r = mac.install("--no-autostart")
+    out = r.stdout.decode("utf-8")
+    assert r.returncode == 0 and "[WARN] 자동 시작 등록 건너뜀(--no-autostart)" in out, mac.diag(r)
+    assert not mac.plist.exists() and mac.launchctl() == [] and "autostart" not in mac.record()
+    assert "watch >/dev/null" in out
+    r = mac.install()
+    assert r.returncode == 0 and mac.plist.is_file() and mac.record()["autostart"] == "launchd", mac.diag(r)
+    r = mac.install("--no-autostart")
+    out = r.stdout.decode("utf-8")
+    assert r.returncode == 0 and "이미 있던 자동 시작 등록은 그대로 둡니다" in out, mac.diag(r)
+    assert mac.plist.is_file() and mac.record()["autostart"] == "launchd"
+    assert [c[1] for c in mac.launchctl()] == ["bootout", "bootstrap"]
+
+
+def test_mac_replaces_another_installs_autostart_with_a_warning(mac):
+    """같은 사용자에 다른 설치본의 등록이 있으면(설치본은 사용자당 하나) 알리고 이 설치본으로 덮어쓴다."""
+    other = hostctl.launchd_plist("/Users/x/Other/app", "/Users/x/.claude/session_manager", path_env=None, lang=None,
+                                  umask=None)
+    mac.plist.parent.mkdir(parents=True)
+    mac.plist.write_bytes(plistlib.dumps(other))
+    r = mac.fresh()
+    out = r.stdout.decode("utf-8")
+    assert "다른 설치본의 자동 시작(/Users/x/Other/app/start-connector.sh)을 이 설치본으로 바꿉니다" in out, mac.diag(r)
+    assert plistlib.loads(mac.plist.read_bytes())["ProgramArguments"][-1] == str(mac.root / _posix.START_SCRIPT)
+
+
+def test_mac_launchd_job_becomes_the_host_and_ends_quietly(mac):
+    """등록 파일 그대로(launchd 흉내) 작업을 돌린다 — 꺼진 Host 는 foreground 가 띄워 작업의 pid 가 곧 Host 이고(env 는 등록
+    파일의 PATH·LANG, 출력은 host.log), 떠 있으면 5분마다의 확인은 곧 0, stop --hold 로 멈추면 KeepAlive 가 다시 불러도
+    foreground 가 곧 0, 설치 폴더를 손으로 지웠으면 0 — 어느 쪽도 30초마다 다시 부르는 0 아닌 종료가 아니다.
+    SIGTERM 정상 종료도 0 이다(server.main — uvicorn 이 다시 일으키는 SIGTERM 을 0 종료로 받는다. 기본 처리기면 -15 라
+    launchd 가 '죽음'으로 보고 stop 한 Host 를 30초 뒤 되살렸다)."""
+    mac.fresh()
+    r = mac.sh(mac.launcher, "stop")
+    assert r.returncode == 0 and mac.host_pids() == [], mac.diag(r)
+    pidf = mac.base / "job.pid"
+    job = mac.popen([str(mac.tools / "fake-launchd"), str(mac.plist), "--pid", str(pidf)],
+                    env=mac.env(FAKE_LAUNCHD_WAIT=600))
+    assert _wait(lambda: pidf.is_file() and pidf.read_text() and mac.host_pids() == [int(pidf.read_text())]
+                 and mac.get("/api/health") == {"status": "ok"}, 60), mac.diag()
+    pid = int(pidf.read_text())
+    d = plistlib.loads(mac.plist.read_bytes())
+    env = psutil.Process(pid).environ()
+    assert env["PATH"] == d["EnvironmentVariables"]["PATH"] and env["LANG"] == d["EnvironmentVariables"]["LANG"]
+    assert os.readlink(f"/proc/{pid}/fd/1") == str(mac.data / "host.log")
+    assert mac.text(mac.data / "host.log").count("=== launcher start") == 2
+    assert "Traceback" not in mac.text(mac.data / "launchd.log")
+    tick = subprocess.run([str(mac.tools / "fake-launchd"), str(mac.plist)], env=mac.env(), timeout=90)
+    assert tick.returncode == 0 and mac.text(mac.launchd_rc).splitlines() == ["0"] and mac.host_pids() == [pid]
+    r = mac.sh(mac.launcher, "stop", "--hold")                                # 계속 끄기 — SIGTERM + maintenance.flag
+    assert r.returncode == 0 and job.wait(timeout=60) == 0, mac.diag(r)
+    rcs = mac.text(mac.launchd_rc).splitlines()
+    assert rcs == ["0", "0"], rcs                                           # 정상 종료 = 0 — KeepAlive 가 되살리지 않는다
+    n = len(rcs)
+    shutil.move(str(mac.root), str(mac.base / "moved away"))                 # 설치 폴더를 손으로 지움
+    subprocess.run([str(mac.tools / "fake-launchd"), str(mac.plist)], env=mac.env(), timeout=90)
+    assert mac.text(mac.launchd_rc).splitlines()[n:] == ["0"] and mac.host_pids() == []
+
+
+def test_mac_install_then_uninstall_round_trip(mac):
+    r = mac.fresh()
+    pid = mac.host_pid()
+    r = mac.uninstall("--yes")
+    out = r.stdout.decode("utf-8")
+    assert r.returncode == 0 and "[OK]   자동 시작(launchd) 해제" in out and "=== 제거 완료 ===" in out, mac.diag(r)
+    assert not mac.plist.exists() and not mac.root.exists() and _wait(lambda: _gone(pid), 10)
+    assert [c[:2] for c in mac.launchctl()][-2:] == [["F", "bootout"], ["F", "print"]], "maintenance.flag 를 만든 뒤에 내린다"
+
+
+def test_linux_install_registers_no_launchd(box):
+    """[linux] 자동 시작은 안내만(systemd --user 는 결정 전) — 등록 파일·launchctl 이 없다."""
+    r = box.fresh()
+    out = r.stdout.decode("utf-8")
+    assert "자동 시작은 아직 없습니다" in out and box.launchctl() == [] and not (box.home / "Library").exists()
+    assert "autostart" not in box.record()
+    r = box.uninstall("--yes")
+    assert r.returncode == 0 and box.launchctl() == [], box.diag(r)
 
 
 # ---------------------------------------------------------------- 제거

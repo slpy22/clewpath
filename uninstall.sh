@@ -7,14 +7,16 @@
 #   sh uninstall.sh --purge-uv       ClewPath 가 받은 uv·파이썬 런타임($CLEWPATH_HOME/bin·python)도 지운다
 #   sh uninstall.sh --purge          둘 다
 #
-# 순서: 확인 → maintenance.flag(감시가 다시 띄우지 않게) → 감시(watch)·Host·터미널 관리 프로세스(브로커) 정지
-#   → 설치 폴더의 우리 항목 삭제(비면 폴더도) → (선택) uv·데이터 삭제 → 남은 것 보고
+# 순서: 확인 → maintenance.flag(감시·launchd 가 다시 띄우지 않게) → 감시(watch)·Host·터미널 관리 프로세스(브로커) 정지
+#   → [mac] 자동 시작(launchd) 내리기·등록 파일 삭제(이 설치본을 부를 때만) → 설치 폴더의 우리 항목 삭제(비면 폴더도)
+#   → (선택) uv·데이터 삭제 → 남은 것 보고
 #
 # 지키는 것:
 #  - 클로드의 파일은 건드리지 않는다: ~/.claude/projects 는 어떤 경우에도 그대로, settings.json 은 읽기만 한다 —
 #    ClewPath 가 등록한 훅이 남아 있으면 개수와 지우는 방법만 알려 준다(사장님 결정 2026-10-20)
 #  - 지우는 자리는 정해 둔 것뿐(설치 폴더 안의 우리 이름 — our_name, 그 기록의 uv·파이썬 폴더, 이름이 session_manager 인
-#    데이터 폴더). 설치 폴더에 남의 파일이 있으면 그것과 폴더는 남긴다(zip 을 ~/Downloads 에 풀고 설치했어도).
+#    데이터 폴더, [mac] 이 설치본의 런처를 부르는 launchd 등록 파일). 설치 폴더에 남의 파일이 있으면 그것과 폴더는
+#    남긴다(zip 을 ~/Downloads 에 풀고 설치했어도). 다른 설치본의 launchd 등록은 남긴다.
 #    개발 체크아웃(.git·ops)·/·홈·클로드 폴더(와 그 위 — 물리 경로로도)는 거부한다. 업데이트·설치가 진행 중이면
 #    멈춘다(러너가 끝에 Host 를 다시 띄운다)
 #  - 지우다 끊기면(Ctrl+C·창 닫힘) maintenance.flag 를 남기고, 같은 명령으로 다시 실행해 마저 지운다 — 판정·다시 실행에
@@ -31,6 +33,24 @@ case "${HOME:-}" in
 esac
 
 NL='
+'
+# [mac] 자동 시작(launchd) 이름 — hostctl.LAUNCHD_LABEL·install.sh 와 같아야 한다(test_posix_scripts.test_launchd_names_agree).
+# 등록 파일은 "$HOME/Library/LaunchAgents/$LAUNCHD_LABEL.plist"
+LAUNCHD_LABEL=com.clewpath.host
+
+# 등록 파일(plist)이 부르는 런처들(…/start-connector.sh, 한 줄에 하나) — plistlib 이 XML 이스케이프(&amp; 등)·형식을 푼다.
+# 설치본 venv 의 파이썬으로(-I, 표준 라이브러리만). 읽을 수 없는 파일이면 종료코드 3
+PLIST_PY='
+import plistlib, sys
+try:
+    with open(sys.argv[1], "rb") as f:
+        d = plistlib.load(f)
+except Exception:
+    sys.exit(3)
+args = d.get("ProgramArguments") if isinstance(d, dict) else None
+for a in args if isinstance(args, list) else []:
+    if isinstance(a, str) and a.endswith("/start-connector.sh") and "\n" not in a:
+        print(a)
 '
 
 # >>> clewpath-home (get.sh·install.sh·uninstall.sh·update_runner.sh 공통 — 바꾸면 넷 다)
@@ -375,6 +395,47 @@ purge_uv() {   # 10. ClewPath 가 받은 uv·파이썬 런타임 — 우리가 �
   say "         uv 캐시(~/.cache/uv, 맥 ~/Library/Caches/uv)는 다른 프로그램도 쓸 수 있어 남깁니다 — 필요하면 직접 지우세요."
 }
 
+launchd_ours() {   # 0 = [mac] 자동 시작 등록 파일이 있고 이 설치본의 런처를 부른다. LD_ARGS = 그 파일이 부르는 런처(알 수 있으면)
+  LD_ARGS=
+  exists "$LD_PLIST" || return 1
+  _lw="$ROOT/start-connector.sh"
+  if [ -x "$ROOT/.venv/bin/python" ] \
+     && LD_ARGS=$("$ROOT/.venv/bin/python" -I -c "$PLIST_PY" "$LD_PLIST" </dev/null 2>/dev/null); then
+    case "$NL$LD_ARGS$NL" in *"$NL$_lw$NL"*) return 0 ;; esac
+    return 1
+  fi
+  # venv 가 없거나(지우다 끊긴 뒤 다시 실행) 파이썬이 못 읽으면 글자로 — plistlib 이 쓴 <string>…</string> 한 줄과 견준다.
+  # 경로의 & < > 는 XML 이스케이프로 바꿔서(plistlib 이 쓰는 그대로)
+  LD_ARGS=
+  _le=$(printf '%s' "$_lw" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')
+  grep -q -F -e "<string>$_le</string>" "$LD_PLIST" 2>/dev/null
+}
+
+autostart_remove() {   # 8. [mac] 자동 시작(launchd) — 등록 파일이 이 설치본의 런처를 부를 때만 내리고(bootout) 지운다. 다른
+  # 설치본의 것은 둔다. maintenance.flag(4)를 만든 뒤라 내리는 사이 launchd 가 부르는 foreground 는 아무것도 띄우지 않는다.
+  # [linux] 자동 시작이 없다(systemd --user 는 결정 전)
+  [ "$OS" = mac ] || return 0
+  exists "$LD_PLIST" || return 0
+  if ! launchd_ours; then
+    warn "자동 시작(launchd) 등록은 이 설치본의 것이 아니라(또는 읽을 수 없어) 두었습니다: $LD_PLIST${LD_ARGS:+ ($(printf '%s' "$LD_ARGS" | tr '\n' ' '))}"
+    return 0
+  fi
+  _ld="gui/$(id -u)/$LAUNCHD_LABEL"
+  launchctl bootout "$_ld" </dev/null >/dev/null 2>&1        # 올라 있지 않으면 실패 — 상관없다
+  rm -f "$LD_PLIST" 2>/dev/null
+  if exists "$LD_PLIST"; then
+    warn "자동 시작 등록 파일을 지우지 못했습니다: $LD_PLIST"
+    return 0
+  fi
+  if launchctl print "$_ld" </dev/null >/dev/null 2>&1; then  # 내리지 못했다(SSH 셸 — 로그인한 화면 세션에 닿지 못함 등)
+    LD_LOADED=1
+    warn "자동 시작 등록 파일은 지웠지만 launchd 에는 아직 올라 있습니다 — 로그아웃하면 사라집니다"
+    say "         지금 내리려면 로그인한 화면의 터미널에서: launchctl bootout $_ld"
+    return 0
+  fi
+  ok "자동 시작(launchd) 해제: $LD_PLIST"
+}
+
 hooks_notice() {   # 13. 훅은 지우지 않는다(claude 파일 무접촉) — 남은 개수와 지우는 법만
   _cs="$(dirname "$DATA_DIR")/settings.json"   # 데이터 폴더의 부모 = Host 가 훅을 적은 클로드 폴더
   [ -f "$_cs" ] || return 0
@@ -405,6 +466,7 @@ confirm() {   # 3. /dev/tty 로 묻는다 — 표준 입력이 파이프여도 �
   say "      (ClewPath 가 놓는 이름만 — session_manager·pwa·.venv·start-connector.sh 등. 다른 파일은 지우지 않습니다)"
   _cf=$(foreign_names)
   [ -n "$_cf" ] && say "      ClewPath 것이 아닌 항목이 있어 그것과 폴더는 남깁니다: $_cf"
+  [ "$OS" = mac ] && launchd_ours && say "    - 자동 시작(launchd) 등록: $LD_PLIST"
   [ "$PURGE_UV" = 1 ] && say "    - uv·파이썬 런타임: $CLEWPATH_HOME/bin, $CLEWPATH_HOME/python"
   [ "$PURGE_DATA" = 1 ] && say "    - 데이터 폴더: $DATA_DIR"
   say "  열린 ClewPath 터미널(그 안의 claude)이 모두 끝납니다."
@@ -490,6 +552,10 @@ main() {
   UV_SKIP=0
   UV_OURS=0
   REC_UV=''
+  LD_ARGS=''
+  LD_LOADED=0
+  case "$(uname -s)" in Darwin) OS=mac ;; *) OS=linux ;; esac
+  LD_PLIST="$HOME/Library/LaunchAgents/$LAUNCHD_LABEL.plist"
   while [ $# -gt 0 ]; do
     case "$1" in
       --yes|-y) ASSUME_YES=1 ;;
@@ -587,11 +653,10 @@ main() {
     stop_broker                                  # 7.
   fi
   sweep
-  # 8. 자동 시작 해제 자리 — 다음 단계에서 [mac] launchctl bootout + plist 삭제, [linux] systemctl --user disable --now
-
-  # 9. 설치 폴더 — 여기부터 끊기면 표식을 남긴다(반쯤 지운 설치본으로 Host 가 뜨지 않게)
+  # 8~9. 여기부터 끊기면 표식을 남긴다(반쯤 지운 설치본으로 Host 가 뜨지 않게 — 다시 실행하면 마저 지운다)
   U_PHASE=removing
-  safe_target "$ROOT" && remove_root
+  autostart_remove                              # 8. [mac] launchd 내리기·등록 파일 삭제([linux] 자동 시작 없음)
+  safe_target "$ROOT" && remove_root            # 9. 설치 폴더
   after_root "설치 폴더의 ClewPath 항목을 다 지우지 못했습니다: $ROOT"
   [ "$PURGE_UV" = 1 ] && purge_uv               # 10.
   if [ "$PURGE_DATA" = 1 ]; then                # 11. 이름이 session_manager 이고 클로드 폴더 자체가 아닐 때만
@@ -626,6 +691,10 @@ main() {
   left_pid "$HP0" "Host" server
   left_pid "$BP0" "터미널 관리 프로세스(브로커)" ptyd
   ours_left && U_LEFT=1
+  if [ "$OS" = mac ]; then                      # 이 설치본의 자동 시작 등록이 남았거나 launchd 에 아직 올라 있으면
+    if launchd_ours; then warn "자동 시작 등록이 남아 있습니다: $LD_PLIST"; U_LEFT=1; fi
+    [ "$LD_LOADED" = 1 ] && U_LEFT=1
+  fi
   [ "$PURGE_DATA" = 1 ] && exists "$DATA_DIR" && U_LEFT=1
   if [ "$PURGE_UV" = 1 ]; then
     { [ "$UV_SKIP" = 1 ] || { [ "$UV_OURS" = 1 ] && exists "$CLEWPATH_HOME/bin/uv"; } || exists "$CLEWPATH_HOME/python"; } && U_LEFT=1

@@ -13,6 +13,9 @@
                    → creds=kept|created|failed connector= reason=
   wait-ready       기동 확인(runtime.json 의 실제 포트를 따라간다. 클로드 폴더가 다른 남의 Host 는 down)
                    → state=up|down port= mode= session_count= claude_exe_found=
+  render-launchd   [mac] 자동 시작 등록 파일(~/Library/LaunchAgents/com.clewpath.host.plist, plistlib·0644·원자적).
+                   멱등 런처(v2)가 있어야 쓴다(S22) — 올리기(launchctl)는 install.sh 가 한다 → launchd=created|updated|
+                   unchanged plist= label=
 
 왜 파이썬인가: 경로 규칙(config·appconfig)·설정 템플릿·자격증명 저장(cp_client)은 Host 코드가 원본이다 — 셸에 셋째 사본을
 만들지 않는다. 토큰은 인자로 받지 않는다(같은 PC 의 다른 사용자에게 ps 로 보인다) — env CLEWPATH_CLIENT_TOKEN·
@@ -35,6 +38,20 @@ from pathlib import Path
 
 _CTRL = re.compile(r"[\x00-\x1f\x7f]")
 _HOST_DEFAULT_PORT = 5100            # server.main 의 SM_PORT 기본값 — 설정 파일에 port 가 없을 때 Host 가 여는 포트
+
+# [mac] launchd — 이름·자리는 install.sh·uninstall.sh 의 LAUNCHD_LABEL·"$HOME/Library/LaunchAgents/$LAUNCHD_LABEL.plist" 와
+# 같아야 한다(test_posix_scripts.test_launchd_names_agree)
+LAUNCHD_LABEL = "com.clewpath.host"
+LAUNCHD_PLIST = f"Library/LaunchAgents/{LAUNCHD_LABEL}.plist"           # 홈 아래
+LAUNCHD_INTERVAL = 300               # 5분마다 foreground 한 번 — Windows 예약 작업의 5분 반복과 같은 주기
+LAUNCHD_THROTTLE = 30                # 다시 띄우기 사이 최소 간격(초)
+LAUNCHD_BASE_PATH = ("/usr/bin", "/bin", "/usr/sbin", "/sbin")        # launchd 기본 PATH — 빠져 있으면 뒤에 붙인다
+LAUNCHD_LANG = "en_US.UTF-8"         # 설치 때 LANG 이 UTF-8 이 아니면
+# launchd 가 부르는 명령 — 런처가 있으면 foreground 로 이어 가고(exec, pid 그대로), 없으면(설치 폴더를 손으로 지움) 0 으로 끝낸다.
+# 0 이 아닌 종료는 KeepAlive 가 30초마다 다시 부르는 신호라, 그대로 `/bin/sh <런처>` 를 부르면 런처가 없어진 뒤로 sh 가 127 로
+# 끝나며 plist 가 남아 있는 한(로그인할 때마다) 쉼 없이 돈다
+LAUNCHD_WRAPPER = '[ -f "$1" ] || exit 0; exec /bin/sh "$1" foreground'
+LAUNCHD_ARGV0 = "clewpath-launchd"   # sh -c 의 $0 — ps 에서 알아보게
 
 
 class HostctlError(Exception):
@@ -276,6 +293,135 @@ def cmd_render_launcher(a) -> int:
     return 0
 
 
+# ---------------------------------------------------------------- [mac] 자동 시작(launchd)
+
+def launchd_path(path_env: str | None) -> str:
+    """launchd 아래 Host 의 PATH — 설치 때 PATH 에서 절대 경로 조각만(상대·빈 조각·~·제어문자는 버린다), 겹치지 않게, 끝에
+    launchd 기본 PATH 를 빠진 것만 붙인다. launchd 의 기본 PATH(/usr/bin:/bin:/usr/sbin:/sbin)로는 ~/.local/bin·
+    /opt/homebrew/bin 의 claude 를 못 찾는다(재개·터미널이 claude 를 못 띄운다)."""
+    out: list[str] = []
+    for p in (path_env or "").split(":") + list(LAUNCHD_BASE_PATH):
+        p = (p.rstrip("/") or "/") if p.startswith("/") else ""
+        if p and not _CTRL.search(p) and p not in out:
+            out.append(p)
+    return ":".join(out)
+
+
+def launchd_lang(lang: str | None) -> str:
+    """설치 때 LANG 이 UTF-8 로캘이면 그대로, 아니면(없음·C·다른 인코딩·이상한 글자) en_US.UTF-8 — launchd 는 LANG 을 주지
+    않아, 그대로 두면 Host 안의 claude·셸이 C 로캘(한글이 깨진다)로 돈다."""
+    if lang and re.fullmatch(r"[A-Za-z0-9_.@-]{1,64}", lang) and re.search(r"\.utf-?8(?:@|$)", lang, re.I):
+        return lang
+    return LAUNCHD_LANG
+
+
+def launchd_plist(root: str, data_dir: str, *, path_env: str | None, lang: str | None, umask: int | None) -> dict:
+    """com.clewpath.host 의 내용(plistlib 가 쓸 dict) — 순수 함수(시험이 쉽게).
+
+    - 로그인할 때(RunAtLoad) 켜고, 5분마다(StartInterval) foreground 를 한 번 돌려 살핀다 — 러너가 업데이트 뒤 launchd 밖에서
+      띄운 Host 가 죽어도, 사람이 stop(--hold 없이)한 Host 도 5분 안에 다시 뜬다(Windows 예약 작업과 같다). 계속 끄려면 stop --hold.
+      Host 가 떠 있으면 foreground 는 곧 0 으로 끝난다(launchd 는 같은 작업을 둘 띄우지 않는다).
+    - KeepAlive{SuccessfulExit: false}: 0 이 아닌 종료·신호로 죽었을 때만 다시(ThrottleInterval 30초). foreground 는 띄우지 않을
+      때 늘 0 이고(유지보수·업데이트 중·이미 떠 있음·막힘), 업데이트로 내려가는 Host 는 0 으로 끝난다. (SIGTERM 정상 종료는 지금
+      uvicorn 이 그 신호를 다시 일으켜 신호 종료로 보여 30초 뒤 다시 불린다 — stop --hold 면 foreground 가 곧 0 이라 그대로 꺼져 있다)
+    - AbandonProcessGroup: Host 가 끝날 때 launchd 가 그 프로세스 그룹을 죽이지 않게 — 터미널 관리 프로세스(브로커)·업데이트
+      러너는 Host 재기동·업데이트에도 살아야 한다. ProcessType Interactive: Background 의 QoS 제한이 claude 자식에 물려간다.
+    - env 는 PATH·LANG 만(HOME·TMPDIR·USER 는 launchd 가 준다 — 사용자 환경을 바꾸지 않는다, S38). umask 도 설치 때 셸의 것을
+      그대로(launchd 기본값과 다르면 Host 안의 claude 가 만드는 파일 권한이 달라진다).
+    - WorkingDirectory 는 두지 않는다: 런처는 제 경로($0)로 설치 루트를 찾고 Host 를 띄우기 직전에 그리로 옮겨 간다. 두면 설치
+      폴더를 손으로 지웠을 때 launchd 가 작업을 띄우지조차 못할 수 있어(chdir 실패 — 맥 확인 거리) 런처 없음 → 0 으로 끝내는
+      감싸개가 소용없어진다.
+    - 출력: foreground 셸 단계의 말만 launchd.log 로 — exec 한 Host 는 런처가 host.log·host.err.log 로 돌린다(start 와 같다).
+    """
+    root = root.rstrip("/") or "/"
+    data_dir = data_dir.rstrip("/") or "/"
+    doc = {
+        "Label": LAUNCHD_LABEL,
+        "ProgramArguments": ["/bin/sh", "-c", LAUNCHD_WRAPPER, LAUNCHD_ARGV0, f"{root}/start-connector.sh"],
+        "RunAtLoad": True,
+        "KeepAlive": {"SuccessfulExit": False},
+        "StartInterval": LAUNCHD_INTERVAL,
+        "ThrottleInterval": LAUNCHD_THROTTLE,
+        "AbandonProcessGroup": True,
+        "ProcessType": "Interactive",
+        "EnvironmentVariables": {"PATH": launchd_path(path_env), "LANG": launchd_lang(lang)},
+        "StandardOutPath": f"{data_dir}/launchd.log",
+        "StandardErrorPath": f"{data_dir}/launchd.log",
+    }
+    if isinstance(umask, int) and not isinstance(umask, bool) and 0 <= umask <= 0o777:
+        doc["Umask"] = umask
+    return doc
+
+
+def plist_launcher(raw: bytes) -> str | None:
+    """기존 plist 가 부르는 런처(…/start-connector.sh) — 없으면 "", 읽을 수 없는 파일이면 None."""
+    import plistlib
+    try:
+        d = plistlib.loads(raw)
+    except Exception:  # noqa: BLE001 — 깨진 XML·다른 형식
+        return None
+    args = d.get("ProgramArguments") if isinstance(d, dict) else None
+    if not isinstance(args, list):
+        return ""
+    return next((a for a in args if isinstance(a, str) and a.endswith("/start-connector.sh")), "")
+
+
+def _current_umask() -> int:
+    m = os.umask(0o022)
+    os.umask(m)
+    return m
+
+
+def cmd_render_launchd(a) -> int:
+    import plistlib
+    from session_manager.osdep import _posix
+    for name, v in (("--root", a.root), ("--data-dir", a.data_dir)):
+        if _CTRL.search(v) or not v.startswith("/"):                # plist 에 박는 값 — 맥 절대 경로만
+            raise HostctlError(f"{name} 는 절대 경로여야 하고 제어문자가 없어야 합니다: {v!r}")
+    plist = Path(a.plist)
+    if _CTRL.search(a.plist) or not plist.is_absolute():
+        raise HostctlError(f"--plist 는 절대 경로여야 합니다: {a.plist!r}")
+    root = a.root.rstrip("/") or "/"
+    launcher = f"{root}/{_posix.START_SCRIPT}"
+    try:                                                            # 반복 실행 주체는 멱등 런처를 확인한 뒤에만 둔다(S22)
+        head = Path(launcher).read_bytes()[:1024].decode("utf-8", "replace").split("\n")
+    except OSError as e:
+        raise HostctlError(f"런처가 없어 자동 시작을 등록하지 않습니다(먼저 render-launcher): {launcher}") from e
+    if len(head) < 2 or "clewpath-launcher v2 (posix)" not in head[1]:
+        raise HostctlError(f"멱등 런처(clewpath-launcher v2)가 아니라 자동 시작을 등록하지 않습니다: {launcher}")
+    doc = launchd_plist(root, a.data_dir, path_env=os.environ.get("PATH"), lang=os.environ.get("LANG"),
+                        umask=_current_umask() if os.name == "posix" else None)
+    new = plistlib.dumps(doc, fmt=plistlib.FMT_XML, sort_keys=True)
+    old = None
+    if plist.is_file() or plist.is_symlink():
+        try:
+            old = plist.read_bytes()
+        except OSError:
+            old = b""
+        prev = plist_launcher(old)
+        if prev is None:
+            warn(f"읽을 수 없는 기존 자동 시작 등록 파일을 새로 씁니다: {plist}")
+        elif prev and prev != launcher:
+            warn(f"다른 설치본의 자동 시작({prev})을 이 설치본으로 바꿉니다 — 설치본은 사용자당 하나입니다")
+    if old == new:
+        res = "unchanged"
+    else:
+        d = plist.parent
+        if not d.is_dir():                                          # ~/Library/LaunchAgents — 없으면 0755 로
+            d.mkdir(mode=0o755, parents=True, exist_ok=True)
+            with contextlib.suppress(OSError):
+                os.chmod(d, 0o755)
+        try:                                                        # 0644 — launchd 는 남이 쓸 수 있는 plist 를 거부한다
+            _atomic_write(plist, new, 0o644)
+        except OSError as e:
+            raise HostctlError(f"자동 시작 등록 파일을 쓸 수 없습니다: {plist} ({e})") from e
+        res = "created" if old is None else "updated"
+    what = {"created": "생성", "updated": "갱신", "unchanged": "그대로(내용이 같음)"}[res]
+    ok(f"자동 시작 등록 파일 {what}: {plist}")
+    _out(launchd=res, plist=plist, label=LAUNCHD_LABEL)
+    return 0
+
+
 # ---------------------------------------------------------------- 자격증명
 
 def cmd_provision(a) -> int:
@@ -470,11 +616,16 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--port", type=_port, required=True)
     s.add_argument("--tries", type=_tries, default=20)
     s.add_argument("--data-dir")
+    s = sub.add_parser("render-launchd", help="[mac] 자동 시작 등록 파일(plist). PATH·LANG 은 지금 env 에서")
+    s.add_argument("--root", required=True)
+    s.add_argument("--data-dir", required=True)
+    s.add_argument("--plist", required=True)
     return p
 
 
 _COMMANDS = {"paths": cmd_paths, "secure-data-dir": cmd_secure_data_dir, "write-config": cmd_write_config,
-             "render-launcher": cmd_render_launcher, "provision": cmd_provision, "wait-ready": cmd_wait_ready}
+             "render-launcher": cmd_render_launcher, "provision": cmd_provision, "wait-ready": cmd_wait_ready,
+             "render-launchd": cmd_render_launchd}
 
 
 def main(argv: list[str] | None = None) -> int:

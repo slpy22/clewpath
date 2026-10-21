@@ -858,18 +858,104 @@ def test_zombie_marker_owner_is_dead_on_every_probe_path(variant):
     assert not marker.exists() and "stale update marker 제거" in i.llog()
 
 
-# ---------------------------------------------------------------- foreground(다음 단계 launchd·systemd)
+# ---------------------------------------------------------------- foreground([mac] launchd 가 부른다)
+
+def _foreground(inst, sup: Path | None = None, **kw) -> subprocess.Popen:
+    """감독자(launchd)처럼 foreground 를 띄운다 — 표준 출력·오류는 sup(launchd 의 StandardOutPath 흉내), 표준 입력은 파이프."""
+    if sup is None:
+        return inst.popen(["/bin/sh", str(inst.launcher), "foreground"], env=inst.env(), cwd=str(inst.home), **kw)
+    with open(sup, "ab") as f:
+        return inst.popen(["/bin/sh", str(inst.launcher), "foreground"], env=inst.env(), cwd=str(inst.home),
+                          stdin=subprocess.PIPE, stdout=f, stderr=f, **kw)
+
 
 def test_foreground_becomes_the_host(inst):
-    p = inst.popen(["/bin/sh", str(inst.launcher), "foreground"], env=inst.env(), cwd=str(inst.home))
+    """foreground 는 exec 로 이 프로세스가 곧 Host(pid 그대로 — launchd 가 지켜본다). 표준 입출력은 start 와 같게 바꿔 단다:
+    stdin /dev/null, stdout host.log·stderr host.err.log 이어 쓰기 — launchd.log 로 새지 않고, 사고 꼬리(liveness.log_tail)·
+    사람의 로그 확인이 start 로 뜬 Host 와 같다. 런처 구분줄(=== launcher start)도 start 와 같은 규칙으로 남긴다."""
+    sup = inst.home / "launchd.log"
+    p = _foreground(inst, sup)
     assert _wait(lambda: inst.runtime().get("pid") == p.pid and inst.health(), 20), inst.diag()
     assert psutil.Process(p.pid).cmdline()[:3] == [str(inst.py), "-m", "session_manager.server"], "exec — pid 그대로"
     assert inst.fake(p.pid)["env"]["CLEWPATH_CONFIG"] == str(inst.conf)
+    if Path(f"/proc/{p.pid}/fd").is_dir():
+        fds = {n: os.readlink(f"/proc/{p.pid}/fd/{n}") for n in (0, 1, 2)}
+        assert fds == {0: "/dev/null", 1: str(inst.data / "host.log"), 2: str(inst.data / "host.err.log")}, fds
+    log = inst.text("host.log")
+    assert log.startswith("=== launcher start ") and log.count("=== launcher start") == 1
+    assert f"fake host {p.pid} up" in log and f"fake host {p.pid} err" in inst.text("host.err.log")
+    assert b"fake host" not in sup.read_bytes(), "Host 의 출력은 감독자의 로그(launchd.log)로 가지 않는다"
+    assert f"foreground: runtime.json 없음 → 기동(exec, pid {p.pid})" in inst.llog()
+    assert not (inst.data / "launcher.lock").exists(), "잠금은 exec 직전(제 pid 를 적은 뒤)에 놓는다"
+    assert json.loads(inst.text("launcher.spawn"))["pid"] == p.pid
+    r = inst.run("foreground", timeout=30)                                 # 5분마다의 확인 — 떠 있으면 조용히 0
+    assert r.returncode == 0 and inst.host_pids() == [p.pid] and inst.llog().count("foreground:") == 1, inst.diag(r)
     p.send_signal(signal.SIGTERM)
-    assert p.wait(timeout=10) == 0
+    assert p.wait(timeout=10) == 0, "정상 종료는 0 — KeepAlive{SuccessfulExit:false} 가 되살리지 않는다"
     (inst.data / "maintenance.flag").write_text("by=test\n", encoding="utf-8")
     r = inst.run("foreground", timeout=30)
     assert r.returncode == 0 and inst.host_pids() == [], "보류 중이면 띄우지 않고 0(감독자가 다시 부르지 않게)"
+
+
+def test_foreground_refusals_end_with_zero(inst):
+    """foreground 가 띄우지 않을 때는 늘 0 — 0 이 아닌 종료는 launchd KeepAlive 에게 'Host 가 죽었다, 곧 다시'라서 곧 풀리지 않는
+    사유(남의 서버·venv 없음·잔재 복구 막힘·다른 런처)로 30초마다 쉼 없이 돈다. 사유는 launcher.log(와 표준오류)에 남고 다시
+    보는 것은 5분 주기(StartInterval)다. 사유가 풀리면 띄운다."""
+    srv = _foreign_server(inst.port)                                        # 남의 서버가 포트를 차지
+    try:
+        r = inst.run("foreground", timeout=30)
+        assert r.returncode == 0 and "다른 프로그램" in r.stderr.decode(), inst.diag(r)
+        assert inst.host_pids() == [] and f"fail: 포트 {inst.port}" in inst.llog()
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    lock = inst.data / "launcher.lock"                                      # 다른 런처가 기동 중(산 잠금)
+    lock.mkdir()
+    holder = inst.holder(_posix.START_SCRIPT)
+    (lock / "pid").write_text(f"{holder.pid}\n", encoding="utf-8")
+    r = inst.run("foreground", timeout=30)
+    assert r.returncode == 0 and inst.host_pids() == [] and "foreground: 다른 런처가 기동 중" in inst.llog(), inst.diag(r)
+    assert (lock / "pid").read_text(encoding="utf-8") == f"{holder.pid}\n", "남의 잠금은 그대로"
+    shutil.rmtree(lock)
+    swap = inst.root / ".clewpath-swap.5"                                   # 잔재가 있는데 되돌릴 러너 사본이 없다
+    swap.mkdir()
+    r = inst.run("foreground", timeout=30)
+    assert r.returncode == 0 and "blocked:" in inst.llog() and inst.host_pids() == [], inst.diag(r)
+    swap.rmdir()
+    shutil.move(str(inst.root / ".venv"), str(inst.root / ".venv-away"))    # venv 가 없다
+    r = inst.run("foreground", timeout=30)
+    assert r.returncode == 0 and "fail: venv 없음" in inst.llog() and "--reinstall" in r.stderr.decode(), inst.diag(r)
+    shutil.move(str(inst.root / ".venv-away"), str(inst.root / ".venv"))
+    p = _foreground(inst)                                                   # 사유가 풀리면 띄운다
+    assert _wait(lambda: inst.runtime().get("pid") == p.pid and inst.health(), 20), inst.diag()
+
+
+def test_foreground_rotates_the_log_like_start(inst, monkeypatch):
+    """foreground 도 띄우기 직전에 5MB 회전·구분줄 — launchd 아래 Host 는 start 를 거치지 않으므로, 아니면 host.log 가 끝없이
+    자라고 새 Host 가 읽는 사고 꼬리(구분줄 앞)가 비었다. 회전이 구분줄 바로 앞이면 꼬리는 host.log.1 에 있다."""
+    from session_manager import config, liveness
+    with (inst.data / "host.log").open("ab") as f:
+        f.write(b"x" * 5_300_000 + b"\nTraceback ... (launchd Host last words)\n")
+    p = _foreground(inst)
+    assert _wait(lambda: inst.runtime().get("pid") == p.pid and inst.health(), 20), inst.diag()
+    assert (inst.data / "host.log.1").is_file() and inst.text("host.log").startswith("=== launcher start")
+    monkeypatch.setattr(config, "data_dir", lambda: inst.data)
+    assert liveness.log_tail(10)[-1] == "Traceback ... (launchd Host last words)"
+
+
+def test_foreground_and_start_together_spawn_once(inst):
+    """launchd 의 foreground(로그인·5분·KeepAlive)와 사람·러너의 start 가 겹쳐도 한 번만 띄운다 — foreground 도 launcher.lock 을
+    쥐고 잠금 안에서 다시 판정하며, 잠금은 제 pid 를 launcher.spawn 에 적은 뒤에야 놓는다."""
+    inst.conf_write(delay=1)
+    procs = [_foreground(inst) if i % 2 == 0 else
+             inst.popen(["/bin/sh", str(inst.launcher), "start"], env=inst.env(), cwd=str(inst.home))
+             for i in range(6)]
+    assert _wait(inst.health, 30), inst.diag()
+    time.sleep(1.5)
+    assert len(list(inst.data.glob("fake-*.json"))) == 1, inst.diag()
+    assert len(inst.host_pids()) == 1
+    alive = [p for p in procs if p.poll() is None]
+    assert len(alive) <= 1, "Host 가 된 foreground 하나(또는 start 가 띄웠으면 없음) 말고는 다 끝났다"
 
 
 # ---------------------------------------------------------------- 2회차 검토(L1~L6·C1·C4)
@@ -1095,8 +1181,8 @@ def test_data_dir_mismatch_is_refused(inst, how):
     assert r.returncode == 1 and "데이터 폴더" in r.stderr.decode(), inst.diag(r)
     assert inst.host_pids() == [] and not list(inst.data.glob("fake-*.json"))
     assert f"{other}/session_manager" in inst.llog()
-    r = inst.run("foreground", env=env, timeout=30)
-    assert r.returncode == 1 and inst.host_pids() == [], inst.diag(r)
+    r = inst.run("foreground", env=env, timeout=30)          # 감독자용은 0(KeepAlive 가 30초마다 다시 부르지 않게) — 알리기는 같다
+    assert r.returncode == 0 and "데이터 폴더" in r.stderr.decode() and inst.host_pids() == [], inst.diag(r)
 
 
 def test_data_dir_named_differently_but_same_is_fine(inst):

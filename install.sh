@@ -6,7 +6,8 @@
 #   (get.sh) sh <임시>/stage/install.sh --from-stage <임시>/stage --dir <설치 루트> …   받은 파일을 옮긴 뒤 이어 간다
 #
 # 하는 일: [1/6] uv(고정 버전·SHA-256) → [2/6] 파이썬([linux] 시스템 우선, [mac] uv 관리 런타임만) → [3/6] 클로드 폴더
-#   → [4/6] 전용 .venv·의존성(uv.lock 고정) → [5/6] 설정·권한·런처·설치 기록·자격증명 → [6/6] (재)기동·확인
+#   → [4/6] 전용 .venv·의존성(uv.lock 고정) → [5/6] 설정·권한·런처·설치 기록·자격증명
+#   → [6/6] 자동 시작([mac] launchd — 로그인할 때·5분마다·죽으면 다시. [linux] 안내만)·(재)기동·확인
 #
 # 옵션: --cp-url URL --relay-url URL --app-url URL --port N --python 3.11 --uv-version X.Y.Z
 #       --system-uv --reinstall --no-autostart --dry-run
@@ -34,6 +35,9 @@ esac
 
 # uv 고정 버전 — install.ps1 의 $UvDefault 와 같아야 한다(test_posix_scripts.test_uv_pins_match_windows_installer)
 UV_DEFAULT="0.12.1"
+# [mac] 자동 시작(launchd) 이름 — hostctl.LAUNCHD_LABEL·uninstall.sh 와 같아야 한다(test_posix_scripts.test_launchd_names_agree).
+# 등록 파일은 "$HOME/Library/LaunchAgents/$LAUNCHD_LABEL.plist"
+LAUNCHD_LABEL=com.clewpath.host
 NL='
 '
 CLEWPATH_HOME_GIVEN=${CLEWPATH_HOME:-}           # 사용자가 준 값인가 — 아래 공통 블록이 기본값을 채운다(uv_ours 가 본다)
@@ -988,7 +992,8 @@ step_paths() {   # I7 — 경로는 파이썬 규칙(Host 가 볼 데이터 폴�
 
 # ---------------------------------------------------------------- [5/6] 설정·권한·런처·기록·자격증명
 
-write_record() {   # 설치 기록 — 러너(uv=·python_pref=·python_install_dir=)와 제거 스크립트가 sed 로 읽는다(소스로 실행하지 않는다)
+write_record() {   # 설치 기록 — 러너(uv=·python_pref=·python_install_dir=)와 제거 스크립트가 sed 로 읽는다(소스로 실행하지 않는다).
+  # autostart= 는 [mac] 자동 시작: launchd(올림) | launchd-pending(등록 파일만 — 다음 로그인에 올라간다). [$1=quiet 면 [OK] 없이]
   _rf="$ROOT/.clewpath-install"
   _rt="$ROOT/.clewpath-install.$$.tmp"
   if { printf '%s\n' "# clewpath-install v1 — install.sh 가 쓴다. 손대지 마세요"
@@ -1001,8 +1006,9 @@ write_record() {   # 설치 기록 — 러너(uv=·python_pref=·python_install_
        printf 'conf_file=%s\n' "$CONF_FILE"
        printf 'installed_version=%s\n' "$(pyproject_version "$ROOT/pyproject.toml")"
        printf 'installed_at=%s\n' "$(date +%s)"
+       if [ -n "$AUTOSTART" ]; then printf 'autostart=%s\n' "$AUTOSTART"; fi
      } >"$_rt" 2>/dev/null && mv -f "$_rt" "$_rf" 2>/dev/null; then
-    ok "설치 기록: $_rf"
+    [ "${1:-}" = quiet ] || ok "설치 기록: $_rf"
     return 0
   fi
   rm -f "$_rt" 2>/dev/null
@@ -1052,9 +1058,56 @@ dry_healthz() {   # DryRun 일 때 컨트롤플레인 도달만 본다. 루프�
 
 # ---------------------------------------------------------------- [6/6] 기동
 
-autostart_install() {   # 자리만 — 다음 단계에서 [mac] launchd, [linux] systemd --user 를 여기에(그때도 런처 렌더 성공 뒤에만)
+autostart_install() {   # 자동 시작 — [mac] launchd(아래). [linux] 안내만(systemd --user 는 정식 지원 여부와 함께 결정 전).
+  # 런처 렌더([5/6])가 성공한 뒤에만 온다 — 반복 실행 주체는 멱등 런처를 확인한 뒤에만 둔다(S22)
+  if [ "$OS" = mac ]; then launchd_install; return 0; fi
   [ "$NO_AUTOSTART" = 1 ] && return 0
   warn "자동 시작은 아직 없습니다 — 로그인할 때마다 아래 '시작' 명령으로 켜거나 임시 감시(watch)를 쓰세요"
+}
+
+launchd_bootstrap() {   # $1=도메인 $2=plist — 올린다. 막 내린(bootout) 같은 이름이 아직 정리 중이면 실패할 수 있어 1초 뒤 한 번 더.
+  # 실패 이유(launchctl 의 말)는 LB_ERR 에
+  [ "$OS" = mac ] || return 1
+  LB_ERR=$(launchctl bootstrap "$1" "$2" </dev/null 2>&1) && return 0
+  sleep 1
+  LB_ERR=$(launchctl bootstrap "$1" "$2" </dev/null 2>&1) && return 0
+  LB_ERR=$(printf '%s' "$LB_ERR" | tr '\n' ' ' | cut -c 1-200)
+  return 1
+}
+
+launchd_install() {   # [mac] ~/Library/LaunchAgents/com.clewpath.host.plist — 로그인할 때 켜고, 5분마다 살피고, Host 가 죽으면
+  # 다시 띄운다(launchd 가 런처의 foreground 를 부른다). 등록 파일은 hostctl 이 plistlib 로 쓰고(이스케이프), 옛 것을 내린 뒤
+  # (bootout — 없으면 실패, 상관없다) 새로 올린다(bootstrap). 올리지 못해도(SSH 셸 등 — 로그인한 화면 세션이 없다) 설치는
+  # 성공이다: 등록 파일은 다음 로그인 때 올라간다. 지금 이 설치가 쥔 표식(update.inprogress) 때문에 올리자마자 도는
+  # foreground(RunAtLoad)는 아무것도 띄우지 않고 끝난다 — Host 는 아래 순서대로 런처 start 가 띄운다
+  [ "$OS" = mac ] || return 0
+  _lp="$HOME/Library/LaunchAgents/$LAUNCHD_LABEL.plist"
+  _ld="gui/$(id -u)"
+  if [ "$NO_AUTOSTART" = 1 ]; then
+    warn "자동 시작 등록 건너뜀(--no-autostart)"
+    exists "$_lp" && say "         이미 있던 자동 시작 등록은 그대로 둡니다: $_lp"
+    return 0
+  fi
+  if [ "$DRY_RUN" = 1 ]; then
+    warn "DryRun: 자동 시작(launchd) 등록 건너뜀 — 할 일: $_lp 작성, launchctl bootout $_ld/$LAUNCHD_LABEL, launchctl bootstrap $_ld $(shq "$_lp")"
+    return 0
+  fi
+  if ! hostctl "$I_TMP/launchd.out" render-launchd --root "$ROOT" --data-dir "$DATA_DIR" --plist "$_lp"; then
+    warn "자동 시작을 등록하지 못했습니다 — 로그인할 때마다 아래 '시작' 명령으로 켜세요"
+    return 0
+  fi
+  launchctl bootout "$_ld/$LAUNCHD_LABEL" </dev/null >/dev/null 2>&1
+  if launchd_bootstrap "$_ld" "$_lp"; then
+    ok "자동 시작 등록 (launchd $LAUNCHD_LABEL — 로그인할 때 켜고 5분마다 확인, 꺼지면 다시 띄움)"
+    AUTOSTART=launchd
+  else
+    warn "자동 시작을 지금 켜지 못했습니다(launchctl bootstrap: ${LB_ERR:-실패}) — 등록 파일은 두었습니다(다음 로그인 때 켜집니다): $_lp"
+    say "         지금 켜려면 로그인한 화면의 터미널에서 다시 sh $(shq "$ROOT/install.sh") 하거나 다음을 실행하세요:"
+    say "           launchctl bootstrap $_ld $(shq "$_lp")"
+    say "         (SSH 로 접속한 셸에서는 켤 수 없습니다. 시스템 설정 > 일반 > 로그인 항목에서 꺼 두었는지도 확인하세요)"
+    AUTOSTART=launchd-pending
+  fi
+  write_record quiet
 }
 
 step_start() {
@@ -1101,7 +1154,13 @@ guide() {
   say "       시작 : sh $(shq "$_lc")"
   say "       상태 : sh $(shq "$_lc") status"
   say "       멈춤 : sh $(shq "$_lc") stop --hold   (다시 켜기: sh $(shq "$_lc") resume)"
-  say "       감시 : nohup sh $(shq "$_lc") watch >/dev/null 2>&1 &   (임시 — 자동 시작이 생기기 전까지)"
+  case "$AUTOSTART" in
+    launchd|launchd-pending)
+      say "       자동 시작: launchd($LAUNCHD_LABEL) — 로그인할 때 켜고 5분마다 확인합니다"
+      say "              (--hold 없는 stop 은 곧 다시 켜집니다. 계속 끄려면 stop --hold)" ;;
+    *)
+      say "       감시 : nohup sh $(shq "$_lc") watch >/dev/null 2>&1 &   (임시 — 자동 시작이 생기기 전까지)" ;;
+  esac
   say "       제거 : sh $(shq "$ROOT/uninstall.sh")"
   say ""
   say "  설정 파일: $CONF_FILE"
@@ -1237,6 +1296,8 @@ main() {
   HC_CONF=''
   DEV_TREE=0
   VENV_MARK=.clewpath-venv
+  AUTOSTART=''
+  LB_ERR=''
   parse_args "$@"
   ROOT=$(CDPATH='' cd "$(dirname "$0")" && phys_pwd) || die "설치 폴더를 찾지 못했습니다: $0"
   if [ -n "$FROM_STAGE" ]; then                 # get.sh 의 임시 stage 를 먼저 알아 둔다 — 서막의 어떤 거절에도 on_exit 가 치운다
@@ -1301,6 +1362,11 @@ main() {
   fi
   HC_CONF=${CLEWPATH_CONFIG:-$LP_CF}
   CONF_FILE=${HC_CONF:-$DATA_DIR/clewpath.toml}
+  # [mac] 있던 자동 시작 등록은 기록에 이어 적는다(--no-autostart 로 다시 설치해도 남겨 두는 등록을 기록에서 지우지 않게)
+  if [ "$OS" = mac ] && exists "$HOME/Library/LaunchAgents/$LAUNCHD_LABEL.plist"; then
+    AUTOSTART=$(kv autostart "$ROOT/.clewpath-install")
+    case "$AUTOSTART" in launchd|launchd-pending) ;; *) AUTOSTART='' ;; esac
+  fi
   # 설치 폴더 — 데이터 폴더(나 그 위)도 아니고, 첫 설치면 우리 항목만, .venv 는 우리가 만든 것만
   root_guard "$ROOT"
   check_root_items

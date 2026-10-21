@@ -2230,6 +2230,12 @@ def main():
     # 스스로 내려가려면 인스턴스를 붙잡고 있어야 한다.
     global _SERVER
     _SERVER = uvicorn.Server(uvicorn.Config(app, host=host, port=port))
+    if os.name != "nt":
+        # uvicorn 은 정상 종료를 마친 뒤 원래 처리기로 되돌리고 받은 SIGTERM 을 다시 일으킨다 — 기본 처리기면 신호로 죽어(-15)
+        # launchd KeepAlive{SuccessfulExit=false} 가 '죽음'으로 보고 stop 한 Host 를 30초 뒤 되살렸다. 정상 종료는 0 으로.
+        import signal
+        import sys
+        signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     _SERVER.run()
 
 

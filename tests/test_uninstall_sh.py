@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import plistlib
 import re
 import select
 import shutil
@@ -21,8 +22,9 @@ pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="맥·리눅스 
 
 if sys.platform != "win32":
     import pty                                   # termios 가 필요해 Windows 에선 import 조차 안 된다
+    from session_manager import hostctl
     from session_manager.osdep import _posix
-    from tests.test_install_sh import ROOT, _gone, _wait, box, payload  # noqa: F401 — box·payload 는 픽스처
+    from tests.test_install_sh import ROOT, _gone, _wait, box, mac, payload  # noqa: F401 — box·mac·payload 는 픽스처
 
 # 가짜 Host·브로커 — 진짜처럼 runtime.json·ptyd.json 에 제 pid 를 적고 잔다. 명령줄 끝에 -m <모듈>(이 설치본 판정의 재료)
 FAKE_PROC = """
@@ -353,3 +355,84 @@ def test_update_started_while_asking_is_seen_after_the_flag(box, held):
         assert _flag(box).read_text(encoding="utf-8") == "by=stop\nat=1\n"
     else:
         assert not _flag(box).exists()
+
+
+# ---------------------------------------------------------------- 8. [mac] 자동 시작(launchd) 해제
+
+def _plist_for(box, root: Path, loaded: bool = True) -> bytes:
+    """install.sh(hostctl render-launchd)가 쓰는 모양의 등록 파일 — root 의 런처를 부른다. loaded 면 launchd 에 올라 있는 상태."""
+    raw = plistlib.dumps(hostctl.launchd_plist(str(root), str(box.data), path_env=None, lang=None, umask=None))
+    box.plist.parent.mkdir(parents=True, exist_ok=True)
+    box.plist.write_bytes(raw)
+    if loaded:
+        Path(f"{box.lctl_log}.loaded").write_bytes(raw)
+    return raw
+
+
+def test_mac_unloads_and_removes_its_autostart_after_the_flag(mac):
+    """[mac] 등록 파일이 이 설치본의 런처를 부르면 내리고(bootout — maintenance.flag 를 만든 뒤라 그 사이 launchd 가 부르는
+    foreground 는 아무것도 띄우지 않는다) 지운다. 확인 질문에도 지울 것으로 보인다."""
+    _lay(mac)
+    _plist_for(mac, mac.root)
+    rc, out = _on_tty(["/bin/sh", str(mac.root / "uninstall.sh")], mac.env(), "n")
+    assert rc == 1 and f"자동 시작(launchd) 등록: {mac.plist}" in out and mac.plist.is_file(), out
+    r = mac.uninstall("--yes")
+    out = _out(r)
+    assert r.returncode == 0 and "[OK]   자동 시작(launchd) 해제" in out and "=== 제거 완료 ===" in out, out
+    assert not mac.plist.exists() and not mac.root.exists()
+    label = f"gui/{os.getuid()}/com.clewpath.host"
+    assert mac.launchctl() == [["F", "bootout", label], ["F", "print", label]], mac.launchctl()
+
+
+@pytest.mark.parametrize("other", ["/Users/x/other/app", "@ROOT@2", "/x@ROOT@"])
+@pytest.mark.parametrize("venv", [True, False])
+def test_mac_keeps_another_installs_autostart(mac, other, venv):
+    """다른 설치본의 런처를 부르는 등록은 남기고 알린다(내리지도 않는다). venv 파이썬이 없으면(지우다 끊긴 뒤 다시 실행)
+    plistlib 대신 글자로 견주는데, 경로의 & 는 XML 이스케이프(&amp;)로 적혀 있고 앞뒤만 닮은 경로는 남의 것이다."""
+    _lay(mac)
+    if not venv:
+        (mac.root / ".venv" / "bin" / "python").unlink()
+    raw = _plist_for(mac, Path(other.replace("@ROOT@", str(mac.root))))
+    r = mac.uninstall("--yes")
+    out = _out(r)
+    assert r.returncode == 0 and "이 설치본의 것이 아니라" in out and not mac.root.exists(), out
+    assert mac.plist.read_bytes() == raw and mac.launchctl() == []
+
+
+def test_mac_reads_its_own_plist_without_the_venv(mac):
+    """venv 파이썬이 없어도 — 설치 경로의 & 가 &amp; 로 적힌 제 등록 파일을 알아보고 지운다."""
+    _lay(mac)
+    (mac.root / ".venv" / "bin" / "python").unlink()
+    _plist_for(mac, mac.root)
+    assert "&" in str(mac.root) and b"&amp;" in mac.plist.read_bytes() and b"mac & home" not in mac.plist.read_bytes()
+    r = mac.uninstall("--yes")
+    assert r.returncode == 0 and "[OK]   자동 시작(launchd) 해제" in _out(r) and not mac.plist.exists(), _out(r)
+
+
+@pytest.mark.parametrize("case", ["bootout", "plist"])
+def test_mac_reports_autostart_it_could_not_undo(mac, case):
+    """내리지 못했으면(SSH 셸 등 — 아직 올라 있다) 등록 파일은 지우되 알리고, 등록 파일을 지우지 못했으면 남은 것으로 센다(1).
+    설치 폴더는 그대로 지운다."""
+    _lay(mac)
+    _plist_for(mac, mac.root)
+    env = mac.env(FAKE_LAUNCHCTL="fail-bootout") if case == "bootout" else mac.env()
+    if case == "plist":
+        os.chmod(mac.plist.parent, 0o555)
+    try:
+        r = mac.sh(mac.root / "uninstall.sh", "--yes", env=env)
+    finally:
+        os.chmod(mac.plist.parent, 0o755)
+    out = _out(r)
+    assert r.returncode == 1 and "=== 제거가 끝나지 않았습니다" in out and not mac.root.exists(), out
+    if case == "bootout":
+        assert not mac.plist.exists() and "launchd 에는 아직 올라 있습니다" in out and "launchctl bootout gui/" in out
+    else:
+        assert mac.plist.exists() and "지우지 못했습니다" in out and "자동 시작 등록이 남아 있습니다" in out
+
+
+def test_linux_leaves_launchd_files_alone(box):
+    """[linux] 자동 시작이 없다 — 홈에 같은 이름의 등록 파일이 있어도 보지 않고 launchctl 도 부르지 않는다."""
+    _lay(box)
+    raw = _plist_for(box, box.root)
+    r = box.uninstall("--yes")
+    assert r.returncode == 0 and box.plist.read_bytes() == raw and box.launchctl() == [], _out(r)

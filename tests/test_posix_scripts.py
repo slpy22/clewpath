@@ -713,6 +713,51 @@ def test_scripts_leave_claude_files_alone(name):
             assert "projects" not in code, f"{name}:{i}: projects 를 지운다: {line.strip()}"
 
 
+_LAUNCHCTL = re.compile(r"(?<![\w$./-])launchctl(?![\w.-])")
+_SH_FUNC = re.compile(r"(?m)^([a-z_][a-z0-9_]*)\(\) \{(?![^\n]*\}[ \t]*$)[^\n]*\n(.*?)^\}", re.S)   # 여러 줄 함수
+
+
+def test_launchctl_runs_only_on_mac():
+    """launchd 명령(launchctl)은 [mac] 분기 안에서만 — 부르는 함수는 첫 줄이 OS 가드(`[ "$OS" = mac ] || return …`)이고, 함수
+    밖에서는 부르지 않는다. 런처·러너·get.sh 는 부르지 않는다(자동 시작은 설치·제거의 일). 메시지·주석의 글자는 세지 않는다."""
+    for name in SCRIPTS:
+        view = _code_view(_text(name))
+        total = len(_LAUNCHCTL.findall(view))
+        if name not in ("install.sh", "uninstall.sh"):
+            assert total == 0, f"{name} 가 launchctl 을 부른다"
+            continue
+        inside, guarded = 0, []
+        for m in _SH_FUNC.finditer(view):
+            n = len(_LAUNCHCTL.findall(m.group(2)))
+            if not n:
+                continue
+            inside += n
+            first = next(ln.strip() for ln in m.group(2).split("\n") if ln.strip())
+            assert re.fullmatch(r'\[ "\$OS" = mac \] \|\| return [01]', first), \
+                f"{name}:{m.group(1)}() — launchctl 을 부르는 함수의 첫 줄은 맥 가드여야 한다: {first}"
+            guarded.append(m.group(1))
+        assert guarded and inside == total, f"{name}: 함수 밖의 launchctl {total - inside}곳"
+
+
+def test_launchd_names_agree():
+    """자동 시작 이름(Label)·등록 파일 자리는 install.sh·uninstall.sh·hostctl 이 같다 — 셸은 LAUNCHD_LABEL 한 줄에서만 이름을
+    적고(코드의 다른 곳에 글자로 두지 않는다) 자리는 늘 "$HOME/Library/LaunchAgents/$LAUNCHD_LABEL.plist"."""
+    from session_manager import hostctl
+    assert hostctl.LAUNCHD_PLIST == f"Library/LaunchAgents/{hostctl.LAUNCHD_LABEL}.plist"
+    for name in SCRIPTS:
+        t = _text(name)
+        if name not in ("install.sh", "uninstall.sh"):
+            assert hostctl.LAUNCHD_LABEL not in _code_view(t), name
+            continue
+        assert re.findall(r"(?m)^LAUNCHD_LABEL=(\S+)$", t) == [hostctl.LAUNCHD_LABEL], name
+        assert _code_view(t).count(hostctl.LAUNCHD_LABEL) == 1, f"{name}: 이름을 LAUNCHD_LABEL 밖에 글자로 적었다"
+        assert '"$HOME/Library/LaunchAgents/$LAUNCHD_LABEL.plist"' in t, name
+        for i, line in enumerate(t.splitlines(), 1):                        # 코드 줄(주석 아님)의 등록 파일 자리는 한 모양
+            code = line.split("#", 1)[0] if not line.lstrip().startswith("#") else ""
+            if "LaunchAgents" in code:
+                assert '"$HOME/Library/LaunchAgents/$LAUNCHD_LABEL.plist"' in code, f"{name}:{i}: {line.strip()}"
+
+
 def test_e2e_harness_never_touches_release_keys_or_production():
     d = _need("posix_e2e")
     bad = []

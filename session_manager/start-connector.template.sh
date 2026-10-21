@@ -10,9 +10,10 @@
 #   sh start-connector.sh resume         maintenance.flag 를 지우고 start
 #   sh start-connector.sh status         state= pid= port= url= broker_pid= broker_alive= watch_pid= maintenance=
 #                                        (종료코드 0 정상 / 1 아님 / 3 유지보수)
-#   sh start-connector.sh watch [초]     상주 감시 — 자동 시작이 생기기 전의 임시용(기본 60초, 최소 10초). 하나만 돈다
+#   sh start-connector.sh watch [초]     상주 감시 — 자동 시작이 없는 곳(리눅스)의 임시용(기본 60초, 최소 10초). 하나만 돈다
 #   sh start-connector.sh paths          root= data_dir= conf_file= default_port= python=
-#   sh start-connector.sh foreground     (다음 단계 launchd·systemd 용) 이 프로세스가 곧 Host 가 된다
+#   sh start-connector.sh foreground     (감독자용 — [mac] launchd 가 부른다) 죽어 있으면 이 프로세스가 곧 Host 가 된다.
+#                                        띄우지 않을 때는 늘 0(0 이 아닌 종료는 Host 자신이 죽었을 때만)
 # 지키는 것:
 #  - health 실패만으로 기존 프로세스를 죽이거나 겹쳐 띄우지 않는다(기동 중일 수 있음)
 #  - maintenance.flag 면 아무것도 띄우지 않는다. 업데이트·설치 중(update.inprogress)이면 러너 자신의 재기동만 통과
@@ -128,6 +129,10 @@ print(state, pid, port)
 # pty 안의 claude 까지 물려가, 브로커가 죽어도 pty 자식이 SIGHUP 으로 끝나지 않는다(새 세션이라 터미널 신호는 오지 않는다).
 # exec 모드(foreground)는 이 프로세스를 Host 로 바꾼다(pid 그대로 — launchd·systemd 가 지켜볼 수 있게). 이때는 부른 쪽의
 # 신호 처리를 그대로 둔다 — launchd·systemd 는 기본값이고, 사람이 nohup 으로 붙잡아 둔 터미널 밖 기동을 풀지 않게.
+# 표준 입출력은 start 와 같게 바꿔 단다(stdin /dev/null, stdout host.log, stderr host.err.log — 이어 쓰기): launchd 의
+# launchd.log 로 새지 않고, 사고 꼬리(liveness.log_tail)·사람의 로그 확인이 start 로 뜬 Host 와 같다. foreground 가 쥔
+# launcher.lock 은 제 pid 를 launcher.spawn 에 적은 뒤 놓는다(그 뒤 다른 런처의 판정은 이 pid 를 Host 로 본다). 다섯째 인자(런처
+# 경로)는 그때까지 명령줄에 런처 이름이 남게 하는 것 — 잠금의 주인 확인(lock_live)이 그 이름을 본다.
 SPAWN_PY='
 import json, os, signal, subprocess, sys, time
 root, data, conf, mode = sys.argv[1:5]
@@ -151,9 +156,30 @@ def note_spawn(pid):
             pass
 
 
+def unlock(lock):
+    try:
+        with open(os.path.join(lock, "pid"), encoding="utf-8") as f:
+            mine = f.readline().strip() == str(os.getpid())
+        if mine:
+            os.unlink(os.path.join(lock, "pid"))
+            os.rmdir(lock)
+    except Exception:
+        pass
+
+
 if mode == "exec":
     os.chdir(root)
+    for fd, name, flags in ((0, os.devnull, os.O_RDONLY),
+                            (1, os.path.join(data, "host.log"), os.O_WRONLY | os.O_CREAT | os.O_APPEND),
+                            (2, os.path.join(data, "host.err.log"), os.O_WRONLY | os.O_CREAT | os.O_APPEND)):
+        f = os.open(name, flags, 0o666)
+        if f == fd:
+            os.set_inheritable(fd, True)
+        else:
+            os.dup2(f, fd)
+            os.close(f)
     note_spawn(os.getpid())
+    unlock(os.path.join(data, "launcher.lock"))
     os.execve(py, argv, env)
 for s in (signal.SIGHUP, signal.SIGINT, signal.SIGQUIT):
     signal.signal(s, signal.SIG_DFL)
@@ -224,11 +250,11 @@ data_dir_ready() {   # 폴더 권한만 좁힌다 — umask 는 사용자 것 �
   return 0
 }
 
-need_venv() {
+need_venv() {   # [$1=끝낼 종료코드(기본 2 — foreground 는 0)]
   [ -x "$PY" ] && return 0
   llog "fail: venv 없음($PY)"
   say "venv 가 없습니다($PY) — sh \"$ROOT/install.sh\" --reinstall"
-  exit 2
+  exit "${1:-2}"
 }
 
 pid_alive() {   # $1=pid — 좀비(끝났는데 부모가 아직 안 거둠)는 죽은 것
@@ -427,17 +453,17 @@ probe_now() {   # P_STATE P_PID P_PORT 를 채운다. 판정 못 하면(venv 파
   return 0
 }
 
-probe_or_die() {
+probe_or_die() {   # [$1=끝낼 종료코드(기본 2 — foreground 는 0)]
   probe_now && return 0
   llog "fail: 상태 판정 실패(venv 파이썬 — $PY)"
   say "venv 파이썬으로 상태를 판정하지 못했습니다($PY) — sh \"$ROOT/install.sh\" --reinstall"
-  exit 2
+  exit "${1:-2}"
 }
 
-port_taken() {   # P_STATE=foreign — 띄우지 않고 실패로(조용히 '떠 있음'으로 보면 watch 도 영영 안 되살린다)
+port_taken() {   # P_STATE=foreign — 띄우지 않고 실패로(조용히 '떠 있음'으로 보면 watch 도 영영 안 되살린다). [$1=종료코드(기본 1)]
   llog "fail: 포트 $P_PORT 를 다른 프로그램이 쓰고 있음(health 는 답하지만 이 설치본의 Host 가 아님)"
   say "포트 $P_PORT 를 다른 프로그램이 쓰고 있어 띄우지 않습니다 — 그 프로그램을 끄거나 $CONF_FILE 의 [server] port 를 바꾸세요"
-  exit 1
+  exit "${1:-1}"
 }
 
 datadir_same() {   # 0 = 이 env 로 뜬 Host 도 DATA_DIR 을 쓴다. 판정을 못 하면(파이썬 실패) 막지 않는다
@@ -461,6 +487,14 @@ rotate() {   # 5MB 넘으면 한 세대 밀어 둔다(기동 직전에만 — �
   case "$_sz" in ''|*[!0-9]*) return 0 ;; esac
   [ "$_sz" -gt 5242880 ] && mv -f "$1" "$1.1" 2>/dev/null
   return 0
+}
+
+launch_logs() {   # 띄우기 직전(start·foreground 같은 규칙) — 로그 회전, 그리고 host.log 에 런처 구분줄(liveness.LAUNCHER_MARK:
+  # 새 Host 가 읽는 죽은 Host 의 꼬리는 마지막 구분줄 앞까지 — 회전이 구분줄 바로 앞이면 host.log.1 의 꼬리)
+  rotate "$DATA_DIR/host.log"
+  rotate "$DATA_DIR/host.err.log"
+  rotate "$DATA_DIR/launcher.log"
+  { printf '=== launcher start %s ===\n' "$(date '+%Y-%m-%d %H:%M:%S')" >>"$DATA_DIR/host.log"; } 2>/dev/null
 }
 
 cmd_start() {
@@ -504,12 +538,9 @@ cmd_start() {
     if swap_left; then llog "skip: 교체 잔재(잠금 안 재확인 — 다음 판정에서 복구)"; exit 0; fi
   fi
   datadir_same || exit 1
-  rotate "$DATA_DIR/host.log"
-  rotate "$DATA_DIR/host.err.log"
-  rotate "$DATA_DIR/launcher.log"
+  launch_logs
   if [ "$P_PID" = 0 ]; then S_WHY="runtime.json 없음"; else S_WHY="이전 pid $P_PID 없음(health 없음)"; fi
   llog "start: $S_WHY → 기동"
-  { printf '=== launcher start %s ===\n' "$(date '+%Y-%m-%d %H:%M:%S')" >>"$DATA_DIR/host.log"; } 2>/dev/null
   if ! S_OUT=$("$PY" -I -c "$SPAWN_PY" "$ROOT" "$DATA_DIR" "$CONF_FILE" spawn 2>>"$DATA_DIR/launcher.log"); then
     llog "fail: spawn 실패"
     say "Host 를 띄우지 못했습니다 — $DATA_DIR/launcher.log 를 보세요"
@@ -679,27 +710,46 @@ cmd_paths() {
   exit 0
 }
 
+fg_check() {   # foreground 의 판정 — 떠 있으면(ok·busy) 0 으로 끝내고, 남의 서버·판정 실패도 알린 뒤 0
+  probe_or_die 0
+  case "$P_STATE" in
+    ok) exit 0 ;;                                         # 늘 있는 일(5분마다) — 기록하지 않는다(start 와 같다)
+    busy) llog "foreground: pid $P_PID 살아 있음(health 없음 — 기동 중이거나 응답 불능) — 띄우지 않음"; exit 0 ;;
+    foreign) port_taken 0 ;;
+  esac
+}
+
+# launchd(KeepAlive·5분 StartInterval)·systemd 가 부른다 — 죽어 있을 때만 이 프로세스가 곧 Host 가 된다(exec, pid 그대로).
+# 띄우지 않을 때는 늘 0 이다: 0 이 아닌 종료는 감독자에게 'Host 가 죽었다 — 곧 다시'라는 뜻이라(launchd 는 30초마다), 곧 풀리지
+# 않는 사유(venv 없음·데이터 폴더 불일치·남의 서버·잔재 복구 막힘)로 쉼 없이 돌지 않게 한다 — 다시 보는 것은 5분 주기다. 사유는
+# launcher.log(와 표준오류 = launchd.log)에 남긴다. 순서·잠금·로그는 start 와 같다(S21) — 잠금은 SPAWN_PY 가 제 pid 를 적은 뒤 놓는다
 cmd_foreground() {
-  need_venv
+  need_venv 0
   data_dir_ready
-  if [ -e "$DATA_DIR/maintenance.flag" ]; then
-    llog "foreground: maintenance.flag — 띄우지 않음"
-    exit 0
-  fi
+  [ -e "$DATA_DIR/maintenance.flag" ] && exit 0           # 보류 — 5분마다 오므로 기록하지 않는다(start 와 같다)
   if update_live clean && [ "${CLEWPATH_UPDATER:-}" != 1 ]; then
     llog "foreground: 업데이트 진행 중 — 띄우지 않음"
     exit 0
   fi
-  recover_swap_leftovers
-  case $? in 0) ;; 10) exit 0 ;; *) exit 1 ;; esac
-  probe_or_die
-  case "$P_STATE" in
-    ok|busy) llog "foreground: 이미 떠 있음(pid $P_PID) — 띄우지 않음"; exit 0 ;;
-    foreign) port_taken ;;
-  esac
-  datadir_same || exit 1
-  llog "foreground: exec"
-  exec "$PY" -I -c "$SPAWN_PY" "$ROOT" "$DATA_DIR" "$CONF_FILE" exec
+  recover_swap_leftovers || exit 0                        # 보류(10)·막힘(1) — 기록·안내는 그 안에서
+  fg_check
+  if ! lock_acquire "$DATA_DIR/launcher.lock" "${0##*/}"; then
+    llog "foreground: 다른 런처가 기동 중(launcher.lock) — 띄우지 않음"
+    exit 0
+  fi
+  trap 'start_unlock' EXIT
+  trap 'exit 1' INT TERM HUP
+  fg_check                                                # 잠금 안에서 한 번 더 — 그 사이 다른 런처가 띄웠을 수 있다
+  [ -e "$DATA_DIR/maintenance.flag" ] && exit 0
+  if [ "${CLEWPATH_UPDATER:-}" != 1 ]; then
+    if update_live; then llog "foreground: 업데이트 진행 중(잠금 안 재확인) — 띄우지 않음"; exit 0; fi
+    if swap_left; then llog "foreground: 교체 잔재(잠금 안 재확인 — 다음 판정에서 복구)"; exit 0; fi
+  fi
+  datadir_same || exit 0
+  launch_logs
+  if [ "$P_PID" = 0 ]; then S_WHY="runtime.json 없음"; else S_WHY="이전 pid $P_PID 없음(health 없음)"; fi
+  llog "foreground: $S_WHY → 기동(exec, pid $$)"
+  exec "$PY" -I -c "$SPAWN_PY" "$ROOT" "$DATA_DIR" "$CONF_FILE" exec "$SELF"
 }
 
 [ $# -gt 0 ] || set -- start
