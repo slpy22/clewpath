@@ -1746,7 +1746,7 @@ async function loadList(q){
   const listWrap=el('div'); main.appendChild(listWrap);
   const spin=el('div','spin'); listWrap.appendChild(spin);
   if(LIST_VIEW==='files') sb.style.display='none';
-  if(LIST_VIEW==='groups'){ sb.style.display='none'; fetchTeams().then(ts=>{ TEAMS=ts; if(LIST_VIEW==='groups'&&SESSIONS) rerender(); }); }
+  if(LIST_VIEW==='groups'){ sb.style.display='none'; const tpc=pcNow(); fetchTeams().then(ts=>{ if(setTeams(ts,tpc)&&LIST_VIEW==='groups'&&SESSIONS) rerender(); }); }
   const rerender=()=>{
     if(LIST_VIEW==='groups'){ renderTeamRows(listWrap); return; }
     // 파일 보기: 탐색기는 한 번만 그린다(20초 목록 갱신이 펼친 트리를 갈아엎지 않게)
@@ -1794,8 +1794,11 @@ async function listTick(){
     if(typeof d.now==='number') CLOCK_SKEW=d.now-Date.now()/1000;
     let skipList=false;
     if(LIST_VIEW==='groups'){
-      TEAMS=await fetchTeams();
+      const ts=await fetchTeams();
+      if(pc!==pcNow()) return;     // 받는 사이 PC 를 바꿨다 — 이전 PC 팀 목록을 새 PC 의 받아 둔 팀 목록으로 쓰지 않는다
+      setTeams(ts);
       for(const code of TEAM_OPEN){ if(TEAM_DET[code]) await refreshTeamDetail(code); }   // 펼친 팀의 일감·기록도 새로
+      if(pc!==pcNow()) return;
       skipList=teamEditing();                                                         // 입력 중이면 폼을 갈아엎지 않는다
     }
     const pl=$('#paneList'); const st=pl?pl.scrollTop:0;
@@ -4628,14 +4631,18 @@ let TEAM_OPEN=new Set(lsJson('sm_team_open',[]));   // 펼친 팀(기기에 기�
 function tui(code){ return TEAM_UI[code]||(TEAM_UI[code]={filter:'open', add:{}}); }
 // 받지 못하면 받아 둔 목록(TEAMS). strict: 받지 못하면 null — 바로가기가 통신 실패와 '팀 없음'을 가른다(quick-switch §4-4)
 async function fetchTeams(strict){ try{ const r=await T.api('GET','/api/owner/teams',{query:{archived:1}}); return (r&&r.teams)||[]; }catch(e){ return strict?null:(TEAMS||[]); } }
+// 받아 둔 팀 목록을 바꾼다 — pc(청할 때의 pcNow())가 지금 PC 일 때만. PC 를 바꾸는 사이 늦게 온 이전 PC 팀 목록이 새 PC 의 👥 보기·
+// 🎬 단추에 쓰이지 않게(팀 코드는 이름에서 만들어 PC 마다 겹친다, 바로가기 검토). 🎬 단추·빈 칸 '최근 화면'의 팀 이름도 다시 그린다
+function setTeams(ts, pc){ if(pc!==undefined&&pc!==pcNow()) return false; TEAMS=ts; renderQuickSoon(); return true; }
 async function refreshTeamDetail(code){
-  const u=tui(code); u.loading=true;
-  try{ TEAM_DET[code]=await T.api('GET','/api/owner/teams/'+encodeURIComponent(code)); }
-  catch(e){ TEAM_DET[code]={error:e.message}; }
+  const u=tui(code), pc=pcNow(); u.loading=true;
+  let d; try{ d=await T.api('GET','/api/owner/teams/'+encodeURIComponent(code)); }
+  catch(e){ d={error:e.message}; }
   finally{ u.loading=false; }
+  if(pc===pcNow()) TEAM_DET[code]=d;       // 받는 사이 PC 를 바꿨다 — 이전 PC 팀 상세를 새 PC 의 같은 코드 팀에 붙이지 않는다
 }
 function teamRerender(){ if(LIST_CTX) LIST_CTX.rerender(); if(LEDGER) renderLedger(); }
-async function reloadTeams(code){ TEAMS=await fetchTeams(); if(code) await refreshTeamDetail(code); teamRerender(); }
+async function reloadTeams(code){ const pc=pcNow(), ts=await fetchTeams(); if(!setTeams(ts,pc)) return; if(code) await refreshTeamDetail(code); teamRerender(); }
 // 입력 중이면 20초 자동 갱신이 폼을 갈아엎지 않게
 function teamEditing(){
   if(TEAM_NEW||Object.values(TEAM_UI).some(u=>u.adding)) return true;
@@ -6488,7 +6495,7 @@ function quickFbPeek(){
 }
 // 관제 기억(§4-4·§6-1) → {mem:{team, gid, name}, team(teams 에서 찾은 지금 팀 또는 null), old}. 팀 코드를 먼저 본다(팀을 보관했다
 // 풀면 관제 id 가 새로 생김). 이 PC 의 새 기억이 없으면 옛 sm_mon_last(관제 id, PC 구분 없음)를 한 번 참고하되 이 PC 팀 목록에서
-// 찾을 때만 쓴다(old) — 다른 PC 의 관제 id 일 수 있다
+// 찾을 때만 쓴다(old) — 다른 PC 의 관제 id 일 수 있다. 받아 둔 팀 목록(TEAMS)은 늘 지금 PC 것이다(PC 전환 때 비움·setTeams)
 function quickMonMem(teams){
   const find=(mem)=>teams?((mem.team&&teams.find(x=>x.code===mem.team))||(mem.gid&&teams.find(x=>x.monitor_group_id===mem.gid))||null):null;
   const m=paneMem().monitor;
@@ -6637,7 +6644,7 @@ async function quickGoMonitor(live){
   const teams=await fetchTeams(true);
   if(!live()) return;                                             // 받는 사이 다른 누름·화면·PC 전환
   if(teams===null) return say('팀 목록을 받지 못했습니다 — 연결을 확인하세요');
-  TEAMS=teams;
+  setTeams(teams);
   const r=quickMonMem(teams);
   if(r){
     let g=r.team?(r.team.archived?null:teamAsGroup(r.team)):null;
@@ -7179,6 +7186,9 @@ function pcSwitchReset(){
   // 목록 칸의 이전 PC 줄·탐색기도 지운다 — 새 PC 연결을 기다리는 사이 옛 줄·파일을 누르면 이전 PC 세션·파일이 새 PC 기억 키에
   // 적히고 이전 PC 세션을 새 PC 로 열었다. 새 PC 첫 목록(loadList)이 다시 그리고, 20초 갱신도 그때까지 쉰다(LIST_CTX)
   SESSIONS=[]; LIST_CTX=null;
+  // 받아 둔 팀 목록·펼친 팀 상세도 이전 PC 것이다 — 팀 코드는 이름에서 만들어(한글 이름은 TM·TM2…) PC 마다 겹친다. 남기면 새 PC 의
+  // 🎬 단추·시트·빈 칸 '최근 화면'이 이전 PC 팀 이름을 보이고 누르면 다른 팀이 열렸다(바로가기 검토). 새 PC 팀은 👥 보기·🎬 누름 때 받는다
+  TEAMS=null; for(const k of Object.keys(TEAM_DET)) delete TEAM_DET[k];
   { const pl=paneList(); if(pl){ pl.innerHTML=''; pl.appendChild(el('div','empty','PC 에 연결하는 중…')); } }
   detailPlaceholder();                         // 빈 안내 — PANE_NOW 도 빈 화면으로(세대는 이어서 센다: 늦은 뷰어 응답 판정)
   showListPane();                              // 폰: 상세 칸이 빈 안내(폰에선 숨김)뿐이면 막다른 빈 화면 — 연결이 실패해도 목록 칸을 보인다
