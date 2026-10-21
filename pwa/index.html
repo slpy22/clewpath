@@ -73,6 +73,50 @@
   .dot.on{background:var(--good)} .dot.off{background:var(--crit)}
   header button.icon{width:38px;height:38px;border-radius:10px;font-size:1.1rem;color:var(--ink2)}
   header button.icon:active{background:var(--surface2)}
+  /* ---- 화면 바로가기(quick-switch §3-4·§3-5·§5) — 상세 칸 화면만 바꾼다(목록 칸만 바꾸는 탭 막대의 짝) ----
+     PC(880px~) = 머리 줄 오른쪽 단추 4개(880~1099px 는 그림만, 마우스를 올리면 이름) · 폰 = 제목 ▾ → 아래 시트.
+     새 규칙만 더한다 — 칸 배치 격자·상세 칸 모드 규칙·터미널 격자·◧ 규칙은 그대로(0.22.13·0.27.2 '칸 사라짐' 사고 구역) */
+  #qs-title{gap:2px;padding:4px 6px;margin:-4px -6px;border-radius:9px;text-align:left;line-height:inherit}
+  #qs-title:active{background:var(--surface2)}
+  #head{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #qs-title .qs-caret{flex:none;font-size:.7em;color:var(--muted)}   /* 제목이 길어도 ▾ 는 잘리지 않게 */
+  #qs{display:none}
+  .qtag{flex:none;font-size:.74rem;color:var(--muted);white-space:nowrap}
+  .qtag.now{color:var(--accent);font-weight:650}
+  .qtag.warn{color:var(--warn);font-weight:650}
+  .pop .popi.qs-it.dim{opacity:.5}
+  .popbg.qs-sheet{z-index:61}
+  .pop.qs-sheet{z-index:62}   /* 폰 관제 덮개(z 60) 머리 ▾ 로 열어도 덮개 위에 */
+  .backbar .vtitle{flex:1;min-width:0;padding:0 4px;font-weight:650;font-size:.9rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* 폰: ▾ 가 먹는 폭(약 11px)만큼 머리 줄 사이 간격을 줄인다(10→8px) — 0.30.0 에서 다 보이던 짧은 제목('세션')이 '세…'로 잘렸다
+     (검토 실측 360·390·412px, 릴레이 🖧 + PC 고르기). PC 는 ▾ 가 없어 그대로 */
+  @media (max-width:879px){ header{gap:8px} }
+  @media (min-width:880px){
+    #qs-title{pointer-events:none;cursor:default}   /* PC 제목은 글자 그대로 — 입구는 단추 4개 */
+    #qs-title .qs-caret{display:none}
+    #qs{display:flex;flex:none;gap:2px;padding:3px;border-radius:11px;background:var(--bg);border:1px solid var(--line)}
+    #qs button{display:flex;align-items:center;gap:6px;height:30px;padding:0 11px;border-radius:8px;color:var(--ink2);font-size:.82rem;white-space:nowrap}
+    #qs button:hover{background:var(--surface2);color:var(--ink)}
+    #qs button.on{background:var(--accent2);color:#fff;font-weight:650}
+    #qs button.dim{opacity:.45}                     /* 기억 없음·준비 중 — 누르면 안내 */
+    #qs button.wait{cursor:progress}
+    #qs .qi{font-size:.95rem;line-height:1}
+    /* 빈 상세 칸 '최근 화면'(§3-6) — 폰은 빈 안내 자체가 숨어 있다 */
+    .detail-empty{flex-direction:column;gap:16px}
+    .qs-recent{display:flex;flex-direction:column;gap:10px;width:min(560px,100%)}
+    .qs-rh{display:flex;align-items:center;gap:10px;font-size:.76rem;color:var(--muted)}
+    .qs-rh::before,.qs-rh::after{content:'';flex:1;height:1px;background:var(--line)}
+    .qs-rg{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px}
+    .qs-rb{display:flex;align-items:center;gap:10px;min-width:0;padding:10px 12px;border-radius:11px;border:1px solid var(--line);
+      background:var(--surface);color:var(--ink);text-align:left}
+    .qs-rb:hover{border-color:var(--accent);background:var(--surface2)}
+    .qs-rb .qi{flex:none;font-size:1.1rem}
+    .qs-rb .qt{display:flex;flex-direction:column;min-width:0}
+    .qs-rb .qn{font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .qs-rb small{color:var(--muted);font-size:.74rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  }
+  @media (min-width:880px) and (max-width:1099px){ #qs .ql{display:none} #qs button{padding:0 9px} }
+  /* ---- 화면 바로가기 끝 ---- */
   #main{flex:1;min-height:0;overflow:hidden}
   #paneList,#paneDetail{height:100%;overflow-y:auto;-webkit-overflow-scrolling:touch;
     padding-bottom:calc(16px + var(--safe-b))}
@@ -924,9 +968,10 @@
   <header>
     <button class="icon" id="btn-side" title="목록 칸 접기 (Ctrl+Shift+B)" aria-label="목록 칸 접기·펼치기" aria-pressed="false">◧</button>
     <span class="dot" id="status"></span>
-    <span class="title" id="head">세션</span>
+    <button class="title" id="qs-title" type="button" aria-haspopup="menu" title="화면 바로가기"><span id="head">세션</span><span class="qs-caret" aria-hidden="true">▾</span></button>
     <select class="pcname hidden" id="pcname" title="PC 선택 (localhost / 저장된 PC)"></select>
     <span class="grow"></span>
+    <nav id="qs" aria-label="화면 바로가기"></nav>
     <button class="icon hidden" id="btn-pcs" title="내 PC 전환 · 추가 · 페어링 해제">🖧</button>
     <button class="icon" id="btn-todo" title="할 일 — 승인·권한·입력 대기" aria-label="할 일">🔔<span class="tbadge hidden"></span></button>
     <button class="icon" id="btn-settings" title="설정">⚙</button>
@@ -1551,8 +1596,10 @@ let SELECTED_ID=null;
 const paneList=()=>$('#paneList'), paneDetail=()=>$('#paneDetail');
 function showListPane(){ $('#app').setAttribute('data-view','list'); }
 function showDetailPane(){ $('#app').setAttribute('data-view','detail'); }
+// 빈 상세 칸 — 안내 한 줄 + (PC) '최근 화면' 단추(renderEmptyPane, quick-switch §3-6). 바깥 상자는 그대로 'detail-empty' 하나
+let EMPTY_BOX=null;
 function detailPlaceholder(txt){ paneEnter('empty'); const p=paneDetail(); closeInlineMonitor(); p.classList.remove('term-mode','fb-mode','mon-mode'); p.innerHTML='';
-  p.appendChild(el('div','detail-empty',txt||'왼쪽에서 세션을 선택하세요')); }
+  const box=el('div','detail-empty'); box._txt=txt||''; box._shape=''; box._btns=[]; EMPTY_BOX=box; p.appendChild(box); renderEmptyPane(); }
 function highlightSelected(){ document.querySelectorAll('.srow').forEach(r=>
   r.classList.toggle('sel', r.dataset.sid===SELECTED_ID)); }
 // ---- 화면 진입 기록(quick-switch §8 2단계) ----
@@ -1560,6 +1607,7 @@ function highlightSelected(){ document.querySelectorAll('.srow').forEach(r=>
 // 떠나는 화면이 터미널·편집기였는지 알 수 없다. 모자란 정리만 하고, 여러 번 불려도 안전하다(이미 한 정리는 다시 해도 무해).
 // PANE_NOW = 지금 상세 칸 화면 {kind, sid, key, gid, code, gen}(저장 안 함). gen 은 들어올 때마다 하나씩 — 응답을 기다리던
 // 옛 화면이 늦게 그리거나 실시간 연결을 열지 않게(뷰어 T5). 폰 관제 덮개는 상세 칸 밖이라 여기 들지 않는다.
+// dead 는 뷰어가 대화·실시간 연결을 잃었을 때만 붙는다 — 바로가기로 같은 뷰어를 다시 누르면 다시 연다(4단계)
 let PANE_NOW={kind:'empty', gen:0};
 // PC 전환 세대 — pcSwitchReset 이 하나씩 올린다. 기다리던 동작(2차 인증 확인·목록 받기)이 깨어나 'PC 가 바뀌었나'를 볼 때 쓴다(pcNow).
 // 방 이름(sm_room)만 보면 '＋ 새 PC 추가'의 새 PC 페어링(doPair)에선 연결이 선 뒤에야 방이 바뀌어, 그사이 깨어난 이전 PC 의
@@ -1586,13 +1634,25 @@ function paneEnter(kind, ref){
     gid:kind==='monitor'?(r.gid||null):null, code:kind==='ledger'?(r.code||null):null};
   if(r.session_id&&(kind==='viewer'||kind==='detail'||kind==='resume'))   // 웹 재개는 그 세션 대화로 기억한다(§4-3)
     paneMemSet('viewer', {sid:r.session_id, kind:kind==='detail'?'detail':'viewer', name:sessLabel(r), at:Date.now()});
+  if(PANE_QUICK[kind]) quickLastSet(PANE_QUICK[kind]);         // 빈 칸 '최근 화면'의 맨 앞(§3-6) — 새로고침 뒤에도
+  renderQuickSoon();                                            // 머리 줄 단추 강조(5단계)
 }
+// 상세 칸 화면 → 바로가기 칸. 웹 재개는 그 세션 대화로 돌아간다(§4-3)
+const PANE_QUICK={terminal:'terminal', files:'files', viewer:'viewer', detail:'viewer', resume:'viewer', monitor:'monitor'};
+// 마지막으로 연 바로가기 화면(sm_qs_last_<PC>). 화면 기억(sm_pane_<PC>)과 따로 둔다 — 터미널·파일 진입이 뷰어·관제 기억을 다시 적지 않게
+function quickLast(){ try{ return LS.getItem(paneKey('sm_qs_last'))||''; }catch(e){ return ''; } }
+function quickLastSet(k){ try{ if(LS.getItem(paneKey('sm_qs_last'))!==k) LS.setItem(paneKey('sm_qs_last'),k); }catch(e){} }
+// 바로가기 단추·빈 칸 '최근 화면'을 다시 그린다 — 화면 진입·목록 끝·20초 갱신 끝·기억이 바뀔 때 100ms 로 모아 한 번(renderQuick)
+let _qsTimer=null;
+function renderQuickSoon(){ if(_qsTimer) return; _qsTimer=setTimeout(()=>{ _qsTimer=null; renderQuick(); },100); }
 // 화면 기억(§6-1) sm_pane_<PC> = {viewer:{sid, kind:'viewer'|'detail', name, at}, monitor:{team, gid, name, at}}. 기기·PC 마다 따로(§6-2).
 // PC 키는 로컬 화면 = local, 릴레이 = 그 PC 의 방 이름(sm_e2ee_<room> 과 같은 방식, hostVerKey 와 같은 구분) — 릴레이로 PC 를
 // 바꿔 써도 기억이 섞이지 않게. 터미널 탭(sm_tabs)·파일(sm_fb_state2)도 이 키를 쓴다(3단계). 저장이 막혀도(사생활 보호 창 등) 화면은 그대로 돈다.
 function paneKey(base){ return base+'_'+hostVerKey(); }
 function paneMem(){ const m=lsJson(paneKey('sm_pane'),{}); return (m&&typeof m==='object'&&!Array.isArray(m))?m:{}; }
-function paneMemSet(part, val){ const m=paneMem(); if(val) m[part]=val; else delete m[part]; lsSet(paneKey('sm_pane'), m); }
+// 바꾸면 바로가기 단추·빈 칸 '최근 화면'도 다시 그린다 — 🎬·💬 누름이 없어진 기억을 지운 뒤 지운 이름이 남아 같은 단추가 다른 화면을
+// 열었다(검토). 화면 진입(paneEnter)도 부르지만 100ms 로 모아 한 번만 그린다
+function paneMemSet(part, val){ const m=paneMem(); if(val) m[part]=val; else delete m[part]; lsSet(paneKey('sm_pane'), m); renderQuickSoon(); }
 // PC 별 기억 읽기(3단계) — 이 PC 의 새 키가 아직 없으면 옛 키(PC 구분이 없던 0.28 까지의 sm_tabs·sm_fb_state2)를 읽고 old:true 로
 // 알린다. 옛 키엔 다른 PC 의 탭이 섞였을 수 있어 부르는 쪽이 이 PC 목록으로 걸러 새 키에 한 번 옮긴다. 옛 버전으로 되돌려도
 // 깨지지 않게 옛 키는 지우지 않는다. 새 키가 깨졌으면 옛 키로 돌아가지 않고 빈 기억으로 본다.
@@ -1691,7 +1751,7 @@ async function loadList(q){
   const listWrap=el('div'); main.appendChild(listWrap);
   const spin=el('div','spin'); listWrap.appendChild(spin);
   if(LIST_VIEW==='files') sb.style.display='none';
-  if(LIST_VIEW==='groups'){ sb.style.display='none'; fetchTeams().then(ts=>{ TEAMS=ts; if(LIST_VIEW==='groups'&&SESSIONS) rerender(); }); }
+  if(LIST_VIEW==='groups'){ sb.style.display='none'; const tpc=pcNow(); fetchTeams().then(ts=>{ if(setTeams(ts,tpc)&&LIST_VIEW==='groups'&&SESSIONS) rerender(); }); }
   const rerender=()=>{
     if(LIST_VIEW==='groups'){ renderTeamRows(listWrap); return; }
     // 파일 보기: 탐색기는 한 번만 그린다(20초 목록 갱신이 펼친 트리를 갈아엎지 않게)
@@ -1719,6 +1779,7 @@ async function loadList(q){
     restoreTabsOnce();             // 저장된 터미널 탭 워킹셋 복원(1회, 화면 탈취 없이 목록만)
     consumePendingMonitor();       // 관제 알림 클릭으로 진입한 경우 그 그룹 오버레이 열기
     if(PENDING_APPROVAL){ const a=PENDING_APPROVAL; PENDING_APPROVAL=''; openApprovalById(a); }
+    renderQuickSoon();             // 바로가기 단추 켜기(준비 중 → 기억대로) — 첫 목록 뒤 복원 순서의 마지막(quick-switch §6-2)
     LIST_CTX={rerender};
     refreshTodo();                 // 🔔 배지(승인 요청 수는 서버에서, 권한·입력 대기는 방금 받은 목록에서)           // 자동 갱신(뱃지 실시간화)이 쓸 컨텍스트
   }catch(e){ if(pc!==pcNow()) return;   // 받는 사이 PC 를 바꿨다 — 새 PC 의 loadList 가 따로 돈다
@@ -1738,8 +1799,11 @@ async function listTick(){
     if(typeof d.now==='number') CLOCK_SKEW=d.now-Date.now()/1000;
     let skipList=false;
     if(LIST_VIEW==='groups'){
-      TEAMS=await fetchTeams();
+      const ts=await fetchTeams();
+      if(pc!==pcNow()) return;     // 받는 사이 PC 를 바꿨다 — 이전 PC 팀 목록을 새 PC 의 받아 둔 팀 목록으로 쓰지 않는다
+      setTeams(ts);
       for(const code of TEAM_OPEN){ if(TEAM_DET[code]) await refreshTeamDetail(code); }   // 펼친 팀의 일감·기록도 새로
+      if(pc!==pcNow()) return;
       skipList=teamEditing();                                                         // 입력 중이면 폼을 갈아엎지 않는다
     }
     const pl=$('#paneList'); const st=pl?pl.scrollTop:0;
@@ -1748,6 +1812,7 @@ async function listTick(){
     if(Date.now()-TODO_AT>55000) refreshTodo(); else renderTodoBadge();
     // 터미널 탭 칩의 상태 밑줄도 같은 훅 상태를 쓴다 — 목록과 함께 갱신(term-mode 일 때만 의미)
     if(paneDetail().classList.contains('term-mode')) renderTabBarSoon();
+    renderQuickSoon();             // 바로가기 단추의 상태·보조 글(입력 대기·꺼짐·👀)도 같은 목록으로
   }catch(e){}
 }
 setInterval(listTick, 20000);
@@ -2911,6 +2976,7 @@ const termView={
     if(MODE==='local'){
       // 로컬: 탭별 iframe(terminal.html 무수정). 숨겨도 자기 WS 로 계속 붙어 있다.
       const frame=document.createElement('iframe'); frame.setAttribute('allow','clipboard-read; clipboard-write');
+      frame.onload=()=>quickKeyWatch(frame.contentWindow);   // 커서가 터미널 창 안이어도 Alt+1~4(바로가기) — 다시 읽을 때마다 새로 붙는다
       frame.src=`${APIBASE}/terminal?id=${encodeURIComponent(s.session_id)}&skip=${safe?0:1}`;
       host.appendChild(frame); t.frame=frame;
     } else {
@@ -2921,6 +2987,8 @@ const termView={
         theme:{background:'#0d1117',foreground:'#e6edf3',cursor:'#58a6ff'}});
       const fit=new FitAddon.FitAddon(); term.loadAddon(fit); term.open(host);
       t.term=term; t.fit=fit;
+      // Alt+1~4 는 화면 바로가기(결정 8) — claude 로 보내지 않는다. 받는 일은 창 감시(onQuickKey)가 한다. 맥 Option 이 만든 글자는 보낸다
+      try{ term.attachCustomKeyEventHandler(e=>!quickKeyKind(e)||quickKeyTyping(e)); }catch(e){}
       // 모바일 터치 UX(탭별). 입력은 이 탭이 전경일 때만 보낸다 — 숨은 xterm 이 포커스를 얻어도 유실/오전송 없음
       t.ux=attachMobileTermUX(host, term, {
         send:(d)=>{ if(this.active===key) this.send({type:'input',data:d}); },
@@ -3055,6 +3123,7 @@ function saveTabs(){
   try{ LS.setItem(paneKey('sm_tabs'),JSON.stringify({active:TABS.active,
     list:TABS.list.map(t=>({key:t.key,sid:t.s.session_id,safe:!!t.safe})),
     mru:TABS.mru.filter(k=>findTab(k))})); }catch(e){}
+  renderQuickSoon();                       // 🖥 단추의 탭 수·기억 있음/없음
 }
 // 부팅 후 SESSIONS 가 준비된 시점에 1회. 탭 '목록'만 복원하고 터미널은 열지 않는다 — 자동으로
 // 붙이면 다른 기기가 쥔 화면을 탈취한다(세션당 화면 1개, webterm 점유 규칙). live_terminal 이
@@ -3529,6 +3598,8 @@ async function loadViewer(s){
   paneEnter('viewer', s); const gen=PANE_NOW.gen;   // 칸을 비우기 바로 앞. gen: 응답을 기다리는 사이 다른 화면으로 가면 늦게 그리지 않게(T5)
   const main=paneDetail(); closeInlineMonitor(); main.classList.remove('term-mode','fb-mode','mon-mode'); main.innerHTML=''; $('#head').textContent='뷰어';
   const bar=listBack();
+  // 무엇을 보는지 — 바로가기로 들어오면 목록 줄을 거치지 않아 화면에 세션 이름이 없었다(quick-switch §4-3)
+  const vt=el('span','vtitle',sessLabel(s)); vt.title=sessLabel(s)+(s.cwd?' · '+s.cwd:''); bar.appendChild(vt);
   const badge=el('div','vlive off'); badge.appendChild(el('span','vdot'));
   const bt=el('span',null,'실시간 연결 중…'); badge.appendChild(bt); bar.appendChild(badge);
   main.appendChild(bar);
@@ -3543,12 +3614,13 @@ async function loadViewer(s){
     for(const m of msgs){ renderHistoryMsg(wrap,m,pend);
       if(m.timestamp&&m.timestamp>lastTs) lastTs=m.timestamp; }
     main.scrollTop=main.scrollHeight;
-  }catch(e){ if(gen!==PANE_NOW.gen) return; wrap.innerHTML=''; wrap.appendChild(el('div','empty','뷰어 실패: '+e.message)); return; }
+  }catch(e){ if(gen!==PANE_NOW.gen) return; PANE_NOW.dead=true; wrap.innerHTML=''; wrap.appendChild(el('div','empty','뷰어 실패: '+e.message)); return; }
   // 실시간 tail: 단일 세션 monitor 스트림을 붙여 새 메시지를 같은 카드로 append
+  // PANE_NOW.dead: 이 뷰어의 대화·실시간이 끊겼다 — 바로가기로 같은 뷰어를 다시 누르면 다시 연다(quick-switch §4-3, 폰에서 숨겨 둔 뷰어 등)
   const setBadge=(on,txt)=>{ badge.className='vlive '+(on?'on':'off'); bt.textContent=txt; };
   const nearBot=()=> main.scrollHeight-main.scrollTop-main.clientHeight < 120;
   function onMsg(dataStr,eof){
-    if(eof){ setBadge(false,'연결 끊김'); return; }
+    if(eof){ if(gen===PANE_NOW.gen) PANE_NOW.dead=true; setBadge(false,'연결 끊김'); return; }
     let m; try{ m=JSON.parse(dataStr); }catch(e){ return; }
     if(m.type==='heartbeat'){ setBadge(true,'● 실시간'); return; }
     if(m.type==='snapshot'||m.type==='events'){
@@ -3564,7 +3636,7 @@ async function loadViewer(s){
     }
   }
   try{ _liveViewer=T.monitor(s.session_id, s.session_id, onMsg); }
-  catch(e){ setBadge(false,'실시간 불가'); }
+  catch(e){ PANE_NOW.dead=true; setBadge(false,'실시간 불가'); }
 }
 
 // 서버가 깔끔한 대화만(메타/도구인자/thinking 제외) 최근 limit개 준다.
@@ -4170,7 +4242,8 @@ function fbSaveState(){ if(!FB.restored||FB.migrate) return;
   try{ const tabs=FB.tabs.slice(), i=tabs.findIndex(t=>t.id===FB.active);
   if(i>=FB_KEEP) tabs.splice(FB_KEEP-1, 0, tabs.splice(i,1)[0]);
   LS.setItem(paneKey(FB_STATE), JSON.stringify({open:[...FB.open], sort:FB.sort,
-  tabs:tabs.map(t=>({root:t.root,path:t.path,pinned:!!t.pinned})), active:FB.active})); }catch(e){} }
+  tabs:tabs.map(t=>({root:t.root,path:t.path,pinned:!!t.pinned})), active:FB.active})); }catch(e){}
+  renderQuickSoon(); }   // 📄 단추의 마지막 파일·파일 수
 function fbRestoreState(){ if(FB.restored) return; FB.restored=true;
   const m=pcMemLoad(FB_STATE), st=m.v;
   // 옛 키(PC 구분 없던 값)를 처음 옮겨 올 때는 다른 PC 의 폴더가 섞였을 수 있다 — 이 PC 목록에 있는 폴더의 탭·펼침만 남겨 새 키에
@@ -4561,15 +4634,20 @@ function lsJson(k,d){ try{ const v=JSON.parse(LS.getItem(k)||'null'); return v==
 function lsSet(k,v){ try{ LS.setItem(k,JSON.stringify(v)); }catch(e){} }
 let TEAM_OPEN=new Set(lsJson('sm_team_open',[]));   // 펼친 팀(기기에 기억)
 function tui(code){ return TEAM_UI[code]||(TEAM_UI[code]={filter:'open', add:{}}); }
-async function fetchTeams(){ try{ const r=await T.api('GET','/api/owner/teams',{query:{archived:1}}); return (r&&r.teams)||[]; }catch(e){ return TEAMS||[]; } }
+// 받지 못하면 받아 둔 목록(TEAMS). strict: 받지 못하면 null — 바로가기가 통신 실패와 '팀 없음'을 가른다(quick-switch §4-4)
+async function fetchTeams(strict){ try{ const r=await T.api('GET','/api/owner/teams',{query:{archived:1}}); return (r&&r.teams)||[]; }catch(e){ return strict?null:(TEAMS||[]); } }
+// 받아 둔 팀 목록을 바꾼다 — pc(청할 때의 pcNow())가 지금 PC 일 때만. PC 를 바꾸는 사이 늦게 온 이전 PC 팀 목록이 새 PC 의 👥 보기·
+// 🎬 단추에 쓰이지 않게(팀 코드는 이름에서 만들어 PC 마다 겹친다, 바로가기 검토). 🎬 단추·빈 칸 '최근 화면'의 팀 이름도 다시 그린다
+function setTeams(ts, pc){ if(pc!==undefined&&pc!==pcNow()) return false; TEAMS=ts; renderQuickSoon(); return true; }
 async function refreshTeamDetail(code){
-  const u=tui(code); u.loading=true;
-  try{ TEAM_DET[code]=await T.api('GET','/api/owner/teams/'+encodeURIComponent(code)); }
-  catch(e){ TEAM_DET[code]={error:e.message}; }
+  const u=tui(code), pc=pcNow(); u.loading=true;
+  let d; try{ d=await T.api('GET','/api/owner/teams/'+encodeURIComponent(code)); }
+  catch(e){ d={error:e.message}; }
   finally{ u.loading=false; }
+  if(pc===pcNow()) TEAM_DET[code]=d;       // 받는 사이 PC 를 바꿨다 — 이전 PC 팀 상세를 새 PC 의 같은 코드 팀에 붙이지 않는다
 }
 function teamRerender(){ if(LIST_CTX) LIST_CTX.rerender(); if(LEDGER) renderLedger(); }
-async function reloadTeams(code){ TEAMS=await fetchTeams(); if(code) await refreshTeamDetail(code); teamRerender(); }
+async function reloadTeams(code){ const pc=pcNow(), ts=await fetchTeams(); if(!setTeams(ts,pc)) return; if(code) await refreshTeamDetail(code); teamRerender(); }
 // 입력 중이면 20초 자동 갱신이 폼을 갈아엎지 않게
 function teamEditing(){
   if(TEAM_NEW||Object.values(TEAM_UI).some(u=>u.adding)) return true;
@@ -5097,6 +5175,10 @@ function openMonitor(ids, manager, labels, opts){
   const live=el('div','mon-live off'); live.appendChild(el('span','dot2'));
   const lt=el('span',null,'연결 중…'); live.appendChild(lt); head.appendChild(live);
   const vtoggle=el('button','mon-vtoggle','◨'); vtoggle.title='뷰어 패널 접기/펼치기'; head.appendChild(vtoggle);
+  // 폰 덮개는 머리 줄까지 가려 제목 ▾ 가 안 보인다 — 관제 머리에도 같은 시트를 여는 ▾(결정 10, quick-switch §5-3).
+  // 다른 화면을 고르면 quickGo 가 덮개를 닫고 간다. 상세 칸 관제(PC)는 머리 줄 단추 4개가 보인다
+  if(!inline){ const qb=el('button','mon-vtoggle qs-ov','▾'); qb.title='화면 바로가기'; qb.setAttribute('aria-label','화면 바로가기');
+    qb.setAttribute('aria-haspopup','menu'); qb.onclick=()=>showQuickSheet(qb); head.appendChild(qb); }
   const x=el('button','x','✕'); head.appendChild(x);
   const legend=el('div','mon-legend');
   const fbar=el('div','mon-filter');   // 타임라인 필터(종류 + 세션별 숨김)
@@ -5717,6 +5799,7 @@ function setSideOff(off){
   const b=$('#btn-side');
   if(b){ b.title=off?'목록 칸 펼치기 (Ctrl+Shift+B)':'목록 칸 접기 (Ctrl+Shift+B)'; b.setAttribute('aria-pressed', off?'true':'false'); }
   try{ if(off) LS.setItem(SIDE_KEY,'1'); else LS.removeItem(SIDE_KEY); }catch(e){}
+  renderEmptyPane();                       // 빈 상세 칸 안내 — 접혀 있으면 '왼쪽에서 …'는 틀린 말(quick-switch §3-6)
 }
 function toggleSide(){ const app=$('#app'); setSideOff(!(app&&app.classList.contains('side-off'))); }
 (function initSide(){
@@ -5801,9 +5884,9 @@ function renderPairPcs(){
 //       브라우저에 저장된 '접속 자격'만 지운다.
 const PAIR_KEYS_ACTIVE=['sm_room','sm_token','sm_cs','sm_cp','sm_devtoken','sm_cjwt','sm_grace'];
 const PAIR_KEYS_ALL=PAIR_KEYS_ACTIVE.concat(['sm_pcs','sm_hint_done']);
-// PC 별 화면 기억(quick-switch §6-1: 터미널 탭·파일·화면 = <키>_<PC>) — 그 PC 의 파일 경로·세션 제목·팀 이름이 든다.
+// PC 별 화면 기억(quick-switch §6-1: 터미널 탭·파일·화면 = <키>_<PC>, 마지막 바로가기 화면 sm_qs_last) — 그 PC 의 파일 경로·세션 제목·팀 이름이 든다.
 // 페어링 해제는 그 PC 것을, 이 기기 초기화는 모든 PC 것과 PC 구분 없던 옛 키(sm_tabs·sm_fb_state2)까지 지운다.
-const PC_MEM_KEYS=['sm_tabs','sm_fb_state2','sm_pane'];
+const PC_MEM_KEYS=['sm_tabs','sm_fb_state2','sm_pane','sm_qs_last'];
 function forgetPcMem(room){ if(room) PC_MEM_KEYS.forEach(b=>LS.removeItem(b+'_'+room)); }
 function clearPairing(all){
   (all?PAIR_KEYS_ALL:PAIR_KEYS_ACTIVE).forEach(k=>LS.removeItem(k));
@@ -6250,7 +6333,10 @@ function closePop(){
   if(!POP) return; const p=POP; POP=null;
   try{ p.bg.remove(); p.box.remove(); }catch(e){}
   try{ document.removeEventListener('keydown',p.onKey); }catch(e){}
+  popExpanded(p.anchor, false);
 }
+// 메뉴 단추(aria-haspopup)의 열림 표시 — 보조기기가 시트가 열렸는지 알게(바로가기 검토: 폰 제목 ▾ 가 한 번도 바뀌지 않았다)
+function popExpanded(a, on){ try{ if(a&&a.getAttribute&&a.getAttribute('aria-haspopup')) a.setAttribute('aria-expanded', on?'true':'false'); }catch(e){} }
 function popItem(icon,label,sub,fn,cls){
   const b=el('button','popi'+(cls?' '+cls:'')); b.setAttribute('role','menuitem');
   b.appendChild(el('span','pi',icon)); const t=el('span','pt'); t.appendChild(el('span',null,label));
@@ -6267,7 +6353,7 @@ function openPop(anchor,content,title){
   document.body.appendChild(bg); document.body.appendChild(box);
   const onKey=(e)=>{ if(e.key==='Escape') closePop(); };
   document.addEventListener('keydown',onKey);
-  POP={bg,box,anchor,onKey};
+  POP={bg,box,anchor,onKey}; popExpanded(anchor, true);
   // PC: 누른 버튼 바로 아래(화면 밖이면 위로). 폰은 CSS 가 아래 시트로 고정한다.
   try{ if(innerWidth>=880&&anchor&&anchor.getBoundingClientRect){ const r=anchor.getBoundingClientRect();
     const bw=box.offsetWidth||260, bh=box.offsetHeight||240;
@@ -6379,6 +6465,345 @@ function tabbarGo(v){
   if(onList){ const pl=paneList(); if(pl) pl.scrollTop=0; }   // 보던 탭을 또 누르면 맨 위로
   syncTabbar();
 }
+
+// ---- 상세 칸 화면 바로가기(quick-switch §8 4단계 — 화면 없이 함수만) ----
+// 네 화면(🖥 터미널 · 📄 파일 · 💬 뷰어/ℹ 상세 · 🎬 팀 관제)을 목록 칸에서 다시 고르지 않고 마지막 상태로 오간다(명세 §4).
+// 돌아가기 전용: 새 터미널 탭·새 claude 를 만들지 않고, 2차 인증·화면 인계 확인은 각 화면을 여는 기존 함수가 그대로 맡는다
+// (취소하면 지금 화면 그대로). 5단계(머리 줄 단추 · 폰 제목 ▾ 시트 · 단축키)는 quickTargets() 를 그리고 quickGo(kind) 를 부른다.
+const QUICK_KINDS=['terminal','files','viewer','monitor'];
+const QUICK_META={terminal:['🖥','터미널'], files:['📄','파일'], viewer:['💬','뷰어'], monitor:['🎬','팀 관제']};
+// 기억이 없을 때(결정 5): 안내 + 고를 곳인 목록 칸의 보기
+const QUICK_NONE={terminal:['열어 둔 터미널이 없습니다 — 세션 줄의 🖥/▶ 로 여세요','sessions'],
+  files:['열어 둔 파일이 없습니다 — 파일을 고르세요','files'], viewer:['최근에 본 대화가 없습니다 — 세션 ⋯ → 💬 대화 보기','sessions']};
+// 바로가기가 돌아갈 터미널 탭(§4-1): 떠 있는 화면 → 마지막 탭 → 최근 본 순서 → 남은 탭. ok 로 거를 수 있다(목록에 있는 것만 등)
+function quickTermTab(ok){
+  for(const k of [termView.active, TABS.active, ...TABS.mru, ...TABS.list.map(t=>t.key)]){
+    const t=k?findTab(k):null; if(t&&(!ok||ok(t))) return t; }
+  return null;
+}
+// 👀 다른 기기가 그 터미널을 보는 중인가 — 인계 통지와 20초 목록만으로(새 연결 없이). 지금 이 기기가 붙어 보고 있으면 아니다
+// (목록이 아직 앞 기기 화면을 보여도 — 가져온 직후)
+function quickTermTaken(t, s){
+  if(t.taken) return true;
+  const inst=termView.tabs&&termView.tabs[t.key];
+  if(termView.active===t.key&&termView.sid===t.s.session_id&&!termView.disconnected&&!(inst&&inst.ended)) return false;
+  return shouldConfirmTakeover(s, t);
+}
+// 꺼짐처럼 보이나 — 목록 줄 판정(tabGone)에 더해, 다른 기기가 가져간 탭은 화면이 떠 있어도 이 기기가 붙어 있지 않으니 목록대로 본다.
+// 가져간 뒤 claude 가 끝났는데 인계 확인을 거쳐 다시 붙으면 새 claude 가 뜬다
+function quickTabGone(t, s){ return tabGone(t,s)||(!!t.taken&&!s.live_terminal); }
+// 목록(20초)이 아직 모를 수 있는 탭인가 — 지금 상세 칸에 떠 있거나, 이 페이지가 그 목록 뒤에 살아 있음을 봤다(tabSeenLive). 방금 연
+// 🧑‍💼 비서가 그렇다: 목록은 claude -p 로 만든 세션을 살아 있을 때만 싣고, 비서는 목록 밖 세션 객체로 연다. 목록에 없다고 바로 내리지 않는다(검토)
+function quickTermFresh(t){ return (termView.active===t.key&&termView.mounted(paneDetail()))||tabSeenLive(t); }
+// 파일 기억 엿보기 — 이 페이지가 아직 읽지 않았으면(FB.restored 전) 저장값을 읽기만 한다. fbRestoreState 를 부르지 않는 까닭: PC 를
+// 바꾸는 사이(방 이름이 바뀌기 전) 불리면 이전 PC 기억을 읽어 들여 새 PC 키에 적게 된다. 옛 키는 이 PC 목록의 폴더만(fbRestoreState 와 같게)
+function quickFbPeek(){
+  if(FB.restored) return {tabs:FB.tabs.map(t=>({root:t.root, path:t.path})), active:FB.active};
+  const m=pcMemLoad(FB_STATE), st=m.v||{};
+  const mine=(m.old&&LIST_READY)?new Set((SESSIONS||[]).filter(s=>s.cwd&&!s.headless).map(s=>s.cwd.toLowerCase())):null;
+  const tabs=(Array.isArray(st.tabs)?st.tabs:[]).filter(t=>t&&t.root&&t.path&&(!mine||mine.has(t.root))).slice(0,FB_KEEP);
+  return {tabs, active:st.active};
+}
+// 관제 기억(§4-4·§6-1) → {mem:{team, gid, name}, team(teams 에서 찾은 지금 팀 또는 null), old}. 팀 코드를 먼저 본다(팀을 보관했다
+// 풀면 관제 id 가 새로 생김). 이 PC 의 새 기억이 없으면 옛 sm_mon_last(관제 id, PC 구분 없음)를 한 번 참고하되 이 PC 팀 목록에서
+// 찾을 때만 쓴다(old) — 다른 PC 의 관제 id 일 수 있다. 받아 둔 팀 목록(TEAMS)은 늘 지금 PC 것이다(PC 전환 때 비움·setTeams)
+function quickMonMem(teams){
+  const find=(mem)=>teams?((mem.team&&teams.find(x=>x.code===mem.team))||(mem.gid&&teams.find(x=>x.monitor_group_id===mem.gid))||null):null;
+  const m=paneMem().monitor;
+  if(m&&(m.team||m.gid)) return {mem:m, team:find(m), old:false};
+  let last=null; try{ last=LS.getItem('sm_mon_last'); }catch(e){}
+  const t=(last&&teams)?teams.find(x=>x.monitor_group_id===last):null;
+  return t?{mem:{team:t.code, gid:last, name:t.name||''}, team:t, old:true}:null;
+}
+// 네 칸의 지금 모습 — [{kind, icon, label, has(돌아갈 기억), name, sub(보조 글), dim(흐림), taken(👀), wait(첫 목록 전 — 준비 중),
+// cur(지금 보이는 상세 칸 화면), back(숨겨 둔 화면 — 폰 '‹ 목록'·관제 덮개 밑)}]. 20초 목록·받아 둔 팀 목록·기억만 본다 — 새 연결
+// 없이(목록 끝·20초 갱신마다 그려도 된다). 검증·정리는 누를 때(quickGo).
+function quickTargets(){
+  const ready=LIST_READY, find=(sid)=>(SESSIONS||[]).find(x=>x.session_id===sid)||null;
+  const ov=!!MON_OV, hid=detailHiddenOnPhone(), pk=PANE_NOW.kind;
+  return QUICK_KINDS.map(kind=>{
+    const [icon,label]=QUICK_META[kind];
+    const o={kind, icon, label, has:false, name:'', sub:'', dim:false, taken:false, wait:!ready, cur:false, back:false};
+    const here=kind==='viewer'?(pk==='viewer'||pk==='detail'):pk===kind;
+    if(kind==='monitor'){ o.cur=ov||(here&&!hid); o.back=!ov&&here&&hid; }   // 폰 관제는 화면 전체 덮개
+    else { o.cur=here&&!ov&&!hid; o.back=here&&(ov||hid); }
+    if(kind==='terminal'){
+      // 목록에서 빠진 탭은 누르면 내린다 — 목록이 아직 모르는 탭(떠 있는 터미널·방금 본 터미널)은 그대로 보인다
+      const ok=(t)=>!ready||!!find(t.s.session_id)||quickTermFresh(t), t=quickTermTab(ok), n=TABS.list.filter(ok).length;
+      if(t){ const s=find(t.s.session_id)||t.s, inst=termView.tabs&&termView.tabs[t.key];
+        const off=!!(inst&&inst.ended)||(quickTabGone(t,s)&&!tabSeenLive(t)), bd=off?null:sessionBadge(s);
+        o.has=true; o.name=sessLabel(s); o.sub=[off?'꺼짐':(bd?bd.text:''), n>1?'탭 '+n+'개':''].filter(Boolean).join(' · ');
+        o.taken=!off&&quickTermTaken(t,s); }
+      else o.sub='열어 둔 터미널 없음';
+    } else if(kind==='files'){
+      const st=quickFbPeek();
+      if(st.tabs.length){ const a=st.tabs.find(t=>fbId(t.root,t.path)===st.active)||st.tabs[0];
+        o.has=true; o.name=baseName(a.path); o.sub=st.tabs.length>1?'파일 '+st.tabs.length+'개':''; }
+      else o.sub='열어 둔 파일 없음';
+    } else if(kind==='viewer'){
+      const m=paneMem().viewer;
+      if(m&&m.sid){ const det=m.kind==='detail', s=find(m.sid), tgt=s?continuedTarget(s):null, gone=ready&&!s;
+        if(det){ o.icon='ℹ'; o.label='상세'; }                     // 결정 1: 마지막에 본 종류를 따라 단추 이름이 바뀐다
+        o.has=true; o.name=tgt?sessLabel(tgt):(m.name||String(m.sid).slice(0,8));
+        o.sub=[gone?'목록에 없음':'', tgt&&tgt!==s?'이어받음':'', (typeof m.at==='number'&&m.at>0)?relTs(m.at/1000):''].filter(Boolean).join(' · ');
+        if(gone) o.dim=true; }
+      else o.sub='최근에 본 대화 없음';
+    } else {
+      const r=quickMonMem(TEAMS);
+      if(r){ o.has=true; o.name=(r.team&&r.team.name)||r.mem.name||'';
+        if(r.team&&(r.team.archived||!teamAsGroup(r.team))){ o.sub='열 수 없음'; o.dim=true; } }   // 팀 목록에 없으면 누를 때 관제 목록으로 한 번 더 본다
+      else o.sub='최근에 연 관제 없음';
+    }
+    if(!o.has||!ready) o.dim=true;
+    return o;
+  });
+}
+// 기억이 없을 때(결정 5): 고를 곳인 목록 칸을 그 보기로 — PC 는 접혀 있으면 펼친다. 폰은 아래 탭 막대와 같은 길로 목록 칸에
+// (PC 에서 tabbarGo 를 쓰지 않는 까닭: 웹 재개가 그대로 보이는데도 재개를 끝낸다)
+function quickPickIn(view){
+  if(innerWidth<880) return tabbarGo(view);
+  if($('#app').classList.contains('side-off')) setSideOff(false);
+  if(LIST_VIEW!==view||!LIST_CTX){ setListView(view); return loadList(); }
+}
+function quickNone(kind){ const [msg,view]=QUICK_NONE[kind]; toast(msg); return quickPickIn(view); }
+// 이미 그 화면이면 다시 짓지 않고 커서만 옮긴다(§4 공통) — 터미널(xterm · 로컬 터미널 창)·편집기.
+// 로컬 터미널 창(iframe, 같은 출처)은 창 안 xterm 입력칸에 바로 둔다 — 크롬은 iframe 요소에 focus 를 주면 창 문서의 커서를 body 로 옮겨
+// xterm 이 커서를 잃는다(다음 타자가 claude 로 안 감, 검토 실측). 창 문서를 못 읽을 때(아직 안 뜸)만 창에
+function quickFocus(kind){
+  try{
+    if(kind==='terminal'){ const c=termView.cur(); if(!c) return;
+      if(c.term) c.term.focus();
+      else if(c.frame){
+        let ta=null; try{ const d=c.frame.contentDocument; ta=d&&d.querySelector('.xterm-helper-textarea'); }catch(e){}
+        if(ta) ta.focus();
+        else { c.frame.focus(); const w=c.frame.contentWindow; if(w&&typeof w.focus==='function') w.focus(); } } }
+    else if(kind==='files'&&FB.ed) FB.ed.focus();
+  }catch(e){}
+}
+// 바로가기 누름(§4) — 그 화면의 마지막 상태로. 첫 목록 전(새로고침·PC 전환 직후)엔 기억을 지금 목록으로 확인할 수 없어 받지 않는다 —
+// 누름 순번도 올리지 않아 기다리던 알림 진입을 끊지 않는다. 그 뒤로는 바로 끝나는 누름도 마지막 누름이다(navTicket): 목록·팀 목록을
+// 받거나 2차 인증을 기다리던 앞 누름은 늦게 끝나도 화면을 바꾸지 않는다(§4 공통 '연달아 누르면 마지막 누름만')
+async function quickGo(kind){
+  if(!QUICK_META[kind]) return;
+  if(!LIST_READY){
+    // 폰 관제 덮개(z 60)가 알림(z 20)을 가린다 — 다른 화면을 골랐으면(끊긴 덮개의 🎬 도) 덮개를 닫고 알린다(§5-3, 검토). 관제 알림이 첫 목록보다
+    // 먼저 덮개를 열었을 때다. 살아 있는 덮개의 🎬 는 이미 그 화면이라 알릴 것이 없다
+    if(MON_OV){ if(kind==='monitor'&&!MON_OV.dead()) return; MON_OV.close(); }
+    toast('목록을 받는 중입니다'); return; }
+  if(kind!=='monitor'&&MON_OV) MON_OV.close();   // 폰 관제 덮개에서 다른 화면을 고르면 덮개(와 관제 연결)를 닫고 간다 — 알림은 닫은 뒤에(§5-3)
+  const live=navTicket();
+  if(kind==='terminal') return quickGoTerminal(live);
+  if(kind==='files') return quickGoFiles();
+  if(kind==='viewer') return quickGoViewer();
+  return quickGoMonitor(live);
+}
+// 🖥 터미널(§4-1, 결정 4): 목록 줄을 누른 것과 같은 규칙(jumpToSession)을 '그 탭'에. 꺼짐처럼 보이면 판정 전에 목록을 한 번 새로 받는다 —
+// 20초 목록은 방금 띄운 터미널을 꺼진 것으로 볼 수 있다. 그래도 꺼졌으면 다시 띄우지 않고 그 탭을 닫고 상세로
+async function quickGoTerminal(live){
+  let listed=false, left=false;
+  const ended=(t)=>{ const i=termView.tabs&&termView.tabs[t.key]; return !!(i&&i.ended); };   // claude 가 끝났다고 들었다(다시 붙으면 새로 뜬다)
+  for(let n=TABS.list.length+1; n>0; n--){
+    const t=quickTermTab(); if(!t) break;
+    // 이미 그 화면 — 다시 짓지 않고 커서만(목록에 아직 없는 세션이어도 — 방금 연 🧑‍💼 비서 등). 폰에서 '‹ 목록'으로 숨겼으면 다시
+    // 보여 주기만(재접속 없음, §5-2). 전엔 목록에 없다고 먼저 내려 보던 터미널을 허물었다(검토)
+    if(termView.mounted(paneDetail())&&termView.active===t.key&&!termView.disconnected&&!t.taken&&!ended(t)){ showDetailPane(); quickFocus('terminal'); return; }
+    let s=(SESSIONS||[]).find(x=>x.session_id===t.s.session_id);
+    // 지워짐·이사 — 그 탭을 조용히 내리고 다음 최근 탭으로. 목록이 아직 모를 수 있는 탭(quickTermFresh)은 아래에서 한 번 새로 받아 판정한다
+    if(!s&&(listed||!quickTermFresh(t))){ left=quickDropTab(t)||left; continue; }
+    if(!listed&&(!s||ended(t)||quickTabGone(t,s))){
+      const recent=tabSeenRecently(t)&&!ended(t);
+      const f=await freshSessShown(t.s.session_id);
+      if(!live()) return;                                         // 기다리는 사이 다른 누름·다른 화면·PC 전환 — 이 누름은 화면을 바꾸지 않는다
+      listed=true;                                                // 이번에 받은 목록으로 다음 탭도 판정한다(다시 기다리지 않게)
+      if(!findTab(t.key)) continue;                               // 기다리는 사이 그 탭이 닫혔다
+      if(f===null){ left=quickDropTab(t)||left; continue; }
+      if(f===undefined){                                          // 목록을 받지 못했다(끊김·3초 넘김) — 목록 줄과 같게
+        if(recent){ switchTab(t.key,{listed}); return; }          // 막 살아 있음을 본 탭 — 그 탭으로(끊겼으면 '연결 종료'로 열려 다시 연결될 때 붙는다)
+        if(!s){ toast('터미널 상태를 확인하지 못했습니다 — 연결을 확인하세요'); return; }   // 목록에 없는 탭 — 내리지도 열지도 않는다(지금 화면 그대로)
+        loadDetail(s); toast('터미널 상태를 확인하지 못해 상세로 열었습니다'); return;   // 그사이 꺼졌을 수 있다 — 새 claude 를 띄우지 않게. 탭은 그대로
+      }
+      s=f;
+    }
+    if((ended(t)&&!s.live_terminal)||quickTabGone(t,s)){         // 꺼짐 — 그 탭을 닫고 그 세션 상세(▶ 재개)로, 새 claude 는 띄우지 않는다
+      dropGoneTab(t); loadDetail(s); toast('꺼진 터미널이라 상세로 열었습니다 — ▶ 재개로 다시 띄울 수 있어요'); return; }
+    switchTab(t.key, listed?{listed}:undefined); return;          // 2차 인증·다른 기기 인계 확인은 loadTerminal 이 — 끊긴 탭은 같은 탭에 다시 붙는다
+  }
+  if(left) detailPlaceholder();                                   // 보던 터미널의 세션이 목록에서 사라졌다 — 빈 터미널 틀을 남기지 않는다
+  return quickNone('terminal');
+}
+function quickDropTab(t){ const onView=termView.active===t.key; dropGoneTab(t); return onView; }
+// 📄 파일(§4-2): 열어 둔 파일 탭들 그대로 편집기로. 내용이 메모리에 있으면 받지 않고, 새로고침 뒤엔 마지막 파일 하나만 받는다.
+// 목록 칸 보기는 바꾸지 않는다(거울 원칙) — 기억이 없을 때만 고를 곳인 📁 탐색기로
+function quickGoFiles(){
+  fbRestoreState();                                               // 새로고침 뒤 처음이면 이 PC 기억을 읽는다(첫 목록 뒤라 옛 키도 이 PC 폴더로 걸러진다)
+  if(!FB.tabs.length) return quickNone('files');
+  if(paneDetail().classList.contains('fb-mode')){ showDetailPane(); quickFocus('files'); return; }   // 이미 그 화면(폰에서 숨겼으면 보여 주기만)
+  fbRoots();                                                      // 폴더 → 세션을 지금 목록으로 다시 센다
+  for(const t of FB.tabs) if(t.err&&(t.err.error==='no_session'||t.err.error==='no_cwd')) t.err=null;   // 일시 오류는 지우고 다시 받는다(굳지 않게)
+  return fbShowEditor();
+}
+// 💬 뷰어 · ℹ 상세(§4-3, 결정 1): 마지막에 본 종류로, 목록의 최신 세션 정보로 다시 그린다. 이어받았으면 이어받은 세션으로
+function quickGoViewer(){
+  const m=paneMem().viewer;
+  if(!m||!m.sid) return quickNone('viewer');
+  const det=m.kind==='detail';
+  // 이미 그 화면 — 그대로(폰에서 숨겼으면 보여 주기만). 대화 보기의 대화·실시간이 끊겼으면 다시 연다
+  if(PANE_NOW.kind===(det?'detail':'viewer')&&PANE_NOW.sid===m.sid&&!(!det&&PANE_NOW.dead)){ showDetailPane(); return; }
+  const s=(SESSIONS||[]).find(x=>x.session_id===m.sid);
+  if(!s){ paneMemSet('viewer',null); toast('그 세션은 목록에 없습니다'); return; }   // 지워짐·이사·자동 실행(-p) — 그 기억만 지운다
+  const tgt=continuedTarget(s);
+  if(det) loadDetail(tgt); else loadViewer(tgt);
+  if(tgt!==s) toast('이어받은 세션으로 열었습니다');
+}
+// 🎬 팀 관제(§4-4): 팀 목록을 받아 그 팀의 지금 구성원으로(PC 상세 칸 · 폰 화면 전체 덮개). 통신 실패와 '그 팀 없음'을 가른다 —
+// 실패면 기억을 두고 알리고, 팀이 지워졌거나 보관·관리 세션 없음이면 그 기억만 지운다
+async function quickGoMonitor(live){
+  const m0=quickMonMem(null), gid0=m0&&m0.mem.gid;
+  // 이미 떠 있고 연결이 살아 있으면 그대로. 끊겼으면 아래에서 다시 연다(1-5)
+  const inl=MON_INLINE;
+  if(inl&&!inl.dead()&&paneDetail().classList.contains('mon-mode')&&(!gid0||inl.gid===gid0)){ showDetailPane(); return; }
+  if(MON_OV&&!MON_OV.dead()&&(!gid0||MON_OV.gid===gid0)) return;
+  // 다시 열지 못하고 알릴 때 — 폰의 끊긴 관제 덮개가 남아 있으면 먼저 닫는다(덮개가 알림·목록 칸을 가린다, §5-3)
+  const say=(msg)=>{ if(MON_OV) MON_OV.close(); toast(msg); };
+  const teams=await fetchTeams(true);
+  if(!live()) return;                                             // 받는 사이 다른 누름·화면·PC 전환
+  if(teams===null) return say('팀 목록을 받지 못했습니다 — 연결을 확인하세요');
+  setTeams(teams);
+  const r=quickMonMem(teams);
+  if(r){
+    let g=r.team?(r.team.archived?null:teamAsGroup(r.team)):null;
+    if(!r.team&&r.mem.gid){                                       // 팀 목록에 없다 — 관제 그룹 목록의 id 로 한 번 더(팀이 아닌 옛 관제 등)
+      let gs=null; try{ const x=await T.api('GET','/api/owner/monitor/groups'); gs=(x&&x.groups)||[]; }catch(e){}
+      if(!live()) return;
+      if(gs===null) return say('관제 목록을 받지 못했습니다 — 연결을 확인하세요');
+      g=gs.find(x=>x.id===r.mem.gid)||null;
+    }
+    if(g){ openMonitorGroup(g); return; }
+    if(!r.old){ paneMemSet('monitor',null); return say('그 팀 관제를 열 수 없습니다'); }
+  }
+  // 기억 없음(결정 5): 관제할 수 있는 팀이 1개면 바로 연다(읽기 전용이라 안전), 여럿이면 👥 팀 보기로, 없으면 알린다
+  const can=teams.filter(t=>t.kind!=='portfolio'&&!t.archived&&teamAsGroup(t));
+  if(can.length===1){ openMonitorGroup(teamAsGroup(can[0])); return; }
+  if(!can.length) return say('관제할 팀이 없습니다');
+  say('관제할 팀을 고르세요 — 팀 ⋯ → 🎬 관제 열기'); return quickPickIn('groups');
+}
+
+// ---- 화면 바로가기 화면(quick-switch §8 5단계) — PC 머리 줄 단추 4개 · 폰 제목 ▾ 시트 · 폰 관제 덮개 머리 ▾ · Alt+1~4 · 빈 칸 '최근 화면' ----
+// 그리기만 한다: 모습은 quickTargets(), 누르면 quickGo(kind). 강조는 renderQuickSoon(화면 진입·목록 끝·20초 갱신 끝, 100ms 로 모아)
+const QUICK_KEYS={terminal:'Alt+1', files:'Alt+2', viewer:'Alt+3', monitor:'Alt+4'};
+// 무엇이 열릴지 한 줄(이름 · 보조 글) — 툴팁·시트·빈 칸이 같이 쓴다
+function quickLine(o){ return [o.name, o.sub].filter(Boolean).join(' · '); }
+function quickTip(o){
+  return o.label+' — '+(o.wait?'준비 중(목록을 받는 중)':quickLine(o))+' · '+QUICK_KEYS[o.kind]
+    +(o.taken?'\n👀 다른 기기에서 보는 중 — 누르면 가져오기 확인':'');
+}
+// PC 머리 줄 단추 4개(.grow 뒤·🔔 앞) — 파랑 = 지금 상세 칸 화면, 보통 = 기억 있음, 흐림 = 기억 없음·준비 중(첫 목록 전).
+// 단추는 한 번만 만들고 모습만 바꾼다(20초마다 다시 만들면 누르던 단추의 포커스를 잃는다). 폰은 CSS 가 숨긴다(제목 ▾ 시트)
+function renderQuick(){
+  const nav=$('#qs'), list=quickTargets();
+  if(nav){
+    if(nav.children.length!==list.length){ nav.innerHTML='';
+      for(const o of list){ const b=el('button'); b.type='button'; b.dataset.k=o.kind;
+        b.appendChild(el('span','qi')); b.appendChild(el('span','ql')); b.onclick=()=>quickGo(o.kind); nav.appendChild(b); } }
+    list.forEach((o,i)=>{ const b=nav.children[i];
+      b.className=[o.cur&&'on', o.dim&&!o.cur&&'dim', o.wait&&'wait', o.taken&&'taken'].filter(Boolean).join(' ');
+      b.children[0].textContent=o.icon; b.children[1].textContent=o.kind==='monitor'?'관제':o.label;   // 결정 1: 💬 뷰어 ↔ ℹ 상세
+      b.title=quickTip(o); b.setAttribute('aria-label',o.label); b.setAttribute('aria-current',o.cur?'true':'false'); });
+  }
+  quickTitleSync();
+  renderEmptyPane(list);
+}
+// 머리 줄 제목(#qs-title) — 폰(<880px)은 '화면 바로가기' 메뉴 단추(▾ 시트), PC 는 제목 글자일 뿐이다(입구는 단추 4개). PC 에서 CSS·탭 키만
+// 막으면 보조기기가 '세션, 메뉴 단추'로 읽는데 눌러도 아무 일이 없었다(검토) — 막힌 단추로 두어 커서를 받지 않게 하고(그래야 role=none 이
+// 먹는다) 메뉴 표시를 뗀다. 창 폭이 바뀌면(창 크기·태블릿 회전) 따라 바꾼다
+let _qsTitlePc=null;
+function quickTitleSync(){
+  const tb=$('#qs-title'); if(!tb) return;
+  const pc=innerWidth>=880; if(_qsTitlePc===pc) return; _qsTitlePc=pc;
+  tb.disabled=pc; tb.tabIndex=pc?-1:0; tb.title=pc?'':'화면 바로가기';
+  if(pc){ tb.setAttribute('role','none'); tb.removeAttribute('aria-haspopup'); tb.removeAttribute('aria-expanded'); }
+  else { tb.removeAttribute('role'); tb.setAttribute('aria-haspopup','menu'); tb.setAttribute('aria-expanded', POP&&POP.anchor===tb?'true':'false'); }
+}
+quickTitleSync();
+window.addEventListener('resize', quickTitleSync);
+// 빈 상세 칸(§3-6) — 안내 + '최근 화면'(갈 수 있는 기억만 = 흐림 빼고, 마지막 화면이 맨 앞·나머지는 단추 순서). 첫 목록 전엔 기억을 확인하지
+// 못해 모두 흐림(quickTargets)이라 단추가 없다. 목록 칸이 접혀 있으면 '왼쪽에서 …'는 틀린 말이라 ◧ 안내로 바꾼다. 폰은 빈 안내 자체가
+// 숨어 있다(CSS). 모습(안내·단추 차례)이 같으면 글자만 고친다 — 💬 칸의 '방금 → 1분 전'처럼 매분 바뀌는 글자로 20초 갱신이 단추를 새로
+// 만들면 Tab 으로 둔 키보드 커서가 빠졌다(검토). 차례가 바뀌어 새로 그릴 때는 커서가 있던 칸의 새 단추로 커서를 옮긴다
+function renderEmptyPane(list){
+  const box=EMPTY_BOX;
+  if(!box||PANE_NOW.kind!=='empty'||paneDetail().children[0]!==box) return;
+  const last=quickLast();
+  const recent=(list||quickTargets()).filter(o=>o.has&&!o.dim).sort((a,b)=>(b.kind===last)-(a.kind===last));
+  const app=$('#app'), off=!!app&&app.classList.contains('side-off'), txt=box._txt||'왼쪽에서 세션을 선택하세요';
+  const msg=(off&&/^왼쪽에서 /.test(txt))?(recent.length?'◧ 로 목록 칸을 펼치거나 최근 화면으로 가세요':txt.replace(/^왼쪽에서 /,'◧ 로 목록 칸을 펼쳐 ')):txt;
+  const shape=JSON.stringify([msg, recent.map(o=>o.kind)]);
+  if(box._shape===shape){ recent.forEach((o,i)=>quickRecentFill(box._btns[i],o)); return; }
+  const a=document.activeElement, had=(box._btns||[]).includes(a)?a.dataset.k:'';
+  box._shape=shape; box._btns=[];
+  box.innerHTML='';
+  box.appendChild(el('div','de-msg',msg));
+  if(!recent.length) return;
+  const wrap=el('div','qs-recent'); wrap.appendChild(el('div','qs-rh','최근 화면'));
+  const grid=el('div','qs-rg');
+  for(const o of recent){ const b=el('button','qs-rb'); b.type='button'; b.dataset.k=o.kind;
+    b.appendChild(el('span','qi')); const t=el('span','qt'); t.appendChild(el('span','qn')); t.appendChild(el('small')); b.appendChild(t);
+    quickRecentFill(b,o); b.onclick=()=>quickGo(o.kind); grid.appendChild(b); box._btns.push(b); }
+  wrap.appendChild(grid); box.appendChild(wrap);
+  const nb=had&&box._btns.find(b=>b.dataset.k===had); if(nb) try{ nb.focus(); }catch(e){}
+}
+// '최근 화면' 단추 하나의 글자 — 그림 · 이름 · (칸 · 보조 글) · 툴팁
+function quickRecentFill(b, o){
+  b.title=quickTip(o); b.children[0].textContent=o.icon; const t=b.children[1];
+  t.children[0].textContent=o.name||o.label; t.children[1].textContent=[o.label, o.sub].filter(Boolean).join(' · ');
+}
+// 폰 화면 바로가기 시트(§5-1) — 제목 ▾ 와 관제 덮개 머리 ▾(§5-3)가 연다. 4줄 고정 순서: 지금 화면 '지금', 숨겨 둔 화면 '바로 돌아가기',
+// 기억 없음은 흐리게 '고르기…', 다른 기기가 보는 터미널은 '👀 가져오기'(누르면 인계 확인창). 덮개(z 60) 위에서도 보이게 위 층으로(qs-sheet)
+function showQuickSheet(anchor){
+  const box=el('div');
+  for(const o of quickTargets()){
+    const [tag,tc]=o.taken?['👀 가져오기','warn']:o.cur?['지금','now']:o.back?['바로 돌아가기','now']:o.wait?['준비 중','']:!o.has?['고르기…','']:['',''];
+    const b=popItem(o.icon, o.label, quickLine(o), ()=>quickGo(o.kind), 'qs-it'+(o.dim&&!o.cur&&!o.back?' dim':''));
+    b.dataset.k=o.kind;
+    if(tag) b.appendChild(el('span','qtag'+(tc?' '+tc:''),tag));
+    box.appendChild(b);
+  }
+  const p=openPop(anchor, box, '화면 바로가기');
+  try{ p.classList.add('qs-sheet'); POP.bg.classList.add('qs-sheet'); p.setAttribute('aria-label','화면 바로가기'); }catch(e){}
+  return p;
+}
+// 폰: 제목 ▾ → 시트. PC 는 제목이 글자 그대로라 누르지 않는다(입구는 단추 4개 — CSS 도 막는다)
+{ const tb=$('#qs-title'); if(tb) tb.onclick=()=>{ if(innerWidth<880) showQuickSheet(tb); }; }
+// 단축키 Alt+1~4(결정 8, §3-7) — 창 전체 감시(capture 라 터미널·편집기보다 먼저 받는다). 받지 않는 경우: 진짜 입력칸(검색·이름·한글 입력창)에
+// 커서가 있을 때, 설정·확인창·⋯ 팝이 열려 있을 때, Ctrl·Shift(·⌘)가 섞였을 때. 터미널(xterm 숨은 입력)·파일 편집기(Monaco) 안에서는 받는다.
+// 숫자는 윗줄만 — Alt+숫자 패드는 Windows 문자 입력(Alt 코드)이다
+const QUICK_KEY_CODES={Digit1:'terminal', Digit2:'files', Digit3:'viewer', Digit4:'monitor'};
+function quickKeyKind(e){
+  if(!e||!e.altKey||e.ctrlKey||e.shiftKey||e.metaKey||e.isComposing||e.keyCode===229) return null;
+  if(e.code) return QUICK_KEY_CODES[e.code]||null;
+  return QUICK_KINDS[['1','2','3','4'].indexOf(String(e.key))]||null;   // code 를 주지 않는 옛 브라우저
+}
+// 맥(아이패드 포함)의 Option 은 글자를 만드는 수식키다 — Option+1~4 = US ¡™£¢, UK 배열은 Option+3 이 '#'(그 배열에서 # 를 치는 길).
+// 숫자 아닌 글자(죽은 키 포함)가 나오면 글을 받는 곳(터미널·편집기 찾기 칸)에서는 바로가기가 아니라 입력이다(검토). 읽기 전용 편집기
+// 본문(domReadOnly)은 글자가 갈 데가 없어 바로가기로 받는다. 윈도우·리눅스의 Alt+숫자는 글자를 만들지 않는다(AltGr 은 Ctrl 이 섞여 이미 뺀다)
+const QUICK_MAC=(()=>{ try{ return /mac|iphone|ipad|ipod/i.test((navigator.userAgentData&&navigator.userAgentData.platform)||navigator.platform||''); }catch(e){ return false; } })();
+function quickKeyTyping(e){ return QUICK_MAC&&!!e&&typeof e.key==='string'&&(e.key==='Dead'||(e.key.length===1&&!/^[0-9]$/.test(e.key))); }
+function quickKeyOk(t, e){
+  const app=$('#app'); if(!app||app.classList.contains('hidden')) return false;   // 페어링 화면
+  if(POP||document.getElementById('overlay')) return false;                      // 팝·모달(설정·확인창)이 열려 있다 — 그쪽 일
+  if(!t||typeof t.closest!=='function') return true;
+  if(t.closest('.xterm')||t.closest('.monaco-editor')) return !(quickKeyTyping(e)&&t.readOnly!==true);   // 터미널·편집기 안 — 가장 필요한 곳
+  return !(/^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName||'')||t.isContentEditable===true);
+}
+function onQuickKey(e){
+  const kind=quickKeyKind(e); if(!kind||!quickKeyOk(e.target, e)) return;
+  try{ e.preventDefault(); e.stopPropagation(); }catch(_){}                       // claude·편집기·브라우저로 가지 않게
+  if(e.repeat) return;                                                           // 누르고 있는 동안 되풀이하지 않는다
+  quickGo(kind);
+}
+window.addEventListener('keydown', onQuickKey, true);
+// 로컬 터미널 창(iframe, 같은 출처)은 커서가 그 안에 있으면 키가 바깥 창으로 오지 않는다 — 창이 뜰 때마다 같은 감시를 그 창에 붙인다(§3-7)
+function quickKeyWatch(w){ try{ if(w&&typeof w.addEventListener==='function') w.addEventListener('keydown', onQuickKey, true); }catch(e){} }
 
 // ---- 🧑‍💼 개인 비서(단계 3, A-7) — 헤더 버튼: PC·폰 어디서든 비서 세션 터미널 ----
 async function openAssistant(){
@@ -6811,6 +7236,9 @@ function pcSwitchReset(){
   // 목록 칸의 이전 PC 줄·탐색기도 지운다 — 새 PC 연결을 기다리는 사이 옛 줄·파일을 누르면 이전 PC 세션·파일이 새 PC 기억 키에
   // 적히고 이전 PC 세션을 새 PC 로 열었다. 새 PC 첫 목록(loadList)이 다시 그리고, 20초 갱신도 그때까지 쉰다(LIST_CTX)
   SESSIONS=[]; LIST_CTX=null;
+  // 받아 둔 팀 목록·펼친 팀 상세도 이전 PC 것이다 — 팀 코드는 이름에서 만들어(한글 이름은 TM·TM2…) PC 마다 겹친다. 남기면 새 PC 의
+  // 🎬 단추·시트·빈 칸 '최근 화면'이 이전 PC 팀 이름을 보이고 누르면 다른 팀이 열렸다(바로가기 검토). 새 PC 팀은 👥 보기·🎬 누름 때 받는다
+  TEAMS=null; for(const k of Object.keys(TEAM_DET)) delete TEAM_DET[k];
   { const pl=paneList(); if(pl){ pl.innerHTML=''; pl.appendChild(el('div','empty','PC 에 연결하는 중…')); } }
   detailPlaceholder();                         // 빈 안내 — PANE_NOW 도 빈 화면으로(세대는 이어서 센다: 늦은 뷰어 응답 판정)
   showListPane();                              // 폰: 상세 칸이 빈 안내(폰에선 숨김)뿐이면 막다른 빈 화면 — 연결이 실패해도 목록 칸을 보인다
