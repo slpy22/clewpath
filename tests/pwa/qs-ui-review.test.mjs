@@ -237,3 +237,28 @@ test("T98 🎬·💬 를 눌러 그 기억을 지우면(팀 삭제·세션이 �
                    after: { btn: ["dim", "뷰어 — 최근에 본 대화 없음 · Alt+3"], recent: [] } },
   });
 });
+
+// ---------------------------------------------------------------- 첫 목록 전 폰 관제 덮개(검토 r4)
+// 덮개(z 60)가 알림(z 20)을 가린다. 관제 알림이 연결 직후·PC 전환 직후 첫 목록보다 먼저 덮개를 열면(드묾) 그 ▾ 에서 다른 화면을 골라도
+// '목록을 받는 중입니다'가 덮개 밑에 떠 무반응처럼 보였다(§5-3 '토스트는 덮개를 닫은 뒤').
+test("T99 첫 목록 전 폰 관제 덮개 ▾ 에서 다른 화면을 고르면 덮개(와 관제 연결)를 닫고 '목록을 받는 중입니다'를 알린다 — 살아 있는 덮개에서 🎬 는 그대로(알림 없음), 끊긴 덮개면 닫고 알린다", async () => {
+  const ROW = { "🖥": 0, "📄": 1, "💬": 2, "🎬": 3 };
+  const got = await each(["🖥", "📄", "💬", "🎬", "🎬 끊긴 덮개"], async (p) => {
+    const { ctx } = await boot({ width: 390, ready: false, pre: "T.list = () => new Promise(() => {});" });
+    ev(ctx, "globalThis.__log = []; toast = (m) => __log.push(m + ' / 덮개=' + (MON_OV ? '열림' : '닫힘'));");
+    ev(ctx, "loadList()");                                              // 첫 목록을 받는 중
+    ev(ctx, `openMonitorGroup({ id: 'g1', name: '팀1', manager: '${A}', subs: [], labels: {} })`);   // 관제 알림이 먼저 연 덮개
+    const mon = ev(ctx, "__mon.filter((h) => h.gid).at(-1)");
+    if (p.includes("끊긴")) mon.cb(null, true);
+    const ov = ctx.document.body.children.filter((c) => String(c.className) === "mon-ov").at(-1);
+    ov.children[0].children.find((c) => String(c.className).includes("qs-ov")).onclick();   // 덮개 머리 ▾ → 시트
+    ev(ctx, `POP.box.children[1].children[${ROW[p.split(" ")[0]]}].onclick()`); await tick(QS);
+    return { log: ev(ctx, "__log.join('|')"), overlay: ev(ctx, "!!MON_OV"), monClosed: mon.closed };
+  });
+  const SAID = "목록을 받는 중입니다 / 덮개=닫힘";
+  assert.deepEqual(got, {
+    "🖥": { log: SAID, overlay: false, monClosed: 1 }, "📄": { log: SAID, overlay: false, monClosed: 1 }, "💬": { log: SAID, overlay: false, monClosed: 1 },
+    "🎬": { log: "", overlay: true, monClosed: 0 },                     // 이미 그 화면
+    "🎬 끊긴 덮개": { log: SAID, overlay: false, monClosed: 1 },
+  });
+});
