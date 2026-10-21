@@ -31,9 +31,9 @@ function seed(sb, pc, mem) {
 
 // 머리 줄 단추 칸(#qs)·제목 단추(#qs-title)는 부트 전에 고정한다(제목 누름은 부트 때 건다). 나머지는 qs-ui 와 같다(하네스 주의 §8).
 // room: 릴레이 PC 방 이름(그 PC 키에 기억을 심고 PC 둘을 저장해 둔다 — switchToPc 로 바꿔 본다). __teams 는 배열·'fail'·함수(받기를 늦출 때)
-async function boot({ width = 1400, local = false, room = null, mem = null, more = null, ready = true, pre = "", setup = null } = {}) {
+async function boot({ width = 1400, local = false, room = null, mem = null, more = null, ready = true, pre = "", setup = null, navigator = null } = {}) {
   const pc = local ? "local" : (room || "relay");
-  const ctx = await load({ ...(local ? { location: LOCAL } : {}), setup: (sb) => {
+  const ctx = await load({ ...(local ? { location: LOCAL } : {}), ...(navigator ? { navigator } : {}), setup: (sb) => {
     sb.document._register("qs", sb.document.createElement("nav")); sb.document._register("qs-title", sb.document.createElement("button"));
     if (room) sb.localStorage.setItem("sm_room", room);
     if (mem) seed(sb, pc, mem);
@@ -288,5 +288,49 @@ test("T100 빈 상세 칸 '최근 화면': 글자만 바뀌면(방금 → 1분 �
     before: ["viewer:B · 뷰어 · 방금"],
     minute: { same: true, texts: ["viewer:B · 뷰어 · 1분 전"], tip: "뷰어 — B · 1분 전 · Alt+3" },
     rebuilt: { texts: ["monitor", "viewer"], focused: "viewer", fresh: true },
+  });
+});
+
+// ---------------------------------------------------------------- 맥 Option+숫자(검토 s8)
+// 맥(아이패드 포함)의 Option 은 글자를 만드는 수식키다 — Option+1~4 = US ¡™£¢, UK 배열은 Option+3 이 '#'(그 배열에서 # 를 치는 유일한 길).
+// 바로가기 판정은 물리 키(code)만 봐서 터미널·편집기 안에서 그 글자를 삼켰다(릴레이 xterm 도 claude 로 보내지 않음). 윈도우의 Alt+숫자는
+// 글자를 만들지 않는다(AltGr 은 Ctrl 이 섞여 이미 뺀다).
+test("T101 맥 Option+숫자가 글자를 만들면(¡™£¢·UK '#'·죽은 키) 글을 받는 곳(터미널·편집기 찾기 칸)에서는 입력으로 둔다(막지 않고 릴레이 xterm 도 claude 로 보낸다) — 읽기 전용 편집기 본문·본문에서는 바로가기, 윈도우는 지금처럼 터미널 안에서도 바로가기", async () => {
+  const xt = () => Object.assign(stubEl("textarea"), { readOnly: false, closest: (s) => (s === ".xterm" ? stubEl("div") : null) });
+  // 파일 편집기(Monaco)는 읽기 전용(domReadOnly — 숨은 입력칸이 readonly). 찾기 칸(Ctrl+F)은 글을 받는다
+  const mo = (readOnly) => Object.assign(stubEl("textarea"), { readOnly, closest: (s) => (s === ".monaco-editor" ? stubEl("div") : null) });
+  const key = (code, key, target) => ({ type: "keydown", altKey: true, ctrlKey: false, shiftKey: false, metaKey: false, isComposing: false, repeat: false,
+    code, key, target, prevented: 0, preventDefault() { this.prevented++; }, stopPropagation() {} });
+  const run = async (platform, cases) => {
+    const { ctx } = await boot({ mem: {}, navigator: { platform } });
+    ev(ctx, "globalThis.__ckh = []; { const X = Terminal; Terminal = class { constructor(o) { const t = new X(o); t.attachCustomKeyEventHandler = (f) => __ckh.push(f); return t; } }; }");
+    await press(ctx, "terminal");                                       // 릴레이 xterm — 이 조합을 claude 로 보낼지 정하는 처리기
+    const h = ev(ctx, "__ckh[0]");
+    ev(ctx, "globalThis.__qg = []; quickGo = (k) => { __qg.push(k); }");
+    const out = {};
+    for (const [name, [code, k, target]] of Object.entries(cases)) {
+      const e = key(code, k, target);
+      ev(ctx, "__qg.length = 0"); ctx.onQuickKey(e);
+      out[name] = { go: ev(ctx, "__qg.join(',')"), prevented: e.prevented, xtermSends: target.closest(".xterm") ? h(e) : null };
+    }
+    return out;
+  };
+  const got = {
+    mac: await run("MacIntel", {
+      "터미널 Option+3 = '#'(UK)": ["Digit3", "#", xt()], "터미널 Option+1 = '¡'(US)": ["Digit1", "¡", xt()],
+      "터미널 Option+죽은 키": ["Digit4", "Dead", xt()], "편집기 찾기 칸 Option+3 = '#'": ["Digit3", "#", mo(false)],
+      "편집기 본문(읽기 전용) Option+2 = '™'": ["Digit2", "™", mo(true)],
+      "본문 Option+3 = '£'": ["Digit3", "£", stubEl("body")], "터미널 Option+3 = '3'(숫자 그대로)": ["Digit3", "3", xt()],
+    }),
+    win: await run("Win32", { "터미널 Alt+3(AZERTY '\"')": ["Digit3", "\"", xt()], "터미널 Alt+1": ["Digit1", "1", xt()] }),
+  };
+  const typed = { go: "", prevented: 0, xtermSends: true };
+  assert.deepEqual(got, {
+    mac: { "터미널 Option+3 = '#'(UK)": typed, "터미널 Option+1 = '¡'(US)": typed, "터미널 Option+죽은 키": typed,
+           "편집기 찾기 칸 Option+3 = '#'": { go: "", prevented: 0, xtermSends: null },
+           "편집기 본문(읽기 전용) Option+2 = '™'": { go: "files", prevented: 1, xtermSends: null },   // 글자가 갈 데가 없다
+           "본문 Option+3 = '£'": { go: "viewer", prevented: 1, xtermSends: null },   // 입력칸이 아닌 곳 — 글자는 갈 데가 없다
+           "터미널 Option+3 = '3'(숫자 그대로)": { go: "viewer", prevented: 1, xtermSends: false } },
+    win: { "터미널 Alt+3(AZERTY '\"')": { go: "viewer", prevented: 1, xtermSends: false }, "터미널 Alt+1": { go: "terminal", prevented: 1, xtermSends: false } },
   });
 });

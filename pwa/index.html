@@ -2984,8 +2984,8 @@ const termView={
         theme:{background:'#0d1117',foreground:'#e6edf3',cursor:'#58a6ff'}});
       const fit=new FitAddon.FitAddon(); term.loadAddon(fit); term.open(host);
       t.term=term; t.fit=fit;
-      // Alt+1~4 는 화면 바로가기(결정 8) — claude 로 보내지 않는다. 받는 일은 창 감시(onQuickKey)가 한다
-      try{ term.attachCustomKeyEventHandler(e=>!quickKeyKind(e)); }catch(e){}
+      // Alt+1~4 는 화면 바로가기(결정 8) — claude 로 보내지 않는다. 받는 일은 창 감시(onQuickKey)가 한다. 맥 Option 이 만든 글자는 보낸다
+      try{ term.attachCustomKeyEventHandler(e=>!quickKeyKind(e)||quickKeyTyping(e)); }catch(e){}
       // 모바일 터치 UX(탭별). 입력은 이 탭이 전경일 때만 보낸다 — 숨은 xterm 이 포커스를 얻어도 유실/오전송 없음
       t.ux=attachMobileTermUX(host, term, {
         send:(d)=>{ if(this.active===key) this.send({type:'input',data:d}); },
@@ -6764,15 +6764,20 @@ function quickKeyKind(e){
   if(e.code) return QUICK_KEY_CODES[e.code]||null;
   return QUICK_KINDS[['1','2','3','4'].indexOf(String(e.key))]||null;   // code 를 주지 않는 옛 브라우저
 }
-function quickKeyOk(t){
+// 맥(아이패드 포함)의 Option 은 글자를 만드는 수식키다 — Option+1~4 = US ¡™£¢, UK 배열은 Option+3 이 '#'(그 배열에서 # 를 치는 길).
+// 숫자 아닌 글자(죽은 키 포함)가 나오면 글을 받는 곳(터미널·편집기 찾기 칸)에서는 바로가기가 아니라 입력이다(검토). 읽기 전용 편집기
+// 본문(domReadOnly)은 글자가 갈 데가 없어 바로가기로 받는다. 윈도우·리눅스의 Alt+숫자는 글자를 만들지 않는다(AltGr 은 Ctrl 이 섞여 이미 뺀다)
+const QUICK_MAC=(()=>{ try{ return /mac|iphone|ipad|ipod/i.test((navigator.userAgentData&&navigator.userAgentData.platform)||navigator.platform||''); }catch(e){ return false; } })();
+function quickKeyTyping(e){ return QUICK_MAC&&!!e&&typeof e.key==='string'&&(e.key==='Dead'||(e.key.length===1&&!/^[0-9]$/.test(e.key))); }
+function quickKeyOk(t, e){
   const app=$('#app'); if(!app||app.classList.contains('hidden')) return false;   // 페어링 화면
   if(POP||document.getElementById('overlay')) return false;                      // 팝·모달(설정·확인창)이 열려 있다 — 그쪽 일
   if(!t||typeof t.closest!=='function') return true;
-  if(t.closest('.xterm')||t.closest('.monaco-editor')) return true;               // 터미널·편집기 안 — 가장 필요한 곳
+  if(t.closest('.xterm')||t.closest('.monaco-editor')) return !(quickKeyTyping(e)&&t.readOnly!==true);   // 터미널·편집기 안 — 가장 필요한 곳
   return !(/^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName||'')||t.isContentEditable===true);
 }
 function onQuickKey(e){
-  const kind=quickKeyKind(e); if(!kind||!quickKeyOk(e.target)) return;
+  const kind=quickKeyKind(e); if(!kind||!quickKeyOk(e.target, e)) return;
   try{ e.preventDefault(); e.stopPropagation(); }catch(_){}                       // claude·편집기·브라우저로 가지 않게
   if(e.repeat) return;                                                           // 누르고 있는 동안 되풀이하지 않는다
   quickGo(kind);
