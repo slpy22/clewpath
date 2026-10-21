@@ -6558,12 +6558,17 @@ function quickPickIn(view){
   if(LIST_VIEW!==view||!LIST_CTX){ setListView(view); return loadList(); }
 }
 function quickNone(kind){ const [msg,view]=QUICK_NONE[kind]; toast(msg); return quickPickIn(view); }
-// 이미 그 화면이면 다시 짓지 않고 커서만 옮긴다(§4 공통) — 터미널(xterm · 로컬 터미널 창)·편집기
+// 이미 그 화면이면 다시 짓지 않고 커서만 옮긴다(§4 공통) — 터미널(xterm · 로컬 터미널 창)·편집기.
+// 로컬 터미널 창(iframe, 같은 출처)은 창 안 xterm 입력칸에 바로 둔다 — 크롬은 iframe 요소에 focus 를 주면 창 문서의 커서를 body 로 옮겨
+// xterm 이 커서를 잃는다(다음 타자가 claude 로 안 감, 검토 실측). 창 문서를 못 읽을 때(아직 안 뜸)만 창에
 function quickFocus(kind){
   try{
     if(kind==='terminal'){ const c=termView.cur(); if(!c) return;
       if(c.term) c.term.focus();
-      else if(c.frame){ c.frame.focus(); const w=c.frame.contentWindow; if(w&&typeof w.focus==='function') w.focus(); } }
+      else if(c.frame){
+        let ta=null; try{ const d=c.frame.contentDocument; ta=d&&d.querySelector('.xterm-helper-textarea'); }catch(e){}
+        if(ta) ta.focus();
+        else { c.frame.focus(); const w=c.frame.contentWindow; if(w&&typeof w.focus==='function') w.focus(); } } }
     else if(kind==='files'&&FB.ed) FB.ed.focus();
   }catch(e){}
 }

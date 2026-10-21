@@ -190,3 +190,30 @@ test("T96 목록에 아직 없는 터미널(방금 연 🧑‍💼 비서): 보�
       toast: "열어 둔 터미널이 없습니다 — 세션 줄의 🖥/▶ 로 여세요", closedLive: 0 },
   });
 });
+
+// ---------------------------------------------------------------- 로컬 터미널 창 커서(검토 s3b)
+// 크롬은 iframe 요소에 focus 를 주면 창 문서의 커서를 body 로 옮긴다 — 창 안 xterm 이 커서를 잃어 다음 타자가 claude 로 가지 않았다
+// (헤드리스 크롬 실측: Alt+1·파란 🖥 단추·검색칸에서 🖥 세 경우 모두). 창 안 xterm 입력칸에 바로 커서를 둔다.
+test("T97 로컬 터미널 창(iframe)이 이미 떠 있을 때 🖥·Alt+1 은 창 안 xterm 입력칸에 커서를 둔다 — 창(iframe 요소)에 focus 를 주지 않는다. 창 문서를 못 읽으면(아직 안 뜸) 지금처럼 창에", async () => {
+  const got = await each(["🖥 단추", "Alt+1(창 안에서)", "창 문서 없음"], async (p) => {
+    const { ctx } = await boot({ local: true, mem: {} });
+    await press(ctx, "terminal");
+    const fr = ev(ctx, "termView.cur().frame"), log = [];
+    const ta = Object.assign(stubEl("textarea"), { focus() { log.push("xterm"); }, closest: (s) => (s === ".xterm" ? stubEl("div") : null) });
+    fr.contentDocument = p === "창 문서 없음" ? null : { querySelector: (s) => (s === ".xterm-helper-textarea" ? ta : null) };
+    fr.focus = () => log.push("창 요소");
+    fr.contentWindow = { focus() { log.push("창"); }, addEventListener() {} };
+    const gen = ev(ctx, "PANE_NOW.gen");
+    if (p.startsWith("Alt+1")) {
+      const e = { type: "keydown", altKey: true, ctrlKey: false, shiftKey: false, metaKey: false, isComposing: false, repeat: false, code: "Digit1", key: "1",
+                  target: ta, preventDefault() {}, stopPropagation() {} };
+      ctx.onQuickKey(e); await tick(RENDER);                          // 창에 붙인 감시(quickKeyWatch)가 부르는 것과 같은 함수
+    } else await press(ctx, "terminal");
+    return { focus: log.join(","), same: ev(ctx, "PANE_NOW.gen") === gen, at: at(ctx) };
+  });
+  assert.deepEqual(got, {
+    "🖥 단추": { focus: "xterm", same: true, at: "terminal:a" },
+    "Alt+1(창 안에서)": { focus: "xterm", same: true, at: "terminal:a" },
+    "창 문서 없음": { focus: "창 요소,창", same: true, at: "terminal:a" },
+  });
+});
