@@ -295,7 +295,10 @@ async def _update_watch():
             if st.get("available"):
                 print(f"[update] 새 버전 {st.get('latest')} 이 있습니다 "
                       f"(현재 {st.get('current')})", flush=True)
-                if auto:
+                if auto and updater.recently_failed(st.get("latest") or ""):
+                    # 재기동 확인과 같은 차단 — 없으면 롤백 직후 첫 바퀴가 같은 버전을 다시 적용해 끝없이 돈다
+                    print(f"[update] {st.get('latest')} 는 방금 실패해 롤백됨 - 자동 적용 건너뜀", flush=True)
+                elif auto:
                     print("[update] auto_apply=true - 지금 적용합니다.", flush=True)
                     staged = await asyncio.to_thread(updater.check_and_stage)
                     if staged.get("staged"):
