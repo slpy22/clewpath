@@ -3,9 +3,17 @@ import json
 import threading
 import time
 
+import pytest
+
 from session_manager import modelprobe as mp
 
 ESC = "\x1b"
+
+
+def test_tests_never_spawn_the_real_claude():
+    """conftest 가드: spawn 주입이 없는 화면 읽기는 시험 중에 거절된다(진짜 claude 가 진짜 ~/.claude 에 쓰던 사고)."""
+    with pytest.raises(RuntimeError, match="진짜 claude"):
+        mp.probe("claude", ".")
 
 
 def _row(n, text, sel=False):

@@ -148,7 +148,13 @@ def test_write_config_without_tokens_comments_them_out(home, capsys):
     d = tomllib.loads(Path(kv["path"]).read_text(encoding="utf-8"))
     assert rc == 0 and "client_token" not in d["cloud"] and "agent_token" not in d["cloud"]
     assert "config_dir" not in d.get("claude", {})
-    assert "CLEWPATH_CLIENT_TOKEN" in err, "토큰이 없으면 어디에 넣는지 알려 준다"
+    assert "CLEWPATH_CLIENT_TOKEN" not in err, \
+        "컨트롤플레인이 있으면 폰 QR 은 기기 전용 자격증명을 싣는다 — 공유 토큰 경고로 헷갈리게 하지 않는다(맥 실기 3b)"
+
+
+def test_write_config_warns_about_the_phone_token_only_without_a_control_plane(home, capsys):
+    rc, kv, err = run(capsys, "write-config", "--port", "5100", "--cp-url", "")
+    assert rc == 0 and kv["config"] == "created" and "CLEWPATH_CLIENT_TOKEN" in err, "그때는 어디에 넣는지 알려 준다"
 
 
 @pytest.mark.parametrize("body,want", [("[server]\nhost = \"127.0.0.1\"\n", "5100"),   # port 가 없으면 Host 기본값

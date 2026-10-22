@@ -269,8 +269,9 @@ def cmd_write_config(a) -> int:
         raise HostctlError(f"설정 파일 본문이 TOML 로 읽히지 않습니다: {e}") from e
     _atomic_write(conf, text.encode("utf-8"), 0o600)
     ok(f"설정 파일 생성: {conf}")
-    if not client:
-        warn("폰 접속 토큰(CLEWPATH_CLIENT_TOKEN)이 없습니다 — 폰 페어링 QR 은 설정 파일의 client_token 을 채우면 됩니다.")
+    if not client and not a.cp_url:      # 컨트롤플레인이 있으면 QR 은 기기 전용 자격증명을 싣는다(공유 토큰 불필요 — 맥 실기 3b)
+        warn("폰 접속 토큰(CLEWPATH_CLIENT_TOKEN)이 없습니다 — 컨트롤플레인 없이 폰 페어링 QR 을 쓰려면 설정 파일의 "
+             "client_token 을 채우세요.")
     _out(config="created", path=conf, port=a.port)
     return 0
 

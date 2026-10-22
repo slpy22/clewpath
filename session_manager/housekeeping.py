@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import json
+import os
 import queue
 import re
 import threading
@@ -268,10 +269,22 @@ PROBE_MAX_AGE_S = 7 * 86400     # claude 버전이 그대로여도 이만큼 지
 _PROBE_KEEP_IDS = 50
 
 
+def _probe_blocked() -> str | None:
+    """화면 읽기를 하지 않을 이유. 격리 모드(SESSION_MANAGER_CLAUDE_HOME — 시험·격리용)면 띄울 claude 는 진짜 ~/.claude 에
+    세션을 쓰는데(probe 는 CLAUDE*·SM_* 를 빼고 띄운다) 숨김 목록은 격리된 데이터 폴더에 적혀, 진짜 목록에 '/model' 만 든
+    세션이 남았다(2026-10-22 맥 실기·이 PC: 5분 넘게 돈 pytest 안의 정기 작업)."""
+    if os.environ.get("SESSION_MANAGER_CLAUDE_HOME"):
+        return "격리 모드(SESSION_MANAGER_CLAUDE_HOME)라 claude 를 띄우지 않음"
+    return None
+
+
 def _maybe_probe(d: dict, force: bool = False) -> tuple[dict | None, str]:
     """claude /model 화면 읽기(modelprobe) — claude 가 업데이트됐거나 7일 지났을 때만. → (마지막 성공 결과, 메모)."""
     from session_manager import config as _cfg, modelprobe
     pr = d.get("probe") or {}
+    why = _probe_blocked()
+    if why:
+        return pr, f"화면 읽기 건너뜀({why})"
     exe = _cfg.claude_exe()
     ver = modelprobe.claude_version(exe) if exe else None
     due = force or not pr.get("ok_models") or (ver and ver != pr.get("version"))         or time.time() - float(pr.get("at") or 0) > PROBE_MAX_AGE_S

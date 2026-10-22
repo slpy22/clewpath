@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 
 from session_manager import config, osdep
@@ -13,6 +14,13 @@ from session_manager.scanner import scan_one, resolve_launch_cwd
 
 
 _SKIP_FLAG = "--dangerously-skip-permissions"
+
+
+def _quote(s: str) -> str:
+    """사람이 붙여 넣을 셸의 따옴표 — Windows cmd 는 큰따옴표(공백 있을 때), 맥·리눅스 sh 는 작은따옴표."""
+    if osdep.IS_WIN:
+        return f'"{s}"' if " " in s else s
+    return shlex.quote(s)
 
 
 def resume_command(session_id: str, skip_permissions: bool = True) -> dict:
@@ -23,16 +31,21 @@ def resume_command(session_id: str, skip_permissions: bool = True) -> dict:
     # fork 세션 등은 실제 저장 폴더와 맞는 실행 디렉토리에서 재개해야 claude 가 찾는다.
     cwd = resolve_launch_cwd(meta) or meta.cwd
     flag = f" {_SKIP_FLAG}" if skip_permissions else ""
-    exe = config.claude_exe()
-    q = f'"{exe}"' if " " in exe else exe
-    cmd = f'{q} --resume {session_id}{flag}'
-    full = (f'cd /d "{cwd}" && {cmd}' if cwd else cmd)
+    cmd = f'{_quote(config.claude_exe())} --resume {session_id}{flag}'
+    if not cwd:
+        full = cmd
+    elif osdep.IS_WIN:
+        full = f'cd /d "{cwd}" && {cmd}'
+    else:                                   # 맥·리눅스 터미널(sh·zsh) — cmd 의 cd /d 는 맥 실기(3b)에서 틀린 안내였다
+        full = f"cd {shlex.quote(cwd)} && {cmd}"
     return {
         "session_id": session_id,
         "cwd": cwd,
         "skip_permissions": skip_permissions,
         "command": cmd,
         "full_command": full,
+        "shell": "cmd" if osdep.IS_WIN else "sh",
+        "can_launch": osdep.IS_WIN,         # 새 터미널 창 열기(launch_terminal) — 맥 Terminal.app 은 아직 없다
         "note": "터미널에서 위 명령을 실행하면 이 세션을 이어서 시작합니다.",
     }
 

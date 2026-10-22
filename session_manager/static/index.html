@@ -446,7 +446,7 @@ let _resume=null;  // {id, cwd}
 async function resumeSession(id){
   const r=await (await fetch(`${BASE}/api/sessions/${id}/resume-command`)).json();
   if(r.error){ toast(r.error,"err"); return; }
-  _resume={id, cwd:r.cwd||""};
+  _resume={id, cwd:r.cwd||"", sh:r.shell==="sh"};
   openModal("세션 재개 — "+id.slice(0,8),
     `<label class="chk"><input type="checkbox" id="skipPerm" checked onchange="renderResumeCmd()">
        권한 확인 건너뛰기 <code>--dangerously-skip-permissions</code></label>
@@ -455,7 +455,7 @@ async function resumeSession(id){
      <div class="note">${esc(r.note)}</div>`,
     `<button onclick="closeModal()">닫기</button>
      <button onclick="copyResumeCmd()">명령 복사</button>
-     <button onclick="launchResume()">새 cmd 창에서 실행</button>
+     ${r.can_launch===false?"":`<button onclick="launchResume()">새 cmd 창에서 실행</button>`}
      <button onclick="openForkTerminal()" title="원본은 그대로 두고 일회용 복제본에서 작업">🔱 포크 재개</button>
      <button class="primary" onclick="openWebTerminal()">🌐 브라우저에서 재개</button>`);
   renderResumeCmd();
@@ -464,7 +464,9 @@ function _skip(){ const el=document.getElementById("skipPerm"); return el?el.che
 function _resumeCmd(){
   const flag=_skip()?" --dangerously-skip-permissions":"";
   const cmd=`claude --resume ${_resume.id}${flag}`;
-  return _resume.cwd?`cd /d "${_resume.cwd}" && ${cmd}`:cmd;
+  if(!_resume.cwd) return cmd;
+  // 맥·리눅스(sh·zsh)는 작은따옴표, Windows 는 cmd 의 cd /d
+  return _resume.sh?`cd '${_resume.cwd.replace(/'/g,"'\\''")}' && ${cmd}`:`cd /d "${_resume.cwd}" && ${cmd}`;
 }
 function renderResumeCmd(){ const p=document.getElementById("resumeCmd"); if(p) p.textContent=_resumeCmd(); }
 function copyResumeCmd(){ navigator.clipboard.writeText(_resumeCmd()); toast("복사됨","ok"); }

@@ -485,8 +485,9 @@ auto_apply = false
     New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
     Set-Content -Path $confFile -Value $toml -Encoding UTF8
     Ok "설정 파일 생성: $confFile"
-    if (-not $ClientToken) {
-        Warn "ClientToken 미지정 — 폰 페어링 QR 은 설정 파일의 client_token 을 채우면 됩니다."
+    # 컨트롤플레인이 있으면 페어링 QR 은 기기 전용 자격증명을 싣는다 — 공유 토큰이 없어도 된다(맥 실기 3b 에서 헷갈린 경고)
+    if (-not $ClientToken -and -not $CpUrl) {
+        Warn "ClientToken 미지정 — 컨트롤플레인 없이 폰 페어링 QR 을 쓰려면 설정 파일의 client_token 을 채우세요."
     }
 }
 

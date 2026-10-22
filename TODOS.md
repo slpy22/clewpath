@@ -68,7 +68,15 @@
 
 ### 3b 맥 실기 — 대기 (명세 1.2, R1: 맥에서 시나리오를 다시 돌리기 전에는 `platforms` 에 mac 을 넣지 않는다)
 - [x] launchd 자동 시작·자기 회복(2026-10-21, 명세 10장) — `com.clewpath.host.plist`(RunAtLoad·KeepAlive{SuccessfulExit=false}·StartInterval 300·AbandonProcessGroup), install 등록(bootout→bootstrap, 실패해도 설치 성공)·uninstall 해제, foreground 잠금·로그·늘 0, 정상 종료 0(server.main). 리눅스 컨테이너에서 launchctl·uname 흉내로 시험 — **맥 실기 확인은 `docs/mac-host-tasks.md`(맥 측 Claude)**
-- [ ] (launchd 후속) `osdep._posix.ensure_launcher` 가 plist 도 점검·재등록하게(지금은 런처만 다시 렌더) · `launchd.log` 회전 없음 · 맥 실기 결과(`mac-3b` 브랜치) 반영
+- [x] **맥 실기 1회차(2026-10-22, `docs/mac-results/3b-20261022.md`) — 통과 18·실패 1·확인 필요 1, 수리 완료:** 설치·launchd·자기 회복(kill 15초·stop 뒤 5분)·잠자기·로그인·한글 claude·Host 재기동 중 터미널 유지·폰 페어링·제거·재설치가 실기에서 됐다. 고친 것:
+  ① **시험이 맥을 건드림** — `Upd.cleanup` 의 chmod 가 링크를 따라가 진짜 pyenv 파이썬을 0644 로 만들었다(링크 건너뜀). 앱 기동이 남긴 정기 작업 줄이 +5분 뒤 시험 프로세스 안에서 '모델 목록 갱신'을 돌려 진짜 claude 가 진짜 `~/.claude` 에 '/model' 세션을 남겼다 — **이 PC 에도 10-21 에 4개**(시험이 5분을 넘긴 때). 격리 모드면 화면 읽기 건너뜀(`housekeeping._probe_blocked`)·conftest 가드·앱을 내리면 정기 작업 종료
+  ② M2 실패 94건 — 시험의 한글 임시 경로(맥은 ASCII 가드)·리눅스 전제(/proc·musl·/usr/bin/python3·TIME_WAIT·AF_UNIX 길이·bash 3.2 의 `:`), 답장 주소 시험의 겹친 소켓. 제품 결함 하나: 런처 판정이 psutil·/proc 둘 다 없으면 살아 있는 아무 pid 나 Host 로 봤다(ps 로 확인)
+  ③ 맥에서 설치·start·resume 이 띄운 Host 가 launchd 밖(PPID 1)이라 죽으면 5분 확인이 받고 로그아웃에도 살았다 → launchd 에 맡김(kickstart)
+  ④ 재개 창 명령이 Windows 의 `cd /d` 였고 '새 cmd 창' 단추가 맥에도 보였다 · 폰 토큰 경고가 컨트롤플레인이 있어도 나왔다(Windows 설치도)
+  → 맥 2회차 확인은 `docs/mac-host-tasks.md` 맨 위 「2회차」(결과는 `mac-3b2` 브랜치)
+- [ ] **맥 이름·권한 창(사장님 결정 대기)** — 로그인 항목·백그라운드 알림에 **"sh"**(plist 의 프로그램이 /bin/sh), 웹 터미널의 claude 가 데스크탑·문서·사진·iCloud 등에 처음 닿을 때 **"python3.11"** 권한 창이 항목마다 떴다(launchd → Host(python) 가 책임 프로세스. uv 파이썬은 adhoc 서명이라 파이썬이 바뀌면 다시 뜰 수 있다). 사장님: "설치 시에 허락돼 버리면 좋겠다" — macOS 는 프로그램이 스스로 권한을 줄 수 없다. 안: (가) 등록 프로그램을 `ClewPath` 라는 작은 스크립트로(로그인 항목 이름만 바뀜) (나) 서명된 `ClewPath.app` 이 Host 를 자식으로 띄워 책임 프로세스가 되게(권한 창 이름이 ClewPath, 업데이트 뒤에도 권한 유지 — Developer ID 서명·공증 필요) (다) 설치 끝에 '전체 디스크 접근' 설정 화면을 열어 안내. 1회차 세션이 홈 폴더라 claude 가 홈 아래를 훑어 창이 많았다
+- [ ] (launchd 후속) `osdep._posix.ensure_launcher` 가 plist 도 점검·재등록하게(지금은 런처만 다시 렌더) · `launchd.log` 회전 없음 · 업데이트 러너(CLEWPATH_UPDATER=1)가 다시 띄운 Host 는 아직 launchd 밖 · 제거 뒤 `sfltool dumpbtm` 에 옛 "sh" 항목이 남는다(맥이 정리)
+- [ ] 시험이 남긴 '/model' 세션 정리(사장님 결정) — 이 PC `E:\` 폴더 4개(10-21), 맥 `-Volumes-Works-Projects-clewpath` 3개. ClewPath 목록에서 지우거나 숨김 목록에 넣기
 - [ ] 키체인(`osdep.protect`/`unprotect` — 지금은 None 이라 데이터 폴더 0700 안 파일) · Terminal.app 재개(`open_resume_terminal`) · Gatekeeper 격리 속성 확인
 - [ ] 맥에서 전체 pytest + 3a e2e 시나리오(명세 6.3) 반복 + 실제 claude 기동·재접속·업데이트 왕복 → 통과하면 릴리스 `platforms` 에 mac
 - [ ] CP `/get.sh` 공개(서비스 모니터 의뢰, 명세 7절): `ops/get.sh` 를 007 `control_plane/get.sh` 로 옮기고 `/get.sh` 라우트·007 `.gitattributes`·007 테스트·nginx `location = /get.sh` · 랜딩·README OS 별 한 줄(리눅스는 '시험용'으로 표시하거나 빼기) — 이때 tests/test_docs_multi_os.py 의 '공개 주소 없음' 시험도 함께 바꾼다

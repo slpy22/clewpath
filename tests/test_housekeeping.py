@@ -183,9 +183,40 @@ def test_models_merge_with_picker(fake_claude_home, monkeypatch):
     assert "화면 목록 3개" in r["summary"] and r["source"] == "picker"
 
 
+def test_app_shutdown_stops_the_housekeeping_line(fake_claude_home, monkeypatch):
+    """앱을 내리면 정기 작업 줄도 끝난다 — 남으면 +5분 뒤 내린 앱의 일을 돈다(시험 프로세스에서는 다른 시험의 환경으로)."""
+    from fastapi.testclient import TestClient
+
+    from session_manager import server as S
+    for k in ("SM_RELAY_URL", "SM_RELAY_ROOM", "SM_RELAY_AGENT_TOKEN", "SM_CP_URL"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("SM_HOST", "127.0.0.1")
+    monkeypatch.setattr(hk, "_thread", None)
+    with TestClient(S.create_app()):
+        line = hk._thread
+        assert line is not None and line.is_alive()
+    line.join(5)
+    assert not line.is_alive()
+
+
+def test_maybe_probe_skips_in_isolation_mode(fake_claude_home, monkeypatch):
+    """격리 모드(SESSION_MANAGER_CLAUDE_HOME)면 claude 를 띄우지 않는다 — 띄운 claude 는 진짜 ~/.claude 에 쓰고 숨김 목록은
+    격리 폴더에 적혀 진짜 목록에 '/model' 세션이 남았다(2026-10-22 맥 실기: 5분 넘게 돈 pytest 안의 정기 작업)."""
+    from session_manager import modelprobe
+    calls = []
+    monkeypatch.setattr("session_manager.config.claude_exe", lambda: "claude.exe")
+    monkeypatch.setattr(modelprobe, "pick_cwd", lambda: "E:/t")
+    monkeypatch.setattr(modelprobe, "claude_version", lambda exe: "2.1.307")
+    monkeypatch.setattr(modelprobe, "probe", lambda exe, cwd: calls.append(cwd))
+    d = {}
+    pr, note = hk._maybe_probe(d, force=True)
+    assert calls == [] and "격리 모드" in note and "probe_sessions" not in d
+
+
 def test_maybe_probe_runs_on_version_change_only(fake_claude_home, monkeypatch):
     from session_manager import modelprobe
     calls = []
+    monkeypatch.setattr(hk, "_probe_blocked", lambda: None)       # 격리 모드 가드는 위 시험이 본다 — 여기는 판정만
     monkeypatch.setattr("session_manager.config.claude_exe", lambda: "claude.exe")
     monkeypatch.setattr(modelprobe, "pick_cwd", lambda: "E:/t")
     ver = {"v": "2.1.296"}

@@ -22,6 +22,22 @@ os.environ["SM_PTY_BROKER"] = "off"
 for _k in ("SM_CP_URL", "SM_RELAY_URL", "SM_RELAY_AGENT_TOKEN", "SM_RELAY_CLIENT_TOKEN", "SM_RELAY_ROOM"):
     os.environ.pop(_k, None)
 
+# 진짜 claude 도 띄우지 않는다(2026-10-22 맥 실기·이 PC): 앱 기동이 남긴 정기 작업 줄이 +5분 뒤 시험 프로세스 안에서 '모델 목록
+# 갱신'을 돌려, PATH 의 진짜 claude 가 진짜 ~/.claude 에 '/model' 세션을 남겼다(전체 시험이 5분을 넘긴 맥·Windows). 제품은
+# 격리 모드면 건너뛰고(housekeeping._probe_blocked), 여기서는 spawn 주입이 없는 화면 읽기 자체를 막는다.
+from session_manager import modelprobe as _modelprobe  # noqa: E402
+
+if not getattr(_modelprobe.probe, "_test_guard", False):
+    _real_probe = _modelprobe.probe
+
+    def _probe_without_real_claude(exe, cwd, timeout=30.0, spawn=None):
+        if spawn is None:
+            raise RuntimeError("시험 중에는 진짜 claude 를 띄우지 않습니다 — modelprobe.probe 에 spawn 을 주입하세요")
+        return _real_probe(exe, cwd, timeout=timeout, spawn=spawn)
+
+    _probe_without_real_claude._test_guard = True
+    _modelprobe.probe = _probe_without_real_claude
+
 
 @pytest.fixture(autouse=True)
 def _pty_broker_off(monkeypatch):

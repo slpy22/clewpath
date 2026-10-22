@@ -434,6 +434,7 @@ async def _lifespan(app: FastAPI):
         _monwatch.stop()
         _devsync.stop()
         _teamwatch.stop()
+        _hk.stop()                           # 앱을 내렸는데 +5분 정기 작업이 남아 돌지 않게(시험의 TestClient 도 여기로 온다)
         for t in (task, upd_task):
             if t is not None:
                 t.cancel()
