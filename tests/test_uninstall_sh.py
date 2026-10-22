@@ -185,12 +185,11 @@ def _tool(box, name: str, body: str) -> dict:
 
 
 _KILL_UNINSTALL = '''
+import psutil
 def _ppid(p):
-    with open(f"/proc/{p}/status") as f:
-        return int(next(x for x in f if x.startswith("PPid:")).split()[1])
+    return psutil.Process(p).ppid()
 def _cmd(p):
-    with open(f"/proc/{p}/cmdline", "rb") as f:
-        return f.read()
+    return " ".join(psutil.Process(p).cmdline()).encode()
 def kill_uninstall():
     """나를 부른 제거 스크립트의 본 셸(임시 사본, 하위 셸이 아닌 맨 위)에 SIGTERM — 사람이 창을 닫은 것처럼."""
     p = os.getppid()
@@ -222,11 +221,13 @@ def test_cut_before_deleting_takes_the_flag_back(box):
     """아직 아무것도 지우지 않았을 때 끊기면 표식을 거둔다 — 설치본은 그대로이고 다시 띄울 수 있어야 한다."""
     _lay(box)
     once = box.base / "once"
-    env = box.env(FAKE_ONCE=once,
-                  **_tool(box, "grep", _KILL_UNINSTALL + "if any('/proc/' in a for a in sys.argv[1:]) and "
-                                                         "not os.path.exists(os.environ['FAKE_ONCE']):\n"
-                                                         "    open(os.environ['FAKE_ONCE'], 'w').close()\n"
-                                                         "    kill_uninstall()"))
+    # 걸쇠 = 살아 남은 프로세스 찾기(proc_pids): 리눅스는 grep … /proc/*/cmdline, /proc 가 없으면(맥) ps -A -ww
+    tool, arg = ("grep", "/proc/") if Path("/proc/self").is_dir() else ("ps", "-A")
+    env = box.env(FAKE_ONCE=once, FAKE_HOOK_ARG=arg,
+                  **_tool(box, tool, _KILL_UNINSTALL + "if any(os.environ['FAKE_HOOK_ARG'] in a for a in sys.argv[1:]) and "
+                                                       "not os.path.exists(os.environ['FAKE_ONCE']):\n"
+                                                       "    open(os.environ['FAKE_ONCE'], 'w').close()\n"
+                                                       "    kill_uninstall()"))
     r = box.uninstall("--yes", env=env)
     assert r.returncode != 0 and once.exists(), _out(r)
     assert sorted(x.name for x in box.root.iterdir()) == sorted(OURS) and not _flag(box).exists(), _out(r)

@@ -394,16 +394,20 @@ class Run:
         return f"rc={self.rc}\n--- stdout\n{self.out}\n--- stderr\n{self.err}"
 
 
+ON_MAC = sys.platform == "darwin"
+_LINUX_UNAME = '#!/bin/sh\ncase "${1:-}" in -m) m=$(/usr/bin/uname -m); [ "$m" = arm64 ] && m=aarch64; echo "$m" ;; *) echo Linux ;; esac\n'
 TOOLS = ("uname", "id", "curl", "mktemp", "tr", "sed", "awk", "wc", "find", "dirname", "sort", "uniq", "cat", "rm",
          "mkdir", "chmod", "ls", "grep", "sha256sum", "base64", "unzip", "python3", "readlink", "openssl")
 
 
 class GBox:
-    """가짜 홈 하나(공백·한글 경로) — 설치 위치는 공통 경로 블록의 리눅스 기본값($HOME/.local/share/clewpath/app)."""
+    """가짜 홈 하나(공백·한글 경로) — 설치 위치는 공통 경로 블록의 리눅스 기본값($HOME/.local/share/clewpath/app).
+    진짜 맥에서는 리눅스 길을 가짜 uname(Linux)으로 흉내 내고 홈은 ASCII 다(맥은 ASCII 밖 설치 경로를 거부한다 — C5).
+    PATH 를 직접 주는 시험은 tools() 로 만든다(같은 가짜 uname 이 든다. shims 의 uname 이 있으면 그것)."""
 
     def __init__(self, tmp: Path, cp: FakeCP, signer: Signer):
         self.base = tmp.resolve()
-        self.home = self.base / "home x" / "홈"
+        self.home = self.base / "home x" / ("hom" if ON_MAC else "홈")
         self.tmpdir = self.base / "tmp"
         self.chome = self.home / ".local" / "share" / "clewpath"
         self.dir = self.chome / "app"
@@ -412,12 +416,19 @@ class GBox:
         self.base_args = ["--cp-url", cp.url, "--allow-http", "--no-provision"]
         for d in (self.home, self.tmpdir):
             d.mkdir(parents=True)
+        self.os_tools = self.base / "linux uname"
+        if ON_MAC:
+            self.os_tools.mkdir()
+            (self.os_tools / "uname").write_text(_LINUX_UNAME, encoding="utf-8")
+            os.chmod(self.os_tools / "uname", 0o755)
 
     def env(self, **extra) -> dict:
         e = {k: v for k, v in os.environ.items()
              if not k.startswith(("CLEWPATH_", "SM_", "GET_TEST_")) and k.lower() not in
              ("http_proxy", "https_proxy", "all_proxy", "no_proxy", "xdg_data_home", "session_manager_claude_home")}
         e.update(HOME=str(self.home), TMPDIR=str(self.tmpdir), LANG="C.UTF-8", GET_TEST_RECORD=str(self.record))
+        if ON_MAC and "PATH" not in extra:
+            e["PATH"] = f"{self.os_tools}:{e.get('PATH', '/usr/bin:/bin')}"
         e.update({k: str(v) for k, v in extra.items()})
         return e
 
@@ -477,7 +488,10 @@ class GBox:
         d.mkdir()
         for t in TOOLS:
             src = shutil.which(t)
-            if t not in drop and src:
+            if t == "uname" and ON_MAC and t not in drop:
+                (d / t).write_text(_LINUX_UNAME, encoding="utf-8")       # 진짜 맥에서도 리눅스 길(shims 가 있으면 아래서 바뀐다)
+                os.chmod(d / t, 0o755)
+            elif t not in drop and src:
                 (d / t).symlink_to(src)
         for name, body in (shims or {}).items():
             p = d / name
@@ -855,8 +869,9 @@ def test_hash_and_base64_fallbacks(gbox):
     """옛 맥(base64 -D 만, shasum)과 openssl 만 있는 PC 에서도 같은 결과."""
     zb = gbox.publish()
     real_b64, real_sha = shutil.which("base64"), shutil.which("sha256sum")
+    sha_cmd = f'"{real_sha}"' if real_sha else f'"{shutil.which("shasum")}" -a 256'    # 맥에는 sha256sum 이 없을 수 있다
     old_mac = {"base64": f'#!/bin/sh\n[ "$1" = -D ] || {{ echo "base64: invalid option" >&2; exit 64; }}\nexec "{real_b64}" -d\n',
-               "shasum": f'#!/bin/sh\n[ "$1 $2" = "-a 256" ] || exit 2\nexec "{real_sha}"\n'}
+               "shasum": f'#!/bin/sh\n[ "$1 $2" = "-a 256" ] || exit 2\nexec {sha_cmd}\n'}
     r = gbox.run(*gbox.base_args, env=gbox.env(PATH=gbox.tools(drop=("sha256sum", "openssl"), shims=old_mac)))
     assert r.rc == 0, str(r)
     assert _stage_files(Path(gbox.rec()["self"]).parent) == _zip_files(zb)
@@ -997,11 +1012,14 @@ def test_mac_refuses_non_ascii_install_paths(gbox):
     """C5 — [mac] ps 는 ASCII 밖 바이트를 이스케이프해 보여 런처·러너가 Host 를 명령줄로 알아보지 못한다. 그래서 맥에서는 설치
     폴더 경로(글자, 그리고 물리 경로)에 ASCII 밖 바이트가 있으면 거부한다. 리눅스는 그대로다(한글 홈으로 도는 위 시험들)."""
     gbox.publish()
-    mac = gbox.env(PATH=gbox.tools(shims={"uname": _DARWIN}))
-    for args in ([], ["--dir", str(gbox.base / "앱" / "app")]):          # 기본 위치(한글 홈 아래)·--dir
-        r = gbox.run(*gbox.base_args, *args, env=mac)
+    path = gbox.tools(shims={"uname": _DARWIN})
+    mac = gbox.env(PATH=path)
+    k_home = gbox.base / "한글 홈"                                        # 상자의 홈은 진짜 맥에서 ASCII 다 — 한글 홈은 따로
+    k_home.mkdir()
+    for home, args in ((k_home, []), (gbox.home, ["--dir", str(gbox.base / "앱" / "app")])):   # 기본 위치(한글 홈 아래)·--dir
+        r = gbox.run(*gbox.base_args, *args, env=gbox.env(HOME=home, PATH=path))
         assert r.rc == 2 and "ASCII" in r.out, (args, str(r))
-        assert gbox.cp.requests == [] and _no_get_tmp(gbox), args
+        assert gbox.cp.requests == [] and _no_get_tmp(gbox) and list(k_home.iterdir()) == [], args
     real = gbox.base / "앱 폴더"                                          # 글자는 ASCII, 물리 경로는 한글(링크)
     real.mkdir()
     link = gbox.base / "ascii-link"

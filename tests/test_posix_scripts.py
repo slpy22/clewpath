@@ -683,6 +683,9 @@ def test_hostctl_top_level_imports_are_stdlib():
 def test_colon_redirect_failure_ends_the_script(shell):
     """_FORBIDDEN 의 ':' 규칙의 근거 — 특수 내장(:)의 리디렉션이 실패하면 dash·bash --posix 는 `|| …` 로 넘어가지 않고
     스크립트를 끝낸다(러너가 커밋 표식을 못 쓰면 정리 없이 죽던 자리). 일반 명령(true)은 실패만 돌려준다."""
+    ver = subprocess.run([*shell, "-c", 'printf %s "${BASH_VERSION:-}"'], capture_output=True, timeout=30).stdout
+    if ver.startswith(b"3."):
+        pytest.skip("bash 3.2(맥 /bin/sh·/bin/bash)는 특수 내장의 리디렉션이 실패해도 이어 간다 — 금지 규칙은 그래도 무해")
     bad = subprocess.run([*shell, "-c", '{ : >/nonexistent-dir/x; } 2>/dev/null || printf survived; printf end'],
                          capture_output=True, timeout=30)
     assert b"survived" not in bad.stdout and b"end" not in bad.stdout and bad.returncode != 0

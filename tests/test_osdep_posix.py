@@ -70,13 +70,21 @@ def test_orphans_adopted_by_init_count_as_parentless():
     assert webapi.find_orphan_stream_pids(procs) == [50]
 
 
-def test_broker_uses_private_unix_socket(tmp_path):
+def test_broker_uses_private_unix_socket():
+    """소켓은 데이터 폴더의 ptyd.sock — 경로가 길면(맥 소켓 경로 상한 104바이트) 임시 폴더의 사용자·경로별 이름으로.
+    짧은 폴더는 /tmp 아래로 잡는다: 맥의 pytest tmp_path(/private/var/folders/…)는 그것만으로 대체 주소로 간다(경로만 계산)."""
+    import tempfile
+    from pathlib import Path
+
     from session_manager import ptyd
     assert ptyd.FAMILY == "AF_UNIX"
-    addr = ptyd.pipe_address(tmp_path)
-    assert addr == str(tmp_path / "ptyd.sock")
-    long_dir = tmp_path / ("x" * 120)
-    assert len(ptyd.pipe_address(long_dir).encode()) < 104, "맥 소켓 경로 상한을 넘으면 임시 폴더로"
+    short = Path("/tmp") / "clewpath-ptyd-test" / "data"
+    assert ptyd.pipe_address(short) == str(short / "ptyd.sock")
+    long_dir = short / ("x" * 120)
+    addr = ptyd.pipe_address(long_dir)
+    assert len(addr.encode()) < 104, "맥 소켓 경로 상한을 넘으면 임시 폴더로"
+    assert os.path.dirname(addr) == tempfile.gettempdir() and os.path.basename(addr).startswith(f"clewpath-ptyd-{os.getuid()}-")
+    assert ptyd.pipe_address(long_dir) == addr != ptyd.pipe_address(long_dir / "y"), "같은 데이터 폴더면 같은 주소, 다르면 다른 주소"
 
 
 def _leave_time_wait(listener_reuse: bool = True) -> int:
@@ -120,17 +128,23 @@ def test_port_free_sees_through_time_wait():
 
 
 def test_port_free_matches_what_the_server_can_bind():
-    """리눅스는 TIME_WAIT 를 남긴 리스너도 SO_REUSEADDR 였을 때만 다시 bind 를 허락한다. 그렇지 않은 프로그램이 남긴
-    TIME_WAIT 면 uvicorn 도 못 여니 '사용 중'이 맞다(port_free 의 답 = 서버가 실제로 bind 할 수 있나)."""
+    """SO_REUSEADDR 없이 연 리스너가 남긴 TIME_WAIT — 서버(uvicorn, SO_REUSEADDR)가 실제로 bind 할 수 있는지와 port_free 의 답이
+    같아야 한다. 리눅스는 bind 를 거절한다(TIME_WAIT 를 남긴 리스너도 SO_REUSEADDR 였을 때만 허락) → '사용 중'. 맥(BSD)은
+    bind 를 허락한다 → '비어 있음'(2026-10-22 맥 실기에서 리눅스 동작을 단언하던 이 시험만 틀렸다)."""
     import socket
 
     from session_manager import osdep
     port = _leave_time_wait(listener_reuse=False)
     with socket.socket() as s:
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        with pytest.raises(OSError):
+        try:
             s.bind(("127.0.0.1", port))
-    assert osdep.port_free("127.0.0.1", port) is False
+            can_bind = True
+        except OSError:
+            can_bind = False
+    if sys.platform.startswith("linux"):
+        assert can_bind is False, "리눅스: 이 TIME_WAIT 에는 SO_REUSEADDR 로도 bind 할 수 없다(시험의 전제)"
+    assert osdep.port_free("127.0.0.1", port) is can_bind
 
 
 def test_port_free_still_refuses_listeners():

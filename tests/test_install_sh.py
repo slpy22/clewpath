@@ -6,7 +6,8 @@
   의존성), `sync`·`pip install -e` 는 편집 설치 흉내(.pth 로 설치 루트 + dist-info 버전). 부른 모양(인자·cwd·env)을
   calls.jsonl 에 적고 uv.json 으로 실패를 넣는다.
 - 설치 재료는 이 작업 트리의 PAYLOAD 사본(pwa 는 작은 대역) — get.sh 처럼 설치 루트 옆 .clewpath-get.XXXXXX/stage 에 둔다.
-- 경로: 홈에 공백·한글. 설치 위치는 공통 경로 블록의 리눅스 기본값($HOME/.local/share/clewpath/app).
+- 경로: 홈에 공백·한글(진짜 맥에서는 ASCII — 아래 HOME_LEAF). 설치 위치는 공통 경로 블록의 리눅스 기본값
+  ($HOME/.local/share/clewpath/app). 진짜 맥에서도 mac=False 상자는 가짜 uname(Linux)으로 리눅스 길을 흉내 낸다.
 진짜 uv(고정 해시 tarball)·오프라인 uv sync 로 도는 왕복은 컨테이너 e2e(6.3)의 몫이다. Windows 에선 건너뛴다.
 """
 from __future__ import annotations
@@ -48,6 +49,12 @@ from session_manager.osdep import _posix
 REAL_PKG = Path(session_manager.__file__).resolve().parent
 ROOT = Path(__file__).resolve().parents[1]
 DEAD_PID = 4_194_999
+# 진짜 맥에서 도는 리눅스 흉내 Box(mac=False): uname 을 Linux 로 바꿔 끼우고(가짜 launchctl 은 늘 PATH 앞) 홈은 ASCII —
+# 진짜 맥 ps 는 명령줄의 ASCII 밖 바이트를 바꿔 보여 줘 런처·러너가 Host 를 알아보지 못한다(설치가 맥에서 거부하는 까닭).
+# 리눅스 시험장은 한글 홈 그대로(2026-10-22 맥 실기 — 한글 임시 경로가 맥 ASCII 가드에 걸려 80건이 본문을 못 돌았다)
+ON_MAC = sys.platform == "darwin"
+HOME_LEAF = "hom" if ON_MAC else "홈"
+LINUX_UNAME = '#!/bin/sh\ncase "${1:-}" in -m) m=$(/usr/bin/uname -m); [ "$m" = arm64 ] && m=aarch64; echo "$m" ;; *) echo Linux ;; esac\n'
 VERSION = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
 
 FAKE_UV = r'''#!@PYTHON@
@@ -231,6 +238,13 @@ def _mode(p: Path) -> int:
     return stat.S_IMODE(p.stat().st_mode)
 
 
+def _fd_path(pid: int, fd: int) -> str | None:
+    """그 프로세스의 fd 가 연 파일(실제 경로) — 리눅스는 /proc, 맥은 psutil(open_files 의 fd)."""
+    if Path("/proc/self").is_dir():
+        return os.path.realpath(os.readlink(f"/proc/{pid}/fd/{fd}"))
+    return next((os.path.realpath(f.path) for f in psutil.Process(pid).open_files() if f.fd == fd), None)
+
+
 def _tree_hash(p: Path) -> str:
     h = hashlib.sha256()
     for f in sorted(p.rglob("*")):
@@ -315,7 +329,7 @@ class Box:
             self.home = base / "mac & home" / "u"
             self.chome = self.home / "Library" / "Application Support" / "ClewPath"
         else:
-            self.home = base / "home x" / "홈"
+            self.home = base / "home x" / HOME_LEAF
             self.chome = self.home / ".local" / "share" / "clewpath"
         self.root = self.chome / "app"
         self.claude = self.home / ".claude"
@@ -346,6 +360,8 @@ class Box:
         fakes = {"launchctl": FAKE_LAUNCHCTL, "fake-launchd": FAKE_LAUNCHD.replace("@PYTHON@", sys.executable)}
         if mac:
             fakes["uname"] = '#!/bin/sh\ncase "${1:-}" in -m) echo arm64 ;; *) echo Darwin ;; esac\n'
+        elif ON_MAC:
+            fakes["uname"] = LINUX_UNAME
         for name, body in fakes.items():
             (self.tools / name).write_text(body, encoding="utf-8")
             os.chmod(self.tools / name, 0o755)
@@ -548,8 +564,9 @@ def test_fresh_install_lays_out_secures_and_starts(box):
     st = box.status()
     assert st["state"] == "running" and st["pid"] == str(pid)
     # Host 는 사용자의 umask 를 그대로(S38), uv 설정·토큰 env 는 물려받지 않는다
-    status_txt = Path(f"/proc/{pid}/status").read_text(encoding="utf-8")
-    assert "\nUmask:\t0027\n" in status_txt
+    if Path("/proc/self").is_dir():                                           # 맥은 남의 프로세스 umask 를 읽을 길이 없다
+        status_txt = Path(f"/proc/{pid}/status").read_text(encoding="utf-8")
+        assert "\nUmask:\t0027\n" in status_txt
     env = psutil.Process(pid).environ()
     assert not [k for k in env if k.startswith("UV_") or k.startswith("CLEWPATH_CLIENT")], sorted(env)
     assert env["CLEWPATH_CONFIG"] == str(box.conf) and env["HOME"] == str(box.home)
@@ -673,7 +690,7 @@ def test_from_stage_refuses_odd_entries_and_foreign_targets(box):
         r = box.install_from(st)
         assert r.returncode == 1 and "stage 에" in r.stdout.decode("utf-8"), (odd, box.diag(r))
         assert not box.root.exists() and not st.parent.exists(), "하나도 옮기지 않았고, get.sh 의 임시 stage 는 치웠다"
-    foreign = box.base / "남의 폴더"                                          # 설치 루트 옆이 아닌 stage — 거절해도 지우지 않는다
+    foreign = box.base / ("foreign dir" if ON_MAC else "남의 폴더")             # 설치 루트 옆이 아닌 stage — 거절해도 지우지 않는다
     foreign.mkdir()
     (foreign / "README.md").write_text("mine", encoding="utf-8")
     st = box.stage()
@@ -1213,6 +1230,8 @@ def _sh_function(name: str) -> str:
     return src[i:src.index("\n}\n", i) + 3]
 
 
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="리눅스의 libc 판정 — 맥에는 getconf GNU_LIBC_VERSION·ldd 가 없어 "
+                                                              "glibc 증거가 없다(install.sh 는 맥에서 이 판정을 부르지 않는다)")
 def test_glibc_with_a_stray_musl_loader_is_not_musl(tmp_path):
     """glibc 배포판에도 musl 패키지가 /lib/ld-musl-* 를 둘 수 있다 — 그것만 보고 musl 로 보아 설치를 거부했다. glibc 를 먼저 본다."""
     lib = tmp_path / "lib"
@@ -1296,14 +1315,15 @@ def test_system_uv_needs_the_pinned_minor_version(box):
 
 def test_mac_refuses_non_ascii_install_paths(box):
     """맥 ps 는 명령줄의 ASCII 밖 바이트를 이스케이프해 보여 준다 — 설치 경로가 그러면 런처·러너·설치가 Host 를 알아보지
-    못한다. 맥에서는 그런 경로를 거부하고 이유를 알린다(리눅스는 그대로 — 이 시험들의 홈은 늘 한글이다)."""
-    tools = box.base / "mac"
-    tools.mkdir()
-    (tools / "uname").write_text('#!/bin/sh\ncase "${1:-}" in -m) echo arm64 ;; *) echo Darwin ;; esac\n',
-                                 encoding="utf-8")
-    os.chmod(tools / "uname", 0o755)
-    box.unpack()
-    r = box.install(env=box.env(PATH=f"{tools}:{os.environ['PATH']}"))
+    못한다. 맥에서는 그런 경로를 거부하고 이유를 알린다(리눅스는 그대로 — 리눅스 시험장의 홈은 한글이다).
+    상자의 uname 을 Darwin 으로 바꾸고(진짜 맥에서는 상자가 리눅스를 흉내 내는 uname 을 덮는다), 홈과 상관없이 설치 폴더
+    이름에 한글을 넣는다(진짜 맥에서 도는 상자의 홈은 ASCII)."""
+    (box.tools / "uname").write_text('#!/bin/sh\ncase "${1:-}" in -m) echo arm64 ;; *) echo Darwin ;; esac\n',
+                                     encoding="utf-8")
+    os.chmod(box.tools / "uname", 0o755)
+    root = box.chome / "앱"
+    shutil.copytree(box.payload, root)
+    r = box.sh(root / "install.sh", *box.args())
     out = r.stdout.decode("utf-8")
     assert r.returncode == 1 and "ASCII" in out, box.diag(r)
     assert not box.data.exists() and not box.calls() and not (box.home / "Library").exists()
@@ -1432,7 +1452,7 @@ def test_mac_launchd_job_becomes_the_host_and_ends_quietly(mac):
     d = plistlib.loads(mac.plist.read_bytes())
     env = psutil.Process(pid).environ()
     assert env["PATH"] == d["EnvironmentVariables"]["PATH"] and env["LANG"] == d["EnvironmentVariables"]["LANG"]
-    assert os.readlink(f"/proc/{pid}/fd/1") == str(mac.data / "host.log")
+    assert _fd_path(pid, 1) == os.path.realpath(mac.data / "host.log")
     assert mac.text(mac.data / "host.log").count("=== launcher start") == 2
     assert "Traceback" not in mac.text(mac.data / "launchd.log")
     tick = subprocess.run([str(mac.tools / "fake-launchd"), str(mac.plist)], env=mac.env(), timeout=90)
