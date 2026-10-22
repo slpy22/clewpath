@@ -9,7 +9,8 @@
 - 가짜 브로커(session_manager/ptyd.py): ptyd.json 을 쓰고 잔다 — stop 이 건드리지 않는지 본다.
 - 가짜 패키지에 없는 모듈(liveness·config)은 진짜 패키지에서 온다(__path__ 확장) — 강제 stop 의 표식이 진짜
   liveness.mark_shutdown 으로 남는지까지 본다.
-- 판정의 세 갈래(psutil / venv 에 psutil 없음 / /proc 없음 = 맥의 ps 길)는 variant 픽스처로 같은 시나리오를 돌린다.
+- 판정의 네 갈래(psutil / venv 에 psutil 없음 / /proc 없음 = 맥의 ps 길 / 둘 다 없음 = psutil 없는 맥)는 variant 픽스처로 같은
+  시나리오를 돌린다.
 Windows 에선 건너뛴다(리눅스 검증 컨테이너 `docker run --init`·맥에서 돈다). 정리는 설치 루트가 명령줄에 든 프로세스를
 모두 죽이는 것으로 한다.
 """
@@ -17,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import plistlib
 import shutil
 import signal
 import socket
@@ -38,6 +40,7 @@ if sys.platform != "win32":
     import psutil
 
 import session_manager
+from session_manager import hostctl
 from session_manager.osdep import _posix
 
 REAL_PKG = Path(session_manager.__file__).resolve().parent
@@ -309,14 +312,16 @@ def inst(tmp_path):
         i.cleanup()
 
 
-@pytest.fixture(params=["psutil", "no-psutil", "no-procfs"])
+@pytest.fixture(params=["psutil", "no-psutil", "no-procfs", "no-psutil-no-procfs"])
 def variant(request, tmp_path):
-    """판정의 세 갈래: 보통(psutil) / venv 에 psutil 이 없을 때(파이썬이 /proc 를 읽음) / /proc 가 없을 때(맥 —
-    셸이 ps 로 명령줄·상태를 읽는다. 리눅스에서는 런처의 /proc 경로를 없는 곳으로 바꿔 흉내 낸다)."""
-    if request.param == "no-procfs" and not (Path("/proc/self").is_dir() and shutil.which("ps")):
+    """판정의 네 갈래: 보통(psutil) / venv 에 psutil 이 없을 때(파이썬이 /proc 를 읽음) / /proc 가 없을 때(맥 —
+    셸이 ps 로 명령줄·상태를 읽는다. 리눅스에서는 런처의 /proc 경로를 없는 곳으로 바꿔 흉내 낸다) / 둘 다 없을 때(psutil 없는
+    맥 — 파이썬 판정도 ps 를 읽는다. 맥 실기 3b: 재사용된 pid 를 '기동 중'으로 보고 Host 를 띄우지 않았다)."""
+    procfs = request.param in ("no-procfs", "no-psutil-no-procfs")
+    if procfs and not (Path("/proc/self").is_dir() and shutil.which("ps")):
         pytest.skip("/proc 와 ps 가 둘 다 있는 리눅스에서만 흉내 낸다(맥은 기본 시험이 이미 이 길)")
-    i = Inst(tmp_path, with_psutil=request.param != "no-psutil")
-    if request.param == "no-procfs":
+    i = Inst(tmp_path, with_psutil=request.param not in ("no-psutil", "no-psutil-no-procfs"))
+    if procfs:
         t = i.launcher.read_text(encoding="utf-8")
         assert t.count('"/proc/') >= 3 and "/proc/self" in t
         i.launcher.write_bytes(t.replace('"/proc/', '"/nonexistent-proc/').replace("/proc/self", "/nonexistent-proc/self")
@@ -1192,3 +1197,145 @@ def test_data_dir_named_differently_but_same_is_fine(inst):
     inst.started(inst.run("start", env=inst.env(CLAUDE_CONFIG_DIR=link)))
     assert inst.run("stop").returncode == 0
     inst.started(inst.run("start", env=inst.env(SESSION_MANAGER_CLAUDE_HOME=inst.home / ".claude")))
+
+
+# ---------------------------------------------------------------- [mac] start 는 launchd 에 맡긴다(kickstart)
+
+# 가짜 launchctl(런처 시험) — 받은 인자를 calls 에 탭으로 적는다. 올림 상태 = FAKE_LCTL_DIR/loaded(등록 파일 사본).
+# kickstart 는 올라 있는 작업을 launchd 처럼 한 번 띄운다(새 세션 — 작업 프로세스가 곧 Host, 그 pid 를 jobs 에 적는다).
+# FAKE_KICKSTART: fail(실패) | noop(받고도 띄우지 않는다 — 막 내린 작업의 정리·throttle 흉내)
+FAKE_LCTL = r'''#!@PYTHON@
+import os, plistlib, subprocess, sys
+d = os.environ["FAKE_LCTL_DIR"]
+with open(os.path.join(d, "calls"), "a", encoding="utf-8") as f:
+    f.write("\t".join(sys.argv[1:]) + "\n")
+loaded = os.path.join(d, "loaded")
+cmd = sys.argv[1] if len(sys.argv) > 1 else ""
+if cmd == "print":
+    sys.exit(0 if os.path.exists(loaded) else 113)
+if cmd == "kickstart":
+    if not os.path.exists(loaded):
+        print("Could not find service (fake)", file=sys.stderr)
+        sys.exit(113)
+    mode = os.environ.get("FAKE_KICKSTART", "")
+    if mode == "fail":
+        print("Kickstart failed: 5: Input/output error (fake)", file=sys.stderr)
+        sys.exit(5)
+    if mode == "noop":
+        sys.exit(0)
+    with open(loaded, "rb") as f:
+        p = plistlib.load(f)
+    env = {k: os.environ[k] for k in ("HOME", "USER", "LOGNAME", "TMPDIR") if k in os.environ}
+    env["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
+    env.update(p.get("EnvironmentVariables", {}))
+    with open(p["StandardOutPath"], "ab") as out:
+        job = subprocess.Popen(p["ProgramArguments"], cwd="/", env=env, stdin=subprocess.DEVNULL, stdout=out,
+                               stderr=out, start_new_session=True)
+    with open(os.path.join(d, "jobs"), "a", encoding="utf-8") as f:
+        f.write("%d\n" % job.pid)
+    sys.exit(0)
+print("fake launchctl: unknown " + cmd, file=sys.stderr)
+sys.exit(64)
+'''
+
+
+def _mac(inst, *, plist_root: Path | None = None, loaded: bool = True, darwin: bool = True) -> dict:
+    """맥 흉내 env — 가짜 uname(Darwin)·launchctl 을 PATH 앞에 두고, 홈에 자동 시작 등록 파일(plist_root 의 런처를 부른다 —
+    기본은 이 설치본)을 쓴다. loaded 면 launchd 에 올라 있다."""
+    base = inst.home.parent
+    tools = base / "mac tools"
+    tools.mkdir(exist_ok=True)
+    fakes = {"launchctl": FAKE_LCTL.replace("@PYTHON@", sys.executable)}
+    if darwin:
+        fakes["uname"] = '#!/bin/sh\ncase "${1:-}" in -m) echo arm64 ;; *) echo Darwin ;; esac\n'
+    for name, body in fakes.items():
+        (tools / name).write_text(body, encoding="utf-8")
+        os.chmod(tools / name, 0o755)
+    lctl = base / "lctl"
+    lctl.mkdir(exist_ok=True)
+    raw = plistlib.dumps(hostctl.launchd_plist(str(plist_root or inst.root), str(inst.data), path_env=os.environ["PATH"],
+                                               lang="C.UTF-8", umask=0o022))
+    plist = inst.home / hostctl.LAUNCHD_PLIST
+    plist.parent.mkdir(parents=True, exist_ok=True)
+    plist.write_bytes(raw)
+    if loaded:
+        (lctl / "loaded").write_bytes(raw)
+    return inst.env(PATH=f"{tools}:{os.environ['PATH']}", FAKE_LCTL_DIR=lctl)
+
+
+def _calls(inst) -> list[list[str]]:
+    try:
+        text = (inst.home.parent / "lctl" / "calls").read_text(encoding="utf-8")
+    except OSError:
+        return []
+    return [ln.split("\t") for ln in text.splitlines()]
+
+
+def _jobs(inst) -> list[int]:
+    try:
+        return [int(x) for x in (inst.home.parent / "lctl" / "jobs").read_text(encoding="utf-8").split()]
+    except OSError:
+        return []
+
+
+LABEL = "com.clewpath.host"
+
+
+def test_mac_start_and_resume_hand_the_host_to_launchd(inst):
+    """[mac] 이 설치본의 launchd 작업이 올라 있으면 start·resume 은 직접 띄우지 않고 launchd 에 맡긴다(kickstart) — Host 가 그
+    작업의 프로세스라 죽으면 30초 KeepAlive 가 받고 로그아웃 때 같이 끝난다(맥 실기 3b 관찰 3: 설치·resume·start 가 띄운 Host 는
+    PPID 1·launchd 밖이라 죽으면 5분 확인이 받았고 로그아웃에도 살아남았다). 떠 있거나 보류(stop --hold) 중이면 맡기지도 않는다."""
+    env = _mac(inst)
+    target = f"gui/{os.getuid()}/{LABEL}"
+    r = inst.run("start", env=env)
+    assert r.returncode == 0 and _wait(inst.health, 20), inst.diag(r)
+    assert _calls(inst) == [["print", target], ["kickstart", target]], _calls(inst)
+    jobs = _jobs(inst)
+    assert len(jobs) == 1 and inst.host_pids() == jobs and inst.runtime().get("pid") == jobs[0], (jobs, inst.diag())
+    assert f"start: runtime.json 없음 → launchd 에 맡김(kickstart) pid {jobs[0]}" in inst.llog(), inst.diag()
+    assert f"foreground: runtime.json 없음 → 기동(exec, pid {jobs[0]})" in inst.llog() and "spawned pid" not in inst.llog()
+    assert inst.run("start", env=env).returncode == 0 and len(_calls(inst)) == 2, "떠 있으면 아무것도 안 한다"
+    assert inst.run("stop", env=env).stdout.decode().strip() == f"stopped (pid {jobs[0]})"
+    assert inst.run("stop", "--hold", env=env).returncode == 0
+    r = inst.run("start", env=env)
+    assert r.returncode == 0 and len(_calls(inst)) == 2 and inst.host_pids() == [], "보류 중이면 맡기지도 않는다"
+    r = inst.run("resume", env=env)
+    assert r.returncode == 0 and _wait(inst.health, 20), inst.diag(r)
+    jobs = _jobs(inst)
+    assert len(jobs) == 2 and inst.host_pids() == [jobs[1]], (jobs, inst.host_pids(), inst.diag())
+    assert [c[0] for c in _calls(inst)] == ["print", "kickstart", "print", "kickstart"], _calls(inst)
+
+
+@pytest.mark.parametrize("case", ["not-loaded", "kickstart-fails", "kickstart-does-nothing"])
+def test_mac_start_spawns_itself_when_launchd_does_not(inst, case):
+    """맡길 수 없으면 지금처럼 직접 띄운다 — 등록 파일은 있지만 launchd 에 올라 있지 않다(SSH 셸로 설치해 다음 로그인 때 올라갈
+    등록)·kickstart 가 실패·받고도 약 20초 안에 뜨지 않음(반초 낮잠 횟수). 사유는 launcher.log 에."""
+    env = _mac(inst, loaded=case != "not-loaded")
+    if case == "kickstart-fails":
+        env["FAKE_KICKSTART"] = "fail"
+    elif case == "kickstart-does-nothing":
+        env["FAKE_KICKSTART"] = "noop"
+    inst.started(inst.run("start", env=env, timeout=120))
+    assert _jobs(inst) == [] and "spawned pid" in inst.llog(), inst.diag()
+    kinds = [c[0] for c in _calls(inst)]
+    if case == "not-loaded":
+        assert kinds == ["print"], kinds
+        return
+    assert kinds == ["print", "kickstart"], kinds
+    if case == "kickstart-fails":
+        assert "launchd kickstart 실패(Kickstart failed: 5: Input/output error (fake)) → 직접 기동" in inst.llog()
+    else:
+        assert "launchd 에 맡겼지만 약 20초 안에 뜨지 않음(kickstart) → 직접 기동" in inst.llog()
+
+
+@pytest.mark.parametrize("case", ["other-install", "linux", "updater"])
+def test_mac_start_leaves_launchd_alone(inst, case):
+    """같은 이름의 다른 설치본 작업(설치본은 사용자당 하나 — 등록 파일이 다른 런처를 부른다)은 깨우지 않는다. 리눅스(uname
+    그대로)는 launchd 를 보지 않는다. 업데이트 러너의 재기동(CLEWPATH_UPDATER=1)은 직접 띄운다 — launchd 의 foreground 는 러너가
+    쥔 update.inprogress 를 보고 건너뛴다. 셋 다 launchctl 을 부르지도 않는다."""
+    other = inst.home.parent / "Other" / "app"
+    env = _mac(inst, plist_root=other if case == "other-install" else None, darwin=case != "linux")
+    if case == "updater":
+        env["CLEWPATH_UPDATER"] = "1"
+    inst.started(inst.run("start", env=env))
+    assert _calls(inst) == [] and _jobs(inst) == [], _calls(inst)

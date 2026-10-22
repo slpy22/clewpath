@@ -3,7 +3,9 @@
 # 설정은 이 파일이 아니라 {{CONF_FILE}} 을 고치세요.
 #
 # 멱등 런처 — Windows start-connector.template.ps1 의 맥·리눅스판(docs/designs/posix-install.md 3.3).
-#   sh start-connector.sh [start]        떠 있으면 아무것도 안 한다. 죽어 있을 때만(health 없음 + pid 없음) 새로 띄운다
+#   sh start-connector.sh [start]        떠 있으면 아무것도 안 한다. 죽어 있을 때만(health 없음 + pid 없음) 새로 띄운다.
+#                                        [mac] 이 설치본의 launchd 작업이 올라 있으면 launchd 에 맡긴다(kickstart — Host 가
+#                                        그 작업의 프로세스가 된다). 업데이트 러너의 재기동은 직접
 #   sh start-connector.sh stop [--hold]  진행 중인 start 를 기다린 뒤 SIGTERM(정상 종료 표식·브로커 보존), 15초 뒤에도
 #                                        남으면 SIGKILL.
 #                                        --hold 면 maintenance.flag 도 만든다(다시 켜기: resume)
@@ -36,6 +38,8 @@ PY="$ROOT/.venv/bin/python"
 SELF="$ROOT/${0##*/}"
 NL='
 '
+OS=linux                                   # [mac] 은 start 를 launchd 에 맡길 때만 쓴다(launchd_ours·launchd_start)
+[ "$(uname -s 2>/dev/null)" = Darwin ] && OS=mac
 
 # 상태 판정 — 출력 "<ok|busy|foreign|dead|none> <pid> <port>". pid 는 runtime.json 의 것, 그 pid 가 이 설치본의 Host 로
 # 살아 있지 않으면 런처가 띄운 pid(launcher.spawn — runtime.json 을 아직 안 쓴 느린 기동, 겹쳐 뜬 진 쪽이 덮어쓴 runtime.json).
@@ -43,6 +47,9 @@ NL='
 # 의 port 로 health(프록시 무시)에 답하면 ok, 아니면 busy(기동 중·응답 불능). health 는 답하는데 그 Host 가 없으면 foreign
 # (남의 서버가 포트를 차지). pid 재사용은 명령줄로 거른다 — 기동 시각(started_at)과 견주지 않는다: 리눅스 psutil 의
 # create_time 은 지금의 부팅 시각으로 계산해 시계가 앞으로 뛰면(WSL2·VM 재개·NTP) 같이 밀려, 산 Host 를 시체로 본다.
+# psutil 이 없으면 /proc 를, /proc 도 없으면(맥) ps 를 읽는다 — 셸의 pid_alive·is_our_host 와 같은 규칙(ps 는 인자를 공백으로
+# 잇는다). ps 를 못 부를 때만 보수적으로 busy(맥 실기 3b: ps 없이 '산 pid = busy'로 보아 재사용된 pid 앞에서 영영 안 띄웠다).
+# 이 파이썬 본문은 python -c 인자라 ASCII 만 쓴다(작은따옴표도 없다 — 셸 문자열 안).
 PROBE_PY='
 import json, os, sys, urllib.request
 data, port, root = sys.argv[1], int(sys.argv[2]), sys.argv[3]
@@ -78,13 +85,30 @@ def is_host(args):
             and any(a == "session_manager.server" or a.endswith("/clewpath-host") for a in args))
 
 
+def by_ps(pid):
+    import subprocess
+    try:
+        r = subprocess.run(["ps", "-ww", "-o", "stat=", "-o", "command=", "-p", str(pid)], stdin=subprocess.DEVNULL,
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=10)
+    except Exception:
+        return "busy"
+    line = r.stdout.decode("utf-8", "replace").strip()
+    if not line:
+        return "dead"
+    st, _, cmd = line.partition(" ")
+    cmd = " " + cmd.strip() + " "
+    if "Z" in st or (" " + root + "/.venv/bin/") not in cmd:
+        return "dead"
+    return "busy" if (" session_manager.server " in cmd or "/clewpath-host " in cmd) else "dead"
+
+
 def by_proc(pid):
     try:
         os.kill(pid, 0)
     except Exception:
         return "dead"
     if not os.path.isdir("/proc/self"):
-        return "busy"
+        return by_ps(pid)
     try:
         with open("/proc/%d/stat" % pid, "rb") as f:
             st = f.read().rsplit(b")", 1)[1].split()[0]
@@ -202,6 +226,21 @@ while time.monotonic() < end:
         pass
     time.sleep(0.2)
 print(p.pid, state)
+'
+
+# [mac] 자동 시작 등록 파일(plistlib)이 부르는 런처 — 한 줄에 하나(uninstall.sh 의 PLIST_PY 와 같은 규칙). 못 읽으면 3
+LAUNCHD_LABEL=com.clewpath.host
+LAUNCHD_PY='
+import plistlib, sys
+try:
+    with open(sys.argv[1], "rb") as f:
+        d = plistlib.load(f)
+except Exception:
+    sys.exit(3)
+args = d.get("ProgramArguments") if isinstance(d, dict) else None
+for a in args if isinstance(args, list) else []:
+    if isinstance(a, str) and a.endswith("/start-connector.sh") and "\n" not in a:
+        print(a)
 '
 
 # stop 이 강제 종료(SIGKILL)했을 때만 — 죽인 Host 의 pid 로 정상 종료 표식(다음 기동이 사고로 보지 않게). 실패는 무시.
@@ -497,6 +536,44 @@ launch_logs() {   # 띄우기 직전(start·foreground 같은 규칙) — 로그
   { printf '=== launcher start %s ===\n' "$(date '+%Y-%m-%d %H:%M:%S')" >>"$DATA_DIR/host.log"; } 2>/dev/null
 }
 
+launchd_ours() {   # 0 = [mac] 이 설치본의 launchd 작업이 올라 있다 — 등록 파일이 이 런처를 부르고(같은 이름의 다른 설치본 작업은
+  # 깨우지 않는다) launchctl 이 그 작업을 안다. 리눅스·등록 없음·못 읽음이면 1
+  [ "$OS" = mac ] || return 1
+  _jp="$HOME/Library/LaunchAgents/$LAUNCHD_LABEL.plist"
+  [ -f "$_jp" ] || return 1
+  _ja=$("$PY" -I -c "$LAUNCHD_PY" "$_jp" </dev/null 2>/dev/null) || return 1
+  case "$NL$_ja$NL" in *"$NL$SELF$NL"*) ;; *) return 1 ;; esac
+  launchctl print "gui/$(id -u)/$LAUNCHD_LABEL" </dev/null >/dev/null 2>&1
+}
+
+# [mac] launchd 에 맡겨 띄운다(kickstart) — 그 작업의 foreground 가 곧 Host 가 되어(exec) 죽으면 30초 KeepAlive 가 받고 로그아웃
+# 때 같이 끝난다(맥 실기 3b: 설치·resume·start 가 직접 띄운 Host 는 PPID 1·launchd 밖이라 죽으면 5분 확인이 받았고 로그아웃에도
+# 살아남았다). 잠금을 잡기 전에 부른다 — foreground 가 launcher.lock 을 잡는다. 반초 낮잠 40번(약 20초)까지 판정이 ok·busy 가
+# 되기를 본다(벽시계 마감이 아니라 횟수). 0 = 떴다. 아니면 사유를 남기고 1 — 부른 쪽이 지금처럼 직접 띄운다(늦게 뜬 작업과는 잠금
+# 안 재판정이 겹쳐 띄우기를 막는다)
+launchd_start() {
+  [ "$OS" = mac ] || return 1
+  if [ "$P_PID" = 0 ]; then _kw="runtime.json 없음"; else _kw="이전 pid $P_PID 없음(health 없음)"; fi
+  if ! _ke=$(launchctl kickstart "gui/$(id -u)/$LAUNCHD_LABEL" </dev/null 2>&1); then
+    llog "start: launchd kickstart 실패($(printf '%s' "$_ke" | tr '\n' ' ' | cut -c 1-160)) → 직접 기동"
+    return 1
+  fi
+  _kn=0
+  while [ "$_kn" -lt 40 ]; do
+    sleep 0.5 2>/dev/null || sleep 1
+    _kn=$((_kn + 1))
+    probe_now || continue
+    case "$P_STATE" in
+      ok|busy) llog "start: $_kw → launchd 에 맡김(kickstart) pid $P_PID"
+               note "기동했습니다(launchd 작업) — pid $P_PID (로그: $DATA_DIR/host.log)"
+               return 0 ;;
+      foreign) port_taken ;;
+    esac
+  done
+  llog "start: launchd 에 맡겼지만 약 20초 안에 뜨지 않음(kickstart) → 직접 기동"
+  return 1
+}
+
 cmd_start() {
   need_venv
   data_dir_ready
@@ -519,6 +596,11 @@ cmd_start() {
           exit 0 ;;
     foreign) port_taken ;;
   esac
+  # [mac] 이 설치본의 launchd 작업에 맡긴다. 업데이트 러너의 재기동(CLEWPATH_UPDATER=1)은 직접 — 러너가 update.inprogress 를
+  # 쥐고 있어 launchd 의 foreground 는 띄우지 않는다(그 Host 는 다음에 죽거나 로그아웃할 때까지 launchd 밖에 있다)
+  if [ "${CLEWPATH_UPDATER:-}" != 1 ] && launchd_ours && launchd_start; then
+    exit 0
+  fi
   if ! lock_acquire "$DATA_DIR/launcher.lock" "${0##*/}"; then
     llog "skip: 다른 런처가 기동 중(launcher.lock)"
     exit 0

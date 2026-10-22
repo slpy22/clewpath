@@ -143,7 +143,9 @@ else:
 
 # 가짜 launchctl — 받은 인자를 탭으로 이어 한 줄씩 적는다(맨 앞 칸: 그때 maintenance.flag 가 있었나 F/-). 올림 상태는 파일 하나.
 # FAKE_LAUNCHCTL: ok(기본) | fail(bootstrap 늘 실패 — SSH 셸처럼 GUI 세션이 없다) | fail-once(첫 bootstrap 만 — 막 내린 이름이
-# 정리 중) | fail-bootout(올라 있어도 내리지 못한다). FAKE_LAUNCHD_RUN=1 이면 올릴 때 RunAtLoad 처럼 그 작업을 한 번 돌린다
+# 정리 중) | fail-bootout(올라 있어도 내리지 못한다) | fail-kickstart. FAKE_LAUNCHD_RUN=1 이면 올릴 때 RunAtLoad 처럼 그 작업을 한
+# 번 돌린다. kickstart 는 올라 있는 작업을 뒤에서 띄운다(런처 start 가 맡긴다 — 작업 pid 는 .job.pid, 종료코드는 .kick.rc 에 따로
+# 적어 RunAtLoad·5분 확인의 $FAKE_LAUNCHD_RC 와 섞지 않는다). bootout 은 진짜처럼 그 작업 프로세스도 끝낸다(SIGTERM)
 FAKE_LAUNCHCTL = r"""#!/bin/sh
 st="$FAKE_LAUNCHCTL_LOG.loaded"
 { if [ -e "${FAKE_FLAG:-/nonexistent}" ]; then printf '%s\t' F; else printf '%s\t' -; fi
@@ -152,7 +154,14 @@ case "$1" in
   bootout)
     [ "${FAKE_LAUNCHCTL:-ok}" = fail-bootout ] && { echo "Boot-out failed: 125: Domain does not support specified action" >&2; exit 125; }
     [ -e "$st" ] || { echo "Boot-out failed: 3: No such process" >&2; exit 3; }
-    rm -f "$st"; exit 0 ;;
+    if [ -s "$FAKE_LAUNCHCTL_LOG.job.pid" ]; then kill -TERM "$(cat "$FAKE_LAUNCHCTL_LOG.job.pid")" 2>/dev/null; fi
+    rm -f "$st" "$FAKE_LAUNCHCTL_LOG.job.pid"; exit 0 ;;
+  kickstart)
+    [ -e "$st" ] || { echo "Could not find service" >&2; exit 113; }
+    [ "${FAKE_LAUNCHCTL:-ok}" = fail-kickstart ] && { echo "Kickstart failed: 5: Input/output error" >&2; exit 5; }
+    FAKE_LAUNCHD_RC="$FAKE_LAUNCHCTL_LOG.kick.rc" FAKE_LAUNCHD_WAIT=3600 \
+      fake-launchd "$st" --pid "$FAKE_LAUNCHCTL_LOG.job.pid" </dev/null >/dev/null 2>&1 &
+    exit 0 ;;
   bootstrap)
     case "${FAKE_LAUNCHCTL:-ok}" in
       fail) echo "Bootstrap failed: 125: Domain does not support specified action" >&2; exit 125 ;;
@@ -1334,7 +1343,8 @@ def _umask() -> int:
 def test_mac_install_registers_launchd_after_the_launcher(mac):
     """[mac] 런처를 렌더한 뒤 ~/Library/LaunchAgents/com.clewpath.host.plist(0644, plistlib)를 쓰고 옛 것을 내린 뒤(bootout)
     올린다(bootstrap gui/<uid>). 올리자마자 도는 foreground(RunAtLoad)는 설치 표식 때문에 아무것도 띄우지 않고 0 — Host 는
-    지금처럼 런처 start 가 띄운 하나. 기록에 autostart=launchd. 다시 설치하면 같은 내용은 그대로 두고 다시 내렸다 올린다."""
+    표식을 놓은 뒤 런처 start 가 launchd 에 맡겨(print 로 올라 있는지 본 뒤 kickstart) 띄운 하나. 기록에 autostart=launchd.
+    다시 설치하면 같은 내용은 그대로 두고 다시 내렸다 올린다."""
     r = mac.fresh(env=mac.env(FAKE_LAUNCHD_RUN=1))
     out = r.stdout.decode("utf-8")
     assert "[OK]   자동 시작 등록 (launchd com.clewpath.host" in out, mac.diag(r)
@@ -1348,7 +1358,9 @@ def test_mac_install_registers_launchd_after_the_launcher(mac):
     assert d["Umask"] == _umask() and d["RunAtLoad"] is True and d["StartInterval"] == 300
     uid = str(os.getuid())
     assert [c[1:] for c in mac.launchctl()] == [["bootout", f"gui/{uid}/com.clewpath.host"],
-                                                ["bootstrap", f"gui/{uid}", str(mac.plist)]], mac.launchctl()
+                                                ["bootstrap", f"gui/{uid}", str(mac.plist)],
+                                                ["print", f"gui/{uid}/com.clewpath.host"],
+                                                ["kickstart", f"gui/{uid}/com.clewpath.host"]], mac.launchctl()
     assert mac.text(mac.launchd_rc) == "0\n", "RunAtLoad 의 foreground 는 곧 0 으로 끝났다"
     assert "foreground: 업데이트 진행 중 — 띄우지 않음" in mac.text(mac.data / "launcher.log")
     pid = mac.host_pid()
@@ -1357,7 +1369,7 @@ def test_mac_install_registers_launchd_after_the_launcher(mac):
     r = mac.install()
     out = r.stdout.decode("utf-8")
     assert r.returncode == 0 and "자동 시작 등록 파일 그대로(내용이 같음)" in out, mac.diag(r)
-    assert [c[1] for c in mac.launchctl()] == ["bootout", "bootstrap", "bootout", "bootstrap"]
+    assert [c[1] for c in mac.launchctl()] == ["bootout", "bootstrap", "print", "kickstart"] * 2
     assert mac.record()["autostart"] == "launchd" and mac.host_pid() != pid
 
 
@@ -1368,7 +1380,9 @@ def test_mac_bootstrap_failure_still_installs(mac, mode):
     r = mac.fresh(env=mac.env(FAKE_LAUNCHCTL=mode))
     out = r.stdout.decode("utf-8")
     assert r.returncode == 0 and "=== 설치 완료 ===" in out, mac.diag(r)
-    assert [c[1] for c in mac.launchctl()] == ["bootout", "bootstrap", "bootstrap"], "실패하면 1초 뒤 한 번 더"
+    calls = [c[1] for c in mac.launchctl()]
+    assert calls[:3] == ["bootout", "bootstrap", "bootstrap"], "실패하면 1초 뒤 한 번 더"
+    assert calls[3:] == (["print", "kickstart"] if mode == "fail-once" else ["print"]), "올라 있을 때만 launchd 에 맡긴다"
     assert mac.plist.is_file()
     mac.host_pid()
     if mode == "fail-once":
@@ -1399,7 +1413,7 @@ def test_mac_dry_run_and_no_autostart_register_nothing(mac):
     out = r.stdout.decode("utf-8")
     assert r.returncode == 0 and "이미 있던 자동 시작 등록은 그대로 둡니다" in out, mac.diag(r)
     assert mac.plist.is_file() and mac.record()["autostart"] == "launchd"
-    assert [c[1] for c in mac.launchctl()] == ["bootout", "bootstrap"]
+    assert [c[1] for c in mac.launchctl()] == ["bootout", "bootstrap", "print", "kickstart", "print", "kickstart"],         "등록을 건드리지 않아도 올라 있는 제 작업에는 기동을 맡긴다"
 
 
 def test_mac_replaces_another_installs_autostart_with_a_warning(mac):
@@ -1455,6 +1469,29 @@ def test_mac_install_then_uninstall_round_trip(mac):
     assert r.returncode == 0 and "[OK]   자동 시작(launchd) 해제" in out and "=== 제거 완료 ===" in out, mac.diag(r)
     assert not mac.plist.exists() and not mac.root.exists() and _wait(lambda: _gone(pid), 10)
     assert [c[:2] for c in mac.launchctl()][-2:] == [["F", "bootout"], ["F", "print"]], "maintenance.flag 를 만든 뒤에 내린다"
+
+
+def test_mac_install_leaves_the_host_to_launchd(mac):
+    """[mac] 설치가 끝난 Host 는 launchd 작업의 프로세스다 — 런처 start 가 올라 있는 제 작업에 맡긴다(kickstart). 맥 실기 3b
+    관찰 3: 설치가 직접 띄운 Host 는 PPID 1·launchd 밖이라 죽으면 KeepAlive(30초)가 아니라 5분 확인이 받았고 로그아웃에도
+    살아남았다. 다시 설치해도(bootout 이 옛 작업을 끝낸다) 새 Host 는 다시 작업의 프로세스이고, kickstart 가 실패하면 지금처럼
+    런처가 직접 띄워 설치는 성공한다."""
+    jobf = Path(f"{mac.lctl_log}.job.pid")
+    mac.fresh()
+    assert _wait(lambda: jobf.is_file() and jobf.read_text().strip(), 10), mac.diag()
+    pid = mac.host_pid()
+    assert pid == int(jobf.read_text()), (pid, jobf.read_text(), mac.diag())
+    log = mac.text(mac.data / "launcher.log")
+    assert f"→ launchd 에 맡김(kickstart) pid {pid}" in log, mac.diag()
+    assert f"foreground: runtime.json 없음 → 기동(exec, pid {pid})" in log and "spawned pid" not in log
+    r = mac.install()
+    assert r.returncode == 0 and _wait(lambda: jobf.is_file() and jobf.read_text().strip(), 10), mac.diag(r)
+    pid2 = mac.host_pid()
+    assert pid2 != pid and pid2 == int(jobf.read_text()), (pid, pid2, mac.diag())
+    r = mac.install(env=mac.env(FAKE_LAUNCHCTL="fail-kickstart"))
+    log = mac.text(mac.data / "launcher.log")
+    assert r.returncode == 0 and "launchd kickstart 실패(Kickstart failed: 5: Input/output error) → 직접 기동" in log, mac.diag(r)
+    assert not jobf.exists() and mac.host_pid() not in (pid, pid2) and "spawned pid" in log, mac.diag()
 
 
 def test_linux_install_registers_no_launchd(box):

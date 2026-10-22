@@ -719,13 +719,18 @@ _SH_FUNC = re.compile(r"(?m)^([a-z_][a-z0-9_]*)\(\) \{(?![^\n]*\}[ \t]*$)[^\n]*\
 
 def test_launchctl_runs_only_on_mac():
     """launchd 명령(launchctl)은 [mac] 분기 안에서만 — 부르는 함수는 첫 줄이 OS 가드(`[ "$OS" = mac ] || return …`)이고, 함수
-    밖에서는 부르지 않는다. 런처·러너·get.sh 는 부르지 않는다(자동 시작은 설치·제거의 일). 메시지·주석의 글자는 세지 않는다."""
+    밖에서는 부르지 않는다. 러너·get.sh 는 부르지 않는다. 등록·해제(bootstrap·bootout)는 설치·제거의 일이고, 런처는 start 를 제
+    작업에 맡길 때(맥 실기 3b — Host 를 launchd 아래에) 올라 있는지 보고(print) 깨우는(kickstart) 것만 한다. 메시지·주석의 글자는
+    세지 않는다."""
     for name in SCRIPTS:
         view = _code_view(_text(name))
         total = len(_LAUNCHCTL.findall(view))
-        if name not in ("install.sh", "uninstall.sh"):
+        if name not in ("install.sh", "uninstall.sh", "start-connector.template.sh"):
             assert total == 0, f"{name} 가 launchctl 을 부른다"
             continue
+        if name == "start-connector.template.sh":
+            subs = re.findall(r"(?<![\w$./-])launchctl[ \t]+([a-z]+)", view)
+            assert len(subs) == total and set(subs) == {"print", "kickstart"}, f"런처의 launchctl 은 print·kickstart 만: {subs}"
         inside, guarded = 0, []
         for m in _SH_FUNC.finditer(view):
             n = len(_LAUNCHCTL.findall(m.group(2)))
@@ -740,13 +745,13 @@ def test_launchctl_runs_only_on_mac():
 
 
 def test_launchd_names_agree():
-    """자동 시작 이름(Label)·등록 파일 자리는 install.sh·uninstall.sh·hostctl 이 같다 — 셸은 LAUNCHD_LABEL 한 줄에서만 이름을
-    적고(코드의 다른 곳에 글자로 두지 않는다) 자리는 늘 "$HOME/Library/LaunchAgents/$LAUNCHD_LABEL.plist"."""
+    """자동 시작 이름(Label)·등록 파일 자리는 install.sh·uninstall.sh·런처·hostctl 이 같다 — 셸은 LAUNCHD_LABEL 한 줄에서만
+    이름을 적고(코드의 다른 곳에 글자로 두지 않는다) 자리는 늘 "$HOME/Library/LaunchAgents/$LAUNCHD_LABEL.plist"."""
     from session_manager import hostctl
     assert hostctl.LAUNCHD_PLIST == f"Library/LaunchAgents/{hostctl.LAUNCHD_LABEL}.plist"
     for name in SCRIPTS:
         t = _text(name)
-        if name not in ("install.sh", "uninstall.sh"):
+        if name not in ("install.sh", "uninstall.sh", "start-connector.template.sh"):
             assert hostctl.LAUNCHD_LABEL not in _code_view(t), name
             continue
         assert re.findall(r"(?m)^LAUNCHD_LABEL=(\S+)$", t) == [hostctl.LAUNCHD_LABEL], name
