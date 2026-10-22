@@ -21,6 +21,10 @@ os.environ["SM_PTY_BROKER"] = "off"
 # CP 가 필요한 테스트는 monkeypatch 로 가짜 주소를 넣는다.
 for _k in ("SM_CP_URL", "SM_RELAY_URL", "SM_RELAY_AGENT_TOKEN", "SM_RELAY_CLIENT_TOKEN", "SM_RELAY_ROOM"):
     os.environ.pop(_k, None)
+# 진짜 설정 파일 자리도 물려받지 않는다(2026-10-22 맥 실기 3b-2 이슈 B 의 원인): 런처가 Host 에 넣는 CLEWPATH_CONFIG(진짜
+# ~/.claude/session_manager/clewpath.toml)가 브로커 → ClewPath 웹 터미널 → claude → pytest 로 샌다. appconfig.config_path() 는
+# 그 값을 위의 가짜 홈보다 먼저 봐서, 설정 파일을 쓰고 지우는 시험이 진짜 파일을 덮어쓰고 지웠다. 필요한 시험은 monkeypatch 로 넣는다.
+os.environ.pop("CLEWPATH_CONFIG", None)
 
 # 진짜 claude 도 띄우지 않는다(2026-10-22 맥 실기·이 PC): 앱 기동이 남긴 정기 작업 줄이 +5분 뒤 시험 프로세스 안에서 '모델 목록
 # 갱신'을 돌려, PATH 의 진짜 claude 가 진짜 ~/.claude 에 '/model' 세션을 남겼다(전체 시험이 5분을 넘긴 맥·Windows). 제품은
@@ -39,7 +43,8 @@ if not getattr(_modelprobe.probe, "_test_guard", False):
     _modelprobe.probe = _probe_without_real_claude
 
 # 진짜 데이터 폴더의 핵심 파일을 시험이 지우지 않는지 시험마다 본다(2026-10-22 맥 실기 3b-2 이슈 B: 전체 시험 전후로 진짜
-# ~/.claude/session_manager/clewpath.toml 이 사라져 있었다 — 원인 미확정). 있던 것이 사라지면 그 직후 시험을 실패시켜 범인을 가리킨다.
+# ~/.claude/session_manager/clewpath.toml 이 사라져 있었다 — 원인은 위의 CLEWPATH_CONFIG 누출, 3b-3 뒤 확인). 있던 것이 사라지면
+# 그 직후 시험을 실패시켜 범인을 가리킨다.
 # 자리는 import 때(어느 시험도 HOME 을 바꾸기 전) 정한다. 내용은 보지 않는다 — Host 는 원자적으로 다시 써서 교체 중에도 파일이 있다.
 _REAL_DATA = Path(os.path.expanduser("~")) / ".claude" / "session_manager"
 _REAL_KEEP = [p for p in (_REAL_DATA / n for n in ("clewpath.toml", "cp_credentials.json", "devices.json")) if p.is_file()]

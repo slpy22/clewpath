@@ -203,13 +203,15 @@ def test_usage_summary_handles_service_keys(env, monkeypatch):
     assert any(r["token"] == "svc:nklaw" and r["calls"] == 1 for r in rows)
 
 
-def test_legacy_token_switch_off_in_config(env, monkeypatch):
-    """S5: clewpath.toml [server] legacy_api_token = false → 공용 토큰은 꺼지고 서비스 토큰은 그대로."""
+def test_legacy_token_switch_off_in_config(env, monkeypatch, tmp_path):
+    """S5: clewpath.toml [server] legacy_api_token = false → 공용 토큰은 꺼지고 서비스 토큰은 그대로.
+    설정 파일 자리는 이 시험의 임시 폴더로 못 박는다 — 물려받은 CLEWPATH_CONFIG 가 진짜 파일을 가리켜도(맥 실기 3b-2 이슈 B)."""
     from session_manager import appconfig
     client, _ = env
     tok = _create(client, monkeypatch).json()["token"]
-    p = appconfig.config_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
+    p = tmp_path / "clewpath.toml"
+    monkeypatch.setenv("CLEWPATH_CONFIG", str(p))
+    assert appconfig.config_path() == p
     p.write_text("[server]\nlegacy_api_token = false\n", encoding="utf-8")
     appconfig.load(refresh=True)
     try:
