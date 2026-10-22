@@ -3,8 +3,10 @@
 # exit 1 이면 표식을 쓰지 않는다 → 다음 기동에 다시 한다.
 #  1) start-connector.ps1 이 'v2(멱등) + 구문 정상' 이 아니면 패키지 템플릿으로 다시 만든다 — BOM 붙여 쓰고 구문 검사,
 #     못 넘으면 원래 런처(바이트 그대로)로 되돌린다
-#  2) ClewPathHost 작업에 5분 반복 트리거가 없으면 단다(로그온 트리거 유지, 중복 인스턴스 무시). 같은 Set-ScheduledTask 에서
-#     작업 동작이 우리 기본 모양이면 conhost --headless 로 감싼다(5분마다 콘솔 창이 깜박이지 않게)
+#  2) ClewPathHost 작업에 5분 반복 트리거가 없으면 단다(로그온 트리거 유지, 중복 인스턴스 무시). 작업 동작이 우리 기본 모양이면
+#     conhost --headless 로 감싼다(5분마다 콘솔 창이 깜박이지 않게) — 반복 트리거를 다는 그 Set-ScheduledTask 에서, 또는
+#     반복 트리거가 이미 있으면 동작만 바꾼다(2026-10-23 사장님 결정: 이미 5분 확인이 도는 PC 도 깜박임을 없앤다).
+#     사람이 바꾼 모양(이미 conhost·다른 실행 파일·다른 인자)은 어느 경우든 건드리지 않는다.
 # ⚠ 순서가 안전의 전부: 런처가 멱등이 아닌데 반복 트리거를 달면 5분마다 서버가 겹쳐 뜬다.
 #    그래서 1) 이 실패하면 2) 는 하지 않는다. 순서는 런처 v2 → 동작 → 트리거(동작과 트리거는 한 번의 Set-ScheduledTask).
 # ⚠ 인코딩(2026-10-22 노트북 사고): 영어 Windows(ANSI cp1252)의 powershell.exe 5.1 은 BOM 없는 파일을 cp1252 로 읽는다.
@@ -142,13 +144,11 @@ function Test-HeadlessWorks([string]$Conhost, [string]$Exe) {
     finally { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue }
 }
 
-# 작업에 무엇을 할지 — @{ NeedRepetition; Action(Get-HeadlessAction 결과) }. 반복 트리거가 이미 있으면 아무것도 안 바꾼다:
-# 이미 돌고 있는 자동 시작(이 PC 처럼 손으로 바꾼 동작 포함)은 건드리지 않고, conhost 로 바꾸는 건 반복 트리거를 다는 그 단계에서만.
+# 작업에 무엇을 할지 — @{ NeedRepetition; Action(Get-HeadlessAction 결과) }. 동작 판단은 반복 트리거가 있든 없든 같다:
+# 우리 기본 모양이면 conhost 로 감싸고, 사람이 바꾼 모양(이 PC 처럼 이미 conhost 등)은 그대로 둔다.
 function Get-TaskPlan($Task, [string]$StartPs, [int]$Build, [string]$Conhost) {
-    if (Test-HasRepetition $Task.Triggers) {
-        return @{ NeedRepetition = $false; Action = @{ Change = $false; Reason = "repetition present - action untouched" } }
-    }
-    return @{ NeedRepetition = $true; Action = (Get-HeadlessAction -Actions $Task.Actions -StartPs $StartPs -Build $Build -Conhost $Conhost) }
+    return @{ NeedRepetition = (-not (Test-HasRepetition $Task.Triggers))
+              Action = (Get-HeadlessAction -Actions $Task.Actions -StartPs $StartPs -Build $Build -Conhost $Conhost) }
 }
 
 if ($LibOnly) { return }
@@ -188,9 +188,9 @@ if (-not $t) {
     exit 1
 }
 $plan = Get-TaskPlan -Task $t -StartPs $startPs -Build (Get-OsBuild) -Conhost (Join-Path $env:SystemRoot "System32\conhost.exe")
-if (-not $plan.NeedRepetition) { "task: ok (repetition present)"; exit 0 }
-
 $act = $plan.Action
+if (-not $plan.NeedRepetition -and -not $act.Change) { "task: ok (repetition present)"; exit 0 }
+
 $newAction = $null
 if ($act.Change) {
     if (Test-HeadlessWorks -Conhost $act.Execute -Exe $act.Exe) {
@@ -203,6 +203,24 @@ if ($act.Change) {
         } catch { $act = @{ Change = $false; Reason = "action build failed: $($_.Exception.Message)" } }
     } else { $act = @{ Change = $false; Reason = "conhost --headless probe failed" } }
 }
+
+# 반복 트리거가 이미 있으면 동작만 바꾼다(트리거·설정은 그대로). 시험 실행이 안 되면 그대로 두고 성공으로 끝낸다(깜박임만 남음).
+if (-not $plan.NeedRepetition) {
+    if (-not $newAction) { "action: unchanged ($($act.Reason))"; "task: ok (repetition present)"; exit 0 }
+    try {
+        Set-ScheduledTask -TaskName $TaskName -Action $newAction -ErrorAction Stop | Out-Null
+        $t2 = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+        if ("$(@($t2.Actions)[0].Execute)" -ne $act.Execute) { throw "action not changed after update" }
+        if (-not (Test-HasRepetition $t2.Triggers)) { throw "repetition trigger lost after action update" }
+    } catch {
+        "task: action update failed: $($_.Exception.Message)"
+        exit 1
+    }
+    "action: conhost --headless ($([IO.Path]::GetFileName($act.Exe)))"
+    "task: ok (repetition present)"
+    exit 0
+}
+
 try {
     $me = "$env:USERDOMAIN\$env:USERNAME"
     $logon = New-ScheduledTaskTrigger -AtLogOn -User $me -ErrorAction Stop

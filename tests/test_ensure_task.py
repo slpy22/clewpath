@@ -263,17 +263,23 @@ Hdl @(Act $ps5 ($std + ' -X') $null) 19045 $ch                         # 10 -Fil
 
 
 @on_windows_ps
-def test_task_plan_converts_action_only_when_adding_repetition(tmp_path):
-    """반복 트리거를 다는 그 단계에서만 동작을 conhost 로 — 이미 반복 트리거가 있으면 동작도 그대로(이 PC 처럼 손으로 바꾼 것 포함)."""
+def test_task_plan_converts_default_action_with_or_without_repetition(tmp_path):
+    """우리 기본 모양 동작은 반복 트리거가 있든 없든 conhost 로(2026-10-23 사장님 결정: 이미 5분 확인이 도는 PC 도 깜박임을 없앤다).
+    사람이 바꾼 모양(이 PC 처럼 이미 conhost, 다른 실행 파일)은 반복 트리거가 있어도 그대로."""
     res = _lib("powershell", _ACT + r"""
 function NewTrig($rep) { if ($rep) { [pscustomobject]@{ Repetition = [pscustomobject]@{ Interval = $rep } } } else { [pscustomobject]@{ Repetition = [pscustomobject]@{ Interval = $null } } } }
 function NewTask($trs, $acts) { [pscustomobject]@{ Triggers = $trs; Actions = $acts } }
+$both = @((NewTrig $null), (NewTrig 'PT5M'))
 Get-TaskPlan -Task (NewTask @(NewTrig $null) @(Act $ps5 $std $null)) -StartPs $sp -Build 19045 -Conhost $ch                 # 0 노트북: 로그온 트리거뿐
-Get-TaskPlan -Task (NewTask @((NewTrig $null), (NewTrig 'PT5M')) @(Act $ps5 $std $null)) -StartPs $sp -Build 19045 -Conhost $ch   # 1 반복 있음
+Get-TaskPlan -Task (NewTask $both @(Act $ps5 $std $null)) -StartPs $sp -Build 19045 -Conhost $ch                            # 1 반복 있음 + 기본 모양
 Get-TaskPlan -Task (NewTask @(NewTrig $null) @(Act $ps5 $std $null)) -StartPs $sp -Build 17134 -Conhost $ch                 # 2 옛 빌드
 Get-TaskPlan -Task (NewTask @() @(Act $ps5 $std $null)) -StartPs $sp -Build 19045 -Conhost $ch                        # 3 트리거 없음
+Get-TaskPlan -Task (NewTask $both @(Act $ch ('--headless "' + $ps7 + '" ' + $std) $null)) -StartPs $sp -Build 26100 -Conhost $ch   # 4 반복 있음 + 이미 conhost(이 PC)
+Get-TaskPlan -Task (NewTask $both @(Act 'C:\WINDOWS\System32\cmd.exe' $std $null)) -StartPs $sp -Build 19045 -Conhost $ch          # 5 반복 있음 + 사람이 바꾼 모양
+Get-TaskPlan -Task (NewTask $both @(Act $ps5 $std $null)) -StartPs $sp -Build 17134 -Conhost $ch                            # 6 반복 있음 + 옛 빌드
 """, tmp_path)
-    assert [(x["NeedRepetition"], x["Action"]["Change"]) for x in res] == [(True, True), (False, False), (True, False), (True, True)], res
+    assert [(x["NeedRepetition"], x["Action"]["Change"]) for x in res] == [
+        (True, True), (False, True), (True, False), (True, True), (False, False), (False, False), (False, False)], res
 
 
 @on_windows_ps
