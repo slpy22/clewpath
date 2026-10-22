@@ -529,16 +529,15 @@ class Upd:
             except subprocess.TimeoutExpired:
                 pass
         for d, dirs, files in os.walk(self.base):                  # 시험이 좁힌 권한을 풀어야 tmp 를 지운다
-            for n in dirs:
-                try:
-                    os.chmod(os.path.join(d, n), 0o755)
-                except OSError:
-                    pass
-            for n in files:
-                try:
-                    os.chmod(os.path.join(d, n), 0o644)
-                except OSError:
-                    pass
+            for names, mode in ((dirs, 0o755), (files, 0o644)):
+                for n in names:
+                    p = os.path.join(d, n)
+                    if os.path.islink(p):                          # chmod 는 링크를 따라간다 — venv 의 bin/python 은 진짜 인터프리터
+                        continue
+                    try:
+                        os.chmod(p, mode)
+                    except OSError:
+                        pass
 
 
 @pytest.fixture
@@ -548,6 +547,27 @@ def upd(tmp_path):
         yield u
     finally:
         u.cleanup()
+
+
+def test_cleanup_leaves_link_targets_alone(tmp_path):
+    """정리는 시험이 좁힌 권한만 푼다 — 링크 너머는 건드리지 않는다. venv 의 bin/python 은 진짜 인터프리터로 가는 링크라,
+    링크를 따라 chmod 하면 사용자 소유 파이썬(맥 pyenv)의 실행 권한이 빠진다(2026-10-22 맥 실기 이슈 1)."""
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    exe = outside / "python-real"
+    exe.write_text("#!/bin/sh\n", encoding="utf-8")
+    os.chmod(exe, 0o750)
+    sub = outside / "dir-real"
+    sub.mkdir()
+    os.chmod(sub, 0o700)
+    u = Upd(tmp_path / "box")
+    try:
+        (u.base / "link-file").symlink_to(exe)
+        (u.base / "link-dir").symlink_to(sub, target_is_directory=True)
+        assert (u.root / ".venv" / "bin" / "python").is_symlink(), "venv 의 python 은 링크다(이 시험의 전제)"
+    finally:
+        u.cleanup()
+    assert (exe.stat().st_mode & 0o777, sub.stat().st_mode & 0o777) == (0o750, 0o700)
 
 
 @pytest.fixture
@@ -1375,8 +1395,14 @@ def _without_python(upd: Upd) -> tuple[Path, str, str]:
     restart.write_text("#!/bin/sh\n(cd %s && CLEWPATH_CONFIG=%s exec %s -m session_manager.server %s) </dev/null >/dev/null 2>&1 &\n" % (
         shlex.quote(str(upd.root)), shlex.quote(str(upd.conf)), shlex.quote(sys.executable),
         shlex.quote(str(upd.root / ".venv" / "bin" / "clewpath-host"))), encoding="utf-8")
-    path = f"{fakebin}:/usr/bin:/bin"
-    assert subprocess.run(["sh", "-c", "command -v python3"], env={"PATH": path}).returncode != 0, "PATH 에 python3 가 없어야"
+    plain = upd.base / "plain bin"         # /usr/bin·/bin 에서 python* 만 뺀 링크 농장 — 맥에는 /usr/bin/python3 가 있다
+    plain.mkdir()
+    for d in ("/usr/bin", "/bin"):
+        for n in sorted(os.listdir(d)):
+            if not n.startswith("python") and not os.path.lexists(plain / n):
+                (plain / n).symlink_to(os.path.join(d, n))
+    path = f"{fakebin}:{plain}"
+    assert subprocess.run(["/bin/sh", "-c", "command -v python3"], env={"PATH": path}).returncode != 0, "PATH 에 python3 가 없어야"
     return fakebin, path, str(restart)
 
 

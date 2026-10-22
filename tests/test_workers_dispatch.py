@@ -31,7 +31,8 @@ def _fresh_cache():
 
 def test_peer_map_and_resolve(fake_claude_home):
     _peer(fake_claude_home, 111, W, "worker-f5")
-    _peer(fake_claude_home, 222, M, "관리 [dup]", status="busy")
+    # 관리 세션은 제 소켓 — 둘이 같은 소켓이면 답장 주소 해석이 디렉터리를 읽는 순서에 달렸다(2026-10-22 맥 실기에서 갈림)
+    _peer(fake_claude_home, 222, M, "관리 [dup]", status="busy", sock=r"\\.\pipe\LOCAL\cc-msg-mgr")
     (fake_claude_home / "sessions" / "333.json").write_text("{broken", encoding="utf-8")
     pm = peers.peer_map()
     assert pm[W]["name"] == "worker-f5" and pm[M]["status"] == "busy" and len(pm) == 2
