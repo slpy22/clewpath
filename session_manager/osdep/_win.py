@@ -117,8 +117,27 @@ def unprotect(data: bytes) -> bytes | None:
     return _dpapi(data, False)
 
 
+def _ps_text(b: bytes) -> str:
+    """PowerShell 출력 → 문자열(빈 줄·줄끝 정리). ensure_task.ps1 의 줄은 ASCII 지만 파스 에러·예외 문구는 OS 언어 +
+    OEM 코드페이지(한국어 cp949, 영어 cp437)로 올 수 있다 — UTF-8 로 안 읽히면 OEM 으로."""
+    try:
+        s = b.decode("utf-8")
+    except UnicodeDecodeError:
+        try:
+            s = b.decode("oem", "replace")
+        except LookupError:                     # 'oem' 코덱은 Windows 파이썬에만 있다(맥·리눅스에서 도는 시험)
+            s = b.decode("utf-8", "replace")
+    return "\n".join(line.rstrip() for line in s.splitlines() if line.strip())
+
+
 def ensure_launcher(root: Path, data_dir: Path, conf_file: Path, port: int) -> str | None:
-    """ensure_task.ps1 로 런처 v2·예약 작업 반복 트리거를 맞춘다. pwsh 가 없으면 None."""
+    """ensure_task.ps1 로 런처 v2·예약 작업 반복 트리거를 맞춘다. pwsh·powershell 이 둘 다 없으면 None.
+
+    성공(종료 코드 0 + 출력 있음)이면 출력을 돌려준다(stderr 가 있으면 덧붙임) → liveness 가 버전 표식에 적는다.
+    실패면 RuntimeError(종료 코드·출력·stderr) → liveness 가 표식을 쓰지 않고 host.log 에 남긴다 → 다음 기동에 다시.
+    판정은 출력 글자가 아니라 종료 코드로 — 2026-10-22 노트북(영어 Windows·5.1): ensure_task.ps1 을 파스 못 해 빈 stdout·exit 1
+    이었는데 예전엔 stdout 만 돌려줘서 빈 문자열이 표식에 써졌고(stderr 는 버려 원인도 안 남음) 0.10.5~0.31.1 내내 다시 안 했다.
+    """
     pwsh = shutil.which("pwsh") or shutil.which("powershell")
     if not pwsh:
         return None
@@ -126,8 +145,13 @@ def ensure_launcher(root: Path, data_dir: Path, conf_file: Path, port: int) -> s
             str(root / "session_manager" / "ensure_task.ps1"),
             "-Root", str(root), "-DataDir", str(data_dir),
             "-ConfFile", str(conf_file), "-Port", str(port)]
-    r = subprocess.run(args, capture_output=True, timeout=60, creationflags=NO_WINDOW)
-    return r.stdout.decode("utf-8", "replace").strip()
+    # 120초: 5.1 은 기동만 몇 초 — 7 에서 돌면 5.1 구문 확인·conhost 시험 실행으로 셸을 두어 번 더 띄운다
+    r = subprocess.run(args, capture_output=True, timeout=120, creationflags=NO_WINDOW)
+    out, err = _ps_text(r.stdout), _ps_text(r.stderr)
+    text = out + (f"\nstderr: {err}" if err else "")
+    if r.returncode != 0 or not out:
+        raise RuntimeError(f"ensure_task exit {r.returncode}: {text[:4000] or '(출력 없음)'}")
+    return text
 
 
 def port_free(host: str, port: int) -> bool:

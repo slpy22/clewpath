@@ -25,7 +25,7 @@ Gemini(B 목록 성능 우선) vs Codex·Claude(A 자기 회복 우선), Copilot
 |---|---|
 | `session_manager/start-connector.template.ps1` (**정본**, 첫 줄 `# clewpath-launcher v2`) | ① `maintenance.flag` 있으면 종료 ② `/api/health` 3초 → ok 면 종료 ③ `runtime.json` 의 pid 가 python 으로 살아 있으면 종료(기동 중/응답 불능 — 죽이지 않음, launcher.log 기록) ④ `launcher.lock`(2분 시체 무시) 안에서 Start-Process ⑤ 사유를 `launcher.log` 에 |
 | `install.ps1` | 템플릿에서 런처 생성(없으면 v1 폴백). 런처가 v2 일 때만 작업에 **5분 반복 트리거**(로그온 트리거 유지, `MultipleInstances=IgnoreNew`). PS5.1 은 `RepetitionDuration MaxValue` |
-| `session_manager/ensure_task.ps1` | 기존 설치본용. 런처가 v2 가 아니면 템플릿으로 재생성 → **그 다음에만** 작업에 반복 트리거 추가(순서가 안전의 전부: 멱등 아닌 런처에 반복을 달면 5분마다 겹쳐 뜬다). Host 가 기동 시 버전당 1회(`launcher-ensured-<ver>` 마커) 실행. 개발 트리(설치본 레이아웃 아님)는 건너뜀 |
+| `session_manager/ensure_task.ps1` | 기존 설치본용. 런처가 v2 가 아니면 템플릿으로 재생성 → **그 다음에만** 작업에 반복 트리거 추가(순서가 안전의 전부: 멱등 아닌 런처에 반복을 달면 5분마다 겹쳐 뜬다). Host 가 기동 시 버전당 1회(`launcher-ensured-<ver>` 마커) 실행. 개발 트리(설치본 레이아웃 아님)는 건너뜀. **2026-10-22 고침**(영어 Windows 5.1 노트북에서 BOM 이 없어 파스 에러로 16개 버전 동안 안 돈 사고): 파일·템플릿 UTF-8 BOM, 템플릿 `-Encoding UTF8` 읽기, 런처는 BOM 붙여 쓰고 구문 검사(못 넘으면 원복), 'v2 표식 + 구문 정상' 일 때만 그대로, 실패는 exit 1 → 마커를 안 써 다음 기동에 재시도, 반복 트리거를 다는 그 단계에서 동작이 기본 모양이면 `conhost.exe --headless`(빌드 17763+, 시험 실행 성공 시) |
 | `session_manager/liveness.py` | `check_previous_exit()`: `runtime.json` 의 이전 pid 가 죽었고 `shutdown.json` 표식이 그 pid 로 없으면 **의심** → `incidents.jsonl` 기록(마지막 로그 10줄, ANSI 제거) → 기동 후 푸시 1건(`host-recovered`). 다른 인스턴스가 살아 있으면(개발 서버) 사고 아님. `mark_shutdown(reason)`: lifespan 종료(`normal`)·업데이트 적용 직전(`update`) |
 
 ## 검증

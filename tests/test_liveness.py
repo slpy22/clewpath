@@ -118,11 +118,11 @@ def test_notify_incident_payload(fake_claude_home, monkeypatch):
 def test_launcher_template_and_ensure_script_contract():
     tpl = Path(liveness.__file__).parent / "start-connector.template.ps1"
     ens = Path(liveness.__file__).parent / "ensure_task.ps1"
-    t = tpl.read_text(encoding="utf-8")
+    t = tpl.read_text(encoding="utf-8-sig")                     # BOM 붙은 UTF-8(5.1 이 ANSI 로 읽지 않게)
     assert t.splitlines()[0].startswith("# clewpath-launcher v2")
     for needle in ("/api/health", "maintenance.flag", "launcher.lock", "runtime.json", "{{DATA_DIR}}", "{{CONF_FILE}}", "{{PORT}}", "launcher.log"):
         assert needle in t
-    e = ens.read_text(encoding="utf-8")
+    e = ens.read_text(encoding="utf-8-sig")
     # 런처가 멱등이 아니면 반복 트리거를 달지 않는다(겹쳐 뜨는 사고 방지) — 순서 계약
     assert e.index("launcher not idempotent") < e.index("RepetitionInterval")
     assert "MultipleInstances IgnoreNew" in e
@@ -131,6 +131,30 @@ def test_launcher_template_and_ensure_script_contract():
 def test_ensure_launcher_skips_dev_tree(fake_claude_home):
     assert liveness.ensure_launcher(5100) is None               # 리포 실행 = start-connector.ps1 없음
     assert not list(config.data_dir().glob("launcher-ensured-*"))
+
+
+def test_ensure_launcher_failure_writes_no_marker(fake_claude_home, tmp_path, monkeypatch, capsys):
+    """회귀(2026-10-22 노트북): ensure_task.ps1 이 파스 에러로 빈 출력을 냈는데도 표식을 써서 16개 버전 동안 다시 안 했다.
+    실패(osdep 이 예외)면 표식을 쓰지 않는다 → 다음 기동에 다시. 이유는 host.log(print)로 남는다."""
+    from session_manager import osdep
+    root = tmp_path / "app"
+    root.mkdir()
+    (root / osdep.START_SCRIPT).write_text("# 옛 런처\n", encoding="utf-8")
+    monkeypatch.setattr(liveness, "_install_root", lambda: root)
+    monkeypatch.setattr(liveness, "_version", lambda: "9.9.8")
+    config.data_dir().mkdir(parents=True, exist_ok=True)
+    marker = config.data_dir() / "launcher-ensured-9.9.8"
+
+    def boom(*a):
+        raise RuntimeError("ensure_task exit 1: stderr: ParserError L30")
+    monkeypatch.setattr(osdep, "ensure_launcher", boom)
+    out = liveness.ensure_launcher(5100)
+    assert out.startswith("ensure failed") and "ParserError L30" in out
+    assert not marker.exists()
+    monkeypatch.setattr(osdep, "ensure_launcher", lambda *a: "launcher: regenerated (v2)\ntask: repetition trigger added (5m)")
+    assert liveness.ensure_launcher(5100) == "launcher: regenerated (v2)\ntask: repetition trigger added (5m)"
+    assert marker.read_text(encoding="utf-8").startswith("launcher: regenerated (v2)")
+    assert liveness.ensure_launcher(5100) is None                 # 성공한 버전은 다시 안 함
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="맥·리눅스 런처(start-connector.sh) 경로")

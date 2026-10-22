@@ -171,7 +171,11 @@ def _version() -> str:
 
 def ensure_launcher(port: int | None = None) -> str | None:
     """설치본이면 런처·자동 시작을 맞춘다(Windows: ensure_task.ps1 → 런처 v2·예약 작업, 맥·리눅스: start-connector.sh 를
-    지금 템플릿으로 다시 렌더). 버전당 1회, 개발 트리는 건너뜀."""
+    지금 템플릿으로 다시 렌더). 버전당 1회(성공한 버전만 표식), 개발 트리는 건너뜀.
+
+    표식은 성공했을 때만 쓴다. osdep 이 예외로 실패를 알리면(Windows: ensure_task.ps1 종료 코드 ≠ 0·빈 출력·시간 초과)
+    표식 없이 'ensure failed: …' 를 돌려줘 host.log 에 남기고 다음 기동에 다시 한다 — 2026-10-22 노트북은 실패(빈 출력)도
+    표식에 써서 16개 버전 동안 다시 시도하지 않았다. 업데이트로 버전이 바뀌면 표식 이름이 달라 새 코드로 한 번 더 돈다."""
     from session_manager import appconfig, osdep
     root = _install_root()
     if not (root / osdep.START_SCRIPT).is_file():
@@ -200,7 +204,9 @@ def on_startup_async(port: int | None) -> None:
                 print(f"[liveness] 알림 실패: {e}", flush=True)
         try:
             out = ensure_launcher(port)
-            if out:
+            if out and out.startswith("ensure failed"):
+                print(f"[liveness] 런처 보장 실패(표식 안 씀, 다음 기동에 다시): {out.replace(chr(10), ' | ')}", flush=True)
+            elif out:
                 print(f"[liveness] 런처 보장: {out.replace(chr(10), ' | ')}", flush=True)
         except Exception as e:  # noqa: BLE001
             print(f"[liveness] 런처 보장 실패: {e}", flush=True)

@@ -501,7 +501,9 @@ $startPs = Join-Path $Root "start-connector.ps1"
 $tplPath = Join-Path $Root "session_manager\start-connector.template.ps1"
 $cfg = $null
 if (Test-Path $tplPath) {
-    $cfg = (Get-Content $tplPath -Raw).Replace("{{DATA_DIR}}", $dataDir).Replace("{{CONF_FILE}}", $confFile).Replace("{{PORT}}", "$Port")
+    # -Encoding UTF8 필수(2026-10-22) — 빠지면 5.1 이 ANSI 로 읽는다. 영어 Windows(cp1252)는 「—」의 0x94 가 ” 가 돼
+    # 만든 런처가 구문 오류(34·49·50행)라 Host 가 안 뜬다. TrimStart 는 템플릿 BOM 이 글자로 남는 경우 대비.
+    $cfg = (Get-Content $tplPath -Raw -Encoding UTF8).TrimStart([char]0xFEFF).Replace("{{DATA_DIR}}", $dataDir).Replace("{{CONF_FILE}}", $confFile).Replace("{{PORT}}", "$Port")
 }
 if (-not $cfg) { $cfg = @"
 # 자동 생성됨 (install.ps1) — 재설치하면 덮어써집니다.
@@ -530,7 +532,9 @@ $launcherV2 = ($cfg -match "clewpath-launcher v2")
 if ($DryRun) {
     Warn "DryRun: $startPs 생성 건너뜀"
 } else {
-    Set-Content -Path $startPs -Value $cfg -Encoding UTF8
+    # BOM 붙은 UTF-8 로 직접 쓴다 — Set-Content -Encoding UTF8 은 5.1 이면 BOM, 7 이면 BOM 없음이라, 7 로 설치한 뒤
+    # 작업이 5.1 로 런처를 돌리면(pwsh 를 지운 PC) 한글을 ANSI 로 읽는다. ensure_task.ps1 도 같은 방식으로 쓴다.
+    [IO.File]::WriteAllText($startPs, $cfg, (New-Object System.Text.UTF8Encoding($true)))
     Ok "start-connector.ps1 생성"
 }
 if (Test-Path $credFile) {
@@ -574,6 +578,19 @@ if (Test-Path $credFile) {
 Say ""
 Say "[6/6] 기동 및 자동시작 등록"
 $taskName = "ClewPathHost"
+
+# 작업 동작을 conhost --headless 로 감쌀 수 있으면 @{ Execute; Argument }, 아니면 $null.
+# 판단은 ensure_task.ps1 의 함수(Get-HeadlessAction·Test-HeadlessWorks)를 그대로 쓴다 — 함수 **안에서** 점 소싱해야
+# 그 스크립트의 param($Root·$Port …)이 이 스크립트 변수를 덮지 않는다(tests/test_ensure_task.py 가 검사).
+function Get-HeadlessLaunch($exe, $arg) {
+    try {
+        . (Join-Path $Root "session_manager\ensure_task.ps1") -LibOnly
+        $a = [pscustomobject]@{ Execute = $exe; Arguments = $arg; WorkingDirectory = $null }
+        $h = Get-HeadlessAction -Actions @($a) -StartPs $startPs -Build (Get-OsBuild) -Conhost (Join-Path $env:SystemRoot "System32\conhost.exe")
+        if ($h.Change -and (Test-HeadlessWorks -Conhost $h.Execute -Exe $h.Exe)) { return @{ Execute = $h.Execute; Argument = $h.Argument } }
+    } catch {}
+    return $null
+}
 if ($DryRun) {
     Warn "DryRun: 기동/등록 건너뜀"
 } else {
@@ -595,8 +612,15 @@ if ($DryRun) {
             # Restricted(스크립트 파일 실행 금지)라, 없으면 로그온 자동시작이
             # **조용히** 실패한다. 설치 자체는 irm|iex(문자열 실행)라 정책을 안 타서
             # 개발 PC(Bypass 정책)에선 재현이 안 됐다 — 실사용자 PC 에서 발견.
-            $action    = New-ScheduledTaskAction -Execute $pwsh `
-                          -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$startPs`""
+            $actExe = $pwsh
+            $actArg = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$startPs`""
+            # 콘솔 깜박임 방지(2026-10-22): 5분 반복 트리거는 셸을 5분마다 띄워 콘솔 창이 잠깐씩 보인다 — conhost --headless 로
+            # 감싸면 창 자체가 안 생긴다. 조건은 Host 의 자기 회복(ensure_task.ps1)과 같은 함수로 본다: 반복 트리거를 달 때(v2 런처)만,
+            # Windows 10 1809(빌드 17763) 이상 + conhost.exe 있음 + 실제로 한 번 띄워 봐서 됨. 아니면 지금처럼 셸을 바로 실행.
+            $headless = $null
+            if ($launcherV2) { $headless = Get-HeadlessLaunch $actExe $actArg }
+            if ($headless) { $actExe = $headless.Execute; $actArg = $headless.Argument }
+            $action    = New-ScheduledTaskAction -Execute $actExe -Argument $actArg
             $trigger   = New-ScheduledTaskTrigger -AtLogOn -User $me
             $triggers  = @($trigger)
             # v0.9.2 자기 회복: 5분 반복 트리거 — 런처가 멱등(v2)일 때만. 서버가 떠 있으면
@@ -615,7 +639,8 @@ if ($DryRun) {
                           -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew
             Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $triggers `
                         -Principal $principal -Settings $set -Force | Out-Null
-            if ($launcherV2) { Ok "자동시작 등록 ($taskName, 로그온 시 + 5분마다 생존 확인)" }
+            if ($launcherV2 -and $headless) { Ok "자동시작 등록 ($taskName, 로그온 시 + 5분마다 생존 확인, 창 없이)" }
+            elseif ($launcherV2) { Ok "자동시작 등록 ($taskName, 로그온 시 + 5분마다 생존 확인)" }
             else { Ok "자동시작 등록 ($taskName, 이 사용자 로그온 시)" }
             $registered = $true
         } catch {

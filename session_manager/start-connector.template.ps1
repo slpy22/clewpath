@@ -1,4 +1,4 @@
-# clewpath-launcher v2 — 자동 생성됨 (install.ps1 / ensure_task.ps1). 재설치·업데이트 때 덮어써집니다.
+﻿# clewpath-launcher v2 — 자동 생성됨 (install.ps1 / ensure_task.ps1). 재설치·업데이트 때 덮어써집니다.
 # 설정을 바꾸려면 이 파일이 아니라 아래 파일을 고치세요:
 #   {{CONF_FILE}}
 #
