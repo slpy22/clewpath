@@ -70,7 +70,9 @@ grep -c "폰 접속 토큰" /tmp/clewpath-install2.log      # 0 이어야(관찰
 2. `kill -9 <pid>` → **30초 안팎에** 새 pid(KeepAlive). 1회차의 첫 kill 은 281초였다.
 3. `sh start-connector.sh stop` → 30초 뒤에도 stopped. 그다음 `sh start-connector.sh start` → 곧 running, pid 가 같아야 한다.
 4. `sh start-connector.sh stop --hold` → `state=maintenance`(안 뜸). 그다음 `sh start-connector.sh resume` → running, pid 가 같아야 한다.
-5. `grep -i kickstart ~/.claude/session_manager/launcher.log | tail -5` — 3·4 에서 launchd 에 맡긴 줄이 있어야 한다.
+5. `grep -i kickstart ~/.claude/session_manager/launcher.log | tail -5` — 3·4 의 줄이 **"launchd 에 맡김(kickstart) pid N"** 이어야 한다.
+   "kickstart 실패 → 직접 기동"이나 "약 20초 안에 뜨지 않음 → 직접 기동"이면 그 줄과 `launchctl print` 를 그대로 보고한다
+   (stop 직후 30초 안에 start 하면 launchd 의 ThrottleInterval 30초에 걸릴 수 있다 — 그래서 3 은 30초 기다린 뒤 start 한다).
 6. (사장님이 되실 때) 로그아웃 → 로그인. 로그아웃 때 Host 가 끝나고(launchd 작업이므로), 로그인 1분 안에 새 pid 로 뜨는지.
 
 ### R4 재개 창 (사장님과 함께)

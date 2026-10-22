@@ -76,6 +76,9 @@
   → 맥 2회차 확인은 `docs/mac-host-tasks.md` 맨 위 「2회차」(결과는 `mac-3b2` 브랜치)
 - [ ] **맥 이름·권한 창(사장님 결정 대기)** — 로그인 항목·백그라운드 알림에 **"sh"**(plist 의 프로그램이 /bin/sh), 웹 터미널의 claude 가 데스크탑·문서·사진·iCloud 등에 처음 닿을 때 **"python3.11"** 권한 창이 항목마다 떴다(launchd → Host(python) 가 책임 프로세스. uv 파이썬은 adhoc 서명이라 파이썬이 바뀌면 다시 뜰 수 있다). 사장님: "설치 시에 허락돼 버리면 좋겠다" — macOS 는 프로그램이 스스로 권한을 줄 수 없다. 안: (가) 등록 프로그램을 `ClewPath` 라는 작은 스크립트로(로그인 항목 이름만 바뀜) (나) 서명된 `ClewPath.app` 이 Host 를 자식으로 띄워 책임 프로세스가 되게(권한 창 이름이 ClewPath, 업데이트 뒤에도 권한 유지 — Developer ID 서명·공증 필요) (다) 설치 끝에 '전체 디스크 접근' 설정 화면을 열어 안내. 1회차 세션이 홈 폴더라 claude 가 홈 아래를 훑어 창이 많았다
 - [ ] (launchd 후속) `osdep._posix.ensure_launcher` 가 plist 도 점검·재등록하게(지금은 런처만 다시 렌더) · `launchd.log` 회전 없음 · 업데이트 러너(CLEWPATH_UPDATER=1)가 다시 띄운 Host 는 아직 launchd 밖 · 제거 뒤 `sfltool dumpbtm` 에 옛 "sh" 항목이 남는다(맥이 정리)
+- [ ] **노트북 이전(서비스 모니터 계획 v0.4.2) 선행 수정 2건 — 사장님 승인 대기(2026-10-22 회신):**
+  ① Host '원격 API 전용' 두 번째 포트(예: 127.0.0.1:5110) — 루프백 신뢰 없이 /api/v1 + 서비스 토큰(cps_)만. 왜: ssh 터널로 들어온 요청은 Host 에 127.0.0.1 로 보여 `_is_local` 이 인증 없이 사장님 권한(owner API·웹 터미널까지)으로 통과시킨다. nklaw 를 노트북으로 옮기는 P3 의 선행 조건. 시작점: `session_manager/server.py` `_is_local`·`AuthASGIMiddleware`, `server.main`(두 번째 리스너). M
+  ② 007 CP `/internal/*` 공유 토큰(릴레이가 X-Internal-Token) — 왜: `/internal/rooms/{room}/agent-down·up` 이 무인증이라 CP 에 직접 닿는 쪽은 room 키만 알면 폰에 가짜 '연결 끊김' 웹푸시를 보낼 수 있다(지금은 이 PC 프로세스·컨테이너만 닿음, 노트북 5200 LAN 게시 때 노트북 자신이 더해짐). P4-2 선행 권장. 시작점: 007 `control_plane/api.py:326-354`, `relay/relay.py:154·237·327`. S
 - [ ] 시험이 남긴 '/model' 세션 정리(사장님 결정) — 이 PC `E:\` 폴더 4개(10-21), 맥 `-Volumes-Works-Projects-clewpath` 3개. ClewPath 목록에서 지우거나 숨김 목록에 넣기
 - [ ] 키체인(`osdep.protect`/`unprotect` — 지금은 None 이라 데이터 폴더 0700 안 파일) · Terminal.app 재개(`open_resume_terminal`) · Gatekeeper 격리 속성 확인
 - [ ] 맥에서 전체 pytest + 3a e2e 시나리오(명세 6.3) 반복 + 실제 claude 기동·재접속·업데이트 왕복 → 통과하면 릴리스 `platforms` 에 mac
