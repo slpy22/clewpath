@@ -27,7 +27,7 @@ from session_manager import config, team
 
 TTL_S = 30 * 60
 KINDS = ("team_create", "team_import", "team_archive", "team_delete", "team_purge", "assistant_set", "delegate", "task_decide", "profile_decide",
-         "session_send", "service_register")
+         "session_send", "service_register", "pclink_pair", "pclink_contact")
 _ALIAS_ASSISTANT = "비서"
 _PORTFOLIO_CODE = "ASSIST"
 ASSISTANT_TITLE = "개인비서"      # 비서 세션 이름 고정(2026-10-13 사장님)
@@ -63,13 +63,17 @@ def _summary(kind: str, a: dict) -> str:
         return f"외부 서비스 등록: {a.get('name')}({a.get('service')}) · 폴더 {a.get('folder')}"
     if kind == "session_send":
         return f"[{a.get('title') or str(a.get('session_id'))[:8]}] 세션에 전달: {str(a.get('message'))[:120]}"
+    if kind in ("pclink_pair", "pclink_contact"):
+        from session_manager.pclink import service
+        return service.summary(kind, a)
     return kind
 
 
 def _validate(kind: str, a: dict) -> None:
     need = {"team_create": ("name",), "team_import": ("path",), "team_archive": ("team",), "team_delete": ("team",), "team_purge": ("team",), "assistant_set": (),
             "delegate": ("team", "goal"), "task_decide": ("team", "task", "action"), "profile_decide": ("id", "decision"),
-            "session_send": ("session_id", "message"), "service_register": ("request", "service", "folder", "bases")}
+            "session_send": ("session_id", "message"), "service_register": ("request", "service", "folder", "bases"),
+            "pclink_pair": ("action",), "pclink_contact": ("peer", "session_id")}
     if kind not in KINDS:
         raise team.TeamError("bad_kind")
     for k in need[kind]:
@@ -81,6 +85,8 @@ def _validate(kind: str, a: dict) -> None:
         raise team.TeamError("bad_action")
     if kind == "profile_decide" and a.get("decision") not in ("confirm", "reject", "edit", "delete"):
         raise team.TeamError("bad_decision")
+    if kind == "pclink_pair" and (a.get("action") not in ("invite", "accept") or (a["action"] == "accept" and not a.get("accept_id"))):
+        raise team.TeamError("bad_action")
 
 
 def _view(r) -> dict:
@@ -281,10 +287,23 @@ def _x_service_register(a: dict, aid: str, by: str | None) -> dict:
     return servicereg.provision(a, aid)
 
 
+def _x_pclink_pair(a: dict, aid: str, by: str | None) -> dict:
+    """PC 짝짓기(docs/designs/pclink-protocol-v0.md 6절) — 초대 만들기(B) 또는 붙여 넣은 초대로 짝 맺기(A).
+    초대 문자열·비밀은 인자·결과에 싣지 않는다(승인 대기열은 평문 저장) — 정책 파일에 감싸 둔 것을 id 로 가리킨다."""
+    from session_manager.pclink import service
+    return service.execute_pair(a)
+
+
+def _x_pclink_contact(a: dict, aid: str, by: str | None) -> dict:
+    """첫 연락 승인 — 짝 PC 가 그 세션의 지금·앞으로 대화 전체를 30일 동안 물을 수 있게(D13)."""
+    from session_manager.pclink import service
+    return service.execute_contact(a)
+
+
 _EXEC = {"team_create": _x_team_create, "team_import": _x_team_import, "team_archive": _x_team_archive, "team_delete": _x_team_delete, "team_purge": _x_team_purge,
          "assistant_set": _x_assistant_set, "delegate": _x_delegate, "task_decide": _x_task_decide,
          "profile_decide": _x_profile_decide, "session_send": _x_session_send,
-         "service_register": _x_service_register}
+         "service_register": _x_service_register, "pclink_pair": _x_pclink_pair, "pclink_contact": _x_pclink_contact}
 
 
 # ---------------------------------------------------------------- 비서(A-7)

@@ -135,6 +135,7 @@ def list_devices() -> list[dict]:
                 "client_scoped": bool(x.get("client_public_id")),
                 "cp_pending": bool(x.get("cp_pending")),               # 서버 폐기 확인 대기(⏳)
                 "delete_pending": bool(x.get("delete_pending")),       # 폐기 확인되면 행 제거
+                "kind": x.get("kind") or "phone",                      # 'pc' = pclink 짝(접속 토큰 없음, pclink·ping 만)
             })
         return out
     return _read(_f)
@@ -160,16 +161,32 @@ def add_device(name: str | None = None) -> dict:
     return {"id": did, "name": nm or did[:8], "token": tok}
 
 
+def add_pc_device(name: str | None, peer_host: str) -> str:
+    """pclink 짝 PC 를 PC 등급 기기로 등록(docs/designs/pclink-protocol-v0.md 6절). 접속 토큰이 없어 auth 로는 인증될 수 없고,
+    짝 키로 봉인한 pclink 글만 받는다. 기기 목록·폐기·CP 자격 회수(client_public_id)는 폰 기기와 같은 길을 쓴다."""
+    did = secrets.token_hex(8)
+    nm = clean_name(name, "PC")
+
+    def _f(d):
+        d["devices"].append({
+            "id": did, "name": nm, "name_auto": False, "token_hash": None, "kind": "pc", "peer_host": peer_host,
+            "created": _now(), "last_seen": None, "revoked": False,
+        })
+        return True
+    _mutate(_f)
+    return did
+
+
 def verify(token: str | None) -> dict | None:
-    """토큰 → 활성 기기(dict) 또는 None. revoked 는 실패."""
+    """토큰 → 활성 기기(dict) 또는 None. revoked 는 실패. PC 등급 기기는 토큰이 없으니 여기서 통과할 수 없다."""
     if not token:
         return None
     h = _hash(token)
 
     def _f(d):
         for x in d["devices"]:
-            if x.get("token_hash") == h and not x.get("revoked"):
-                return {"id": x["id"], "name": x.get("name")}
+            if x.get("token_hash") == h and not x.get("revoked") and x.get("kind") != "pc":
+                return {"id": x["id"], "name": x.get("name"), "kind": x.get("kind") or "phone"}
         return None
     return _read(_f)
 
@@ -242,7 +259,7 @@ def rotate_token(did: str) -> str | None:
 
     def _f(d):
         for x in d["devices"]:
-            if x["id"] == did and not x.get("revoked"):
+            if x["id"] == did and not x.get("revoked") and x.get("kind") != "pc":   # PC 짝에는 접속 토큰을 주지 않는다
                 x["token_hash"] = _hash(tok)
                 x["rotated_at"] = _now()
                 return tok
