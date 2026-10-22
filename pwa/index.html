@@ -614,6 +614,11 @@
   .diag{font-family:var(--mono);font-size:.74rem;color:var(--muted);margin:-4px 0 10px}
   .sheet-main{font-size:1rem;margin:2px 0 8px}
   .sheet-sub{font-size:.85rem;color:var(--muted);line-height:1.5}
+  /* 🖥 PC 짝(원격 묻기, pclink) — 설정 하위 화면 · 상세 칸 「📡 원격 묻기 받기」 */
+  .diag.pcl-ev{margin:2px 0;word-break:break-all}
+  .field textarea.pcl-inv{word-break:break-all;min-height:96px}
+  .pcl-allow .dnoteline{padding:6px 8px 6px 14px}
+  .pcl-allow.on{border-color:color-mix(in srgb,var(--accent) 45%,transparent)}
   :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
   .btn.sm{padding:7px 12px;font-size:.82rem;flex:none;min-height:44px;min-width:44px}   /* 터치 최소 44px(DR-13) */
   .btn.danger{background:transparent;border:1px solid color-mix(in srgb,var(--crit) 45%,transparent);color:var(--crit)}
@@ -2877,6 +2882,8 @@ async function loadDetail(s){
   moreBtn.onclick=()=>{ const open=act.classList.toggle('hidden')===false; moreBtn.textContent=(open?'▾':'▸')+' 더 보기 — 포크 · API 정책 · 내보내기 · 폴더 변경'; };
   moreBox.appendChild(moreBtn); moreBox.appendChild(act);
   d.appendChild(moreBox);
+  // 「📡 원격 묻기 받기」(pclink): 상태를 받은 뒤에만 더 보기 바로 위에 붙는다(pclink 없는 옛 Host·실패면 줄이 없다)
+  pclinkAllowRow(s, d, moreBox);
   // 6. 위험 구역(맨 아래): 무엇이 일어나는지·되돌릴 수 있는지·2차 인증 여부를 버튼마다 한 줄
   const danger=el('div','dzone');
   danger.appendChild(el('div','dzone-h','위험 구역'));
@@ -5528,6 +5535,254 @@ async function showSecurity(){
   openModal('🔒 보안 · 2차 인증', body, foot);
 }
 
+// ---- 🖥 PC 짝(원격 묻기, pclink — docs/designs/pclink-protocol-v0.md) ----
+// 짝지은 다른 PC 의 세션이 이 PC 의 「📡 원격 묻기 받기」 세션에 조회 전용으로 묻는다(답만 돌려주고 이 PC 에서는 아무것도 실행 안 함).
+// PC 화면과 폰 둘 다에서 관리한다. 폰(릴레이)에서 '켜는' 동작 — 초대 만들기·초대 보기·붙여넣기·세션 받기 켜기·모두 끄기 풀기 —
+// 과 pclink 승인 결정은 E2EE + 2차 인증(D11): 코드 1회로 grace 를 받아(커넥터 grant) body(GET 은 query)에 싣는다.
+// '끄는' 동작(해제·받기 끄기·모두 끄기·초대 취소·거절)은 인증된 폰이면 코드 없이. 모든 글은 textContent 로만 그린다.
+const PCLINK_TITLE='🖥 PC 짝(원격 묻기)';
+const PCLINK_BADINV='초대가 만료됐거나 잘못됐습니다';
+const PCLINK_ERR={
+  human_proof_required:'이 기기가 인증되지 않았습니다 — 폰을 다시 페어링하세요',
+  e2ee_required:'이 폰 연결이 암호화돼 있지 않습니다 — PC 화면에서 하거나 폰을 다시 페어링하세요',
+  '2fa_required':'2차 인증을 켜야 폰에서 할 수 있습니다 — PC 화면에서 하세요',
+  '2fa_invalid':'2차 인증 코드가 틀렸습니다',
+  cp_unavailable:'서버(CP)에 닿지 못했습니다 — 잠시 뒤 다시 하세요',
+  relay_unavailable:'이 PC 의 원격 연결이 꺼져 있습니다',
+  already_paired:'이미 짝지은 PC 입니다',
+  self_invite:'이 PC 가 만든 초대입니다 — 다른 PC 의 ClewPath 화면에 붙여 넣으세요',
+  invite_expired:PCLINK_BADINV, bad_invite:PCLINK_BADINV,
+  pair_refused:'상대가 거절했습니다 — 초대가 이미 쓰였거나 취소됐습니다',
+  invite_not_open:'이미 쓰였거나 취소·만료된 초대입니다',
+  accept_not_found:'붙여 넣은 초대를 찾지 못했습니다 — 다시 붙여 넣으세요',
+  busy:'상대 PC 가 다른 짝짓기를 처리 중입니다 — 잠시 뒤 다시 하세요',
+  timeout:'상대 PC 가 응답하지 않습니다 — 상대 PC 가 켜져 있는지 확인하세요',
+  bad_pair:'짝짓기 중 오류가 났습니다 — 새 초대로 다시 하세요',
+  policy_corrupt:'PC 짝 설정 파일이 손상됐습니다 — PC 에서 확인하세요',
+  local_only:'PC 화면에서만 할 수 있습니다',
+};
+const PCLINK_STATE={active:{icon:'🔗', text:'짝 맺음', tone:'accent'}, pending:{icon:'⏳', text:'짝짓는 중', tone:'warn'},
+  cleanup:{icon:'🧹', text:'상대 쪽 정리 대기', tone:'warn'}, revoked:{icon:'⛔', text:'기기 목록에서 폐기됨 — 쓸 수 없음', tone:'crit'}};
+const PCLINK_EV={invite_created:'🎟 초대 만듦', invite_cancelled:'🚫 초대 취소', pair_init:'🤝 짝짓기 시작', paired:'🔗 짝 맺음',
+  pair_rollback:'↩ 짝짓기 되돌림', pair_aborted:'↩ 짝짓기 중단', unpaired:'✂ 짝 해제', paused:'⏸ 모두 끔', resumed:'▶ 다시 받음',
+  allow_on:'📡 받기 켬', allow_off:'📡 받기 끔', contact_requested:'✅ 첫 연락 승인 요청', contact_granted:'✅ 첫 연락 승인',
+  ask:'📨 받은 물음', ask_sent:'📤 보낸 물음'};
+// T.api 예외 → 오류 코드. 서버 거절은 본문 {error}/{code}, 커넥터 거절(2FA·local_only)은 message 로만 온다.
+function pclinkCode(e){ const j=(e&&e.json)||{}; return String(j.error||j.code||(e&&e.message)||e||''); }
+function pclinkErrText(e){ const c=pclinkCode(e); return PCLINK_ERR[c]||('실패: '+c); }
+function pclinkFail(e){ const c=pclinkCode(e); if(c==='2fa_invalid'||c==='2fa_required') clearGrace(); toast(pclinkErrText(e)); }
+function pclinkGrace(){ let g=null; try{ g=JSON.parse(LS.getItem('sm_grace')||'null'); }catch(e){}
+  return (g&&g.grace&&g.exp&&g.exp*1000>Date.now()+5000)?String(g.grace):''; }
+// 폰의 '켜는' 동작 자격: 남은 grace → 없으면 코드 1회(grant 로 grace 를 받아 다음 단계·승인 시트도 코드 없이). 로컬은 {}, 취소면 null.
+// ensurePriv 와 달리 2FA '강제'가 꺼져 있어도 묻는다 — pclink 관문은 비밀이 있으면 늘 코드를 요구한다.
+async function pclinkCred(){
+  if(MODE!=='relay') return {};
+  const g=pclinkGrace(); if(g) return {grace:g};
+  let st=null; try{ st=await T.api('GET','/api/owner/2fa/status'); }catch(e){}
+  if(st&&st.has_secret===false){ toast(PCLINK_ERR['2fa_required']); return null; }   // 코드를 물어 봐야 소용없다
+  const otp=askOtp(); if(otp==null) return null;
+  if(!/^\d{6}$/.test(otp)){ toast('2차 인증 코드는 6자리 숫자입니다'); return null; }
+  try{ const r=await T.grant(otp); if(r&&r.grace){ LS.setItem('sm_grace',JSON.stringify(r)); return {grace:r.grace}; } }
+  catch(e){ pclinkFail(e); return null; }
+  return {otp};
+}
+async function showPclink(){
+  const body=el('div');
+  const status=el('p',null,'불러오는 중…'); body.appendChild(status);
+  openModal(PCLINK_TITLE, body, []);
+  let st, tfa=null;
+  try{ [st, tfa]=await Promise.all([T.api('GET','/api/owner/pclink'),
+    Promise.resolve().then(()=>T.api('GET','/api/owner/2fa/status')).catch(()=>null)]); }
+  catch(e){ status.textContent='불러오지 못했습니다: '+pclinkErrText(e); return null; }
+  status.remove();
+  renderPclink(body, st||{}, tfa);
+  return st;
+}
+function renderPclink(body, st, tfa){
+  const pairs=st.pairs||[], invites=(st.invites||[]).filter(i=>i.state==='open'||i.state==='pairing');
+  // 내 PC
+  const card=el('div','setcard');
+  card.appendChild(el('b',null,'🖥 '+(st.name||'이 PC')));
+  card.appendChild(el('small',null,'PC 번호 '+String(st.host_id||'').slice(0,8)+' · 짝 '+pairs.length+'개'));
+  body.appendChild(card);
+  body.appendChild(el('div','cwd','짝지은 PC 의 세션이 이 PC 에서 「📡 원격 묻기 받기」를 켠 세션에 물을 수 있습니다(조회 전용 — 답만 돌려주고 '
+    +'이 PC 에서는 아무것도 실행하지 않습니다). 받기는 세션 상세 칸에서 세션마다 켭니다.'));
+  if(!st.room_ready) body.appendChild(el('div','dnote warn','⚠ 원격 연결(릴레이)이 꺼져 있어 짝짓기를 할 수 없습니다'));
+  if(tfa&&tfa.has_secret===false) body.appendChild(el('div','dnote warn','⚠ 2차 인증이 꺼져 있어 짝짓기·첫 연락을 승인할 수 없습니다 — '
+    +'PC 화면의 설정 → 2차 인증에서 먼저 켜세요'));
+  if(MODE==='relay') body.appendChild(el('div','diag','폰에서 켜는 동작(초대·붙여넣기·받기 켜기·다시 받기)과 승인은 2차 인증 코드가 필요합니다'));
+  // 끄기 스위치
+  { const sw=el('div','devrow'+(st.paused?' off':'')); const si=el('div');
+    si.appendChild(el('div','devname', st.paused?'⏸ 원격 묻기 모두 꺼 둠':'▶ 원격 묻기 받는 중'));
+    si.appendChild(el('div','devmeta', st.paused?'짝지은 PC 의 물음을 모두 거절하고 있습니다':'끄면 짝지은 PC 의 물음을 모두 바로 거절합니다(짝은 그대로)'));
+    sw.appendChild(si);
+    const bt=el('div','devbtns'); const sb=el('button','btn ghost sm'+(st.paused?'':' danger'), st.paused?'다시 받기':'모두 끄기');
+    sb.onclick=()=>pclinkPause(!st.paused); bt.appendChild(sb); sw.appendChild(bt);
+    body.appendChild(sw); }
+  // 짝 목록
+  body.appendChild(el('div','setsec','짝지은 PC'));
+  if(!pairs.length) body.appendChild(el('div','cwd','아직 짝지은 PC 가 없습니다 — 아래에서 초대를 만들거나 다른 PC 의 초대를 붙여 넣으세요.'));
+  pairs.forEach(p=>{
+    const un=el('button','btn ghost sm danger','해제'); un._keep=true; un.onclick=()=>pclinkUnpair(p);
+    body.appendChild(pairRow({name:p.name||String(p.host||'').slice(0,8), id:p.host,
+      chip:PCLINK_STATE[p.state]||{text:String(p.state||'?'), tone:'muted'}, off:p.state==='revoked'||p.state==='cleanup', buttons:[un],
+      meta:[p.last_ok?('마지막 연결 '+relTs(p.last_ok)):'아직 연결 없음', p.role==='inviter'?'내가 초대':p.role==='invitee'?'상대가 초대':null,
+            p.peer_ver?('v'+p.peer_ver):null,
+            p.state==='cleanup'?'해제했지만 상대에게 아직 못 알림 — 상대 PC 가 켜지면 정리됩니다':null,
+            p.state==='revoked'?'📱 기기 목록에서 폐기됨 — 해제로 정리하세요':null]}));
+  });
+  // 열린 초대
+  if(invites.length){
+    body.appendChild(el('div','setsec','열린 초대'));
+    invites.forEach(i=>{
+      const btns=[];
+      if(i.state==='open'){ const v=el('button','btn ghost sm','보기'); v.onclick=()=>pclinkShowInvite(i.inv); btns.push(v); }
+      const c=el('button','btn ghost sm','취소'); c.onclick=()=>pclinkCancelInvite(i); btns.push(c);
+      body.appendChild(pairRow({name:'🎟 초대 '+String(i.inv||'').slice(0,6), buttons:btns,
+        chip:i.state==='pairing'?{icon:'🤝', text:'짝짓는 중', tone:'warn'}:{icon:'⏳', text:todoLeft(i.exp), tone:'muted'},
+        meta:['만듦 '+tsText(i.created), '만료 '+tsText(i.exp)]}));
+    });
+  }
+  // 동작
+  { const acts=el('div','actions');
+    const bi=el('button','btn','＋ 초대 만들기'); bi.onclick=()=>pclinkInvite();
+    const bp=el('button','btn ghost','📥 초대 붙여넣기'); bp.onclick=()=>pclinkPaste();
+    if(!st.room_ready){ bi.disabled=true; bp.disabled=true; }
+    acts.appendChild(bi); acts.appendChild(bp); body.appendChild(acts); }
+  // 받는 세션(끄기만 여기서 — 켜기는 세션 상세 칸에서 확인 시트와 함께)
+  const ss=st.sessions||[];
+  if(ss.length){
+    body.appendChild(el('div','setsec','📡 원격 묻기 받는 세션'));
+    ss.forEach(x=>{ const off=el('button','btn ghost sm','끄기');
+      off.onclick=async()=>{ if(await pclinkSetAllow(x.id,false)!=null) showPclink(); };
+      body.appendChild(pairRow({name:x.title||String(x.id||'').slice(0,8), buttons:[off], meta:[String(x.id||'').slice(0,8)]})); });
+  }
+  // 최근 기록(감사 장부 — 본문 없음)
+  body.appendChild(el('div','setsec','최근 기록'));
+  const lg=el('div'); lg.appendChild(el('div','diag pcl-ev','불러오는 중…')); body.appendChild(lg);
+  return pclinkAudit(lg, pairs);
+}
+function pclinkEvText(e, names){
+  const sx=e.session?(SESSIONS||[]).find(x=>x.session_id===e.session):null;
+  return [tsText(e.ts), PCLINK_EV[e.event]||e.event, e.peer?("PC '"+(names[e.peer]||String(e.peer).slice(0,8))+"'"):'',
+    e.session?('세션 '+(sx?sessLabel(sx):String(e.session).slice(0,8))):'', e.code?('· '+e.code):''].filter(Boolean).join(' ');
+}
+async function pclinkAudit(box, pairs){
+  let r; try{ r=await T.api('GET','/api/owner/pclink/audit',{query:{n:30}}); }
+  catch(e){ box.innerHTML=''; box.appendChild(el('div','diag pcl-ev','기록을 불러오지 못했습니다')); return; }
+  box.innerHTML='';
+  const names={}; (pairs||[]).forEach(p=>{ names[p.host]=p.name; });
+  const evs=((r&&r.events)||[]).slice(-8).reverse();
+  if(!evs.length){ box.appendChild(el('div','diag pcl-ev','아직 기록이 없습니다')); return; }
+  evs.forEach(e=>box.appendChild(el('div','diag pcl-ev',pclinkEvText(e,names))));
+}
+// 초대 만들기: 요청 → 승인 시트(결정하면 서버가 바로 실행 → {inv, exp}) → 초대 문자열 보기
+async function pclinkInvite(){
+  const cred=await pclinkCred(); if(cred===null) return;
+  let r; try{ r=await T.api('POST','/api/owner/pclink/invite',{body:Object.assign({},cred)}); }catch(e){ pclinkFail(e); return; }
+  if(!r||!r.approval){ toast('초대를 만들지 못했습니다'); return; }
+  showApprovalSheet(r.approval,{execute:true, onDone:async(res)=>{ await showPclink(); if(res&&res.inv) await pclinkShowInvite(res.inv); }});
+}
+async function pclinkShowInvite(inv){
+  const cred=await pclinkCred(); if(cred===null) return;
+  let r; try{ r=await T.api('GET','/api/owner/pclink/invites/'+encodeURIComponent(inv),{query:cred}); }catch(e){ pclinkFail(e); return; }
+  const s=String((r&&r.invite)||''); if(!s){ toast(PCLINK_ERR.invite_not_open); return; }
+  const body=el('div');
+  body.appendChild(el('div','sheet-main','1회용·24시간. 다른 PC 의 ClewPath 화면 「초대 붙여넣기」에 넣으세요.'));
+  body.appendChild(el('div','sheet-sub','이 문자열은 비밀번호처럼 다루세요(메신저에 남기지 말 것).'));
+  const ta=el('textarea','pcl-inv'); ta.readOnly=true; ta.value=s; ta.rows=4; ta.onclick=()=>{ try{ ta.select(); }catch(e){} };
+  body.appendChild(field('초대 문자열', ta));
+  const cp=el('button','btn','📋 복사');
+  cp.onclick=async()=>{ const ok=await copyText(s); cp.textContent=ok?'✓ 복사됨':'복사 실패'; if(ok) toast('초대 문자열을 복사했습니다');
+    setTimeout(()=>{ cp.textContent='📋 복사'; },1800); };
+  openModal('🎟 초대 문자열', body, [cp]);
+  return s;
+}
+async function pclinkCancelInvite(i){
+  let r; try{ r=await T.api('POST','/api/owner/pclink/invites/'+encodeURIComponent(i.inv)+'/cancel'); }catch(e){ pclinkFail(e); return; }
+  toast(r&&r.cancelled?'초대를 취소했습니다':'이미 쓰였거나 취소된 초대입니다');
+  return showPclink();
+}
+// 초대 붙여넣기: 문자열 → accept → 승인 시트(결정하면 서버가 짝짓기를 끝까지 — 몇 초) → {host, name}
+function pclinkPaste(){
+  const body=el('div');
+  body.appendChild(el('div','cwd','다른 PC 의 ClewPath 화면에서 만든 초대 문자열(clewpath-pair:…)을 붙여 넣으세요. 승인하면 두 PC 가 짝을 맺습니다.'));
+  const ta=el('textarea','pcl-inv'); ta.rows=4; ta.placeholder='clewpath-pair:0:…'; ta.autocomplete='off'; ta.spellcheck=false;
+  body.appendChild(field('초대 문자열', ta));
+  const err=el('div','err'); body.appendChild(err);
+  const go=el('button','btn','짝 맺기 요청'); go.disabled=false;
+  go.onclick=async()=>{
+    if(go.disabled) return;
+    const s=String(ta.value||'').trim(); if(!s){ err.textContent='초대 문자열을 붙여 넣으세요'; return; }
+    const cred=await pclinkCred(); if(cred===null) return;
+    go.disabled=true; err.textContent='';
+    let r; try{ r=await T.api('POST','/api/owner/pclink/accept',{body:Object.assign({invite:s},cred)}); }
+    catch(e){ const c=pclinkCode(e); if(c==='2fa_invalid'||c==='2fa_required') clearGrace(); err.textContent=pclinkErrText(e); go.disabled=false; return; }
+    go.disabled=false;
+    if(!r||!r.approval){ err.textContent='요청을 만들지 못했습니다'; return; }
+    closeModal();
+    showApprovalSheet(r.approval,{execute:true, onDone:(res)=>{
+      toast("PC '"+((res&&res.name)||r.peer_name||'?')+"' 와 짝을 맺었습니다"); showPclink(); }});
+  };
+  openModal('📥 초대 붙여넣기', body, [go]);
+  return {ta, go, err};
+}
+async function pclinkUnpair(p){
+  const nm=p.name||String(p.host||'').slice(0,8); let r=null;
+  const ok=await confirmSheet({title:'PC 짝 해제', main:"PC '"+nm+"' 와의 짝을 해제할까요?",
+    sub:'상대 PC 와의 짝을 해제합니다. 상대가 꺼져 있으면 상대 쪽 정리는 나중에 됩니다. 다시 쓰려면 새 초대로 짝을 맺어야 합니다.',
+    action:'해제', danger:true, busyText:'해제 중…',
+    run:async()=>{ try{ r=await T.api('POST','/api/owner/pclink/peers/'+encodeURIComponent(p.host)+'/unpair'); }
+      catch(e){ throw new Error(pclinkErrText(e)); } }});
+  if(!ok) return false;
+  toast(r&&r.cleanup?'해제했습니다 — 상대 PC 에 아직 못 알려 「상대 쪽 정리 대기」입니다(상대가 켜지면 정리)':'해제했습니다');
+  showPclink();
+  return true;
+}
+async function pclinkPause(on){
+  let cred={};
+  if(!on){ cred=await pclinkCred(); if(cred===null) return; }   // 다시 받기 = 켜는 동작
+  let r; try{ r=await T.api('POST','/api/owner/pclink/pause',{body:Object.assign({on:!!on},cred)}); }catch(e){ pclinkFail(e); return; }
+  toast(r&&r.paused?'원격 묻기를 모두 껐습니다 — 짝지은 PC 의 물음을 거절합니다':'원격 묻기를 다시 받습니다');
+  return showPclink();
+}
+// 세션 받기 켜기/끄기. 켜기 = 확인 시트(30일·대화 전체) 뒤 (폰은 2차 인증), 끄기 = 바로. 반환: 새 상태 / null(취소·실패)
+async function pclinkSetAllow(sid, on){
+  const path='/api/owner/pclink/sessions/'+encodeURIComponent(sid)+'/allow';
+  if(!on){
+    try{ const r=await T.api('POST',path,{body:{on:false}});
+      toast('원격 묻기 받기를 껐습니다 — 이 세션에 대한 PC 승인도 함께 폐기됐습니다'); return !!(r&&r.allow); }
+    catch(e){ pclinkFail(e); return null; }
+  }
+  let res=null;
+  const ok=await confirmSheet({title:'📡 원격 묻기 받기', main:'짝지은 PC 가 이 세션에 물을 수 있게 합니다.',
+    sub:'처음 묻는 PC 마다 사장님 승인이 필요하고, 승인하면 그 PC 가 이 세션의 지금과 앞으로의 대화 전체를 30일 동안 물어볼 수 있습니다. '
+      +'답만 돌려주고 이 PC 에서는 아무것도 실행하지 않습니다(도구 없는 복제본).',
+    action:'켜기', busyText:'켜는 중…',
+    run:async()=>{ const cred=await pclinkCred(); if(cred===null) throw new Error('2차 인증을 하지 않아 켜지 않았습니다');
+      try{ res=await T.api('POST',path,{body:Object.assign({on:true},cred)}); }
+      catch(e){ const c=pclinkCode(e); if(c==='2fa_invalid'||c==='2fa_required') clearGrace(); throw new Error(pclinkErrText(e)); } }});
+  if(!ok) return null;
+  toast('원격 묻기 받기를 켰습니다'); return !!(res&&res.allow);
+}
+// 상세 칸 「📡 원격 묻기 받기」 줄 — 상태를 받은 뒤에만 before(더 보기) 앞에 붙인다. 옛 Host(pclink 없음)·실패면 없다.
+function pclinkAllowRow(s, d, before){
+  const row=el('div','dnote pcl-allow'); const line=el('div','dnoteline');
+  const txt=el('span'); const btn=el('button','btn ghost sm'); btn.disabled=false;
+  line.appendChild(txt); line.appendChild(btn); row.appendChild(line);
+  let cur=false;
+  const draw=()=>{ txt.textContent='📡 원격 묻기 받기: '+(cur?'켬 — 짝지은 PC 가 물을 수 있음':'끔');
+    btn.textContent=cur?'끄기':'켜기'; btn.title=cur?'짝지은 PC 가 이 세션에 묻지 못하게 합니다':'짝지은 PC 가 이 세션에 조회 전용으로 물을 수 있게 합니다';
+    row.classList.toggle('on',cur); };
+  btn.onclick=async()=>{ if(btn.disabled) return; btn.disabled=true;
+    try{ const r=await pclinkSetAllow(s.session_id,!cur); if(r!=null){ cur=r; draw(); } } finally{ btn.disabled=false; } };
+  row._ready=Promise.resolve().then(()=>T.api('GET','/api/owner/pclink/sessions/'+encodeURIComponent(s.session_id))).then(r=>{
+    if(!r||typeof r.allow!=='boolean') return false;
+    cur=r.allow; draw(); d.insertBefore(row, before); return true;
+  }).catch(()=>false);
+  return row;
+}
+
 // ---- 외부 접속 기기(조회/등록/삭제) — 로컬 전용. 기기 인증은 항상 켜짐(끌 수 없음) ----
 function relTs(sec){ if(!sec)return '미접속';
   const d=Date.now()/1000-sec; if(d<60)return '방금'; if(d<3600)return Math.floor(d/60)+'분 전';
@@ -5545,22 +5800,26 @@ async function showDevices(){
   (st.devices||[]).forEach(d=>{
     // 칩은 행당 1개(우선순위 📵 > 🔗). 📵/⏳/💤 는 0.11.0 에서 서버 상태로 채워진다.
     // 행당 칩 1개, 우선순위 📵 > ⏳ > 🔗 > 💤 (DR-6)
-    const stale=!d.revoked && d.last_seen && (Date.now()/1000 - d.last_seen) > 90*86400;
+    // kind 'pc' = pclink 짝 PC(접속 토큰 없음, pclink 만) — 🖥 배지, 폰 전용 동작(QR 다시 만들기·구형 자격·90일 미접속)은 없다
+    const pc=d.kind==='pc';
+    const stale=!pc && !d.revoked && d.last_seen && (Date.now()/1000 - d.last_seen) > 90*86400;
     // 삭제를 누른 행(delete_pending)은 📵 보다 ⏳ 가 먼저 — 눌렀는데 그대로인 것처럼 보이지 않게
     const chip = (d.delete_pending||d.cp_pending) ? {icon:'⏳', text:'삭제 대기', tone:'warn'}
                : (d.revoked && d.revoked_by==='phone') ? {icon:'📵', text:'폰에서 해제함', tone:'crit'}
                : d.revoked ? {icon:'📵', text:'해제됨', tone:'muted'}
+               : pc ? {icon:'🖥', text:'PC 짝 — pclink 만', tone:'accent'}
                : (!d.client_scoped ? {icon:'🔗', text:'공유 자격(구형)', tone:'warn', dimtext:true}
                : (stale ? {icon:'💤', text:'90일 미접속', tone:'muted'} : null));
     const btns=[];
     if(!d.revoked){
-      const re=el('button','btn ghost sm','QR 다시 만들기'); re.onclick=()=>reissueDevice(d); btns.push(re);
+      if(!pc){ const re=el('button','btn ghost sm','QR 다시 만들기'); re.onclick=()=>reissueDevice(d); btns.push(re); }
       const un=el('button','btn ghost sm','페어링 해제'); un.onclick=()=>deleteDevice(d); btns.push(un);
     }else{
       const del=el('button','btn ghost sm','삭제'); del._keep=true; del.onclick=()=>deleteDevice(d); btns.push(del);
     }
-    list.appendChild(pairRow({name:d.name, id:d.id, chip, off:!!d.revoked, buttons:btns,
-      meta:[d.last_seen?('최근 '+relTs(d.last_seen)):'미접속', (!d.client_scoped&&!d.revoked)?'QR 다시 만들기 권장':null,
+    list.appendChild(pairRow({name:(pc?'🖥 ':'')+d.name, id:d.id, chip, off:!!d.revoked, buttons:btns,
+      meta:[d.last_seen?('최근 '+relTs(d.last_seen)):'미접속', (!pc&&!d.client_scoped&&!d.revoked)?'QR 다시 만들기 권장':null,
+            pc&&!d.revoked?'짝 해제는 설정 → 🖥 PC 짝에서':null,
             stale?'오래 안 쓴 기기면 페어링 해제 권장':null, (d.delete_pending||d.cp_pending)?'서버 폐기 확인되면 사라짐':null]}));
   });
   if(!(st.devices||[]).length) list.appendChild(el('div','cwd','아직 페어링된 기기가 없습니다 — 폰으로 QR 을 찍으면 여기 나타납니다.'));
@@ -6120,6 +6379,10 @@ const setStat={
     return st.required?{t:'켜짐 ✅'}:{t:'꺼짐 — 켜는 것을 권장', warn:true}; },
   devices: async()=>{ const st=await T.api('GET','/api/owner/devices'); const a=st.active|0, t=st.total|0;
     return {t:a?('활성 '+a+'대'+(t>a?' · 해제 '+(t-a):'')):'등록된 기기 없음 — 외부 접속 차단 중'}; },
+  pclink: async()=>{ const st=await T.api('GET','/api/owner/pclink'); const ps=st.pairs||[];
+    const bad=ps.filter(p=>p.state==='revoked'||p.state==='cleanup').length, rx=(st.sessions||[]).length;
+    if(!ps.length) return {t:'짝 없음 — 다른 PC 와 짝을 맺으면 그 PC 의 세션에 물을 수 있습니다'};
+    return {t:(st.paused?'⏸ 모두 꺼 둠 · ':'')+'짝 '+ps.length+'개'+(bad?' (정리할 것 '+bad+')':'')+' · 받는 세션 '+rx+'개', warn:!!bad}; },
   housekeeping: async()=>{ const st=await T.api('GET','/api/owner/housekeeping'); const jobs=st.jobs||[];
     const j=jobs.find(x=>x.id==='idle_sessions'); const on=jobs.filter(x=>x.enabled).length;
     return {t:(j?(j.enabled?('쉬는 세션 '+st.idle_hours+'시간 뒤 정리'):'쉬는 세션 정리 꺼짐')+' · ':'')+'켜진 작업 '+on+'/'+jobs.length}; },
@@ -6180,6 +6443,7 @@ function showSettings(){
   else add(el('div','cwd','이 브라우저는 웹 푸시를 지원하지 않습니다'));
   row('🔒','2차 인증(2FA)','원격 접속 보호',showSecurity,{local:true,status:setStat.tfa});
   row('📱','외부 접속 기기','폰 연결(QR) · 페어링 해제',showDevices,{local:true,status:setStat.devices});
+  row('🖥','PC 짝(원격 묻기)','다른 PC 와 짝 · 초대 · 해제 · 모두 끄기 (조회 전용)',showPclink,{status:setStat.pclink});
 
   sec('세션');
   row('🧹','정기 작업','쉬는 세션 정리 · 모델 목록 갱신',showHousekeeping,{status:setStat.housekeeping});
@@ -6238,7 +6502,8 @@ function teamEventText(e){
   return p.note||p.goal||'';
 }
 const APPROVAL_KIND={team_create:'팀 만들기', team_archive:'팀 보관', team_delete:'팀 삭제', team_purge:'보존본 지우기', assistant_set:'비서 지정', session_send:'세션에 일 전달', service_register:'외부 서비스 등록',
-  delegate:'일감 위임', task_decide:'결과 승인/반려/취소', profile_decide:'사장님 프로필 결정'};
+  delegate:'일감 위임', task_decide:'결과 승인/반려/취소', profile_decide:'사장님 프로필 결정',
+  pclink_pair:'🖥 PC 짝짓기', pclink_contact:'📡 원격 묻기 허용(첫 연락)'};
 async function showApprovals(){
   let r; try{ r=await T.api('GET','/api/owner/approvals'); }catch(e){ toast('승인 목록 실패: '+e.message); return; }
   const body=el('div'); const list=(r&&r.approvals)||[];
@@ -6261,12 +6526,20 @@ function approvalErrText(m){
   return '실패: '+m;
 }
 // opts.execute: 승인 직후 이 화면(PC 로컬)에서 실행까지. opts.onDone(result): 실행 결과 콜백.
+// pclink 승인(kind pclink_*)은 결정하면 서버가 바로 실행한다(decide 응답 status executed) — 폰에서도 E2EE + 2차 인증(D11)이라
+// 폰에서도 코드 칸을 보이고, 남은 grace 가 있으면 함께 싣는다. 요약 문구(30일·대화 전체)는 잘리지 않게 크게.
 function showApprovalSheet(a, opts){
   opts=opts||{};
+  const pcl=String(a.kind||'').startsWith('pclink_');
   const body=el('div');
   body.appendChild(el('div','setsec', APPROVAL_KIND[a.kind]||a.kind));
-  body.appendChild(el('div','cwd', a.summary));
-  if(a.kind==='session_send'){       // 비서 → 일반 세션 전달: 받는 세션과 보낼 글 그대로(승인하면 이 글이 그 세션에 들어간다)
+  body.appendChild(el('div',pcl?'sheet-main':'cwd', a.summary));
+  if(pcl){
+    const g=a.args||{};
+    if(a.kind==='pclink_contact') body.appendChild(el('div','cwd','묻는 PC: '+(g.peer_name||'?')+' ('+String(g.peer||'').slice(0,8)+')'
+      +' · 세션: '+(g.title||String(g.session_id||'').slice(0,8))));
+    else if(g.action==='accept') body.appendChild(el('div','cwd','상대 PC: '+(g.peer_name||'?')+' ('+String(g.peer_host||'').slice(0,8)+')'));
+  } else if(a.kind==='session_send'){       // 비서 → 일반 세션 전달: 받는 세션과 보낼 글 그대로(승인하면 이 글이 그 세션에 들어간다)
     const sx=(SESSIONS||[]).find(x=>x.session_id===(a.args||{}).session_id);
     body.appendChild(el('div','cwd','받는 세션: '+(sx?sessLabel(sx)+' · '+baseName(sx.cwd||''):String((a.args||{}).session_id||'').slice(0,8))
       +(sx&&sessionIsLive(sx)?' (실행 중)':' (꺼져 있으면 자동 허용 모드로 띄운 뒤 전달)')));
@@ -6293,25 +6566,41 @@ function showApprovalSheet(a, opts){
   body.appendChild(el('div','diag','요청 '+tsText(a.created)+(a.requested_by==='owner'?' · 사장님 화면':a.requested_by?' · 세션 '+String(a.requested_by).slice(0,8):'')
     +' · 만료 '+tsText(a.expires)+' · 상태 '+a.status));
   let otp=null;
-  if(MODE==='local' && a.status==='pending'){
-    body.appendChild(el('div','cwd','PC 에서는 2차 인증 코드로 승인합니다(또는 폰 알림에서 탭).'));
+  if((MODE==='local'||pcl) && a.status==='pending'){
+    body.appendChild(el('div','cwd', MODE==='local'?'PC 에서는 2차 인증 코드로 승인합니다(또는 폰 알림에서 탭).'
+      :'PC 짝·원격 묻기 승인은 폰에서도 2차 인증 코드가 필요합니다(방금 코드를 넣었으면 비워 둬도 됩니다).'));
     otp=el('input','inp'); otp.placeholder='2차 인증 6자리'; otp.inputMode='numeric'; body.appendChild(otp);
   }
   const err=el('div','cwd'); body.appendChild(err);
+  let busy=false;
   const decide=async(approve)=>{
+    if(busy) return 'busy';
     err.textContent='';
+    const code=otp&&otp.value?otp.value.trim():'';
+    const grace=(pcl&&approve&&MODE==='relay')?pclinkGrace():'';
+    if(pcl&&approve&&MODE==='relay'&&!code&&!grace){ err.textContent='2차 인증 코드(6자리)를 넣으세요'; return 'error'; }
+    busy=true;
+    if(pcl&&approve) err.textContent='처리 중… (짝짓기는 상대 PC 와 연결하느라 몇 초 걸릴 수 있습니다)';
     try{
       const d=await T.api('POST','/api/owner/approvals/'+encodeURIComponent(a.id)+'/decide',
-        {body:Object.assign({approve}, otp&&otp.value?{otp:otp.value.trim()}:{})});
+        {body:Object.assign({approve}, code?{otp:code}:{}, grace?{grace}:{})});
       if(d && d.error) throw new Error(d.error);
       if(!approve){ toast('거절했습니다'); closeModal(); return 'rejected'; }
+      if(d && d.status==='executed'){      // pclink: 결정과 함께 서버가 이미 실행했다
+        closeModal(); toast('승인·실행했습니다'); if(opts.onDone) opts.onDone(d.result); return 'executed';
+      }
       if(opts.execute){                    // 화면에서 낸 요청 — 승인 즉시 실행(폰에서도, 팀 통합 U5)
         const x=await T.api('POST','/api/owner/approvals/'+encodeURIComponent(a.id)+'/execute');
         if(x && x.error) throw new Error(x.error);
         closeModal(); toast('승인·실행했습니다'); if(opts.onDone) opts.onDone(x&&x.result); return 'executed';
       }
       closeModal(); toast('승인했습니다 — 요청한 세션이 실행합니다'); return 'approved';
-    }catch(e){ err.textContent=approvalErrText(e.message||e); return 'error'; }
+    }catch(e){
+      if(pcl){ const c=pclinkCode(e); if(c==='2fa_invalid'||c==='2fa_required') clearGrace();
+        err.textContent=(c!=='human_proof_required'&&PCLINK_ERR[c])||approvalErrText(c); }
+      else err.textContent=approvalErrText(e.message||e);
+      return 'error';
+    }finally{ busy=false; }
   };
   globalThis.__approvalDecide=decide;      // 테스트 훅
   if(a.status!=='pending'){ openModal('✅ 승인 요청', body, []); return; }
