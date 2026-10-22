@@ -65,6 +65,13 @@ ClewPath 는 claude 를 **관찰·중계·실행**하는 도구이지, claude �
   파일이 깨져 있으면 건너뜀. 모든 OS(Windows·맥·리눅스) 같은 방식. **제거(uninstall) 때는 지우지 않고 남은 훅과 지우는 방법만 안내**(사장님 결정).
   hooks.py `ensure_registered`, 가드: test_hooks.py
 
+- PC 사이 원격 묻기(pclink, 2026-10-22 사장님 협의·결정 — docs/designs/pclink-protocol-v0.md) → 짝지은 다른 PC 가 이 PC 의 세션에
+  묻는 것은 **그 세션의 도구 없는 복제본에 묻기**로만 한다: `claude -p --resume <id> --fork-session --no-session-persistence --tools ""
+  --strict-mcp-config --settings {"disableAllHooks":true}`(도구·MCP·훅 없음, 기록 파일 안 남김, 원본 무접촉, 180초·0.5달러).
+  세션마다 「원격 묻기 받기」(기본 끔)를 켜고, 짝 PC 의 첫 연락은 사장님 승인(승인 = 그 세션의 지금·앞으로 대화 전체 열람, 30일).
+  살아 있는 세션에 글을 넣는 실시간 전달·원격 작업 지시는 만들지 않는다(받는 Claude 가 동료 요청으로 실행 — 허브 프로젝트에서 따로).
+  보낸 쪽 세션 확인은 `~/.claude/sessions/*.json` **읽기만**. 가드: test_webapi_ephemeral_isolated.py·test_pclink_routes.py
+
 이 목록에 없는 claude 파일 접근을 추가할 때는 위 1·2 를 적용할 것.
 
 프로세스 정리 예외(2026-08-21 사장님 협의 — 실사용자 세션 잠금 사고로 승인):

@@ -441,3 +441,57 @@ async def test_non_object_frames_do_not_break_the_relay_loop(monkeypatch):
         assert len(opened) == 1 and c.conn_gen == 1, "접속 루프가 끊겨 다시 붙었다(모든 파이프 해체)"
     finally:
         await _stop(task)
+
+
+# ---- E2EE 강제 모드·로컬 전용·폰 관리 요청의 E2EE 표시(pclink T4) ----
+
+@pytest.mark.asyncio
+async def test_e2ee_require_still_lets_plaintext_pclink_through(gated, monkeypatch):
+    """짝 PC 는 방 키가 없다 — E2EE 강제 모드여도 pclink 는 바깥 평문으로 받고(안쪽은 짝 키 봉투), 다른 평문 요청은 거부."""
+    from session_manager import appconfig
+    gated.e2ee_key = os.urandom(32)
+    plain = []
+
+    async def _plain(obj):
+        plain.append(obj)
+    monkeypatch.setattr(gated, "_plain_send", _plain)
+    monkeypatch.setattr(appconfig, "get_bool", lambda sec, key, default=False: (sec, key) == ("e2ee", "require") or default)
+    await gated._on_frame(_req("cidPC", "k1", "pclink", {"env": ENV}))
+    await gated._on_frame(_req("cidPC", "k2", "pclink.pair", {"step": "init"}))
+    await gated._on_frame(_req("cidX", "k3", "api", {"verb": "GET", "path": "/api/sessions"}))
+    assert gated.handled == [("pclink", "cidPC"), ("pclink.pair", "cidPC")]
+    assert [p["error"] for p in plain] == ["e2ee_required"]
+
+
+def test_asker_api_is_local_only_for_every_verb():
+    for verb in ("GET", "POST"):
+        for path in ("/api/v1/pclink/ask", "/api/v1/pclink/poll", "/api/v1/pclink/peers",
+                     "/api/v1/pclink/peers/0f1e2d3c4b5a6978/sessions", "/api/v1/pclink"):
+            assert connector_mod._is_local_only_api(path, verb), (verb, path)
+    assert not connector_mod._is_local_only_api("/api/owner/pclink", "GET")      # 관리는 폰에서도(관문은 서버)
+
+
+@pytest.mark.asyncio
+async def test_api_proxy_marks_e2ee_only_for_sealed_authed_phone(monkeypatch):
+    c = _conn()
+    seen = []
+
+    async def _get(url, params=None, headers=None):
+        seen.append(dict(headers or {}))
+        return _Resp({})
+
+    async def _send(obj):
+        pass
+    monkeypatch.setattr(c.http, "get", _get)
+    monkeypatch.setattr(c, "send", _send)
+    c.authed["cidE"] = {"id": "d1", "name": "폰"}
+    c.authed["cidP"] = {"id": "d2", "name": "옛 폰"}
+    c.enc_cids.add("cidE")
+    c.enc_cids.add("cidAnon")                       # 봉투로 말했지만 인증 안 된 기기 — 증명도 E2EE 표시도 없음
+    for cid in ("cidE", "cidP", "cidAnon"):
+        await c._handle_api(("x", cid), {"verb": "GET", "path": "/api/owner/pclink"}, cid)
+    e, p, anon = seen
+    assert e.get(connector_mod.E2EE_HEADER) == "1" and e.get(connector_mod.PROOF_HEADER)
+    assert connector_mod.E2EE_HEADER not in p and p.get(connector_mod.PROOF_HEADER)
+    assert connector_mod.E2EE_HEADER not in anon and connector_mod.PROOF_HEADER not in anon
+    await c.http.aclose()

@@ -114,9 +114,11 @@ import secrets as _secrets
 RELAY_PROOF = _secrets.token_hex(24)
 PROOF_HEADER = "X-ClewPath-Relay-Proof"
 DEVICE_HEADER = "X-ClewPath-Device"
+# 그 요청이 E2EE 봉투로 왔다 — 사람 증명 헤더와 함께만 붙인다. pclink 관리의 '켜는' 동작은 폰에서 이것 + 2차 인증이 필요(D11)
+E2EE_HEADER = "X-ClewPath-E2EE"
 _LOCAL_ONLY_API = re.compile(
     r"^/api/(owner/(devices(/|$|\?)|services(/|$|\?)|2fa/(provision|toggle)|skills/[^/]+/install|trash/)"
-    r"|sessions/[^/]+/terminal/start|v1/team(/|$|\?)|services/)")
+    r"|sessions/[^/]+/terminal/start|v1/team(/|$|\?)|v1/pclink(/|$|\?)|services/)")
 # update/apply 는 0.10.5 부터 로컬 전용이 아니라 특권(2FA) — 원격에서 Host 업데이트(사장님 2026-09-30).
 # 실행되는 코드는 CP 가 서명한 패키지뿐(Host 가 서명·해시 검증)이라 원격 트리거의 위험은 '재기동' 에 국한된다.
 
@@ -127,6 +129,8 @@ def _is_local_only_api(path: str, verb: str) -> bool:
         return False
     if path.startswith(("/api/owner/devices", "/api/owner/services", "/api/services/")) or path.startswith("/api/v1/team"):
         return True                      # 모든 동사(팀 명부: eng E-2 — 폰은 세션에 요청)
+    if path.startswith("/api/v1/pclink"):
+        return True                      # 다른 PC 에 묻기는 이 PC 의 세션만(폰이 시키지 못하게)
     return verb == "POST"
 
 
@@ -534,6 +538,8 @@ class Connector:
         dev = self.authed.get(cid) if cid is not None else None
         if dev and dev.get("id"):            # 인증된 기기의 요청에만 사람 증명(A-2)
             via.update({PROOF_HEADER: RELAY_PROOF, DEVICE_HEADER: str(dev["id"])})
+            if cid in self.enc_cids:
+                via[E2EE_HEADER] = "1"
         if verb == "GET":
             r = await self.http.get(url, params=query, headers=via)
         elif verb == "POST":
@@ -807,7 +813,9 @@ class Connector:
         elif self.e2ee_key is not None:
             # 평문 프레임: require 모드면 실질 요청(req/stream_in)을 거부한다.
             from session_manager import appconfig
-            if (appconfig.get_bool("e2ee", "require", False)
+            # pclink 은 예외 — 짝 PC 는 방 키가 없고, 안쪽 봉투가 짝 키로 봉인돼 있어야만 받는다(문서 pclink-protocol-v0 6절 끝)
+            pclink_req = frame.get("type") == "req" and frame.get("method") in ("pclink", "pclink.pair")
+            if (appconfig.get_bool("e2ee", "require", False) and not pclink_req
                     and frame.get("type") in ("req", "stream_in", "stream_close")):
                 await self._plain_send({"v": 1, "type": "res", "id": frame.get("id"),
                                         "ok": False, "error": "e2ee_required",

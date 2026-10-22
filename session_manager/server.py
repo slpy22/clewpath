@@ -411,6 +411,8 @@ async def _lifespan(app: FastAPI):
         _push.mirror_to_cp_async()
     else:
         print("[relay] mode OFF (SM_RELAY_URL/ROOM/AGENT_TOKEN 미설정)")
+    from session_manager.pclink import routes as _pclink   # PC 사이 세션 통신 — 손잡기 되돌림·해제 알림 재시도(docs/designs/pclink-protocol-v0.md)
+    _pclink.start_background()
     try:
         yield
     finally:
@@ -435,6 +437,7 @@ async def _lifespan(app: FastAPI):
         _devsync.stop()
         _teamwatch.stop()
         _hk.stop()                           # 앱을 내렸는데 +5분 정기 작업이 남아 돌지 않게(시험의 TestClient 도 여기로 온다)
+        await _pclink.stop_background()
         for t in (task, upd_task):
             if t is not None:
                 t.cancel()
@@ -450,6 +453,8 @@ def create_app() -> FastAPI:
     # ---- 인증(비밀번호 게이트 + API 토큰) ----
     # 순수 ASGI 미들웨어: 바디를 읽지 않아 POST body 파싱을 깨지 않는다.
     app.add_middleware(AuthASGIMiddleware, base_path=BASE_PATH)
+    from session_manager.pclink import routes as _pclink_routes
+    _pclink_routes.register(app)                 # PC 사이 세션 통신(묻는 쪽 로컬 API·관리 API)
 
     @app.get("/login")
     def login_page():
@@ -1283,6 +1288,10 @@ def create_app() -> FastAPI:
     @app.post("/api/owner/approvals/{aid}/decide")
     def approval_decide(request: Request, aid: str, body: dict = Body(...)):
         try:
+            from session_manager.pclink import routes as _pclink_routes
+            g = _pclink_routes.decide_guard(request, _ap.get(aid), body) if bool(body.get("approve")) else None
+            if g is not None:                    # pclink 승인은 폰에서도 E2EE + 2차 인증(D11)
+                return JSONResponse({"error": g}, status_code=403)
             return _ap.decide(aid, bool(body.get("approve")), _human_proof(request, body.get("otp")))
         except _team.TeamError as e:
             return JSONResponse({"error": e.code}, status_code=e.status)
