@@ -256,6 +256,7 @@ class Connector:
         self.e2ee_key: bytes | None = None   # room E2EE 키(접속 시 로드)
         self.enc_cids: set = set()           # 암호화 봉투로 말한 기기들(cid)
         self.gone_cids: dict = {}            # 떠난 기기(cid) — 그 앞 프레임은 보내지 않는다(send). 삽입순 집합, 상한 있음
+        self.conn_gen = 0                    # 릴레이 연결 세대(_on_connected 마다 +1) — 이전 연결에서 받은 pclink 요청의 늦은 답은 버린다
 
     # ---- 릴레이 송신 ----
     async def send(self, obj: dict) -> None:
@@ -326,6 +327,19 @@ class Connector:
         msg.update(kw)
         await self.send(msg)
 
+    def _pclink_reply(self, rid, cid):
+        """pclink 요청 하나의 답 통로 — 여러 번 불린다(접수 → 답). 그 cid 로만 보낸다: 키에 cid 를 묶어 응답 길 표(상한·재접속 때
+        비움)에 기대지 않고, 보낼 곳을 모르거나(cid 없음) 릴레이에 다시 붙은 뒤의 늦은 답은 버린다 — 릴레이는 cid 없는 프레임·모르는
+        cid 앞 프레임을 방 전체에 뿌린다(문서 pclink-protocol-v0 7절). 떠난 기기(client_offline) 앞 답은 send 가 버린다."""
+        key = rid if isinstance(rid, tuple) else (cid, rid)
+        gen = self.conn_gen
+
+        async def reply(ok, data=None, error=None):
+            if cid is None or self.conn_gen != gen:
+                return
+            await self._res(key, ok, data=data, error=error)
+        return reply
+
     # ---- 기기 인증(auth 프레임) ----
     async def _auth(self, rid, cid, params: dict) -> None:
         """params: token(필수) · pv(클라이언트 규약 버전) · name(폰이 보고하는 자기 이름, B-1).
@@ -390,6 +404,21 @@ class Connector:
             # 기기 인증: 토큰 → 이 cid 를 인증 처리
             if method == "auth":
                 await self._auth(rid, cid, params)
+                return
+
+            # pclink(짝지은 PC, 문서 pclink-protocol-v0 6·7절): 접속 토큰 없이 글마다 짝 키·초대 비밀로 스스로 인증하므로 기기 인증
+            # 관문 앞에서 본체로 넘긴다. handle 은 곧바로 돌아온다(긴 일은 본체의 작업). 본체가 깨져도 폰 요청은 살게 여기서만 불러온다.
+            if isinstance(method, str) and method.startswith("pclink"):
+                from session_manager.pclink import inbound
+                if method in inbound.METHODS:
+                    await inbound.handle(method, params, cid, self._pclink_reply(rid, cid))
+                    return
+
+            # PC 등급 기기(kind=pc)는 pclink·ping 만 — 접속 토큰이 없어 원래 auth 될 수 없지만 이중 방어(문서 6절 끝)
+            pc = self.authed.get(cid)
+            if pc and pc.get("kind") == "pc" and method != "ping":
+                _log(f"[pclink] PC 기기 {str(pc.get('id'))[:8]} 의 {method} 요청 거부(pc_not_allowed)")
+                await self._res(rid, False, error="pc_not_allowed")
                 return
 
             # 인증 강제(enforced) 시: 미인증/폐기 기기의 모든 메서드(ping 제외) 거부.
@@ -757,6 +786,8 @@ class Connector:
             frame = json.loads(raw)
         except Exception:  # noqa: BLE001
             return
+        if not isinstance(frame, dict):     # '[1]'·'null' 같은 글이 frame.get 예외로 접속 루프를 끊어(재접속·모든 파이프 해체) 방
+            return                          # client 자격만 있으면(초대 문자열·짝 PC 포함) 폰 세션을 거듭 끊을 수 있었다
         # E2EE 봉투면 먼저 연다(릴레이가 겉에 주입한 cid 는 unwrap 이 반영).
         from session_manager import e2ee
         if e2ee.is_envelope(frame):
@@ -902,6 +933,7 @@ class Connector:
         (웹 재개면 claude -p 가 Host 재시작까지 남음) 출력은 모르는 cid 앞이라 방 전체에 평문으로 broadcast 됐다. 릴레이가 살아
         있었어도 인증·암호화 상태를 비웠으니 그 파이프는 더 쓸 수 없다. persist 터미널은 화면만 떨어지고 PTY 는 그대로다.
         """
+        self.conn_gen += 1                    # 이전 연결의 pclink 요청에 늦게 나오는 답은 버린다(_pclink_reply) — 그 cid 는 표에 없다
         old = set(self.authed) | set(self.enc_cids) | {c for c in self.req_cid.values() if c is not None}
         for rid, task in list(self.streams.items()):
             old.add(self._owner(rid))
