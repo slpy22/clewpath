@@ -1570,6 +1570,18 @@ pytest 연결: `tests/test_posix_e2e.py`(`@pytest.mark.posix_e2e`, docker가 없
   - exec 직전에 stdin 은 /dev/null, stdout·stderr 는 host.log·host.err.log 이어 쓰기로 바꾼다. 회전과 구분줄은 start 와 같다.
   - 러너가 업데이트 뒤 launchd 밖에서 띄운 Host 가 죽으면 5분 확인이 이어받는다. 그 뒤로는 launchd 작업 자신이 Host 다.
   - `stop`(--hold 없음)은 5분 안에 다시 켜진다(Windows 예약 작업과 같다). 계속 끄려면 `stop --hold` 다.
+- **start·resume 은 launchd 에 맡긴다(kickstart, 맥 실기 3b 반영 2026-10-22):** 실기에서 설치·resume·수동 start 가 직접 띄운 Host 는
+  PPID 1·launchd 밖이라, 죽으면 30초 KeepAlive 가 아니라 5분 확인이 받았고(281초) 로그아웃에도 살아남았다(로그인 때 launchd 작업은 '이미 떠 있음'으로 0).
+  - 런처 `start`(resume·install 의 마지막 start·watch 도 이 길)는 첫 판정이 '안 떠 있음'이고, `uname -s` 가 Darwin 이고, 우리 작업이 올라 있으면
+    (`~/Library/LaunchAgents/com.clewpath.host.plist` 를 plistlib 으로 읽어 이 런처를 부르고 + `launchctl print gui/<uid>/com.clewpath.host` 성공)
+    `launcher.lock` 을 잡기 전에 `launchctl kickstart gui/<uid>/com.clewpath.host` 를 부른다. 작업의 foreground 가 잠금을 잡고 exec 로 Host 가 된다.
+  - 반초 낮잠 40번(약 20초)까지 판정이 ok·busy 가 되면 `start: … → launchd 에 맡김(kickstart) pid N` 을 남기고 0. kickstart 실패·약 20초 안에 안 뜸이면
+    사유를 남기고 지금의 직접 기동으로 이어 간다(늦게 뜬 작업과는 잠금 안 재판정이 겹쳐 띄우기를 막는다). 같은 이름의 다른 설치본 작업은 깨우지 않는다.
+  - install 다시 설치: bootout 이 옛 작업(그 Host)을 끝내고, 마지막 start 가 새 작업에 맡긴다.
+  - **한계 — 업데이트 러너:** 러너의 재기동(`CLEWPATH_UPDATER=1`)은 직접 띄운다. 러너가 `update.inprogress` 를 쥐고 있어 launchd 의 foreground 는
+    띄우지 않기 때문이다. 그 Host 는 다음에 죽거나 로그아웃할 때까지 launchd 밖에 있다(죽으면 5분 확인이 받는다). 러너가 표식을 놓은 뒤 맡기는 것은 후속.
+- **psutil 없는 맥의 판정(맥 실기 3b 반영):** 런처의 파이썬 판정은 psutil 이 없으면 /proc 를, /proc 도 없으면 ps 를 읽는다(셸의 pid_alive·is_our_host 와
+  같은 규칙). 전에는 '산 pid = busy'로 보아 runtime.json 에 남은 pid 를 다른 프로그램이 다시 받으면 Host 를 영영 띄우지 않았다.
 - **정상 종료 = 0(server.main, 맥·리눅스만):** uvicorn 은 정상 종료를 마친 뒤 받은 SIGTERM 을 다시 일으킨다. 기본 처리기면 -15 로 끝나 KeepAlive 가 stop 한 Host 를 30초 뒤 되살렸다. 그래서 SIGTERM 처리기를 `sys.exit(0)` 으로 둔다. Windows 는 그대로다.
 - **install.sh:** [mac] `--no-autostart` 가 아니면 런처 렌더 뒤 render-launchd → `launchctl bootout`(실패 무시) → `launchctl bootstrap gui/<uid>`(실패하면 1초 뒤 한 번 더) 순서로 등록한다.
   - 실패해도(SSH 셸 등) 설치는 성공으로 끝내고 지금 켜는 방법을 안내한다.
