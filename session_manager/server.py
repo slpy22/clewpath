@@ -1292,7 +1292,17 @@ def create_app() -> FastAPI:
             g = _pclink_routes.decide_guard(request, _ap.get(aid), body) if bool(body.get("approve")) else None
             if g is not None:                    # pclink 승인은 폰에서도 E2EE + 2차 인증(D11)
                 return JSONResponse({"error": g}, status_code=403)
-            return _ap.decide(aid, bool(body.get("approve")), _human_proof(request, body.get("otp")))
+            r = _ap.decide(aid, bool(body.get("approve")), _human_proof(request, body.get("otp")))
+            if r["status"] == "approved" and str(r["kind"]).startswith("pclink_"):
+                # pclink 승인은 결정 즉시 실행 — 첫 연락 승인은 요청한 쪽(다른 PC)이 실행할 수 없고, 짝짓기도 사장님 한 번의 승인으로 끝낸다
+                try:
+                    return _ap.execute(aid)
+                except _team.TeamError:
+                    raise
+                except Exception as e:  # noqa: BLE001  (실행 실패 → 승인 상태로 남아 다시 실행할 수 있다)
+                    return JSONResponse({"error": getattr(e, "code", type(e).__name__), "approval": _ap.get(aid)},
+                                        status_code=409)
+            return r
         except _team.TeamError as e:
             return JSONResponse({"error": e.code}, status_code=e.status)
 

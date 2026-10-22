@@ -474,3 +474,29 @@ def test_phone_approval_decide_for_pclink_needs_e2ee(client, monkeypatch):
     assert r.status_code == 403 and r.json()["error"] == "e2ee_required"
     r = client.post(f"/api/owner/approvals/{ap['id']}/decide", json={"approve": False}, headers=plain)
     assert r.status_code == 200 and r.json()["status"] == "rejected"    # 거절(끄는 쪽)은 폰 증명만
+
+
+def test_pclink_approval_executes_on_decide(client, monkeypatch):
+    """첫 연락 승인은 요청한 쪽(다른 PC)이 실행할 수 없다 — 결정하면 서버가 바로 실행한다."""
+    from session_manager import approvals, owner2fa
+    from session_manager.pclink import service
+    got = []
+    monkeypatch.setattr(service, "execute_contact", lambda a: got.append(a) or {"granted": True})
+    monkeypatch.setattr(owner2fa, "enabled", lambda: True)
+    monkeypatch.setattr(owner2fa, "verify", lambda c, *a, **k: c == "123456")
+    ap = approvals.create("pclink_contact", {"peer": "0f1e2d3c4b5a6978", "session_id": "s1", "peer_name": "노트북"},
+                          notify=False)
+    r = client.post(f"/api/owner/approvals/{ap['id']}/decide", json={"approve": True, "otp": "123456"})
+    assert r.status_code == 200 and r.json()["status"] == "executed" and r.json()["result"] == {"granted": True}
+    assert got and got[0]["session_id"] == "s1"
+
+
+def test_pclink_approval_execute_failure_stays_approved(client, monkeypatch):
+    from session_manager import approvals, owner2fa
+    from session_manager.pclink import service
+    monkeypatch.setattr(service, "execute_contact", lambda a: (_ for _ in ()).throw(POL.PolicyError("not_allowed", 409)))
+    monkeypatch.setattr(owner2fa, "enabled", lambda: True)
+    monkeypatch.setattr(owner2fa, "verify", lambda c, *a, **k: True)
+    ap = approvals.create("pclink_contact", {"peer": "0f1e2d3c4b5a6978", "session_id": "s1"}, notify=False)
+    r = client.post(f"/api/owner/approvals/{ap['id']}/decide", json={"approve": True, "otp": "1"})
+    assert r.status_code == 409 and r.json()["error"] == "not_allowed" and r.json()["approval"]["status"] == "approved"
