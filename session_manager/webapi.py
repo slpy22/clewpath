@@ -30,6 +30,7 @@ import os
 import shutil
 import subprocess
 import threading
+import time
 import uuid
 
 from session_manager.scanner import scan_one, resolve_launch_cwd, latest_session_id
@@ -308,14 +309,39 @@ async def run_resume_api(ws, session_id: str, skip_permissions: bool = True,
                 pass
 
 
+# PC 사이 묻기(pclink) 격리 인자 — 도구 0개(--tools "")·MCP 0개(--strict-mcp-config: --tools 만으로는 MCP 도구가
+# 남는다)·훅 끔·기록 안 남김. Claude Code 2.1.308·2.1.309(Windows claude.exe) 실측: init tools=[]·mcp_servers=[]·
+# 훅 이벤트 없음·fork jsonl 안 생김.
+_ISOLATED_ARGS = ["--no-session-persistence", "--tools", "", "--strict-mcp-config",
+                  "--settings", '{"disableAllHooks":true}']
+
+
+def _fork_jsonl_exists(fork_id: str) -> bool:
+    """격리 묻기가 끝난 뒤 fork 기록(jsonl)이 실제로 생겼나 — 미래 claude 가 --no-session-persistence 를 무시할 때 대비."""
+    from session_manager import lifecycle
+    try:
+        return any(p.suffix == ".jsonl" for p in lifecycle._related_paths(fork_id))
+    except Exception as e:  # noqa: BLE001
+        print(f"[ask] fork {fork_id[:8]} 기록 확인 실패: {e}")
+        return False
+
+
 def ephemeral_ask(session_id: str, prompt: str, skip_permissions: bool = True,
-                  timeout: int = 300, guardrails: dict | None = None) -> dict:
+                  timeout: int = 300, guardrails: dict | None = None, *,
+                  isolated: bool = False) -> dict:
     """원본 세션을 fork 해서 프롬프트 1턴을 처리하고, fork 를 삭제한 뒤 결과를 반환한다.
 
     원본은 절대 바뀌지 않는다(--fork-session). 일회성 질의에 적합.
     guardrails 는 policy.effective_guardrails() 결과(도구·권한·모델·시스템프롬프트·비용 등).
     동기 함수(FastAPI sync 엔드포인트 → 스레드풀에서 실행됨).
+
+    isolated=True(PC 사이 묻기): 도구·MCP·훅 없는, 기록도 남기지 않는 복제본에 묻는다(_ISOLATED_ARGS).
+    가드레일의 도구 허용/거부·권한 모드와 skip_permissions 는 무시하고 --dangerously-skip-permissions 를 넣지 않는다 —
+    미래 claude 가 --tools "" 를 무시해도 -p 의 권한 거절이 2차 방어. 모델·시스템 프롬프트·비용 한도는 그대로.
+    기록이 없으니 delete_fork 하지 않는다(그래도 jsonl 이 생겼으면 지우고 fork_persisted=True).
+    tool_use 가 하나라도 나오면 isolation_breach=True — 계약 위반이라 호출자가 답을 버린다.
     """
+    from session_manager import lifecycle, osdep
     g = guardrails or {}
     meta = scan_one(session_id)
     cwd = resolve_launch_cwd(meta) if meta else None
@@ -325,19 +351,46 @@ def ephemeral_ask(session_id: str, prompt: str, skip_permissions: bool = True,
 
     fork_id = str(uuid.uuid4())
     exe = shutil.which("claude") or "claude"
+    if isolated and prompt.startswith("-"):
+        prompt = " " + prompt          # 원격 질문이 claude 옵션으로 읽히지 않게(예: "--tools=Bash")
     argv = [exe, "-p", prompt, "--resume", session_id,
             "--fork-session", "--session-id", fork_id,
             "--output-format", "stream-json", "--verbose"]
-    argv += _guardrail_args(g, skip_permissions)
+    if isolated:
+        argv += _ISOLATED_ARGS
+        argv += _guardrail_args({k: g.get(k) for k in ("model", "system_prompt", "max_budget_usd")},
+                                skip_permissions=False)
+    else:
+        argv += _guardrail_args(g, skip_permissions)
 
     answer: list[str] = []
     tool_uses: list[str] = []
     result_text = None
     cost = None
     is_error = False
+    proc = None
+    t0 = time.monotonic()
     try:
-        r = subprocess.run(argv, cwd=cwd, capture_output=True, timeout=timeout)
-        for line in r.stdout.decode("utf-8", "replace").splitlines():
+        proc = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                creationflags=osdep.NO_WINDOW)
+        # 고아 방지: Windows 는 Job Object 편입 — Host 가 어떻게 죽든 이 claude 도 함께 끝난다.
+        osdep.guard_child(proc.pid)
+        try:
+            out, _err = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            is_error = True
+            result_text = f"시간초과({timeout}s)"
+            out = b""
+            try:
+                proc.kill()
+                proc.communicate(timeout=5)          # 파이프를 비우며 거둔다
+            except Exception:  # noqa: BLE001
+                try:
+                    proc.wait(timeout=3)
+                except Exception:  # noqa: BLE001
+                    pass
+        for line in out.decode("utf-8", "replace").splitlines():
             line = line.strip()
             if not line:
                 continue
@@ -356,21 +409,25 @@ def ephemeral_ask(session_id: str, prompt: str, skip_permissions: bool = True,
                 result_text = o.get("result")
                 cost = o.get("total_cost_usd")
                 is_error = bool(o.get("is_error"))
-    except subprocess.TimeoutExpired:
-        is_error = True
-        result_text = f"시간초과({timeout}s)"
     finally:
-        # 프로세스가 끝난 뒤에만 삭제(시간초과로 살아 있으면 kill 뒤 대기). 그래도 살아 있으면 보류(0.9.9 보호).
-        from session_manager import lifecycle
+        duration_s = round(time.monotonic() - t0, 2)
+        # 프로세스가 끝난 뒤에만 정리(예상 밖 예외로 살아 있으면 kill 뒤 대기). 그래도 살아 있으면 보류(0.9.9 보호).
         try:
-            if proc.poll() is None:
+            if proc is not None and proc.poll() is None:
                 proc.kill(); proc.wait(timeout=3)
         except Exception:  # noqa: BLE001
             pass
-        d = lifecycle.delete_fork(fork_id, origin=session_id)
-        fork_deleted = bool(d.get("deleted"))
+        fork_deleted = False
+        fork_persisted = False
+        if not isolated:
+            d = lifecycle.delete_fork(fork_id, origin=session_id)
+            fork_deleted = bool(d.get("deleted"))
+        elif _fork_jsonl_exists(fork_id):             # 기록 안 남김 계약 위반 — 남은 것만 치운다
+            fork_persisted = True
+            d = lifecycle.delete_fork(fork_id, origin=session_id)
+            fork_deleted = bool(d.get("deleted"))
 
-    return {
+    r = {
         "session_id": session_id,
         "fork_id": fork_id,
         "answer": "".join(answer) or result_text,
@@ -379,7 +436,13 @@ def ephemeral_ask(session_id: str, prompt: str, skip_permissions: bool = True,
         "is_error": is_error,
         "tool_uses": tool_uses,
         "fork_deleted": fork_deleted,
+        "duration_s": duration_s,
     }
+    if fork_persisted:
+        r["fork_persisted"] = True
+    if isolated and tool_uses:
+        r["isolation_breach"] = True
+    return r
 
 
 async def _send(ws, obj: dict) -> None:
