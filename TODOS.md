@@ -74,12 +74,14 @@
   ③ 맥에서 설치·start·resume 이 띄운 Host 가 launchd 밖(PPID 1)이라 죽으면 5분 확인이 받고 로그아웃에도 살았다 → launchd 에 맡김(kickstart)
   ④ 재개 창 명령이 Windows 의 `cd /d` 였고 '새 cmd 창' 단추가 맥에도 보였다 · 폰 토큰 경고가 컨트롤플레인이 있어도 나왔다(Windows 설치도)
   → 맥 2회차 확인은 `docs/mac-host-tasks.md` 맨 위 「2회차」(결과는 `mac-3b2` 브랜치)
-- [ ] **맥 이름·권한 창(사장님 결정 대기)** — 로그인 항목·백그라운드 알림에 **"sh"**(plist 의 프로그램이 /bin/sh), 웹 터미널의 claude 가 데스크탑·문서·사진·iCloud 등에 처음 닿을 때 **"python3.11"** 권한 창이 항목마다 떴다(launchd → Host(python) 가 책임 프로세스. uv 파이썬은 adhoc 서명이라 파이썬이 바뀌면 다시 뜰 수 있다). 사장님: "설치 시에 허락돼 버리면 좋겠다" — macOS 는 프로그램이 스스로 권한을 줄 수 없다. 안: (가) 등록 프로그램을 `ClewPath` 라는 작은 스크립트로(로그인 항목 이름만 바뀜) (나) 서명된 `ClewPath.app` 이 Host 를 자식으로 띄워 책임 프로세스가 되게(권한 창 이름이 ClewPath, 업데이트 뒤에도 권한 유지 — Developer ID 서명·공증 필요) (다) 설치 끝에 '전체 디스크 접근' 설정 화면을 열어 안내. 1회차 세션이 홈 폴더라 claude 가 홈 아래를 훑어 창이 많았다
+- [x] **(가) 로그인 항목 이름 'ClewPath'(사장님 결정 2026-10-22: 이름만 지금, 앱은 나중):** launchd 가 데이터 폴더의 `ClewPath` 스크립트(0700, 표식 `clewpath-launchd v1`)를 부른다. 옛 등록(/bin/sh -c)도 uninstall 이 알아본다. 명세 10장. 맥 2회차에서 이름 확인
+- [ ] **(나) 서명된 ClewPath.app — 맥 정식 출시 전 별도 기획(사장님 결정)**: 권한 창 이름을 ClewPath 로, 업데이트 뒤에도 권한 유지. 아래 기록 참고
+- [ ] (기록) **맥 이름·권한 창** — 로그인 항목·백그라운드 알림에 **"sh"**(plist 의 프로그램이 /bin/sh), 웹 터미널의 claude 가 데스크탑·문서·사진·iCloud 등에 처음 닿을 때 **"python3.11"** 권한 창이 항목마다 떴다(launchd → Host(python) 가 책임 프로세스. uv 파이썬은 adhoc 서명이라 파이썬이 바뀌면 다시 뜰 수 있다). 사장님: "설치 시에 허락돼 버리면 좋겠다" — macOS 는 프로그램이 스스로 권한을 줄 수 없다. 안: (가) 등록 프로그램을 `ClewPath` 라는 작은 스크립트로(로그인 항목 이름만 바뀜) (나) 서명된 `ClewPath.app` 이 Host 를 자식으로 띄워 책임 프로세스가 되게(권한 창 이름이 ClewPath, 업데이트 뒤에도 권한 유지 — Developer ID 서명·공증 필요) (다) 설치 끝에 '전체 디스크 접근' 설정 화면을 열어 안내. 1회차 세션이 홈 폴더라 claude 가 홈 아래를 훑어 창이 많았다
 - [ ] (launchd 후속) `osdep._posix.ensure_launcher` 가 plist 도 점검·재등록하게(지금은 런처만 다시 렌더) · `launchd.log` 회전 없음 · 업데이트 러너(CLEWPATH_UPDATER=1)가 다시 띄운 Host 는 아직 launchd 밖 · 제거 뒤 `sfltool dumpbtm` 에 옛 "sh" 항목이 남는다(맥이 정리)
-- [ ] **노트북 이전(서비스 모니터 계획 v0.4.2) 선행 수정 2건 — 사장님 승인 대기(2026-10-22 회신):**
+- [ ] **노트북 이전(서비스 모니터 계획 v0.4.2) 선행 수정 2건 — 사장님 결정 '나중에'(2026-10-22, 이전 시점이 정해지면 다시 결정):**
   ① Host '원격 API 전용' 두 번째 포트(예: 127.0.0.1:5110) — 루프백 신뢰 없이 /api/v1 + 서비스 토큰(cps_)만. 왜: ssh 터널로 들어온 요청은 Host 에 127.0.0.1 로 보여 `_is_local` 이 인증 없이 사장님 권한(owner API·웹 터미널까지)으로 통과시킨다. nklaw 를 노트북으로 옮기는 P3 의 선행 조건. 시작점: `session_manager/server.py` `_is_local`·`AuthASGIMiddleware`, `server.main`(두 번째 리스너). M
   ② 007 CP `/internal/*` 공유 토큰(릴레이가 X-Internal-Token) — 왜: `/internal/rooms/{room}/agent-down·up` 이 무인증이라 CP 에 직접 닿는 쪽은 room 키만 알면 폰에 가짜 '연결 끊김' 웹푸시를 보낼 수 있다(지금은 이 PC 프로세스·컨테이너만 닿음, 노트북 5200 LAN 게시 때 노트북 자신이 더해짐). P4-2 선행 권장. 시작점: 007 `control_plane/api.py:326-354`, `relay/relay.py:154·237·327`. S
-- [ ] 시험이 남긴 '/model' 세션 정리(사장님 결정) — 이 PC `E:\` 폴더 4개(10-21), 맥 `-Volumes-Works-Projects-clewpath` 3개. ClewPath 목록에서 지우거나 숨김 목록에 넣기
+- [ ] 시험이 남긴 '/model' 세션 — **사장님이 ClewPath 화면에서 직접 지우기로(2026-10-22)**: 이 PC `E:\` 폴더 4개(10-21), 맥 `-Volumes-Works-Projects-clewpath` 3개
 - [ ] 키체인(`osdep.protect`/`unprotect` — 지금은 None 이라 데이터 폴더 0700 안 파일) · Terminal.app 재개(`open_resume_terminal`) · Gatekeeper 격리 속성 확인
 - [ ] 맥에서 전체 pytest + 3a e2e 시나리오(명세 6.3) 반복 + 실제 claude 기동·재접속·업데이트 왕복 → 통과하면 릴리스 `platforms` 에 mac
 - [ ] CP `/get.sh` 공개(서비스 모니터 의뢰, 명세 7절): `ops/get.sh` 를 007 `control_plane/get.sh` 로 옮기고 `/get.sh` 라우트·007 `.gitattributes`·007 테스트·nginx `location = /get.sh` · 랜딩·README OS 별 한 줄(리눅스는 '시험용'으로 표시하거나 빼기) — 이때 tests/test_docs_multi_os.py 의 '공개 주소 없음' 시험도 함께 바꾼다
@@ -130,9 +132,9 @@
 - [ ] (검토) 모니터 만료 때 claude 가 bash 만 끝내고 `tail -F | grep` 손자 프로세스는 남김(삼흥 6쌍, 부모 없음·claude.exe 밖) — 정리 기능은 불가침 원칙(ClewPath 가 띄우지 않은 프로세스) 검토 뒤
 - [x] 0.19.4 세션 상세 머리에 태그(#칩 × 빼기 · ＋ 태그: 입력/기존 태그 골라 저장), 목록 위 태그 필터는 유지
 - [x] 0.20.0 정기 작업(docs/designs/housekeeping.md): 쉬는 세션 정리(4시간·세션 잠금 재확인·📌 항상 켜 두기) · 모델 목록 갱신(CP+실사용 합본) · 설정 🧹 화면
-- [ ] (간헐) 전체 테스트에서 test_update_safety::test_apply_concurrency_lock 가 다른 테스트의 배경 스레드 Popen 과 겹쳐 가끔 실패 — 단독·재실행 통과. 원인(posix-install 3·8단계 관찰): 시험이 `updater.subprocess.Popen`(= 표준 subprocess 모듈 그 자체)을 바꿔 끼우는 동안 앞 시험 앱의 orphan-sweep 스레드가 subprocess 를 불러 호출 수가 하나 늘어난다(assert 3 == 2). 고치는 길: updater 안에 Popen 참조를 따로 두거나, 앱 스레드를 멈춘 뒤 패치
+- [ ] (간헐) 전체 테스트에서 test_update_safety::test_apply_concurrency_lock 가 다른 테스트의 배경 스레드 Popen 과 겹쳐 가끔 실패 — 단독·재실행 통과. 원인(posix-install 3·8단계 관찰): 시험이 `updater.subprocess.Popen`(= 표준 subprocess 모듈 그 자체)을 바꿔 끼우는 동안 앞 시험 앱의 orphan-sweep 스레드가 subprocess 를 불러 호출 수가 하나 늘어난다(assert 3 == 2). 고치는 길: updater 안에 Popen 참조를 따로 두거나, 앱 스레드를 멈춘 뒤 패치. 2026-10-22 같은 원인으로 test_updater::test_apply_refuses_while_an_install_holds_the_marker[other-program-False]·[dead-False] 가 Windows 전체 실행에서 한 번씩(`len(calls) == 1`) — 단독 8회 통과
 - [ ] (간헐, 2026-10-13) 전체 테스트가 바쁠 때 test_ptyd::test_webterm_start_restart_adopt_stop 의 adopt 가 0 (브로커 attach 시간 초과 추정), PWA node 테스트도 가끔 — 단독 25회 통과. 릴리스 스크립트가 첫 시도에 자주 멈춤 → 재시도 1회 또는 원인 제거 필요
-- [ ] (간헐, 2026-10-21) 전체 테스트가 5분을 넘으면 test_session_model::test_api_models_list_builtin_fallback 가 'merged' 로 실패 — `create_app()` 이 띄운 정기 작업 스레드(프로세스당 1개, `FIRST_DELAY_S`=300)가
+- [x] (2026-10-22 해결 — 앱을 내리면 정기 작업 줄도 끝낸다(server lifespan `_hk.stop()`), 격리 모드면 화면 읽기 안 함. 같은 줄이 맥·이 PC 에서 진짜 claude 를 띄운 사고의 원인이었다) (간헐, 2026-10-21) 전체 테스트가 5분을 넘으면 test_session_model::test_api_models_list_builtin_fallback 가 'merged' 로 실패 — `create_app()` 이 띄운 정기 작업 스레드(프로세스당 1개, `FIRST_DELAY_S`=300)가
   5분 뒤 모델 목록 합본을 그때의 가짜 홈 `data_dir` 에 쓴다(627초 실행에서 재현, 299초 실행은 통과, 단독 통과). 고치는 길: 시험에선 `housekeeping.start` 를 막거나 conftest 에서 스레드를 멈춤.
   같은 바쁜 실행에서 test_scanner_incremental::test_incremental_is_fast_on_big_file(시간 재기)도 한 번 실패 — 단독 3회 통과
 - [x] CP 내장 모델 목록 9개로(007 01edb9d, 서비스 모니터 재시작 17:56 완료)

@@ -411,6 +411,16 @@ launchd_ours() {   # 0 = [mac] 자동 시작 등록 파일이 있고 이 설치�
   grep -q -F -e "<string>$_le</string>" "$LD_PLIST" 2>/dev/null
 }
 
+launchd_program_remove() {   # 등록 파일이 부르던 데이터 폴더의 프로그램(ClewPath) — 둘째 줄에 우리 표식(hostctl.LAUNCHD_PROGRAM_MARK)이
+  # 있을 때만 지운다(옛 등록 /bin/sh -c 에는 없다 — 그때는 할 일이 없다)
+  _lpg="$DATA_DIR/ClewPath"
+  { [ -f "$_lpg" ] && [ ! -L "$_lpg" ]; } || return 0
+  sed -n 2p "$_lpg" 2>/dev/null | grep -q -F 'clewpath-launchd v1' || return 0
+  rm -f "$_lpg" 2>/dev/null
+  exists "$_lpg" && warn "자동 시작 프로그램을 지우지 못했습니다: $_lpg"
+  return 0
+}
+
 autostart_remove() {   # 8. [mac] 자동 시작(launchd) — 등록 파일이 이 설치본의 런처를 부를 때만 내리고(bootout) 지운다. 다른
   # 설치본의 것은 둔다. maintenance.flag(4)를 만든 뒤라 내리는 사이 launchd 가 부르는 foreground 는 아무것도 띄우지 않는다.
   # [linux] 자동 시작이 없다(systemd --user 는 결정 전)
@@ -427,6 +437,7 @@ autostart_remove() {   # 8. [mac] 자동 시작(launchd) — 등록 파일이 �
     warn "자동 시작 등록 파일을 지우지 못했습니다: $LD_PLIST"
     return 0
   fi
+  launchd_program_remove
   if launchctl print "$_ld" </dev/null >/dev/null 2>&1; then  # 내리지 못했다(SSH 셸 — 로그인한 화면 세션에 닿지 못함 등)
     LD_LOADED=1
     warn "자동 시작 등록 파일은 지웠지만 launchd 에는 아직 올라 있습니다 — 로그아웃하면 사라집니다"

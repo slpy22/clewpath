@@ -47,11 +47,39 @@ LAUNCHD_INTERVAL = 300               # 5분마다 foreground 한 번 — Windows
 LAUNCHD_THROTTLE = 30                # 다시 띄우기 사이 최소 간격(초)
 LAUNCHD_BASE_PATH = ("/usr/bin", "/bin", "/usr/sbin", "/sbin")        # launchd 기본 PATH — 빠져 있으면 뒤에 붙인다
 LAUNCHD_LANG = "en_US.UTF-8"         # 설치 때 LANG 이 UTF-8 이 아니면
-# launchd 가 부르는 명령 — 런처가 있으면 foreground 로 이어 가고(exec, pid 그대로), 없으면(설치 폴더를 손으로 지움) 0 으로 끝낸다.
-# 0 이 아닌 종료는 KeepAlive 가 30초마다 다시 부르는 신호라, 그대로 `/bin/sh <런처>` 를 부르면 런처가 없어진 뒤로 sh 가 127 로
-# 끝나며 plist 가 남아 있는 한(로그인할 때마다) 쉼 없이 돈다
-LAUNCHD_WRAPPER = '[ -f "$1" ] || exit 0; exec /bin/sh "$1" foreground'
-LAUNCHD_ARGV0 = "clewpath-launchd"   # sh -c 의 $0 — ps 에서 알아보게
+# launchd 가 부르는 프로그램 — 데이터 폴더의 작은 스크립트 'ClewPath'. 로그인 항목·'백그라운드 항목 추가됨' 알림에 프로그램 파일
+# 이름이 보인다(맥 실기 3b: /bin/sh 를 바로 부르니 "sh" 로 보였다). 자리는 데이터 폴더 — plist 가 이미 거기 launchd.log 를 쓰니
+# 없어질 곳이 하나 더 늘지 않는다. 런처가 있으면 foreground 로 이어 가고(exec, pid 그대로), 없으면(설치 폴더를 손으로 지움) 0 으로
+# 끝낸다. 0 이 아닌 종료는 KeepAlive 가 30초마다 다시 부르는 신호라, 그대로 `/bin/sh <런처>` 를 부르면 런처가 없어진 뒤로 sh 가
+# 127 로 끝나며 plist 가 남아 있는 한(로그인할 때마다) 쉼 없이 돈다. 둘째 줄의 표식은 uninstall 이 '우리 것'인지 보는 글자다
+LAUNCHD_PROGRAM = "ClewPath"
+LAUNCHD_PROGRAM_MARK = "clewpath-launchd v1"
+LAUNCHD_PROGRAM_BODY = (
+    "#!/bin/sh\n"
+    f"# {LAUNCHD_PROGRAM_MARK} — ClewPath Host 자동 시작(launchd 가 부른다). 로그인 항목에 이 파일 이름이 보인다\n"
+    "# 런처가 있으면 foreground 로 이어 가고(exec — pid 그대로), 없으면(설치 폴더를 손으로 지움) 0 으로 끝낸다\n"
+    '[ -f "$1" ] || exit 0\n'
+    'exec /bin/sh "$1" foreground\n'
+)
+
+
+def launchd_program(data_dir: str) -> str:
+    """launchd 가 부르는 프로그램(데이터 폴더의 ClewPath) 경로."""
+    return f"{data_dir.rstrip('/') or ''}/{LAUNCHD_PROGRAM}"
+
+
+def write_launchd_program(data_dir: str) -> str:
+    """ClewPath 프로그램을 쓴다(0700, 원자적) → "created" | "updated" | "unchanged"."""
+    p = Path(launchd_program(data_dir))
+    body = LAUNCHD_PROGRAM_BODY.encode("utf-8")
+    try:
+        old = p.read_bytes() if p.is_file() and not p.is_symlink() else None
+    except OSError:
+        old = None
+    if old == body and stat.S_IMODE(p.stat().st_mode) == 0o700:
+        return "unchanged"
+    _atomic_write(p, body, 0o700)
+    return "updated" if old is not None else "created"
 
 
 class HostctlError(Exception):
@@ -331,14 +359,15 @@ def launchd_plist(root: str, data_dir: str, *, path_env: str | None, lang: str |
       그대로(launchd 기본값과 다르면 Host 안의 claude 가 만드는 파일 권한이 달라진다).
     - WorkingDirectory 는 두지 않는다: 런처는 제 경로($0)로 설치 루트를 찾고 Host 를 띄우기 직전에 그리로 옮겨 간다. 두면 설치
       폴더를 손으로 지웠을 때 launchd 가 작업을 띄우지조차 못할 수 있어(chdir 실패 — 맥 확인 거리) 런처 없음 → 0 으로 끝내는
-      감싸개가 소용없어진다.
+      프로그램(ClewPath)이 소용없어진다.
+    - 프로그램은 데이터 폴더의 ClewPath(write_launchd_program) — 로그인 항목에 그 파일 이름이 보인다(/bin/sh 면 "sh").
     - 출력: foreground 셸 단계의 말만 launchd.log 로 — exec 한 Host 는 런처가 host.log·host.err.log 로 돌린다(start 와 같다).
     """
     root = root.rstrip("/") or "/"
     data_dir = data_dir.rstrip("/") or "/"
     doc = {
         "Label": LAUNCHD_LABEL,
-        "ProgramArguments": ["/bin/sh", "-c", LAUNCHD_WRAPPER, LAUNCHD_ARGV0, f"{root}/start-connector.sh"],
+        "ProgramArguments": [launchd_program(data_dir), f"{root}/start-connector.sh"],
         "RunAtLoad": True,
         "KeepAlive": {"SuccessfulExit": False},
         "StartInterval": LAUNCHD_INTERVAL,
@@ -390,6 +419,12 @@ def cmd_render_launchd(a) -> int:
         raise HostctlError(f"런처가 없어 자동 시작을 등록하지 않습니다(먼저 render-launcher): {launcher}") from e
     if len(head) < 2 or "clewpath-launcher v2 (posix)" not in head[1]:
         raise HostctlError(f"멱등 런처(clewpath-launcher v2)가 아니라 자동 시작을 등록하지 않습니다: {launcher}")
+    try:                                                            # plist 보다 먼저 — 올라가자마자 RunAtLoad 가 부른다
+        prog = write_launchd_program(a.data_dir)
+    except OSError as e:
+        raise HostctlError(f"자동 시작 프로그램을 쓸 수 없습니다: {launchd_program(a.data_dir)} ({e})") from e
+    if prog != "unchanged":
+        ok(f"자동 시작 프로그램 {'생성' if prog == 'created' else '갱신'}: {launchd_program(a.data_dir)}")
     doc = launchd_plist(root, a.data_dir, path_env=os.environ.get("PATH"), lang=os.environ.get("LANG"),
                         umask=_current_umask() if os.name == "posix" else None)
     new = plistlib.dumps(doc, fmt=plistlib.FMT_XML, sort_keys=True)

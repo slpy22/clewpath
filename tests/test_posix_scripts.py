@@ -764,6 +764,10 @@ def test_launchd_names_agree():
             code = line.split("#", 1)[0] if not line.lstrip().startswith("#") else ""
             if "LaunchAgents" in code:
                 assert '"$HOME/Library/LaunchAgents/$LAUNCHD_LABEL.plist"' in code, f"{name}:{i}: {line.strip()}"
+    # 자동 시작 프로그램(데이터 폴더의 ClewPath) — uninstall 이 같은 자리·같은 표식(둘째 줄)으로 '우리 것'을 알아본다
+    u = _text("uninstall.sh")
+    assert f'_lpg="$DATA_DIR/{hostctl.LAUNCHD_PROGRAM}"' in u and f"'{hostctl.LAUNCHD_PROGRAM_MARK}'" in u
+    assert hostctl.LAUNCHD_PROGRAM_MARK in hostctl.LAUNCHD_PROGRAM_BODY.splitlines()[1]
 
 
 def test_e2e_harness_never_touches_release_keys_or_production():

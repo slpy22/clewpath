@@ -471,8 +471,7 @@ def test_launchd_plist_contents():
                               lang="ko_KR.UTF-8", umask=0o022)
     assert d == {
         "Label": "com.clewpath.host",
-        "ProgramArguments": ["/bin/sh", "-c", '[ -f "$1" ] || exit 0; exec /bin/sh "$1" foreground', "clewpath-launchd",
-                             f"{MAC_ROOT}/start-connector.sh"],
+        "ProgramArguments": [f"{MAC_DATA}/ClewPath", f"{MAC_ROOT}/start-connector.sh"],   # 로그인 항목에 'ClewPath'(맥 3b)
         "RunAtLoad": True, "KeepAlive": {"SuccessfulExit": False}, "StartInterval": 300, "ThrottleInterval": 30,
         "AbandonProcessGroup": True, "ProcessType": "Interactive",
         "EnvironmentVariables": {"PATH": "/opt/homebrew/bin:/Users/u/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
@@ -482,7 +481,7 @@ def test_launchd_plist_contents():
     assert hostctl.LAUNCHD_PLIST == "Library/LaunchAgents/com.clewpath.host.plist"
     trimmed = hostctl.launchd_plist(MAC_ROOT + "/", MAC_DATA + "/", path_env=None, lang=None, umask=None)
     assert "Umask" not in trimmed
-    assert trimmed["ProgramArguments"][-1] == f"{MAC_ROOT}/start-connector.sh", "끝의 / 는 걷어 낸다"
+    assert trimmed["ProgramArguments"] == [f"{MAC_DATA}/ClewPath", f"{MAC_ROOT}/start-connector.sh"], "끝의 / 는 걷어 낸다"
     assert trimmed["StandardOutPath"] == f"{MAC_DATA}/launchd.log"
 
 
@@ -547,14 +546,22 @@ def test_render_launchd_writes_0644_atomically_once(home, capsys, monkeypatch, t
         assert stat.S_IMODE(plist.stat().st_mode) == 0o644, "launchd 는 남이 쓸 수 있는 plist 를 거부한다"
         assert stat.S_IMODE(plist.parent.stat().st_mode) == 0o755
         d = plistlib.loads(plist.read_bytes())
-        assert d["ProgramArguments"][-1] == f"{root}/start-connector.sh" and "WorkingDirectory" not in d
+        prog = data / "ClewPath"                        # 로그인 항목에 보이는 이름(맥 3b: /bin/sh 면 "sh")
+        assert d["ProgramArguments"] == [str(prog), f"{root}/start-connector.sh"] and "WorkingDirectory" not in d
+        assert prog.read_text(encoding="utf-8") == hostctl.LAUNCHD_PROGRAM_BODY and stat.S_IMODE(prog.stat().st_mode) == 0o700
+        assert "자동 시작 프로그램 생성" in err
         assert d["EnvironmentVariables"] == {
             "PATH": f"/opt/homebrew/bin:{home}/.local/bin:/usr/bin:/bin:/usr/sbin:/sbin", "LANG": "ko_KR.UTF-8"}
         assert d["StandardOutPath"] == d["StandardErrorPath"] == str(data / "launchd.log") and d["Umask"] == 0o027
         assert sorted(p.name for p in plist.parent.iterdir()) == [plist.name], "임시 파일이 남지 않는다"
         raw = plist.read_bytes()
-        rc, kv, _ = run(capsys, *_launchd_args(root, data, plist))
-        assert rc == 0 and kv["launchd"] == "unchanged" and plist.read_bytes() == raw
+        rc, kv, err = run(capsys, *_launchd_args(root, data, plist))
+        assert rc == 0 and kv["launchd"] == "unchanged" and plist.read_bytes() == raw and "자동 시작 프로그램" not in err
+        prog.write_text("#!/bin/sh\nexit 3\n", encoding="utf-8")       # 망가진 프로그램은 다시 쓴다
+        os.chmod(prog, 0o755)
+        rc, kv, err = run(capsys, *_launchd_args(root, data, plist))
+        assert rc == 0 and "자동 시작 프로그램 갱신" in err and prog.read_text(encoding="utf-8") == hostctl.LAUNCHD_PROGRAM_BODY
+        assert stat.S_IMODE(prog.stat().st_mode) == 0o700
         # 바꿔 쓰다 실패하면(교체 직전) 옛 파일 그대로, 임시 파일도 없다(원자적)
         real_replace = os.replace
 
@@ -606,6 +613,7 @@ def test_render_launchd_needs_the_idempotent_launcher(home, capsys, tmp_path, la
     rc, kv, err = run(capsys, *_launchd_args(root, home / ".claude" / "session_manager", plist))
     assert rc == 1 and kv == {} and "[FAIL]" in err and "런처" in err
     assert not plist.exists() and not plist.parent.exists()
+    assert not (home / ".claude" / "session_manager" / "ClewPath").exists(), "자동 시작 프로그램도 쓰지 않는다"
 
 
 @pytest.mark.parametrize("bad", ["root", "data", "plist", "ctrl"])
@@ -629,8 +637,11 @@ def test_launchd_wrapper_runs_the_launcher_or_quietly_ends(tmp_path, present, rc
     if present:
         launcher.parent.mkdir()
         launcher.write_text('printf "%s\\n" "$0" "$@" >"$(dirname "$0")/argv"\nexit 7\n', encoding="utf-8")
-    argv = hostctl.launchd_plist(str(launcher.parent), "/d", path_env=None, lang=None, umask=None)["ProgramArguments"]
-    r = subprocess.run(argv, capture_output=True, timeout=30)
+    data = tmp_path / "data x"
+    assert hostctl.write_launchd_program(str(data)) == "created"
+    argv = hostctl.launchd_plist(str(launcher.parent), str(data), path_env=None, lang=None, umask=None)["ProgramArguments"]
+    assert argv[0] == str(data / "ClewPath")
+    r = subprocess.run(argv, capture_output=True, timeout=30)                    # launchd 처럼 프로그램을 바로 exec
     assert r.returncode == rc, r.stderr.decode("utf-8", "replace")
     if present:
         assert (launcher.parent / "argv").read_text(encoding="utf-8").splitlines() == [str(launcher), "foreground"]

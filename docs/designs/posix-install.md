@@ -1558,8 +1558,14 @@ pytest 연결: `tests/test_posix_e2e.py`(`@pytest.mark.posix_e2e`, docker가 없
 
 - **등록 파일:** `~/Library/LaunchAgents/com.clewpath.host.plist`, Label `com.clewpath.host`. hostctl `render-launchd` 가 plistlib 으로 0644·원자적으로 쓴다.
   멱등 런처(v2)를 확인한 뒤에만 쓴다(S22). 다른 설치본의 등록을 덮을 때는 경고한다(설치본은 사용자당 하나 전제).
-  - `ProgramArguments`: `/bin/sh -c '[ -f "$1" ] || exit 0; exec /bin/sh "$1" foreground' clewpath-launchd <ROOT>/start-connector.sh`.
+  - `ProgramArguments`: `<DATA_DIR>/ClewPath <ROOT>/start-connector.sh`. `ClewPath` 는 render-launchd 가 plist 보다 먼저 쓰는 작은 sh 스크립트(0700,
+    둘째 줄 표식 `clewpath-launchd v1`)로, 내용은 `[ -f "$1" ] || exit 0; exec /bin/sh "$1" foreground` 다.
     설치 폴더를 손으로 지웠을 때 0 으로 끝내, KeepAlive 가 30초마다 끝없이 다시 부르지 않게 한다. `WorkingDirectory` 는 두지 않는다(같은 경우 chdir 실패).
+    - 왜 프로그램 파일인가(맥 실기 3b, 사장님 결정 2026-10-22): 로그인 항목·'백그라운드 항목 추가됨' 알림에 plist 가 부르는 프로그램의 파일 이름이 보인다.
+      1회차는 `/bin/sh` 를 바로 불러 "sh" 로 보였다. 권한 창의 "python3.11" 은 이것으로 바뀌지 않는다(책임 프로세스가 Host 파이썬 — 서명된 ClewPath.app 은 후속).
+    - 왜 데이터 폴더인가: plist 가 이미 거기 launchd.log 를 쓴다. 설치 폴더·CLEWPATH_HOME 에 두면 그 폴더를 손으로 지웠을 때 launchd 가 프로그램을 못 찾아
+      30초마다 실패를 되풀이한다.
+    - uninstall 은 제 등록을 내린 뒤 표식이 있는 `ClewPath` 만 지운다. 1회차 모양(`/bin/sh -c …`)의 등록도 제 것으로 알아본다(런처 경로로 판정).
   - `RunAtLoad` true · `KeepAlive {SuccessfulExit: false}` · `StartInterval` 300 · `ThrottleInterval` 30 · `AbandonProcessGroup` true · `ProcessType` Interactive.
   - `EnvironmentVariables` 는 PATH(설치 때의 절대 경로 조각, 중복 없이 + 시스템 기본)와 LANG(UTF-8 이 아니면 en_US.UTF-8) 둘뿐이다. `Umask` 는 설치 때 셸의 값이다(S38).
   - `StandardOutPath`·`StandardErrorPath`: `<DATA_DIR>/launchd.log`(foreground 셸 단계 출력. Host 출력은 host.log).

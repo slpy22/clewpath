@@ -17,9 +17,10 @@
 | 관찰 3 — launchd 밖에서 뜬 Host | 맥에서 설치·`start`·`resume` 이 launchd 에 맡긴다(`launchctl kickstart`). Host 가 늘 launchd 작업 자신이다 | R3 |
 | 관찰 2 — 폰 토큰 경고 | 컨트롤플레인이 있으면 경고하지 않는다 | R3 |
 | 관찰 1 — 재개 | 재개 창의 명령이 맥 셸 문법(`cd '…'`)이다. 맥에서는 '새 cmd 창에서 실행' 단추가 없다 | R4 |
-| 이슈 3 — "sh"·"python3.11" 이름과 권한 창 | **이번에는 바꾸지 않았다**(사장님 결정 대기) | — |
+| 이슈 3 — 로그인 항목 "sh" | launchd 가 데이터 폴더의 `ClewPath` 스크립트를 부른다 → 로그인 항목·알림에 'ClewPath' 로 보여야 한다 | R3 |
+| 이슈 3 — 권한 창 "python3.11" | **이번에는 바꾸지 않았다**(사장님 결정: 서명된 ClewPath.app 은 맥 정식 출시 전에 따로 기획) | — |
 
-1회차가 남긴 '/model' 세션 3개(`~/.claude/projects/-Volumes-Works-Projects-clewpath/`)는 그대로 둔다(사장님이 정한다).
+1회차가 남긴 '/model' 세션 3개(`~/.claude/projects/-Volumes-Works-Projects-clewpath/`)는 사장님이 ClewPath 화면에서 직접 지우신다 — 맥 측 Claude 는 손대지 않는다.
 
 ### R0 준비 (아무것도 바꾸지 않음)
 
@@ -61,7 +62,12 @@ APP="$HOME/Library/Application Support/ClewPath/app"
 cd "$APP" && sh uninstall.sh                         # 확인 질문에 y (1회차처럼 /dev/tty 로 묻는다)
 mkdir -p "$APP" && cd "$APP" && unzip -q /tmp/clewpath-host.zip && sh install.sh 2>&1 | tee /tmp/clewpath-install2.log
 grep -c "폰 접속 토큰" /tmp/clewpath-install2.log      # 0 이어야(관찰 2)
+plutil -p ~/Library/LaunchAgents/com.clewpath.host.plist | grep -A3 ProgramArguments   # 첫 항목이 ~/.claude/session_manager/ClewPath
+ls -l ~/.claude/session_manager/ClewPath                                               # -rwx------
+sfltool dumpbtm 2>/dev/null | grep -B3 -A12 'com.clewpath.host'                        # Name 이 ClewPath 인지(옛 "sh" 항목이 남았는지도)
 ```
+- 설치 때 '백그라운드 항목 추가됨' 알림이 뜨면 그 문구를 그대로 적는다("ClewPath" 여야). 시스템 설정 → 일반 → 로그인 항목에 보이는 이름도 적는다(사장님께 부탁).
+- 1회차 "sh" 항목이 함께 남아 보이면 그대로 적는다(지우지 않는다 — macOS 가 정리하는지 본다).
 
 각 단계에서 `sh start-connector.sh status` 의 pid 와 `launchctl print "gui/$(id -u)/com.clewpath.host" | grep -E "^\s*(state|pid|runs|last exit code) ="` 를 적는다.
 **이번 기대는 늘 'status 의 pid = launchctl 의 pid'** 다(Host 가 launchd 작업 자신).

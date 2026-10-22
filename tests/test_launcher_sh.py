@@ -1255,6 +1255,7 @@ def _mac(inst, *, plist_root: Path | None = None, loaded: bool = True, darwin: b
     lctl.mkdir(exist_ok=True)
     raw = plistlib.dumps(hostctl.launchd_plist(str(plist_root or inst.root), str(inst.data), path_env=os.environ["PATH"],
                                                lang="C.UTF-8", umask=0o022))
+    hostctl.write_launchd_program(str(inst.data))          # 등록 파일이 부르는 데이터 폴더의 ClewPath(render-launchd 와 같다)
     plist = inst.home / hostctl.LAUNCHD_PLIST
     plist.parent.mkdir(parents=True, exist_ok=True)
     plist.write_bytes(raw)

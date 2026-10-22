@@ -363,6 +363,7 @@ def test_update_started_while_asking_is_seen_after_the_flag(box, held):
 def _plist_for(box, root: Path, loaded: bool = True) -> bytes:
     """install.sh(hostctl render-launchd)가 쓰는 모양의 등록 파일 — root 의 런처를 부른다. loaded 면 launchd 에 올라 있는 상태."""
     raw = plistlib.dumps(hostctl.launchd_plist(str(root), str(box.data), path_env=None, lang=None, umask=None))
+    hostctl.write_launchd_program(str(box.data))           # 등록 파일이 부르는 데이터 폴더의 ClewPath(render-launchd 와 같다)
     box.plist.parent.mkdir(parents=True, exist_ok=True)
     box.plist.write_bytes(raw)
     if loaded:
@@ -381,8 +382,28 @@ def test_mac_unloads_and_removes_its_autostart_after_the_flag(mac):
     out = _out(r)
     assert r.returncode == 0 and "[OK]   자동 시작(launchd) 해제" in out and "=== 제거 완료 ===" in out, out
     assert not mac.plist.exists() and not mac.root.exists()
+    assert not (mac.data / "ClewPath").exists() and mac.data.is_dir(), "등록 파일이 부르던 프로그램도 지운다(데이터는 남김)"
     label = f"gui/{os.getuid()}/com.clewpath.host"
     assert mac.launchctl() == [["F", "bootout", label], ["F", "print", label]], mac.launchctl()
+
+
+def test_mac_removes_the_old_sh_registration_and_keeps_a_foreign_program(mac):
+    """3b 1회차 설치본의 옛 등록(/bin/sh -c 감싸개 — 프로그램 파일 없음)도 제 것으로 알아보고 지운다. 데이터 폴더의 ClewPath 가
+    우리 표식(둘째 줄)이 없으면 남의 파일이라 둔다."""
+    _lay(mac)
+    old = hostctl.launchd_plist(str(mac.root), str(mac.data), path_env=None, lang=None, umask=None)
+    old["ProgramArguments"] = ["/bin/sh", "-c", '[ -f "$1" ] || exit 0; exec /bin/sh "$1" foreground', "clewpath-launchd",
+                               str(mac.root / "start-connector.sh")]
+    raw = plistlib.dumps(old)
+    mac.plist.parent.mkdir(parents=True, exist_ok=True)
+    mac.plist.write_bytes(raw)
+    Path(f"{mac.lctl_log}.loaded").write_bytes(raw)
+    mac.data.mkdir(parents=True, exist_ok=True)
+    (mac.data / "ClewPath").write_text("#!/bin/sh\n# 사용자가 둔 다른 파일\n", encoding="utf-8")
+    r = mac.uninstall("--yes")
+    out = _out(r)
+    assert r.returncode == 0 and "[OK]   자동 시작(launchd) 해제" in out and not mac.plist.exists(), out
+    assert (mac.data / "ClewPath").read_text(encoding="utf-8").endswith("다른 파일\n"), "표식 없는 파일은 둔다"
 
 
 @pytest.mark.parametrize("other", ["/Users/x/other/app", "@ROOT@2", "/x@ROOT@"])
@@ -398,6 +419,7 @@ def test_mac_keeps_another_installs_autostart(mac, other, venv):
     out = _out(r)
     assert r.returncode == 0 and "이 설치본의 것이 아니라" in out and not mac.root.exists(), out
     assert mac.plist.read_bytes() == raw and mac.launchctl() == []
+    assert (mac.data / "ClewPath").is_file(), "남의 등록이 부르는 프로그램도 그대로"
 
 
 def test_mac_reads_its_own_plist_without_the_venv(mac):

@@ -1089,7 +1089,7 @@ launchd_install() {   # [mac] ~/Library/LaunchAgents/com.clewpath.host.plist —
     return 0
   fi
   if [ "$DRY_RUN" = 1 ]; then
-    warn "DryRun: 자동 시작(launchd) 등록 건너뜀 — 할 일: $_lp 작성, launchctl bootout $_ld/$LAUNCHD_LABEL, launchctl bootstrap $_ld $(shq "$_lp")"
+    warn "DryRun: 자동 시작(launchd) 등록 건너뜀 — 할 일: $DATA_DIR/ClewPath·$_lp 작성, launchctl bootout $_ld/$LAUNCHD_LABEL, launchctl bootstrap $_ld $(shq "$_lp")"
     return 0
   fi
   if ! hostctl "$I_TMP/launchd.out" render-launchd --root "$ROOT" --data-dir "$DATA_DIR" --plist "$_lp"; then

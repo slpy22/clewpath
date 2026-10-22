@@ -1372,7 +1372,9 @@ def test_mac_install_registers_launchd_after_the_launcher(mac):
     assert _mode(mac.plist) == 0o644 and _mode(mac.plist.parent) == 0o755
     d = plistlib.loads(mac.plist.read_bytes())
     launcher = mac.root / _posix.START_SCRIPT
-    assert d["ProgramArguments"] == ["/bin/sh", "-c", hostctl.LAUNCHD_WRAPPER, "clewpath-launchd", str(launcher)]
+    prog = mac.data / "ClewPath"                      # 로그인 항목에 보이는 이름(맥 3b: /bin/sh 를 바로 부르면 "sh")
+    assert d["ProgramArguments"] == [str(prog), str(launcher)]
+    assert prog.read_text(encoding="utf-8") == hostctl.LAUNCHD_PROGRAM_BODY and _mode(prog) == 0o700
     assert d["StandardOutPath"] == d["StandardErrorPath"] == str(mac.data / "launchd.log")
     assert d["EnvironmentVariables"] == {"PATH": hostctl.launchd_path(mac.env()["PATH"]), "LANG": "C.UTF-8"}
     assert d["Umask"] == _umask() and d["RunAtLoad"] is True and d["StartInterval"] == 300
