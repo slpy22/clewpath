@@ -1,11 +1,56 @@
-# 맥 측 작업 지시 — ClewPath Host 맥 실기(3b) (1회차 2026-10-21, 2회차 2026-10-22)
+# 맥 측 작업 지시 — ClewPath Host 맥 실기(3b) (1회차 2026-10-21, 2회차 2026-10-22, 3회차~)
 
 > 이 문서는 Windows 측(주 개발)이 맥 측 Claude 에게 전달하는 작업 지시서다. 앱 빌드 지시서 `docs/mac-build-tasks.md` 와 같은 방식이다.
-> **고치지 말고 보고만 한다.** 실패가 나와도 코드를 고치지 않는다. 무엇이 어떻게 실패했는지만 남긴다. 수리는 Windows 측이 한다.
-> **지금 할 일은 바로 아래 「2회차」뿐이다.** 그 아래 M0~M6 은 1회차 전체 절차(참고·다음에 처음부터 다시 할 때)다.
-> 아래 「지킬 것」은 2회차에도 그대로다.
+> **3회차부터는 맥 측이 직접 고치고 시험한다.** 규칙은 `docs/mac-dev-loop.md` — 브랜치 `mac/<주제>`, main 에 올리지 않음,
+> 올리기 전 맥 전체 시험 실패 0, 공통 코드를 바꿨으면 보고서에 적는다. (1·2회차는 「고치지 말고 보고만」이었다.)
+> **지금 할 일은 바로 아래 「3회차」뿐이다.** 2회차 R0~R6 과 1회차 M0~M6 은 참고·다시 할 때의 절차다.
+> 아래 「지킬 것」은 그대로다.
 
-## 2회차(3b-2) — 지금 할 일
+## 3회차(3b-3) — 지금 할 일 (맥에서 직접 고친다)
+
+`docs/mac-dev-loop.md` 를 먼저 읽는다. 2회차 결과(`docs/mac-results/3b2-20261022.md`)로 Windows 측이 고친 것은 main 에 있다.
+
+| 2회차 | Windows 측이 고친 것 |
+|---|---|
+| 이슈 A — 옛 화면 `/legacy` 가 API 를 `/legacy/api/…` 로 불러 404, 재개 창이 틀림 | 주소 계산이 끝의 `/legacy` 를 뗀다(`terminal.html` 과 같은 방식). 응답이 실패면 재개 창을 열지 않고 알린다. node 시험 `tests/pwa/legacy-ui.test.mjs` |
+| 관찰 2 — `test_mac_start_leaves_launchd_alone[linux]` | 그 경우의 가짜 uname 이 Linux 를 낸다 |
+| 이슈 B — 데이터 폴더의 `clewpath.toml` 이 사라짐 | **원인 못 찾음 → T2.** 리눅스 컨테이너의 진짜 홈에 표식 파일을 두고 전체 시험(1,446건)을 돌렸는데 하나도 지워지지 않았다. 제품 코드에도 그 파일만 지우는 곳은 없다(제거는 `--purge-data` 때 폴더째뿐). 대신 시험마다 진짜 데이터 폴더의 `clewpath.toml`·`cp_credentials.json`·`devices.json` 이 그대로인지 보는 가드를 `tests/conftest.py` 에 넣었다 |
+| 관찰 1·7 — 웹 터미널 안의 Claude 가 제거 때 끝남, `sfltool` 암호 창 | 규칙에 적었다(터미널 앱에서 돌림, `sfltool dumpbtm` 쓰지 않음) |
+
+### T1 확인
+
+1. `git checkout main && git pull && git log --oneline -1`
+2. 맥 전체 시험(`docs/mac-dev-loop.md` 4-3) — 실패 0 이어야 한다. 시험 전후로 데이터 폴더 목록을 남긴다(T2 에 쓴다):
+   ```bash
+   ls -la ~/.claude/session_manager > /tmp/sm-before.txt      # 이름·크기·시각만(내용은 열지 않는다)
+   # … 전체 시험 …
+   ls -la ~/.claude/session_manager > /tmp/sm-after.txt; diff /tmp/sm-before.txt /tmp/sm-after.txt
+   ```
+3. 새 코드로 다시 설치한다(2회차 R3 의 zip → 제거 → 설치). 그다음 사장님과 `http://127.0.0.1:5100/legacy` → 세션 하나 → 재개:
+   창의 명령이 `cd … && claude --resume …`(경로에 공백이 있으면 `cd '…'`)이고 '새 cmd 창에서 실행' 단추가 없어야 한다.
+   `tail -100 ~/.claude/session_manager/host.log | grep -c '/legacy/api/'` 가 0 이어야 한다.
+
+### T2 이슈 B 원인 — 맥에서 끝까지
+
+2회차 기록: 10:40 재설치는 "기존 설정 파일 유지", 12:44 설치는 "설정 파일 생성". 그 사이에 사장님의 세션 정리(휴지통 11:48),
+R2 자동 시험(12:20–12:32), 끊긴 1차 제거(12:33)가 있었다. 모두 **읽기만** 해서 좁힌다:
+
+1. T1-2 전체 시험에서 「시험이 진짜 데이터 폴더의 파일을 지웠습니다」가 나오면 그 시험이 범인이다 → 고친다(규칙 3·4).
+   가드가 안 울리고 `diff` 에도 변화가 없으면 시험은 아니다.
+2. 기록에서 그 파일이 언제 없어졌는지 좁힌다: Host 는 뜰 때 설정 파일 값을 env 로 펼친 것이 있으면 `[config] <경로> 적용: …` 을 찍는다
+   (`server.main`). 먼저 지금 기동에서 이 줄이 찍히는지 본다 — 찍히면 `launcher.log`(시각 있음)의 기동 줄과 `host.log`·`launchd.log` 의
+   `[config]` 줄을 맞춰 10:40 이후 어느 기동부터 그 줄이 없는지 본다. 지금도 안 찍히면 이 방법은 쓸 수 없다고 적고 넘어간다.
+3. 1·2회차 맥 측 Claude 자신의 세션 기록(`~/.claude/projects/-Volumes-Works-Projects-clewpath/*.jsonl`)에서 `clewpath.toml`·`session_manager` 를
+   건드린 명령(`rm`·`mv`·`unzip`·`>` 등)을 찾는다. 읽기만 한다.
+4. ClewPath 화면에서 세션을 지우는 재현이 필요하면 지울 세션을 사장님께 정해 달라고 한다. 제거를 중간에 끊는 재현은 사장님께 먼저 묻는다.
+5. 재현되지 않으면 해 본 것과 결과만 적고 멈춘다. 짐작으로 고치지 않는다(가드가 다음에 잡는다).
+
+### T3 보고
+
+브랜치 `mac/3b3` 에 `docs/mac-results/3b3-YYYYMMDD.md`(규칙 7). T2 에서 코드를 고쳤으면 같은 브랜치에 커밋한다.
+사장님께 한 줄: "맥 3회차를 mac/3b3 브랜치에 올렸습니다 — 확인 통과 N·실패 M, 이슈 B: <한 줄>, 공통 코드 변경 있음/없음"
+
+## 2회차(3b-2) — 참고(끝남, 결과 `docs/mac-results/3b2-20261022.md`)
 
 1회차 결과(`docs/mac-results/3b-20261022.md`)로 고친 것을 이 맥에서 확인한다. R0~R6 을 순서대로 한다.
 
@@ -64,8 +109,8 @@ mkdir -p "$APP" && cd "$APP" && unzip -q /tmp/clewpath-host.zip && sh install.sh
 grep -c "폰 접속 토큰" /tmp/clewpath-install2.log      # 0 이어야(관찰 2)
 plutil -p ~/Library/LaunchAgents/com.clewpath.host.plist | grep -A3 ProgramArguments   # 첫 항목이 ~/.claude/session_manager/ClewPath
 ls -l ~/.claude/session_manager/ClewPath                                               # -rwx------
-sfltool dumpbtm 2>/dev/null | grep -B3 -A12 'com.clewpath.host'                        # Name 이 ClewPath 인지(옛 "sh" 항목이 남았는지도)
 ```
+- `sfltool dumpbtm` 은 쓰지 않는다 — 관리자 암호 창이 뜬다(2회차 관찰 7). 로그인 항목 이름은 사장님께 화면으로 확인을 부탁한다.
 - 설치 때 '백그라운드 항목 추가됨' 알림이 뜨면 그 문구를 그대로 적는다("ClewPath" 여야). 시스템 설정 → 일반 → 로그인 항목에 보이는 이름도 적는다(사장님께 부탁).
 - 1회차 "sh" 항목이 함께 남아 보이면 그대로 적는다(지우지 않는다 — macOS 가 정리하는지 본다).
 
@@ -85,9 +130,9 @@ sfltool dumpbtm 2>/dev/null | grep -B3 -A12 'com.clewpath.host'                 
 
 ```bash
 SID=$(ls -t ~/.claude/projects/*/*.jsonl | head -1 | xargs basename | sed 's/\.jsonl$//')
-curl -s "http://127.0.0.1:5100/api/sessions/$SID/resume-command"; echo     # "shell":"sh", "can_launch":false, full_command 이 "cd '" 로 시작
+curl -s "http://127.0.0.1:5100/api/sessions/$SID/resume-command"; echo     # "shell":"sh", "can_launch":false, full_command 이 "cd " 로 시작(경로에 공백·특수문자가 있을 때만 작은따옴표 — shlex 식)
 ```
-- 브라우저 `http://127.0.0.1:5100` → 세션 하나 → 재개: 창의 명령이 `cd '…' && claude --resume …` 꼴인지(`cd /d` 가 아님), '새 cmd 창에서 실행' 단추가 없는지 본다. '🌐 브라우저에서 재개'는 1회차처럼 열려야 한다.
+- 브라우저 `http://127.0.0.1:5100/legacy`(옛 화면 — 재개 창은 여기에 있다) → 세션 하나 → 재개: 창의 명령이 `cd '…' && claude --resume …` 꼴인지(`cd /d` 가 아님), '새 cmd 창에서 실행' 단추가 없는지 본다. '🌐 브라우저에서 재개'는 1회차처럼 열려야 한다.
 - 명령을 복사해 터미널 앱에 붙여 넣으면 그 세션이 이어지는지(확인 뒤 claude 는 `/exit`).
 
 ### R5 터미널 유지 (짧게, 사장님과 함께)
@@ -131,6 +176,7 @@ ClewPath Host 는 PC 에 설치하는 프로그램이고, 지금까지 Windows �
   - 그러면 그 명령은 사장님께 **터미널 앱에서 직접** 붙여 넣어 달라고 부탁하고, 출력을 받아 적는다.
   - 샌드박스를 임의로 끄지 않는다.
 - 로그아웃·재부팅처럼 사람이 해야 하는 단계는 사장님께 부탁한다.
+- **맥 측 Claude 는 터미널 앱에서 돌린다.** ClewPath 웹 터미널 안에서 돌리면 제거·브로커 교체 단계에서 자기 자신이 끝난다(2회차 관찰 1).
 
 ## M0 정보 수집 (아무것도 바꾸지 않음)
 

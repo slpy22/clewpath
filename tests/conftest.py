@@ -38,6 +38,22 @@ if not getattr(_modelprobe.probe, "_test_guard", False):
     _probe_without_real_claude._test_guard = True
     _modelprobe.probe = _probe_without_real_claude
 
+# 진짜 데이터 폴더의 핵심 파일을 시험이 지우지 않는지 시험마다 본다(2026-10-22 맥 실기 3b-2 이슈 B: 전체 시험 전후로 진짜
+# ~/.claude/session_manager/clewpath.toml 이 사라져 있었다 — 원인 미확정). 있던 것이 사라지면 그 직후 시험을 실패시켜 범인을 가리킨다.
+# 자리는 import 때(어느 시험도 HOME 을 바꾸기 전) 정한다. 내용은 보지 않는다 — Host 는 원자적으로 다시 써서 교체 중에도 파일이 있다.
+_REAL_DATA = Path(os.path.expanduser("~")) / ".claude" / "session_manager"
+_REAL_KEEP = [p for p in (_REAL_DATA / n for n in ("clewpath.toml", "cp_credentials.json", "devices.json")) if p.is_file()]
+
+
+@pytest.fixture(autouse=True)
+def _real_data_dir_untouched():
+    yield
+    gone = [p.name for p in _REAL_KEEP if not p.is_file()]
+    if gone:
+        _REAL_KEEP[:] = [p for p in _REAL_KEEP if p.is_file()]     # 한 번만 울린다 — 뒤 시험이 줄줄이 실패하지 않게
+        pytest.fail(f"시험이 진짜 데이터 폴더의 파일을 지웠습니다: {', '.join(gone)} ({_REAL_DATA}) — 이 시험(또는 그 뒤에 남은 스레드)",
+                    pytrace=False)
+
 
 @pytest.fixture(autouse=True)
 def _pty_broker_off(monkeypatch):

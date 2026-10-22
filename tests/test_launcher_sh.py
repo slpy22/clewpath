@@ -1241,13 +1241,14 @@ sys.exit(64)
 
 def _mac(inst, *, plist_root: Path | None = None, loaded: bool = True, darwin: bool = True) -> dict:
     """맥 흉내 env — 가짜 uname(Darwin)·launchctl 을 PATH 앞에 두고, 홈에 자동 시작 등록 파일(plist_root 의 런처를 부른다 —
-    기본은 이 설치본)을 쓴다. loaded 면 launchd 에 올라 있다."""
+    기본은 이 설치본)을 쓴다. loaded 면 launchd 에 올라 있다. darwin=False 면 uname 이 Linux 를 낸다 — 진짜 uname 을 그대로 두면
+    진짜 맥에서는 Darwin 이라 맥 길로 간다(맥 실기 3b-2)."""
     base = inst.home.parent
     tools = base / "mac tools"
     tools.mkdir(exist_ok=True)
     fakes = {"launchctl": FAKE_LCTL.replace("@PYTHON@", sys.executable)}
-    if darwin:
-        fakes["uname"] = '#!/bin/sh\ncase "${1:-}" in -m) echo arm64 ;; *) echo Darwin ;; esac\n'
+    fakes["uname"] = ('#!/bin/sh\ncase "${1:-}" in -m) echo arm64 ;; *) echo Darwin ;; esac\n' if darwin else
+                      '#!/bin/sh\ncase "${1:-}" in -m) echo x86_64 ;; *) echo Linux ;; esac\n')
     for name, body in fakes.items():
         (tools / name).write_text(body, encoding="utf-8")
         os.chmod(tools / name, 0o755)
@@ -1332,7 +1333,7 @@ def test_mac_start_spawns_itself_when_launchd_does_not(inst, case):
 @pytest.mark.parametrize("case", ["other-install", "linux", "updater"])
 def test_mac_start_leaves_launchd_alone(inst, case):
     """같은 이름의 다른 설치본 작업(설치본은 사용자당 하나 — 등록 파일이 다른 런처를 부른다)은 깨우지 않는다. 리눅스(uname
-    그대로)는 launchd 를 보지 않는다. 업데이트 러너의 재기동(CLEWPATH_UPDATER=1)은 직접 띄운다 — launchd 의 foreground 는 러너가
+    Linux)는 launchd 를 보지 않는다. 업데이트 러너의 재기동(CLEWPATH_UPDATER=1)은 직접 띄운다 — launchd 의 foreground 는 러너가
     쥔 update.inprogress 를 보고 건너뛴다. 셋 다 launchctl 을 부르지도 않는다."""
     other = inst.home.parent / "Other" / "app"
     env = _mac(inst, plist_root=other if case == "other-install" else None, darwin=case != "linux")

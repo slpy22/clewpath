@@ -74,10 +74,16 @@
   ③ 맥에서 설치·start·resume 이 띄운 Host 가 launchd 밖(PPID 1)이라 죽으면 5분 확인이 받고 로그아웃에도 살았다 → launchd 에 맡김(kickstart)
   ④ 재개 창 명령이 Windows 의 `cd /d` 였고 '새 cmd 창' 단추가 맥에도 보였다 · 폰 토큰 경고가 컨트롤플레인이 있어도 나왔다(Windows 설치도)
   → 맥 2회차 확인은 `docs/mac-host-tasks.md` 맨 위 「2회차」(결과는 `mac-3b2` 브랜치)
+- [x] **맥 실기 2회차(2026-10-22, `docs/mac-results/3b2-20261022.md`) — 통과 15·실패 2:** 1회차 수리가 실기에서 됐다(시험 1 실패/1,433 통과·권한·진짜 claude 없음, 설치 직후·kill·stop/start·hold/resume·로그인 모두 Host = launchd 작업, kill 뒤 즉시 재기동, 로그인 항목 'ClewPath', 폰 토큰 경고 없음, 재개 API sh/can_launch). 고친 것:
+  ① **옛 화면 `/legacy` 가 API 를 `/legacy/api/…` 로 불러 404**(맥 전용 아님) → 재개 창이 cd 없는 명령·'새 cmd 창' 단추로 열림. 주소 계산이 끝의 `/legacy` 를 떼고, 실패 응답이면 창을 열지 않는다. 옛 화면 첫 시험 `tests/pwa/legacy-ui.test.mjs`
+  ② `test_mac_start_leaves_launchd_alone[linux]` 가 진짜 맥에서 맥 길로 감 → 가짜 uname Linux
+  ③ **이슈 B: 맥 데이터 폴더의 `clewpath.toml` 이 10:40–12:44 사이 사라짐 — 원인 미확정.** 리눅스 진짜 홈 표식 + 전체 시험 1,446건 무사, 제품 코드에 그 파일만 지우는 곳 없음. 시험마다 진짜 데이터 폴더 핵심 파일 3개(`clewpath.toml`·`cp_credentials.json`·`devices.json`)가 그대로인지 보는 conftest 가드 → 맥 3회차 T2 에서 조사
+  → **3회차부터 맥 측이 직접 고치고 시험한다(사장님 제안 2026-10-22, 규칙 `docs/mac-dev-loop.md`)** — `mac/<주제>` 브랜치, Windows 측이 Windows·리눅스·e2e 로 확인 뒤 main 에 합친다
+- [ ] (관찰, 맥 2회차) 브로커와 웹 터미널의 claude 는 로그아웃에도 살아남는다(AbandonProcessGroup — Host 만 launchd 작업이라 끝나고, 새 Host 가 로그인 뒤 그 브로커를 다시 잡는다). 터미널이 이어지는 쪽이라 지금은 그대로, 로그인 세션 밖에서 claude 가 도는 게 문제 되면 다시 본다 · 재설치 직후 status 가 남은 `ptyd.json` 의 옛 브로커(`broker_alive=0`)를 보여 준다(맞는 값이지만 헷갈림)
 - [x] **(가) 로그인 항목 이름 'ClewPath'(사장님 결정 2026-10-22: 이름만 지금, 앱은 나중):** launchd 가 데이터 폴더의 `ClewPath` 스크립트(0700, 표식 `clewpath-launchd v1`)를 부른다. 옛 등록(/bin/sh -c)도 uninstall 이 알아본다. 명세 10장. 맥 2회차에서 이름 확인
 - [ ] **(나) 서명된 ClewPath.app — 맥 정식 출시 전 별도 기획(사장님 결정)**: 권한 창 이름을 ClewPath 로, 업데이트 뒤에도 권한 유지. 아래 기록 참고
 - [ ] (기록) **맥 이름·권한 창** — 로그인 항목·백그라운드 알림에 **"sh"**(plist 의 프로그램이 /bin/sh), 웹 터미널의 claude 가 데스크탑·문서·사진·iCloud 등에 처음 닿을 때 **"python3.11"** 권한 창이 항목마다 떴다(launchd → Host(python) 가 책임 프로세스. uv 파이썬은 adhoc 서명이라 파이썬이 바뀌면 다시 뜰 수 있다). 사장님: "설치 시에 허락돼 버리면 좋겠다" — macOS 는 프로그램이 스스로 권한을 줄 수 없다. 안: (가) 등록 프로그램을 `ClewPath` 라는 작은 스크립트로(로그인 항목 이름만 바뀜) (나) 서명된 `ClewPath.app` 이 Host 를 자식으로 띄워 책임 프로세스가 되게(권한 창 이름이 ClewPath, 업데이트 뒤에도 권한 유지 — Developer ID 서명·공증 필요) (다) 설치 끝에 '전체 디스크 접근' 설정 화면을 열어 안내. 1회차 세션이 홈 폴더라 claude 가 홈 아래를 훑어 창이 많았다
-- [ ] (launchd 후속) `osdep._posix.ensure_launcher` 가 plist 도 점검·재등록하게(지금은 런처만 다시 렌더) · `launchd.log` 회전 없음 · 업데이트 러너(CLEWPATH_UPDATER=1)가 다시 띄운 Host 는 아직 launchd 밖 · 제거 뒤 `sfltool dumpbtm` 에 옛 "sh" 항목이 남는다(맥이 정리)
+- [ ] (launchd 후속) `osdep._posix.ensure_launcher` 가 plist 도 점검·재등록하게(지금은 런처만 다시 렌더) · `launchd.log` 회전 없음 · 업데이트 러너(CLEWPATH_UPDATER=1)가 다시 띄운 Host 는 아직 launchd 밖 · 제거 뒤 `sfltool dumpbtm` 에 옛 "sh" 항목이 남는다(맥이 정리. `sfltool` 은 관리자 암호 창을 띄워 2회차부터 쓰지 않는다 — 남았는지 미확인)
 - [ ] **노트북 이전(서비스 모니터 계획 v0.4.2) 선행 수정 2건 — 사장님 결정 '나중에'(2026-10-22, 이전 시점이 정해지면 다시 결정):**
   ① Host '원격 API 전용' 두 번째 포트(예: 127.0.0.1:5110) — 루프백 신뢰 없이 /api/v1 + 서비스 토큰(cps_)만. 왜: ssh 터널로 들어온 요청은 Host 에 127.0.0.1 로 보여 `_is_local` 이 인증 없이 사장님 권한(owner API·웹 터미널까지)으로 통과시킨다. nklaw 를 노트북으로 옮기는 P3 의 선행 조건. 시작점: `session_manager/server.py` `_is_local`·`AuthASGIMiddleware`, `server.main`(두 번째 리스너). M
   ② 007 CP `/internal/*` 공유 토큰(릴레이가 X-Internal-Token) — 왜: `/internal/rooms/{room}/agent-down·up` 이 무인증이라 CP 에 직접 닿는 쪽은 room 키만 알면 폰에 가짜 '연결 끊김' 웹푸시를 보낼 수 있다(지금은 이 PC 프로세스·컨테이너만 닿음, 노트북 5200 LAN 게시 때 노트북 자신이 더해짐). P4-2 선행 권장. 시작점: 007 `control_plane/api.py:326-354`, `relay/relay.py:154·237·327`. S

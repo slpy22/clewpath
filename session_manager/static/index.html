@@ -153,9 +153,10 @@
 </div>
 
 <script>
-// 현재 페이지 URL에서 서브경로 prefix 자동 계산.
-// 로컬 "/" → "" , nginx "/session_mgr/" → "/session_mgr" (SM_BASE_PATH 없어도 동작)
-const BASE=location.pathname.replace(/\/+$/,"");
+// 현재 페이지 URL에서 서브경로 prefix 자동 계산. 이 화면은 /legacy 에 있다(/ 는 통일 앱) — 끝의 /legacy 를 뗀다(terminal.html 과 같은 방식).
+// 로컬 "/legacy" → "" , nginx "/session_mgr/legacy" → "/session_mgr" (SM_BASE_PATH 없어도 동작)
+// 예전엔 끝의 / 만 떼서 API 를 /legacy/api/… 로 불렀다 → 404, 재개 창이 cd 없는 명령으로 열렸다(맥 실기 3b-2 이슈 A)
+const BASE=location.pathname.replace(/\/legacy\/?$/,"").replace(/\/+$/,"");
 // 버전 표기 — 하드코딩 금지(v2.2 로 방치돼 있던 전례). 진단 API 가 단일 출처.
 fetch(BASE+"/api/owner/diagnostics").then(r=>r.ok?r.json():null)
   .then(d=>{ if(d&&d.version) document.getElementById("appver").textContent="v"+d.version; })
@@ -444,8 +445,10 @@ async function doImport(){
 // ---- 재개 ----
 let _resume=null;  // {id, cwd}
 async function resumeSession(id){
-  const r=await (await fetch(`${BASE}/api/sessions/${id}/resume-command`)).json();
-  if(r.error){ toast(r.error,"err"); return; }
+  const resp=await fetch(`${BASE}/api/sessions/${id}/resume-command`);
+  const r=await resp.json().catch(()=>({}));
+  // 404 본문({"detail":…})엔 error 가 없다 — 그대로 열면 cwd·shell·can_launch 가 비어 틀린 명령과 단추가 나온다
+  if(!resp.ok || r.error){ toast(r.error||`재개 명령을 받지 못했습니다(HTTP ${resp.status})`,"err"); return; }
   _resume={id, cwd:r.cwd||"", sh:r.shell==="sh"};
   openModal("세션 재개 — "+id.slice(0,8),
     `<label class="chk"><input type="checkbox" id="skipPerm" checked onchange="renderResumeCmd()">
