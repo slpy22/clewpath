@@ -93,7 +93,13 @@ def env(fake_claude_home, tmp_path, monkeypatch):
     st = {"home": fake_claude_home, "cwd": str(cwd), "procs": [], "deleted": [], "guarded": [],
           "script": {"events": [_text("청포도"), _result("청포도")]}}
 
+    real_popen = subprocess.Popen
+
     def fake_popen(argv, **kw):
+        # claude 실행만 잡는다 — subprocess.Popen 은 표준 모듈 그 자체라, 앞 시험 앱의 배경 스레드(orphan-sweep 등)가 부르는
+        # 다른 명령까지 여기로 와 procs 에 섞이면 argv 단언이 가끔 틀어졌다(0.32.3 출시 시험에서 실측)
+        if not (isinstance(argv, (list, tuple)) and argv and argv[0] == EXE):
+            return real_popen(argv, **kw)
         p = FakeProc(argv, st, **kw)
         st["procs"].append(p)
         return p
