@@ -69,6 +69,11 @@ class UpdateError(Exception):
     pass
 
 
+# 러너 기동에 쓰는 Popen 참조. 시험은 이것만 바꿔 끼운다 — subprocess.Popen(표준 모듈 그 자체)을 바꾸면 같은 프로세스의 다른
+# 스레드(앞 시험 앱의 orphan-sweep 등)가 부르는 subprocess 까지 가짜로 가서 호출 수 단언이 가끔 틀어졌다(TODOS 172행).
+_popen = subprocess.Popen
+
+
 # ---------------------------------------------------------------- 경로/상태
 
 def install_root() -> Path:
@@ -413,9 +418,9 @@ def apply(manifest: dict[str, Any], staged: Path, restart_cmd: str | None = None
         connector.request_bye("update")
     except Exception:  # noqa: BLE001
         pass
-    subprocess.Popen(args, close_fds=True, **osdep.detached_popen_kwargs(),
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                     stdin=subprocess.DEVNULL)
+    _popen(args, close_fds=True, **osdep.detached_popen_kwargs(),
+           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+           stdin=subprocess.DEVNULL)
     return write_state(applying=manifest["ver"], apply_log=str(log),
                        apply_started_at=int(time.time()))
 

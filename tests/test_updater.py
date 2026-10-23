@@ -295,7 +295,7 @@ def test_apply_refuses_other_os_release(fake_claude_home, monkeypatch):
     """check 를 거치지 않은 경로가 생겨도 마지막 관문(apply)에서 막는다 — 러너를 띄우지 않고 잠금도 남기지 않는다."""
     from session_manager import osdep
     monkeypatch.setattr(osdep, "NAME", "linux")
-    monkeypatch.setattr(updater.subprocess, "Popen", lambda *a, **k: pytest.fail("러너를 띄우면 안 된다"))
+    monkeypatch.setattr(updater, "_popen", lambda *a, **k: pytest.fail("러너를 띄우면 안 된다"))
     with pytest.raises(updater.UpdateError, match="지원하지 않습니다"):
         updater.apply({"ver": "9.9.9", "platforms": ["win"]}, fake_claude_home, restart_cmd="")
     assert not (updater.work_dir() / "apply.lock").exists()
@@ -304,7 +304,7 @@ def test_apply_refuses_other_os_release(fake_claude_home, monkeypatch):
 def test_apply_refuses_while_maintenance_flag(fake_claude_home, monkeypatch):
     """유지보수 표식이 있으면 런처가 아무것도 띄우지 않는다 → 적용하면 재기동이 막혀 롤백되고 Host 가 꺼진 채 남는다."""
     from session_manager import config
-    monkeypatch.setattr(updater.subprocess, "Popen", lambda *a, **k: pytest.fail("러너를 띄우면 안 된다"))
+    monkeypatch.setattr(updater, "_popen", lambda *a, **k: pytest.fail("러너를 띄우면 안 된다"))
     d = config.data_dir()
     d.mkdir(parents=True, exist_ok=True)
     (d / "maintenance.flag").write_text("by=stop\n", encoding="utf-8")
@@ -333,7 +333,7 @@ def test_apply_refuses_while_an_install_holds_the_marker(fake_claude_home, monke
                                              encoding="utf-8")
         monkeypatch.setattr(osdep, "NAME", "win" if case == "windows" else "linux")
         calls = []
-        monkeypatch.setattr(updater.subprocess, "Popen", lambda *a, **k: calls.append(a))
+        monkeypatch.setattr(updater, "_popen", lambda *a, **k: calls.append(a))
         staged = fake_claude_home / "stage"
         staged.mkdir()
         m = {"ver": "9.9.9", "platforms": ["win", "mac", "linux"]}

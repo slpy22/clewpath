@@ -56,7 +56,7 @@ def test_apply_concurrency_lock(fake_claude_home, monkeypatch):
     class _FakePopen:
         def __init__(self, *a, **k):
             calls["n"] += 1
-    monkeypatch.setattr(updater.subprocess, "Popen", _FakePopen)
+    monkeypatch.setattr(updater, "_popen", _FakePopen)
 
     m = {"ver": "9.9.9", "platforms": _ALL_OS}
     staged = fake_claude_home / "stage"
@@ -87,7 +87,7 @@ def _apply_port(fake_claude_home, monkeypatch, bound_port, runtime_port):
     class _Popen:
         def __init__(self, args, *a, **k):
             captured["args"] = list(args)
-    monkeypatch.setattr(updater.subprocess, "Popen", _Popen)
+    monkeypatch.setattr(updater, "_popen", _Popen)
     monkeypatch.setattr(updater, "BOUND_PORT", bound_port)
     d = config.data_dir(); d.mkdir(parents=True, exist_ok=True)
     (d / "runtime.json").write_text(json.dumps({"port": runtime_port}), encoding="utf-8")
@@ -123,9 +123,8 @@ def test_apply_runs_a_copy_outside_the_install(fake_claude_home, monkeypatch):
 
     class _Popen:
         def __init__(self, args, *a, **k):
-            if any(osdep.UPDATE_RUNNER in str(x) for x in args):    # 앞선 시험 앱의 스레드가 부르는 subprocess 는 빼고
-                captured["args"] = list(args)
-    monkeypatch.setattr(updater.subprocess, "Popen", _Popen)
+            captured["args"] = list(args)
+    monkeypatch.setattr(updater, "_popen", _Popen)
     staged = fake_claude_home / "stage"
     staged.mkdir()
     updater.apply({"ver": "9.9.9", "platforms": _ALL_OS}, staged, restart_cmd="")
@@ -135,3 +134,32 @@ def test_apply_runs_a_copy_outside_the_install(fake_claude_home, monkeypatch):
     assert updater.install_root() not in copy.resolve().parents
     if osdep.NAME != "win":
         assert captured["args"][:2] == ["/bin/sh", str(copy)]
+
+
+def test_runner_spawn_patch_does_not_reach_other_threads(fake_claude_home, monkeypatch):
+    """TODOS 172행(간헐 실패의 원인): 시험이 updater.subprocess.Popen(= 표준 subprocess 모듈 그 자체)을 바꿔 끼우면 같은 프로세스의
+    다른 스레드(앞 시험 앱의 orphan-sweep 등)가 부르는 subprocess 까지 가짜로 가서 호출 수 단언이 가끔 틀어졌다.
+    updater 는 러너를 자기 참조(_popen)로 띄우고 시험은 그것만 바꾼다 — 다른 스레드의 subprocess 는 진짜 그대로 돈다."""
+    import subprocess
+    import sys
+    import threading
+    from session_manager import updater
+    real = subprocess.Popen
+    calls = []
+    monkeypatch.setattr(updater, "_popen", lambda args, *a, **k: calls.append(list(args)))
+    assert subprocess.Popen is real
+
+    go, out = threading.Event(), {}
+
+    def background():                # 앞 시험 앱의 배경 스레드 흉내 — apply 와 겹쳐 subprocess 를 부른다
+        go.wait(5)
+        out["rc"] = subprocess.run([sys.executable, "-c", "pass"]).returncode
+    t = threading.Thread(target=background)
+    t.start()
+    go.set()
+    staged = fake_claude_home / "stage"
+    staged.mkdir()
+    updater.apply({"ver": "9.9.9", "platforms": _ALL_OS}, staged, restart_cmd="")
+    t.join(60)
+    assert out.get("rc") == 0                       # 다른 스레드의 subprocess 는 진짜로 돌았고
+    assert len(calls) == 1 and any("9.9.9" == str(x) for x in calls[0])     # 러너 기동만 가짜로 왔다
