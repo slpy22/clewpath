@@ -3623,6 +3623,7 @@ const _leftResumes=new Set();
 function closeLiveResume(now){ const r=_liveResume; _liveResume=null; if(r){ try{ r.close(now); }catch(e){} }
   if(now) for(const x of [..._leftResumes]){ try{ x.close(true); }catch(e){} } }
 
+let VIEWER_TITLE=null;   // 뷰어 막대의 세션 이름 {gen(그 화면의 PANE_NOW.gen), el}
 async function loadViewer(s){
   closeLiveViewer();
   paneEnter('viewer', s); const gen=PANE_NOW.gen;   // 칸을 비우기 바로 앞. gen: 응답을 기다리는 사이 다른 화면으로 가면 늦게 그리지 않게(T5)
@@ -3630,6 +3631,7 @@ async function loadViewer(s){
   const bar=listBack();
   // 무엇을 보는지 — 바로가기로 들어오면 목록 줄을 거치지 않아 화면에 세션 이름이 없었다(quick-switch §4-3)
   const vt=el('span','vtitle',sessLabel(s)); vt.title=sessLabel(s)+(s.cwd?' · '+s.cwd:''); bar.appendChild(vt);
+  VIEWER_TITLE={gen, el:vt};               // 이 세션 이름을 바꾸면 막대 이름만 고친다(renameNative) — 이 화면(gen) 동안만
   const badge=el('div','vlive off'); badge.appendChild(el('span','vdot'));
   const bt=el('span',null,'실시간 연결 중…'); badge.appendChild(bt); bar.appendChild(badge);
   main.appendChild(bar);
@@ -3867,7 +3869,13 @@ async function renameNative(s){
     toast(r&&r.peer_name_conflict ? '이름 변경됨 — ⚠ 같은 이름으로 불리는 세션이 이미 있어 이름으로 부르면 헷갈립니다'
         : (r&&r.peer_name_after_restart) ? '이름 변경됨 — 다른 세션이 부르는 이름은 이 세션을 다시 열 때 바뀝니다'
         : '이름 변경됨 (네이티브 반영)');
-    loadDetail(s);
+    // 보던 화면은 그대로 — 지금 그 세션을 상세 칸에서 보고 있을 때만 그 화면의 이름을 새로(상세는 다시 그림·뷰어는 막대 이름).
+    // 전엔 ⋯ 메뉴로 다른 세션 이름을 바꿔도 보던 터미널·파일이 그 세션 상세로 바뀌었다(quick-switch 6단계)
+    if(PANE_NOW.sid===s.session_id&&PANE_NOW.kind==='detail') loadDetail(s);
+    else if(PANE_NOW.sid===s.session_id&&PANE_NOW.kind==='viewer'&&VIEWER_TITLE&&VIEWER_TITLE.gen===PANE_NOW.gen){
+      VIEWER_TITLE.el.textContent=t; VIEWER_TITLE.el.title=t+(s.cwd?' · '+s.cwd:''); }
+    if(paneDetail().classList.contains('term-mode')) renderTabBarSoon();   // 터미널 탭 칩 이름
+    renderQuickSoon();                                                     // 바로가기 단추의 세션 이름
   }catch(e){
     if(e.status===409) toast('실행 중 세션이라 변경 불가');
     else toast('실패: '+e.message);
@@ -3877,7 +3885,10 @@ async function doDelete(s){
   if(!confirm('이 세션을 휴지통으로 보낼까요?\n영구 삭제가 아니라 복구할 수 있습니다(🗑 휴지통에서 되살리기).'))return;
   try{ const r=await T.api('POST',`/api/sessions/${s.session_id}/delete`,{body:{dry_run:false}});
     toast(r&&r.recoverable ? '휴지통으로 이동됨 (복구 가능)' : '삭제됨');
-    if(SELECTED_ID===s.session_id){SELECTED_ID=null; detailPlaceholder('삭제됨');}
+    // 지금 그 세션을 상세 칸에서 보고 있을 때만 칸을 비운다 — 전엔 마지막으로 연 상세(SELECTED_ID) 기준이라 그 뒤 다른 화면을 보는 중에도
+    // 칸을 지웠다(quick-switch 6단계)
+    if(SELECTED_ID===s.session_id) SELECTED_ID=null;
+    if(PANE_NOW.sid===s.session_id) detailPlaceholder('삭제됨');
     loadList();
   }catch(e){
     if(e.status===409) toast('실행 중인 세션은 삭제할 수 없습니다 — 터미널/프로세스를 먼저 종료하세요');

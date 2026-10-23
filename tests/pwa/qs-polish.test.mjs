@@ -304,3 +304,32 @@ test("T112 Ctrl+Shift+B(목록 칸 접기·펼치기)는 릴레이 터미널(xte
     xtermSends: [false, true], frame: "keydown:quick,keydown:side",
   });
 });
+
+// ---------------------------------------------------------------- 8. 이름 바꾸기·삭제는 그 세션을 보고 있을 때만 상세 칸을 바꾼다
+test("T113 이름 바꾸기 성공·삭제가 보던 화면을 바꾸지 않는다 — 지금 그 세션을 상세 칸에서 보고 있을 때만: 이름은 그 화면에서 새로(상세는 다시 그림·뷰어는 막대 이름), 삭제는 칸을 비운다", async () => {
+  const got = await each(["이름|다른 세션(터미널 보는 중)", "이름|그 세션 터미널", "이름|그 세션 상세", "이름|그 세션 뷰어",
+                          "삭제|다른 세션(전에 그 상세를 봄, 지금 터미널)", "삭제|그 세션 상세", "삭제|그 세션 뷰어"], async (p) => {
+    const [what, where] = p.split("|");
+    const { ctx } = await boot({ mem: { viewer: { sid: B, kind: where.includes("뷰어") ? "viewer" : "detail", name: "B" } } });
+    ev(ctx, "prompt = () => '새 이름'; T.api = ((f) => async (v, path, o) => path.endsWith('/delete') ? { recoverable: true } : f(v, path, o))(T.api);");
+    if (where.startsWith("다른 세션(전에")) await press(ctx, "viewer");                   // B 상세를 봤다(SELECTED_ID = B)
+    if (where.includes("터미널")) await press(ctx, "terminal"); else if (where.startsWith("그 세션")) await press(ctx, "viewer");
+    const target = where === "그 세션 터미널" ? 0 : 1, gen = ev(ctx, "PANE_NOW.gen");
+    if (what === "이름") await ctx.renameNative(ev(ctx, `SESSIONS[${target}]`));
+    else await ctx.doDelete(ev(ctx, `SESSIONS[${target}]`));
+    await tick(QS);
+    const r = { at: at(ctx), redrawn: ev(ctx, "PANE_NOW.gen") !== gen };
+    if (what === "이름") r.name = ev(ctx, `SESSIONS[${target}].title`);
+    if (where === "그 세션 뷰어" && what === "이름") r.bar = ev(ctx, "VIEWER_TITLE && VIEWER_TITLE.gen === PANE_NOW.gen && VIEWER_TITLE.el.textContent");
+    return r;
+  });
+  assert.deepEqual(got, {
+    "이름|다른 세션(터미널 보는 중)": { at: "terminal:a", redrawn: false, name: "새 이름" },
+    "이름|그 세션 터미널": { at: "terminal:a", redrawn: false, name: "새 이름" },
+    "이름|그 세션 상세": { at: "detail:b", redrawn: true, name: "새 이름" },
+    "이름|그 세션 뷰어": { at: "viewer:b", redrawn: false, name: "새 이름", bar: "새 이름" },
+    "삭제|다른 세션(전에 그 상세를 봄, 지금 터미널)": { at: "terminal:a", redrawn: false },
+    "삭제|그 세션 상세": { at: "empty", redrawn: true },
+    "삭제|그 세션 뷰어": { at: "empty", redrawn: true },
+  });
+});
