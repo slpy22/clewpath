@@ -3,10 +3,54 @@
 > 이 문서는 Windows 측(주 개발)이 맥 측 Claude 에게 전달하는 작업 지시서다. 앱 빌드 지시서 `docs/mac-build-tasks.md` 와 같은 방식이다.
 > **3회차부터는 맥 측이 직접 고치고 시험한다.** 규칙은 `docs/mac-dev-loop.md` — 브랜치 `mac/<주제>`, main 에 올리지 않음,
 > 올리기 전 맥 전체 시험 실패 0, 공통 코드를 바꿨으면 보고서에 적는다. (1·2회차는 「고치지 말고 보고만」이었다.)
-> **지금 할 일은 바로 아래 「3회차」뿐이다.** 2회차 R0~R6 과 1회차 M0~M6 은 참고·다시 할 때의 절차다.
+> **지금 할 일은 바로 아래 「4회차」뿐이다.** 3회차·2회차 R0~R6·1회차 M0~M6 은 참고·다시 할 때의 절차다.
 > 아래 「지킬 것」은 그대로다.
 
-## 3회차(3b-3) — 지금 할 일 (맥에서 직접 고친다)
+## 4회차(3b-4) — 지금 할 일 (2026-10-23~)
+
+`docs/mac-dev-loop.md` 를 먼저 읽는다. 3회차 결과(`docs/mac-results/3b3-*.md`, 통과 6·실패 0)를 받아 Windows 측이 한 것:
+
+| 3회차 | Windows 측이 한 것 |
+|---|---|
+| 이슈 B — `clewpath.toml` 사라짐 | 원인은 **시험**: 런처가 넣는 `CLEWPATH_CONFIG`(진짜 설정 파일)가 ClewPath 웹 터미널로 새어, 그 안에서 돈 `test_service_s2` 가 진짜 파일을 쓰고 지웠다. `tests/conftest.py` 가 시험마다 `CLEWPATH_CONFIG` 를 지우게 했다(a17e500). 제품 쪽 누출은 사장님 결정으로 그대로 둔다 |
+| (Windows 노트북 사고) 런처 보장이 실패해도 표식을 써서 다시 안 함 | 맥·리눅스도 같은 결함이 있었다 — `osdep/_posix.ensure_launcher` 가 실패를 문자열로 돌려줬다. 이제 예외로 알리고 표식을 쓰지 않는다(01b3987, 리눅스 시험 통과) |
+| 새 기능 | 0.32.0 PC 사이 원격 묻기(pclink) — **맥 경로는 맥 정식 출시 뒤**(아래 T4 는 조사만) |
+
+### T1 확인 (터미널 앱에서)
+
+1. `git checkout main && git pull && git log --oneline -1`
+2. 맥 전체 시험(`docs/mac-dev-loop.md` 4-3) — 실패 0 이어야 한다. pclink 시험 중 `test_owner_pid_of_real_socket` 이 맥에서 skip 이면 정상이다(아래 T4 가 그 이유를 조사한다).
+
+### T2 ClewPath 웹 터미널 안에서 전체 시험 한 번 (이슈 B 재발 방지 확인)
+
+3회차 원인을 그대로 재현하는 자리다 — **이번엔 지워지지 않아야 한다.**
+1. ClewPath 웹 터미널(폰이든 PC 브라우저든)에서 이 저장소 폴더로 가서 `echo "$CLEWPATH_CONFIG"` 를 기록한다(진짜 설정 파일 경로가 보이면 누출이 그대로라는 뜻 — 정상, 결정대로).
+2. 데이터 폴더 목록을 남기고(`ls -la ~/.claude/session_manager > /tmp/sm-before.txt`, 내용은 열지 않는다) 그 웹 터미널에서 전체 시험을 돌린 뒤 다시 `ls -la … > /tmp/sm-after.txt; diff …`.
+3. 기대: 실패 0, 「시험이 진짜 데이터 폴더의 파일을 지웠습니다」 없음, `clewpath.toml` 그대로(크기·시각 같음).
+   ⚠ 이 단계는 시험만 돈다. **제거·재설치는 웹 터미널에서 하지 않는다**(자기 자신이 끝난다, 규칙 5).
+
+### T3 런처 보장 표식 (읽기만)
+
+1. 지금 설치본에서 `ls -la ~/.claude/session_manager/launcher-ensured-* 2>/dev/null` 과
+   `grep -n "\[liveness\] 런처 보장" ~/.claude/session_manager/host.log | tail -5` 를 기록한다.
+2. 표식이 있으면 그 내용(한 줄, 비밀 없음)이 `launcher: ok (posix v2)` 또는 `launcher: regenerated (posix v2)` 인지 본다.
+   `regenerate failed` 가 적힌 표식이 있으면 옛 결함으로 남은 것이다 — 지우지 말고 보고한다(새 버전은 표식 이름이 달라 다시 돈다).
+
+### T4 (조사만, 고치지 않음) pclink 맥 경로 — 보낸 세션 확인이 맥에서 되는가
+
+pclink 는 이 PC 의 Claude 세션이 로컬 API 를 부를 때 **연결한 프로세스**로 보낸 세션을 확인한다(`session_manager/pclink/sender.py`).
+리눅스·Windows 는 `psutil.net_connections` 로 되지만 맥은 관리자 권한이 필요하다고 알려져 있다. 맥 정식 출시 뒤 구현할 때 쓸 사실만 모은다:
+1. `python3 -c "import psutil; print(len(psutil.net_connections(kind='tcp')))"` — 결과 또는 오류 이름(AccessDenied 등).
+2. 내 프로세스의 연결만 보는 길: `python3 -c "import psutil,os; print(psutil.Process(os.getpid()).connections(kind='tcp'))"` 가 되는지.
+3. `lsof -nP -iTCP -sTCP:ESTABLISHED -a -u "$USER" | head -5` 가 관리자 암호 없이 되는지(창이 뜨면 바로 취소하고 그렇다고 적는다).
+4. `sudo` 는 쓰지 않는다.
+
+### T5 보고
+
+브랜치 `mac/3b4` 에 `docs/mac-results/3b4-YYYYMMDD.md`(규칙 7). T1~T3 에서 고친 게 있으면 같은 브랜치에 커밋(공통 코드 변경 여부 표시).
+사장님께 한 줄: "맥 4회차를 mac/3b4 브랜치에 올렸습니다 — 시험 통과 N·실패 M, 웹 터미널 안 시험 이상 없음/있음, pclink 맥 조사: <한 줄>"
+
+## 3회차(3b-3) — 참고(끝남, 결과 `docs/mac-results/3b3-*.md`)
 
 `docs/mac-dev-loop.md` 를 먼저 읽는다. 2회차 결과(`docs/mac-results/3b2-20261022.md`)로 Windows 측이 고친 것은 main 에 있다.
 
