@@ -120,6 +120,19 @@ def test_home_is_rejected(tmp_path, monkeypatch):
     assert real not in walked, "진짜 홈을 훑었다"
 
 
+def test_rejected_folder_is_not_walked(env, tmp_path, monkeypatch):
+    """제품 쪽(맥 4회차 제안): 이미 승인할 수 없는 폴더(홈·드라이브 루트·~/.claude 를 품은 폴더 등)는 훑지 않는다 — 훑으면 맥에서
+    다른 앱 데이터에 닿아 개인정보 확인 창의 답을 기다리며 Host 의 그 요청이 멈출 수 있다. 승인할 수 있는 폴더는 지금처럼 훑는다."""
+    _client, folder, _ = env
+    walked = []
+    walk = servicereg.os.walk
+    monkeypatch.setattr(servicereg.os, "walk", lambda top, *a, **k: (walked.append(top), walk(top, *a, **k))[1])
+    chk = servicereg.check_folder(str(tmp_path))                          # ~/.claude(가짜 홈)를 품은 폴더 → 오류
+    assert chk["errors"] and walked == []
+    ok = servicereg.check_folder(str(folder))
+    assert not ok["errors"] and walked == [str(folder)]
+
+
 def test_adopt_requires_same_folder_and_profile(env, fake_claude_home):
     client, folder, made = env
     sid = "ffffffff-0000-0000-0000-000000000001"

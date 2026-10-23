@@ -77,6 +77,10 @@ def check_folder(folder: str, adopt: tuple = (), service_id: str | None = None) 
             errors.append(f"서비스 '{sid}' 가 이미 이 폴더를 씁니다.")
     if same:
         warns.append(f"이 폴더에서 열린 다른 대화가 {same}개 있습니다 — claude 자동 기억(같은 폴더 공용)을 원본도 읽습니다.")
+    if errors:
+        # 이미 승인할 수 없으면 훑지 않는다(맥 4회차) — 홈·루트·~/.claude 를 품은 폴더를 훑으면 맥에서 다른 앱 데이터에 닿아
+        # 개인정보 확인 창의 답을 기다리며 이 요청이 멈출 수 있다. 안쪽 파일 경고는 고친 폴더로 다시 신청할 때 나온다.
+        return {"folder": _show(folder), "errors": errors, "warnings": warns}
     found, files = [], 0
     for root, dirs, names in os.walk(folder):
         rel = os.path.relpath(root, folder)
