@@ -47,7 +47,7 @@
 | `ask` | 묻는 쪽 → | `{"prompt": "…"}` | 8,000자 상한 |
 | `accepted` | 받는 쪽 → | `{"ask_id"}` | 접수만 뜻한다(답이 아님) |
 | `poll` | 묻는 쪽 → | `{"ask_id"}` | 시간 초과 뒤 같은 묻기의 결과 다시 받기 |
-| `answer` | 받는 쪽 → | `{"ask_id", "answer", "truncated", "cost_usd", "duration_s"}` | 20,000자 상한. 묻는 쪽은 **믿지 않는 외부 데이터**로 표시 |
+| `answer` | 받는 쪽 → | `{"ask_id", "answer", "truncated", "duration_s"}` | 20,000자 상한. 묻는 쪽은 **믿지 않는 외부 데이터**로 표시 |
 | `pending` | 받는 쪽 → | `{"ask_id", "state": "queued"\|"running"}` | `poll` 의 답 |
 | `refused` | 받는 쪽 → | `{"ask_id"?, "code", "retry_after"?}` | 정책 거절(5절) |
 | `error` | 받는 쪽 → | `{"ask_id"?, "code", "reason"}` | 실행 실패 |
@@ -78,7 +78,8 @@
 | `not_allowed` | 그 세션은 「원격 묻기 받기」가 꺼져 있다(기본) |
 | `pending_approval` | 첫 연락 승인 대기 — 받는 쪽 사장님이 폰에서 승인한 뒤 다시 묻는다 |
 | `paused` | 받는 쪽 끄기 스위치가 켜져 있다 |
-| `limit` | 짝당 분 6·일 200 또는 하루 예산을 넘었다(`retry_after` 초) |
+| `limit` | 짝당 분 6·일 200 또는 하루 어림 예산(20달러)을 넘었다(`retry_after` 초) |
+| `too_big` | 그 세션의 마지막 압축 이후 분량이 묻기당 어림 상한(2달러 ≈ 1MB)을 넘는다 — 세션이 압축된 뒤 다시 |
 | `busy` | 받는 쪽 Host 의 동시 실행 2·대기 4 가 찼다 |
 | `too_long` | 묻기 8,000자 초과 |
 | `ask_failed` | 복제본 실행 실패(세션 폴더 없음·claude 오류·180초 초과·도구 사용 감지) |
@@ -158,7 +159,7 @@ h    = {"v":0,"id":"c2aa…","reply_to":"3b1f0b0e-…","kind":"answer",
         "from":{"host":"0f1e2d3c4b5a6978","session":"9401…"},
         "to":{"host":"a1b2c3d4e5f60718","session":"5d1e…"},"expires_at":1792650300}
 body = {"ask_id":"3b1f0b0e-…","answer":"CP 재시작 → 릴레이 재시작 → healthz 확인",
-        "truncated":false,"cost_usd":0.0012,"duration_s":7.3}
+        "truncated":false,"duration_s":7.3}
 ```
 
 고정 시험 벡터(키·nonce 고정)는 `tests/test_pclink_protocol.py` 에 있다 — 다른 언어로 구현할 때 같은 바이트가 나와야 한다.

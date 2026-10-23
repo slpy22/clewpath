@@ -8,7 +8,8 @@ reply(ok, data=None, error=None) 는 그 요청을 보낸 기기(cid)에게만 r
 
 묻기 하나의 길:
     개봉·만료·짝 확인 → 중복 id 장부(처음이 아니면 보관된 상태를 돌려줌) → 정책(끄기·허용·첫 연락 승인)
-    → 한도 예약(분·일) → Host 동시 2·대기 4 → 접수(accepted) → 작업: 도구·MCP·훅·기록 없는 복제본(180초·0.5달러)
+    → 비용 어림(마지막 압축 이후 분량, 묻기당 2달러 넘으면 too_big) → 한도 예약(분·일·하루 어림 20달러) → Host 동시 2·대기 4
+    → 접수(accepted) → 작업: 도구·MCP·훅·기록 없는 복제본(180초)
     → 답을 짝 키로 봉인해 그 cid 로 + 결과 10분 보관(poll)
 """
 from __future__ import annotations
@@ -185,7 +186,12 @@ async def _on_ask(pol: POL.Policy, peer: str, h: dict, body: dict, reply: Reply,
     if code:
         await refuse(code)
         return
-    retry = pol.reserve(peer)
+    tail = await _off(_tail_bytes, sid, int(POL.ASK_MAX_USD / POL.USD_PER_MB * 1_000_000))
+    if tail is None:
+        await refuse("too_big")
+        return
+    est = round(max(tail, 1) / 1_000_000 * POL.USD_PER_MB, 3)
+    retry = pol.reserve(peer, est)
     if retry is not None:
         await refuse("limit", retry_after=retry)
         return
@@ -197,7 +203,7 @@ async def _on_ask(pol: POL.Policy, peer: str, h: dict, body: dict, reply: Reply,
         return
     _waiting += 1
     await reply(True, data=seal("accepted", {"ask_id": ask_id}, session=sid, to_session=frm_s))
-    t = asyncio.create_task(_run_ask(pol, peer, h, prompt, reply, seal))
+    t = asyncio.create_task(_run_ask(pol, peer, h, prompt, reply, seal, est))
     _TASKS.add(t)
     t.add_done_callback(_TASKS.discard)
 
@@ -213,7 +219,7 @@ def _sem() -> asyncio.Semaphore:
     return s
 
 
-async def _run_ask(pol: POL.Policy, peer: str, h: dict, prompt: str, reply: Reply, seal) -> None:
+async def _run_ask(pol: POL.Policy, peer: str, h: dict, prompt: str, reply: Reply, seal, est: float = 0.0) -> None:
     global _running, _waiting
     sid, frm_s, ask_id = h["to"]["session"], h["from"]["session"], h["id"]
     t0 = time.monotonic()
@@ -232,7 +238,7 @@ async def _run_ask(pol: POL.Policy, peer: str, h: dict, prompt: str, reply: Repl
     out["session"] = sid
     pol.results.finish(ask_id, kind, out)
     pol.audit("ask", peer=peer, session=sid, from_session=frm_s, ask_id=ask_id,
-              code=("answered" if kind == "answer" else out.get("code")), cost=out.get("cost_usd"),
+              code=("answered" if kind == "answer" else out.get("code")), est_usd=est,
               dur=round(time.monotonic() - t0, 2))
     try:
         await reply(True, data=seal(kind, out, session=sid, to_session=frm_s))
@@ -242,8 +248,7 @@ async def _run_ask(pol: POL.Policy, peer: str, h: dict, prompt: str, reply: Repl
 
 def _ask_clone(sid: str, prompt: str, ask_id: str) -> tuple[str, dict]:
     from session_manager import webapi
-    r = webapi.ephemeral_ask(sid, prompt, timeout=POL.ASK_TIMEOUT_S, isolated=True,
-                             guardrails={"max_budget_usd": POL.ASK_BUDGET_USD})
+    r = webapi.ephemeral_ask(sid, prompt, timeout=POL.ASK_TIMEOUT_S, isolated=True, guardrails={})
     if r.get("error"):
         return "error", {"ask_id": ask_id, "code": "ask_failed", "reason": str(r["error"])[:200]}
     if r.get("isolation_breach"):
@@ -252,8 +257,34 @@ def _ask_clone(sid: str, prompt: str, ask_id: str) -> tuple[str, dict]:
     if r.get("is_error"):
         return "error", {"ask_id": ask_id, "code": "ask_failed", "reason": str(r.get("result") or "")[:200]}
     ans = str(r.get("answer") or "")
+    # cost_usd(claude 의 total_cost_usd)는 이어받은 세션의 과거 누적 비용이 섞이므로 싣지 않는다(T12)
     return "answer", {"ask_id": ask_id, "answer": ans[:POL.ANSWER_MAX], "truncated": len(ans) > POL.ANSWER_MAX,
-                      "cost_usd": r.get("cost_usd"), "duration_s": r.get("duration_s")}
+                      "duration_s": r.get("duration_s")}
+
+
+def _tail_bytes(sid: str, limit: int, chunk: int = 256 * 1024) -> int | None:
+    """그 세션 기록에서 마지막 압축 지점(compact_boundary) 이후 바이트 — 이어받을 때 실리는 분량의 어림(읽기만).
+    limit 을 넘으면 None(너무 큼). 끝에서부터 limit 만큼만 거꾸로 읽는다(수백 MB 기록도 전부 읽지 않게)."""
+    from session_manager.scanner import scan_one
+    m = scan_one(sid)
+    if not m:
+        return 0
+    mark = b'"compact_boundary"'
+    with open(m.jsonl_path, "rb") as f:
+        f.seek(0, 2)
+        size = f.tell()
+        pos, buf = size, b""
+        while pos > 0 and size - pos <= limit + chunk:
+            step = min(chunk, pos)
+            pos -= step
+            f.seek(pos)
+            buf = f.read(step) + buf
+            i = buf.rfind(mark)
+            if i >= 0:
+                start = buf.rfind(b"\n", 0, i) + 1
+                tail = size - (pos + start)
+                return tail if tail <= limit else None
+        return size if size <= limit else None
 
 
 def _notify(title: str, body: str) -> None:

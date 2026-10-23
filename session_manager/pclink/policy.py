@@ -37,7 +37,12 @@ PER_DAY = 200
 PROMPT_MAX = 8000
 ANSWER_MAX = 20000
 ASK_TIMEOUT_S = 180
-ASK_BUDGET_USD = 0.5
+# 비용(2026-10-23 사장님 결정: 묻기당 2달러·짝당 하루 20달러, API 기준 어림). 복제본 비용은 그 세션의 '마지막 압축 이후 대화
+# 분량'에 비례한다(T12 실측 250KB ≈ 0.47달러). claude 의 --max-budget-usd 는 이어받은 세션의 과거 누적 비용과 비교돼
+# 지금 쓰는 세션에는 늘 실패하므로 쓰지 않고, 실행 전에 분량으로 어림해 막는다(inbound._tail_bytes).
+ASK_MAX_USD = 2.0
+DAY_BUDGET_USD = 20.0
+USD_PER_MB = 1.9
 HOST_CONCURRENCY = 2
 HOST_QUEUE = 4
 CLEANUP_KEEP_S = 7 * 86400        # 해제 알림을 못 보낸 짝을 '상대 쪽 정리 대기'로 두는 기간
@@ -374,19 +379,27 @@ class Policy:
         return "pending_approval" if st == "pending" else "approval_needed"
 
     # ---- 한도(실행 전 예약) ----
-    def reserve(self, peer: str) -> int | None:
-        """짝당 분 PER_MIN·일 PER_DAY. 넘으면 다시 해도 되는 초, 아니면 None(예약됨)."""
+    def reserve(self, peer: str, est_usd: float = 0.0) -> int | None:
+        """짝당 분 PER_MIN·일 PER_DAY·하루 어림 예산 DAY_BUDGET_USD. 넘으면 다시 해도 되는 초, 아니면 None(예약됨)."""
         t = self.clock()
         with self._lock:
-            q = self._rate.setdefault(peer, collections.deque())
-            while q and t - q[0] >= 86400:
+            q = self._rate.setdefault(peer, collections.deque())      # (시각, 어림 달러)
+            while q and t - q[0][0] >= 86400:
                 q.popleft()
             if len(q) >= PER_DAY:
-                return int(86400 - (t - q[0])) + 1
-            last_min = [x for x in q if t - x < 60]
+                return int(86400 - (t - q[0][0])) + 1
+            last_min = [x for x, _ in q if t - x < 60]
             if len(last_min) >= PER_MIN:
                 return int(60 - (t - last_min[0])) + 1
-            q.append(t)
+            spent = sum(u for _, u in q)
+            if spent + est_usd > DAY_BUDGET_USD:
+                need = spent + est_usd - DAY_BUDGET_USD
+                for x, u in q:                                       # 오래된 예약이 빠지면 되는 시각
+                    need -= u
+                    if need <= 0:
+                        return int(86400 - (t - x)) + 1
+                return 86400
+            q.append((t, float(est_usd)))
             return None
 
     # ---- 초대(B) ----

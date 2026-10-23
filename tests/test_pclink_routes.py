@@ -92,6 +92,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(service, "request_contact", fake_request_contact)
     monkeypatch.setattr(inbound, "_running", 0)
     monkeypatch.setattr(inbound, "_waiting", 0)
+    monkeypatch.setattr(inbound, "_tail_bytes", lambda sid, limit: 100_000)     # 어림 0.19달러
     return a, b, link, calls, contacts, clk
 
 
@@ -258,8 +259,9 @@ def test_ask_clone_uses_isolated_limits(monkeypatch):
     monkeypatch.setattr(webapi, "ephemeral_ask", fake)
     kind, out = _real_clone(SID, "q", "id1")
     assert seen["isolated"] is True and seen["timeout"] == POL.ASK_TIMEOUT_S
-    assert seen["guardrails"] == {"max_budget_usd": POL.ASK_BUDGET_USD}
+    assert seen["guardrails"] == {}            # --max-budget-usd 는 과거 누적 비용과 비교돼 쓰지 않는다(T12)
     assert kind == "answer" and out["truncated"] is True and len(out["answer"]) == POL.ANSWER_MAX
+    assert "cost_usd" not in out
 
 
 def test_list_only_allowed_sessions(env, monkeypatch):
@@ -513,3 +515,46 @@ def test_old_host_without_pclink_is_peer_outdated(env, monkeypatch):
     with pytest.raises(routes.PclinkFail) as ei:
         run(_ask(a, b))
     assert ei.value.code == "peer_outdated"
+
+
+# ---------------------------------------------------------------- 비용 어림(T12 — 사장님 결정 묻기당 2달러·짝당 하루 20달러)
+
+def _jsonl(home, sid, lines):
+    from tests.conftest import write_session
+    return write_session(home, "P--x", sid, lines)
+
+
+def test_tail_bytes_counts_from_last_compact_boundary(fake_claude_home):
+    big = {"type": "user", "message": {"role": "user", "content": "가" * 2000}}
+    f = _jsonl(fake_claude_home, "t1", [big] * 50 + [{"type": "system", "subtype": "compact_boundary"}] + [big] * 3)
+    data = f.read_bytes()
+    want = len(data) - (data.rfind(b'"compact_boundary"') - data[:data.rfind(b'"compact_boundary"')][::-1].find(b"\n"))
+    got = inbound._tail_bytes("t1", 10_000_000, chunk=1024)
+    assert got == want and got < len(data) // 5
+    assert inbound._tail_bytes("t1", 100, chunk=1024) is None                        # 상한을 넘으면 너무 큼
+    _jsonl(fake_claude_home, "t2", [big] * 5)                                         # 압축 지점 없음 = 파일 전체
+    assert inbound._tail_bytes("t2", 10_000_000) == (fake_claude_home / "projects" / "P--x" / "t2.jsonl").stat().st_size
+    assert inbound._tail_bytes("t2", 1000) is None
+    assert inbound._tail_bytes("nope", 1000) == 0
+
+
+def test_too_big_session_is_refused_before_running(env, monkeypatch):
+    a, b, _, calls, _, _ = env
+    _ready(a, b)
+    monkeypatch.setattr(inbound, "_tail_bytes", lambda sid, limit: None)
+    r = run(_ask(a, b))
+    assert r["status"] == "refused" and r["code"] == "too_big" and calls == []
+
+
+def test_day_budget_is_reserved_before_running(env, monkeypatch):
+    a, b, _, calls, _, _ = env
+    _ready(a, b)
+    monkeypatch.setattr(inbound, "_tail_bytes", lambda sid, limit: 1_000_000)        # 어림 1.9달러
+    monkeypatch.setattr(POL, "PER_MIN", 100)
+    n = 0
+    while True:
+        r = run(_ask(a, b))
+        if r["status"] != "answer":
+            break
+        n += 1
+    assert n == int(POL.DAY_BUDGET_USD // 1.9) and r["code"] == "limit" and r["retry_after"] > 0
