@@ -22,6 +22,8 @@ import httpx
 from websockets.asyncio.client import connect
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 
+from session_manager import logredact
+
 CODES = ("peer_offline", "timeout", "auth", "peer_outdated", "link_error")
 
 # CP 토큰 캐시 — (cp, 자격 id) → (토큰, 만료 epoch 초). 만료 5분 전까지 쓴다(폰과 같은 여유). 프로세스 메모리.
@@ -32,6 +34,9 @@ _TOKENS: dict[tuple[str, str], tuple[str, float]] = {}
 # 릴레이가 자격을 거절할 때의 닫기 코드(relay.py): 4401 공유 토큰 없음·틀림, 4402 JWT 거절, 4403 방 모름·회수됨
 _RELAY_AUTH_CODES = (4401, 4402, 4403)
 _RELAY_BAD_REQUEST = 4400
+
+# 상대 방 주소 쿼리에 jwt 가 실린다 — websockets DEBUG 로그(요청 줄)에 남지 않게(멱등)
+logredact.install()
 
 
 def _log(msg: str) -> None:

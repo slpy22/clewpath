@@ -34,6 +34,11 @@ import httpx
 import websockets
 from websockets.asyncio.client import connect
 
+from session_manager import logredact
+
+# 릴레이 주소 쿼리에 jwt·공유 토큰이 실린다 — websockets DEBUG 로그(요청 줄)에 남지 않게(멱등)
+logredact.install()
+
 DEFAULT_LOCAL_BASE = os.environ.get(
     "SM_LOCAL_BASE", "http://127.0.0.1:5100").rstrip("/")
 
@@ -992,7 +997,8 @@ class Connector:
                     async for raw in ws:
                         await self._on_frame(raw)
             except Exception as e:  # noqa: BLE001
-                print(f"[connector] 연결 끊김: {type(e).__name__}: {e} "
+                # 예외 문구(InvalidURI 등)에는 주소 전체 — 쿼리의 jwt·토큰 — 가 들어갈 수 있다
+                print(f"[connector] 연결 끊김: {type(e).__name__}: {logredact.redact(str(e))} "
                       f"→ {backoff}s 후 재시도")
             finally:
                 self.ws = None
