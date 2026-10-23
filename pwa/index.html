@@ -7678,6 +7678,10 @@ async function checkUpdateNow(cur){
     const s=await T.api('GET','/api/owner/update/status',{query:{refresh:1}});
     if(s && s.dev){ status.textContent=`개발 소스에서 실행 중입니다 (v${s.current||cur}). 이 PC 는 git 으로 갱신하세요 — 자동 업데이트는 소스 트리 보호를 위해 막혀 있습니다.`; }
     else if(s && s.available && s.latest){ closeModal(); showUpdateApply(s.current||cur, s.latest); }
+    // 받을 수 없는 까닭이 있으면 '최신'이라 하지 않는다 — 업데이트 서버에 못 닿음(error), 최신 릴리스가 이 OS 용이 아님(unsupported,
+    // 맥·리눅스 판이 아직 없을 때). 서버 응답 모양: session_manager/updater.py check → server.py owner_update_status
+    else if(s && s.error){ status.textContent=`현재 v${s.current||cur} — 업데이트 서버에서 새 버전을 확인하지 못했습니다(${s.error}). 잠시 뒤 다시 확인하세요.`; }
+    else if(s && s.unsupported){ status.textContent=`현재 v${s.current||cur} — 새 버전${s.latest?' v'+s.latest:''} 은 아직 이 PC 에서 받을 수 없습니다(${s.unsupported}). 이 운영체제용 판이 나오면 여기서 업데이트할 수 있습니다.`; }
     else{ status.textContent=`현재 v${(s&&s.current)||cur} — 최신 버전입니다.`; }
   }catch(e){ status.textContent='업데이트 서버에 연결하지 못했습니다.'; }
 }

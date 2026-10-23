@@ -333,3 +333,32 @@ test("T113 이름 바꾸기 성공·삭제가 보던 화면을 바꾸지 않는�
     "삭제|그 세션 뷰어": { at: "empty", redrawn: true },
   });
 });
+
+// ---------------------------------------------------------------- 9. 업데이트 확인의 unsupported·확인 실패
+// update/status 응답(session_manager/server.py owner_update_status = updater.read_state + current·dev): 최신 릴리스가 이 OS 용이 아니면
+// available=false·latest·unsupported(사유), 업데이트 서버에 못 닿으면 available=false·error. 둘 다 '최신 버전입니다'가 아니다
+test("T114 업데이트 확인: 최신 릴리스가 이 OS 용이 아니면(unsupported) 그 사유를, 업데이트 서버 확인에 실패했으면(error) 그 사실을 보여 준다 — '최신 버전입니다'로 보이지 않게. 진짜 최신·새 버전·개발 소스는 그대로", async () => {
+  const UNSUP = "이 릴리스(0.33.0)는 mac 를 지원하지 않습니다";
+  const cases = {
+    "이 OS 용 아님": { current: "0.32.2", latest: "0.33.0", available: false, error: null, unsupported: UNSUP, dev: false },
+    "확인 실패": { current: "0.32.2", latest: "0.32.2", available: false, error: "확인 실패: URLError: timed out", dev: false },
+    "최신": { current: "0.32.2", latest: "0.32.2", available: false, error: null, unsupported: null, dev: false },
+    "새 버전": { current: "0.32.2", latest: "0.33.0", available: true, error: null, unsupported: null, dev: false },
+    "개발 소스": { current: "0.32.2", available: false, dev: true },
+  };
+  const got = await each(Object.keys(cases), async (p) => {
+    const ctx = await load({ location: LOCAL });
+    ev(ctx, `globalThis.__m = []; openModal = (t, b) => { __m.push(b); }; closeModal = () => {}; globalThis.__apply = null;
+      showUpdateApply = (c, l) => { __apply = c + '→' + l; };
+      T.api = async (v, path) => { if (path === '/api/owner/update/status') return ${JSON.stringify(cases[p])}; return {}; };`);
+    await ev(ctx, "checkUpdateNow('0.32.2')");
+    return ev(ctx, "__apply") || ev(ctx, "__m.at(-1).children[0].textContent");
+  });
+  assert.deepEqual(got, {
+    "이 OS 용 아님": "현재 v0.32.2 — 새 버전 v0.33.0 은 아직 이 PC 에서 받을 수 없습니다(" + UNSUP + "). 이 운영체제용 판이 나오면 여기서 업데이트할 수 있습니다.",
+    "확인 실패": "현재 v0.32.2 — 업데이트 서버에서 새 버전을 확인하지 못했습니다(확인 실패: URLError: timed out). 잠시 뒤 다시 확인하세요.",
+    "최신": "현재 v0.32.2 — 최신 버전입니다.",
+    "새 버전": "0.32.2→0.33.0",
+    "개발 소스": "개발 소스에서 실행 중입니다 (v0.32.2). 이 PC 는 git 으로 갱신하세요 — 자동 업데이트는 소스 트리 보호를 위해 막혀 있습니다.",
+  });
+});
