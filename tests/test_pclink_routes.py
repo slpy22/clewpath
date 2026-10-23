@@ -574,3 +574,21 @@ def test_allowed_sessions_carry_titles(fake_claude_home, tmp_path):
     assert set(got) == {"s-titled", "s-plain"}
     assert got["s-titled"]["title"] == "배포 정리" and got["s-plain"]["title"] == "s-plain"[:8]
     assert isinstance(got["s-titled"]["updated_at"], float)
+
+
+def test_phone_on_actions_need_recent_grace(client, monkeypatch):
+    """폰의 pclink '켜는' 동작은 10분 안에 코드를 넣고 받은 grace 만 — 터미널 특권의 8시간 유예를 그대로 쓰지 않는다."""
+    from session_manager import owner2fa
+    monkeypatch.setattr(owner2fa, "secret", lambda: "JBSWY3DPEHPK3PXP")
+    monkeypatch.setattr(owner2fa, "enabled", lambda: True)
+    sealed = _phone(monkeypatch)
+    g = owner2fa.issue_grace()
+    assert g["issued"] <= g["exp"] and owner2fa.grace_age(g["grace"]) <= 1
+    r = client.post("/api/owner/pclink/sessions/s1/allow", json={"on": True, "grace": g["grace"]}, headers=sealed)
+    assert r.status_code == 200 and r.json()["allow"] is True
+    # 같은 grace 가 11분 전에 받은 것처럼(유예 기간 설정을 늘려 발급 시각을 앞당겨 계산) — 터미널엔 아직 유효하지만 pclink 엔 오래됨
+    monkeypatch.setenv("SM_2FA_GRACE_SEC", str(owner2fa.grace_ttl() + 660))
+    assert owner2fa.verify_grace(g["grace"]) is True and owner2fa.grace_age(g["grace"]) > routes.GRACE_FRESH_S
+    r = client.post("/api/owner/pclink/sessions/s2/allow", json={"on": True, "grace": g["grace"]}, headers=sealed)
+    assert r.status_code == 403 and r.json()["error"] == "2fa_stale"
+    assert client.post("/api/owner/pclink/sessions/s2/allow", json={"on": False}, headers=sealed).status_code == 200   # 끄기는 그대로

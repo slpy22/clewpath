@@ -134,13 +134,27 @@ def _grace_key() -> bytes:
 def issue_grace(ttl: int | None = None) -> dict | None:
     if not secret():
         return None
-    exp = int(time.time()) + (ttl or grace_ttl())
+    now = int(time.time())
+    exp = now + (ttl or grace_ttl())
     nonce = secrets.token_hex(8)
     sig = hmac.new(_grace_key(), f"{exp}.{nonce}".encode(),
                    hashlib.sha256).hexdigest()[:32]
     tok = base64.urlsafe_b64encode(
         f"{exp}.{nonce}.{sig}".encode()).decode().rstrip("=")
-    return {"grace": tok, "exp": exp}
+    return {"grace": tok, "exp": exp, "issued": now}
+
+
+def grace_age(tok: str | None) -> int | None:
+    """유효한 grace 가 발급된 지 몇 초(만료 시각 − 유예 기간으로 계산). 유효하지 않으면 None.
+    pclink 의 '켜는' 동작은 최근에 코드를 넣은 grace 만 받는다(터미널 특권의 8시간 유예와 따로)."""
+    if not verify_grace(tok):
+        return None
+    try:
+        pad = "=" * ((4 - len(tok) % 4) % 4)
+        exp = int(base64.urlsafe_b64decode(tok + pad).decode().split(".")[0])
+    except Exception:  # noqa: BLE001
+        return None
+    return max(0, int(time.time()) - (exp - grace_ttl()))
 
 
 def verify_grace(tok: str | None) -> bool:

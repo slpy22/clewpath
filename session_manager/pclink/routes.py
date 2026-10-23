@@ -21,6 +21,7 @@ from session_manager.pclink import protocol as P
 
 from session_manager.connector import E2EE_HEADER   # 커넥터가 E2EE 봉투로 온 요청에만 붙인다(사람 증명 헤더와 함께만 믿는다)
 CALL_TIMEOUT_S = POL.ASK_TIMEOUT_S + 20
+GRACE_FRESH_S = 600     # 폰의 pclink '켜는' 동작은 10분 안에 코드를 넣고 받은 grace 만(터미널 특권의 8시간 유예와 따로)
 SHORT_TIMEOUT_S = 20
 _POOL = None
 _BG = None
@@ -305,9 +306,13 @@ def relay_on_guard(request, body: dict | None) -> str | None:
     b = body or {}
     q = getattr(request, "query_params", {}) or {}
     grace, otp = b.get("grace") or q.get("grace"), b.get("otp") or q.get("otp")
-    if not (owner2fa.verify_grace(grace) or owner2fa.verify(otp)):
-        return "2fa_invalid"
-    return None
+    if otp and owner2fa.verify(otp):
+        return None
+    age = owner2fa.grace_age(grace) if grace else None
+    if age is not None:
+        # 유예는 유효하지만 오래됐다 — 폰에서 짝짓기·세션 열기 같은 '켜는' 동작은 방금 코드를 넣은 사람만
+        return None if age <= GRACE_FRESH_S else "2fa_stale"
+    return "2fa_invalid"
 
 
 def relay_off_guard(request) -> str | None:
