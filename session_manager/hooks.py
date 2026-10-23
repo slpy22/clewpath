@@ -104,7 +104,7 @@ def hook_command(port: int) -> str:
       curl 에 @- 가 전달됨)
     - 공백 있는 인용 헤더 금지(셸별 인용 규칙 지뢰) - `-H Content-Type:application/json`
       처럼 공백 없이(curl 유효 문법)
-    - `cmd /c` 래핑 금지: bash(MSYS)가 `/c` 를 `C:\` 경로로 변환해 cmd 가
+    - `cmd /c` 래핑 금지: bash(MSYS)가 `/c` 를 `C:/` 경로로 변환해 cmd 가
       대화형으로 떠버린다(실측)
     - 실행 파일 이름은 osdep.CURL: Windows 는 `curl.exe` 명시(PS 의 curl 별칭 Invoke-WebRequest 회피),
       맥·리눅스는 `curl`(curl.exe 가 없다)

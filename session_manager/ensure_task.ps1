@@ -151,6 +151,17 @@ function Get-TaskPlan($Task, [string]$StartPs, [int]$Build, [string]$Conhost) {
               Action = (Get-HeadlessAction -Actions $Task.Actions -StartPs $StartPs -Build $Build -Conhost $Conhost) }
 }
 
+# 5분 반복 트리거 — 지속 시간을 주지 않는다(= 무기한). 예전 5.1 분기가 붙이던 [TimeSpan]::MaxValue 는 작업 XML 에서
+# P99999999DT23H59M59S 가 되어 Windows 11 작업 스케줄러가 "incorrectly formatted or out of range" 로 거부했다(2026-10-23 노트북,
+# 0.32.0 — 트리거와 함께 conhost 동작 변경까지 실패). 작업 스케줄러 cmdlet 은 PowerShell 버전과 무관하게 OS 모듈이라 버전 분기가
+# 필요 없다(pwsh 7 분기는 처음부터 지속 시간 없이 통과). -Bounded 는 무기한을 거부하는 옛 Windows 를 위한 재시도(10년).
+function New-RepeatTrigger([switch]$Bounded) {
+    if ($Bounded) {
+        return New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650) -ErrorAction Stop
+    }
+    return New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5) -ErrorAction Stop
+}
+
 if ($LibOnly) { return }
 
 # ================================================================ 본체
@@ -221,28 +232,36 @@ if (-not $plan.NeedRepetition) {
     exit 0
 }
 
+# 동작과 트리거는 따로 바꾼다 — 한쪽이 거부돼도 다른 쪽은 들어가게(노트북 0.32.0: 트리거 거부에 conhost 동작 변경까지 묶여 실패).
+$actionDone = $false
 try {
+    if ($newAction) {
+        Set-ScheduledTask -TaskName $TaskName -Action $newAction -ErrorAction Stop | Out-Null
+        $t1 = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
+        if ("$(@($t1.Actions)[0].Execute)" -ne $act.Execute) { throw "action not changed after update" }
+        $actionDone = $true
+    }
     $me = "$env:USERDOMAIN\$env:USERNAME"
     $logon = New-ScheduledTaskTrigger -AtLogOn -User $me -ErrorAction Stop
-    if ($PSVersionTable.PSVersion.Major -ge 7) {
-        $rep = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5) -ErrorAction Stop
-    } else {
-        $rep = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration ([TimeSpan]::MaxValue) -ErrorAction Stop
-    }
     $set = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -ErrorAction Stop
-    if ($newAction) {
-        Set-ScheduledTask -TaskName $TaskName -Action $newAction -Trigger @($logon, $rep) -Settings $set -ErrorAction Stop | Out-Null
-    } else {
-        Set-ScheduledTask -TaskName $TaskName -Trigger @($logon, $rep) -Settings $set -ErrorAction Stop | Out-Null
+    $bounded = $false
+    try {
+        Set-ScheduledTask -TaskName $TaskName -Trigger @($logon, (New-RepeatTrigger)) -Settings $set -ErrorAction Stop | Out-Null
+    } catch {
+        $first = $_.Exception.Message
+        try {
+            Set-ScheduledTask -TaskName $TaskName -Trigger @($logon, (New-RepeatTrigger -Bounded)) -Settings $set -ErrorAction Stop | Out-Null
+            $bounded = $true
+        } catch { throw "$first | bounded retry: $($_.Exception.Message)" }
     }
     # 바뀌었는지 다시 읽어 확인 — 예전엔 Set 의 비종료 오류가 catch 를 지나쳐 실패해도 'added' 라고 적었다
     $t2 = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop
     if (-not (Test-HasRepetition $t2.Triggers)) { throw "repetition trigger not present after update" }
-    if ($newAction -and ("$(@($t2.Actions)[0].Execute)" -ne $act.Execute)) { throw "action not changed after update" }
 } catch {
+    if ($actionDone) { "action: conhost --headless ($([IO.Path]::GetFileName($act.Exe)))" }
     "task: update failed: $($_.Exception.Message)"
     exit 1
 }
 if ($newAction) { "action: conhost --headless ($([IO.Path]::GetFileName($act.Exe)))" } else { "action: unchanged ($($act.Reason))" }
-"task: repetition trigger added (5m)"
+if ($bounded) { "task: repetition trigger added (5m, 10 years - indefinite was refused)" } else { "task: repetition trigger added (5m)" }
 exit 0

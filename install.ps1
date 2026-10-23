@@ -625,20 +625,26 @@ if ($DryRun) {
             $triggers  = @($trigger)
             # v0.9.2 자기 회복: 5분 반복 트리거 — 런처가 멱등(v2)일 때만. 서버가 떠 있으면
             # 런처는 즉시 끝나고, 죽어 있으면 5분 안에 되살린다(MultipleInstances=IgnoreNew).
+            # 지속 시간은 주지 않는다(= 무기한) — ensure_task.ps1 New-RepeatTrigger 와 같은 규칙. 예전 5.1 분기의 [TimeSpan]::MaxValue 는
+            # Windows 11 작업 스케줄러가 범위 밖으로 거부해 등록이 실패하고 시작 프로그램 폴백으로 빠졌다(2026-10-23 노트북).
             if ($launcherV2) {
-                if ($PSVersionTable.PSVersion.Major -ge 7) {
-                    $rep = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5)
-                } else {
-                    $rep = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration ([TimeSpan]::MaxValue)
-                }
-                $triggers += $rep
+                $triggers += New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5)
             }
             $principal = New-ScheduledTaskPrincipal -UserId $me `
                           -LogonType Interactive -RunLevel Limited
             $set       = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
                           -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew
-            Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $triggers `
-                        -Principal $principal -Settings $set -Force | Out-Null
+            try {
+                Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $triggers `
+                            -Principal $principal -Settings $set -Force -ErrorAction Stop | Out-Null
+            } catch {
+                if (-not $launcherV2) { throw }
+                # 무기한 반복을 거부하는 옛 Windows — 10년으로 한 번 더
+                $triggers = @($trigger, (New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
+                              -RepetitionInterval (New-TimeSpan -Minutes 5) -RepetitionDuration (New-TimeSpan -Days 3650)))
+                Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $triggers `
+                            -Principal $principal -Settings $set -Force -ErrorAction Stop | Out-Null
+            }
             if ($launcherV2 -and $headless) { Ok "자동시작 등록 ($taskName, 로그온 시 + 5분마다 생존 확인, 창 없이)" }
             elseif ($launcherV2) { Ok "자동시작 등록 ($taskName, 로그온 시 + 5분마다 생존 확인)" }
             else { Ok "자동시작 등록 ($taskName, 이 사용자 로그온 시)" }

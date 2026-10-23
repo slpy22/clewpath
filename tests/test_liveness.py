@@ -123,8 +123,9 @@ def test_launcher_template_and_ensure_script_contract():
     for needle in ("/api/health", "maintenance.flag", "launcher.lock", "runtime.json", "{{DATA_DIR}}", "{{CONF_FILE}}", "{{PORT}}", "launcher.log"):
         assert needle in t
     e = ens.read_text(encoding="utf-8-sig")
-    # 런처가 멱등이 아니면 반복 트리거를 달지 않는다(겹쳐 뜨는 사고 방지) — 순서 계약
-    assert e.index("launcher not idempotent") < e.index("RepetitionInterval")
+    # 런처가 멱등이 아니면 반복 트리거를 달지 않는다(겹쳐 뜨는 사고 방지) — 순서 계약. 트리거 생성은 함수(New-RepeatTrigger)라
+    # 정의는 위에 있고, 실제로 다는 곳(Set-ScheduledTask … New-RepeatTrigger)이 런처 검사 뒤여야 한다
+    assert e.index("launcher not idempotent") < e.index("(New-RepeatTrigger)")
     assert "MultipleInstances IgnoreNew" in e
 
 

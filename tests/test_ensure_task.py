@@ -382,3 +382,45 @@ def test_ps_text_falls_back_to_oem_codepage():
                 continue
             assert _win._ps_text(raw) == s
             break
+
+
+# ---------------------------------------------------------------- 5분 반복 트리거(2026-10-23 노트북 0.32.0 회귀)
+# 노트북(Windows 11 26300, powershell.exe 5.1)에서 옛 5.1 분기의 -RepetitionDuration ([TimeSpan]::MaxValue) 가 작업 XML 에
+# P99999999DT23H59M59S 로 들어가 작업 스케줄러가 "incorrectly formatted or out of range" 로 거부했다. 트리거와 같은
+# Set-ScheduledTask 에 묶인 conhost 동작 변경까지 실패. 실제 등록은 이 시험에서 하지 않는다(예약 작업 변경은 서비스 모니터 몫) —
+# 트리거 객체가 '5분 간격·지속 시간 없음(무기한)' 으로 만들어지는지 두 엔진에서 본다.
+
+def test_no_maxvalue_duration_or_version_branch_for_triggers():
+    for f in (ENSURE, ROOT / "install.ps1"):
+        text = "\n".join(ln for ln in f.read_text(encoding="utf-8-sig").splitlines() if not ln.lstrip().startswith("#"))
+        assert "[TimeSpan]::MaxValue" not in text, f                  # 코드 줄만(주석의 사고 기록은 그대로)
+        assert "P99999999" not in text, f
+        # 반복 트리거를 만드는 줄 근처에 PowerShell 버전 분기가 다시 생기지 않게(작업 스케줄러 cmdlet 은 OS 모듈이라 버전과 무관)
+        for i, line in enumerate(text.splitlines()):
+            if "RepetitionInterval" in line:
+                near = "\n".join(text.splitlines()[max(0, i - 3):i + 1])
+                assert "PSVersion" not in near, (f, i, near)
+
+
+@on_windows_ps
+@pytest.mark.parametrize("engine", ENGINES)
+def test_repeat_trigger_is_indefinite_5min_on_each_engine(tmp_path, engine):
+    res = _lib(engine, r"""
+$a = New-RepeatTrigger
+$b = New-RepeatTrigger -Bounded
+[pscustomobject]@{ I = "$($a.Repetition.Interval)"; D = "$($a.Repetition.Duration)"; BI = "$($b.Repetition.Interval)"; BD = "$($b.Repetition.Duration)" }
+""", tmp_path)
+    r = res[0] if isinstance(res, list) else res
+    assert r["I"] == "PT5M" and r["D"] in ("", "None"), r          # 무기한 = 지속 시간 칸이 비어 있음
+    assert r["BI"] == "PT5M" and r["BD"] == "P3650D", r
+
+
+def test_action_and_trigger_are_updated_separately():
+    """동작 변경과 트리거 변경은 따로(한쪽 거부가 다른 쪽을 막지 않게), 무기한이 거부되면 10년으로 한 번 더."""
+    text = ENSURE.read_text(encoding="utf-8-sig")
+    tail = text[text.index("$actionDone = $false"):]
+    assert "Set-ScheduledTask -TaskName $TaskName -Action $newAction -ErrorAction Stop" in tail
+    assert "-Trigger @($logon, (New-RepeatTrigger))" in tail and "-Trigger @($logon, (New-RepeatTrigger -Bounded))" in tail
+    assert "-Action $newAction -Trigger" not in tail                # 한 번의 Set 에 묶지 않는다
+    inst = (ROOT / "install.ps1").read_text(encoding="utf-8-sig")
+    assert "-RepetitionDuration (New-TimeSpan -Days 3650)" in inst   # install.ps1 도 거부되면 10년으로 재시도
