@@ -110,3 +110,35 @@ test("T105 PC 머리 줄 제목은 상세 칸 화면 이름을 따른다 — 목
     "폰": { open: "뷰어", list: "세션", view: "세션" },
   });
 });
+
+// ---------------------------------------------------------------- 2. 첫 목록 실패(PC 꺼짐)와 '받는 중' 구분
+// 폰 시트 한 줄 — [칸, 보조 글, 꼬리표, 흐림]
+const rows = (ctx) => ev(ctx, "POP.box.children[1].children").map((b) => [b.dataset.k,
+  (b.children[1].children[1] || {}).textContent || "", (b.children[2] || {}).textContent || "", b.classList.contains("dim")]);
+test("T106 첫 목록을 받지 못했으면(PC 꺼짐·연결 실패) 바로가기 단추·시트·누름이 '받는 중'이 아니라 그 까닭을 알린다 — 다시 받는 동안은 '받는 중', PC 가 돌아와 목록을 받으면 기억대로", async () => {
+  const OFF = "T.list = async () => { __lists++; throw new Error('agent_offline'); };";
+  const FAIL = "T.list = async () => { __lists++; throw new Error('disconnected'); };";
+  const WAIT = "T.list = () => { __lists++; return new Promise(() => {}); };";
+  const OK = "T.list = async () => { __lists++; return { sessions: SESSIONS.map((s) => ({ ...s })) }; };";
+  const got = await each(["받는 중", "PC 꺼짐", "연결 실패", "PC 꺼짐 → 다시 받는 중(⟳)", "PC 꺼짐 → PC 돌아옴", "폰: PC 꺼짐"], async (p) => {
+    const phone = p.startsWith("폰");
+    const { ctx, nav, title } = await boot({ width: phone ? 390 : 1400, ready: false, mem: {}, pre: p === "받는 중" ? WAIT : p === "연결 실패" ? FAIL : OFF });
+    const pl = ev(ctx, "loadList()"); if (p !== "받는 중") await pl; await tick(QS);
+    if (p.endsWith("다시 받는 중(⟳)")) { ev(ctx, WAIT); ev(ctx, "loadList()"); await tick(QS); }
+    if (p.endsWith("PC 돌아옴")) { ev(ctx, OK); ev(ctx, "pcBack()"); await tick(QS); }
+    const shown = phone ? (title.onclick(), rows(ctx)[0]) : btn(nav, 0);
+    if (phone) ev(ctx, "closePop()");
+    ev(ctx, "__toasts.length = 0");
+    if (p.endsWith("PC 돌아옴")) return { shown };
+    await ctx.quickGo("files"); await tick();
+    return { shown, press: ev(ctx, "__toasts.join('|')"), at: at(ctx) };
+  });
+  assert.deepEqual(got, {
+    "받는 중": { shown: ["dim wait", "터미널 — 준비 중(목록을 받는 중) · Alt+1"], press: "목록을 받는 중입니다", at: "empty" },
+    "PC 꺼짐": { shown: ["dim", "터미널 — PC 가 꺼져 있습니다 · Alt+1"], press: "PC 가 꺼져 있습니다 — 켜지면 자동으로 다시 불러옵니다", at: "empty" },
+    "연결 실패": { shown: ["dim", "터미널 — 목록을 받지 못했습니다 · Alt+1"], press: "목록을 받지 못했습니다 — 연결을 확인하세요", at: "empty" },
+    "PC 꺼짐 → 다시 받는 중(⟳)": { shown: ["dim wait", "터미널 — 준비 중(목록을 받는 중) · Alt+1"], press: "목록을 받는 중입니다", at: "empty" },
+    "PC 꺼짐 → PC 돌아옴": { shown: ["", "터미널 — A · Alt+1"] },
+    "폰: PC 꺼짐": { shown: ["terminal", "PC 가 꺼져 있습니다", "PC 꺼짐", true], press: "PC 가 꺼져 있습니다 — 켜지면 자동으로 다시 불러옵니다", at: "empty" },
+  });
+});

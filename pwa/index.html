@@ -1741,6 +1741,12 @@ function setListView(v){ LIST_VIEW=LIST_VIEWS.includes(v)?v:'sessions'; try{ LS.
 let LIST_READY=false;   // 지금 PC 의 첫 목록을 받았나(PC 전환 때 false) — SESSIONS 가 이 PC 것이라 믿고 기억을 걸러도 되는가(quick-switch 3단계)
 let LIST_AT=0;          // 지금 SESSIONS 를 서버에 청한 시각(ms) — 그 뒤에 이 페이지가 본 것(방금 띄운 터미널)은 목록이 아직 모른다(tabSeenLive)
 let LIST_FAIL=false;    // 목록 칸이 '목록 실패'를 보이는 중인가 — PC 가 돌아오면(pcBack) 처음부터 다시 받는다(20초 갱신은 옛 목록 칸에 그린다)
+let LIST_ERR='';        // 마지막으로 목록을 받지 못한 까닭(오류 코드) — 첫 목록 전 바로가기가 '받는 중'과 'PC 꺼짐·연결 실패'를 가른다. 다시 받기 시작하면 ''
+// 첫 목록을 받지 못한 까닭을 바로가기 말로 — [툴팁·시트 보조 글, 시트 꼬리표, 누름 알림]
+function listErrText(){
+  return LIST_ERR==='agent_offline'?['PC 가 꺼져 있습니다','PC 꺼짐',connErrText(LIST_ERR)]
+    :['목록을 받지 못했습니다','연결 실패','목록을 받지 못했습니다 — 연결을 확인하세요'];
+}
 async function loadList(q){
   const main=paneList(); headList();
   main.innerHTML=''; syncTabbar();
@@ -1773,6 +1779,7 @@ async function loadList(q){
   // 탭 막대 전환(2026-10-14 사장님): 오른쪽 칸은 그대로 — 비어 있을 때만 안내를 그린다(보던 상세·관제·파일·뷰어 유지)
   if(!paneDetail().children.length) detailPlaceholder();
   const pc=pcNow(), at=Date.now();        // 이 목록을 청한 PC·시각
+  if(LIST_ERR){ LIST_ERR=''; renderQuickSoon(); }   // 다시 받는 중 — 바로가기는 'PC 꺼짐'에서 '받는 중'으로
   try{
     const data=await T.list({limit:0});
     // 받는 사이 릴레이로 PC 를 바꿨다 — 늦게 온 옛 PC 목록은 버린다(새 PC 의 loadList 가 따로 돈다). 옛 목록으로 새 PC 의
@@ -1791,7 +1798,8 @@ async function loadList(q){
     LIST_CTX={rerender};
     refreshTodo();                 // 🔔 배지(승인 요청 수는 서버에서, 권한·입력 대기는 방금 받은 목록에서)           // 자동 갱신(뱃지 실시간화)이 쓸 컨텍스트
   }catch(e){ if(pc!==pcNow()) return;   // 받는 사이 PC 를 바꿨다 — 새 PC 의 loadList 가 따로 돈다
-    LIST_FAIL=true; listWrap.innerHTML=''; listWrap.appendChild(el('div','empty','목록 실패: '+connErrText(e.message))); }
+    LIST_FAIL=true; listWrap.innerHTML=''; listWrap.appendChild(el('div','empty','목록 실패: '+connErrText(e.message)));
+    LIST_ERR=String((e&&e.message)||'error'); renderQuickSoon(); }   // 첫 목록 전이면 바로가기가 '받는 중' 대신 이 까닭을 알린다
 }
 
 // ---- 목록 자동 갱신: 훅 상태 뱃지를 실시간처럼 (화면 보일 때만, 스크롤 보존) ----
@@ -6834,14 +6842,14 @@ function quickMonMem(teams){
   return t?{mem:{team:t.code, gid:last, name:t.name||''}, team:t, old:true}:null;
 }
 // 네 칸의 지금 모습 — [{kind, icon, label, has(돌아갈 기억), name, sub(보조 글), dim(흐림), taken(👀), wait(첫 목록 전 — 준비 중),
-// cur(지금 보이는 상세 칸 화면), back(숨겨 둔 화면 — 폰 '‹ 목록'·관제 덮개 밑)}]. 20초 목록·받아 둔 팀 목록·기억만 본다 — 새 연결
-// 없이(목록 끝·20초 갱신마다 그려도 된다). 검증·정리는 누를 때(quickGo).
+// fail(첫 목록을 받지 못한 까닭 — PC 꺼짐 등, 그동안은 wait 아님), cur(지금 보이는 상세 칸 화면), back(숨겨 둔 화면 — 폰 '‹ 목록'·관제 덮개 밑)}].
+// 20초 목록·받아 둔 팀 목록·기억만 본다 — 새 연결 없이(목록 끝·20초 갱신마다 그려도 된다). 검증·정리는 누를 때(quickGo).
 function quickTargets(){
   const ready=LIST_READY, find=(sid)=>(SESSIONS||[]).find(x=>x.session_id===sid)||null;
-  const ov=!!MON_OV, hid=detailHiddenOnPhone(), pk=PANE_NOW.kind;
+  const ov=!!MON_OV, hid=detailHiddenOnPhone(), pk=PANE_NOW.kind, fail=(!ready&&LIST_ERR)?listErrText()[0]:'';
   return QUICK_KINDS.map(kind=>{
     const [icon,label]=QUICK_META[kind];
-    const o={kind, icon, label, has:false, name:'', sub:'', dim:false, taken:false, wait:!ready, cur:false, back:false};
+    const o={kind, icon, label, has:false, name:'', sub:'', dim:false, taken:false, wait:!ready&&!fail, fail, cur:false, back:false};
     const here=kind==='viewer'?(pk==='viewer'||pk==='detail'):pk===kind;
     if(kind==='monitor'){ o.cur=ov||(here&&!hid); o.back=!ov&&here&&hid; }   // 폰 관제는 화면 전체 덮개
     else { o.cur=here&&!ov&&!hid; o.back=here&&(ov||hid); }
@@ -6907,7 +6915,7 @@ async function quickGo(kind){
     // 폰 관제 덮개(z 60)가 알림(z 20)을 가린다 — 다른 화면을 골랐으면(끊긴 덮개의 🎬 도) 덮개를 닫고 알린다(§5-3, 검토). 관제 알림이 첫 목록보다
     // 먼저 덮개를 열었을 때다. 살아 있는 덮개의 🎬 는 이미 그 화면이라 알릴 것이 없다
     if(MON_OV){ if(kind==='monitor'&&!MON_OV.dead()) return; MON_OV.close(); }
-    toast('목록을 받는 중입니다'); return; }
+    toast(LIST_ERR?listErrText()[2]:'목록을 받는 중입니다'); return; }   // 받지 못했으면(PC 꺼짐 등) 그 까닭 — 받는 중과 가른다
   if(kind!=='monitor'&&MON_OV) MON_OV.close();   // 폰 관제 덮개에서 다른 화면을 고르면 덮개(와 관제 연결)를 닫고 간다 — 알림은 닫은 뒤에(§5-3)
   const live=navTicket();
   if(kind==='terminal') return quickGoTerminal(live);
@@ -7012,7 +7020,7 @@ const QUICK_KEYS={terminal:'Alt+1', files:'Alt+2', viewer:'Alt+3', monitor:'Alt+
 // 무엇이 열릴지 한 줄(이름 · 보조 글) — 툴팁·시트·빈 칸이 같이 쓴다
 function quickLine(o){ return [o.name, o.sub].filter(Boolean).join(' · '); }
 function quickTip(o){
-  return o.label+' — '+(o.wait?'준비 중(목록을 받는 중)':quickLine(o))+' · '+QUICK_KEYS[o.kind]
+  return o.label+' — '+(o.wait?'준비 중(목록을 받는 중)':(o.fail||quickLine(o)))+' · '+QUICK_KEYS[o.kind]
     +(o.taken?'\n👀 다른 기기에서 보는 중 — 누르면 가져오기 확인':'');
 }
 // PC 머리 줄 단추 4개(.grow 뒤·🔔 앞) — 파랑 = 지금 상세 칸 화면, 보통 = 기억 있음, 흐림 = 기억 없음·준비 중(첫 목록 전).
@@ -7080,8 +7088,9 @@ function quickRecentFill(b, o){
 function showQuickSheet(anchor){
   const box=el('div');
   for(const o of quickTargets()){
-    const [tag,tc]=o.taken?['👀 가져오기','warn']:o.cur?['지금','now']:o.back?['바로 돌아가기','now']:o.wait?['준비 중','']:!o.has?['고르기…','']:['',''];
-    const b=popItem(o.icon, o.label, quickLine(o), ()=>quickGo(o.kind), 'qs-it'+(o.dim&&!o.cur&&!o.back?' dim':''));
+    const [tag,tc]=o.taken?['👀 가져오기','warn']:o.cur?['지금','now']:o.back?['바로 돌아가기','now']:o.wait?['준비 중','']
+      :o.fail?[listErrText()[1],'']:!o.has?['고르기…','']:['',''];
+    const b=popItem(o.icon, o.label, o.fail||quickLine(o), ()=>quickGo(o.kind), 'qs-it'+(o.dim&&!o.cur&&!o.back?' dim':''));
     b.dataset.k=o.kind;
     if(tag) b.appendChild(el('span','qtag'+(tc?' '+tc:''),tag));
     box.appendChild(b);
@@ -7550,7 +7559,7 @@ function pcSwitchReset(){
   FB.tabs.forEach(t=>fbDisposeTab(t));         // 파일 내용(Monaco 모델) 해제 — 탐색기·편집기 상태도 모두 처음으로
   Object.assign(FB,{tabs:[], active:null, sel:'', open:new Set(), kids:{}, errs:{}, ent:{}, rootMap:null, restored:false, migrate:false, reveal:null, q:'', autoShow:false});
   FB.treeGen++;                                // 받는 중이던 이전 PC 의 폴더 응답은 버린다(파일 응답은 FB.active=null 로 이미 버려진다)
-  LIST_READY=false;
+  LIST_READY=false; LIST_ERR='';
   // 목록 칸의 이전 PC 줄·탐색기도 지운다 — 새 PC 연결을 기다리는 사이 옛 줄·파일을 누르면 이전 PC 세션·파일이 새 PC 기억 키에
   // 적히고 이전 PC 세션을 새 PC 로 열었다. 새 PC 첫 목록(loadList)이 다시 그리고, 20초 갱신도 그때까지 쉰다(LIST_CTX)
   SESSIONS=[]; LIST_CTX=null;
