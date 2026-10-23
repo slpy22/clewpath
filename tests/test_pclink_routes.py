@@ -261,7 +261,7 @@ def test_ask_clone_uses_isolated_limits(monkeypatch):
     assert seen["isolated"] is True and seen["timeout"] == POL.ASK_TIMEOUT_S
     assert seen["guardrails"] == {}            # --max-budget-usd 는 과거 누적 비용과 비교돼 쓰지 않는다(T12)
     assert kind == "answer" and out["truncated"] is True and len(out["answer"]) == POL.ANSWER_MAX
-    assert "cost_usd" not in out
+    assert out["cost_usd"] == 0.01                     # webapi 가 이번 실행분으로 계산한 값을 그대로
 
 
 def test_list_only_allowed_sessions(env, monkeypatch):

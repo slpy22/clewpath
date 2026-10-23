@@ -42,7 +42,7 @@ ASK_TIMEOUT_S = 180
 # 지금 쓰는 세션에는 늘 실패하므로 쓰지 않고, 실행 전에 분량으로 어림해 막는다(inbound._tail_bytes).
 ASK_MAX_USD = 2.0
 DAY_BUDGET_USD = 20.0
-USD_PER_MB = 1.9
+USD_PER_MB = 1.9                  # webapi.RESUME_USD_PER_MB 와 같은 값(서비스 묻기와 같은 어림)
 HOST_CONCURRENCY = 2
 HOST_QUEUE = 4
 CLEANUP_KEEP_S = 7 * 86400

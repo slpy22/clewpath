@@ -240,7 +240,7 @@ async def _run_ask(pol: POL.Policy, peer: str, h: dict, prompt: str, reply: Repl
     out["session"] = sid
     pol.results.finish(ask_id, kind, out)
     pol.audit("ask", peer=peer, session=sid, from_session=frm_s, ask_id=ask_id,
-              code=("answered" if kind == "answer" else out.get("code")), est_usd=est,
+              code=("answered" if kind == "answer" else out.get("code")), est_usd=est, cost=out.get("cost_usd"),
               dur=round(time.monotonic() - t0, 2))
     try:
         await reply(True, data=seal(kind, out, session=sid, to_session=frm_s))
@@ -259,34 +259,14 @@ def _ask_clone(sid: str, prompt: str, ask_id: str) -> tuple[str, dict]:
     if r.get("is_error"):
         return "error", {"ask_id": ask_id, "code": "ask_failed", "reason": str(r.get("result") or "")[:200]}
     ans = str(r.get("answer") or "")
-    # cost_usd(claude 의 total_cost_usd)는 이어받은 세션의 과거 누적 비용이 섞이므로 싣지 않는다(T12)
     return "answer", {"ask_id": ask_id, "answer": ans[:POL.ANSWER_MAX], "truncated": len(ans) > POL.ANSWER_MAX,
-                      "duration_s": r.get("duration_s")}
+                      "duration_s": r.get("duration_s"), "cost_usd": r.get("cost_usd")}   # 이번 실행분(webapi.RunCost)
 
 
 def _tail_bytes(sid: str, limit: int, chunk: int = 256 * 1024) -> int | None:
-    """그 세션 기록에서 마지막 압축 지점(compact_boundary) 이후 바이트 — 이어받을 때 실리는 분량의 어림(읽기만).
-    limit 을 넘으면 None(너무 큼). 끝에서부터 limit 만큼만 거꾸로 읽는다(수백 MB 기록도 전부 읽지 않게)."""
-    from session_manager.scanner import scan_one
-    m = scan_one(sid)
-    if not m:
-        return 0
-    mark = b'"compact_boundary"'
-    with open(m.jsonl_path, "rb") as f:
-        f.seek(0, 2)
-        size = f.tell()
-        pos, buf = size, b""
-        while pos > 0 and size - pos <= limit + chunk:
-            step = min(chunk, pos)
-            pos -= step
-            f.seek(pos)
-            buf = f.read(step) + buf
-            i = buf.rfind(mark)
-            if i >= 0:
-                start = buf.rfind(b"\n", 0, i) + 1
-                tail = size - (pos + start)
-                return tail if tail <= limit else None
-        return size if size <= limit else None
+    """마지막 압축 지점 이후 바이트(webapi.resume_tail_bytes — 서비스 묻기와 같은 어림)."""
+    from session_manager import webapi
+    return webapi.resume_tail_bytes(sid, limit, chunk)
 
 
 def _notify(title: str, body: str) -> None:

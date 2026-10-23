@@ -131,7 +131,7 @@ def test_default_argv_unchanged_full_guardrails(env):
     r = webapi.ephemeral_ask(SID, "질문", skip_permissions=True, timeout=30, guardrails=FULL_G)
     assert env["procs"][0].args == _base(r["fork_id"]) + [
         "--allowed-tools", "Read Grep", "--disallowed-tools", "Bash", "--model", "claude-haiku-4-5",
-        "--append-system-prompt", "짧게 답하라", "--max-budget-usd", "0.5", "--permission-mode", "plan"]
+        "--append-system-prompt", "짧게 답하라", "--permission-mode", "plan"]   # 이어받기엔 --max-budget-usd 없음(과거 누적과 비교돼 엉뚱하게 실패)
 
 
 def test_default_argv_unchanged_no_skip(env):
@@ -157,7 +157,7 @@ def test_isolated_argv(env):
     r = webapi.ephemeral_ask(SID, "질문", skip_permissions=True, timeout=30, guardrails=FULL_G, isolated=True)
     argv = env["procs"][0].args
     assert argv == _base(r["fork_id"]) + ISO_FLAGS + [
-        "--model", "claude-haiku-4-5", "--append-system-prompt", "짧게 답하라", "--max-budget-usd", "0.5"]
+        "--model", "claude-haiku-4-5", "--append-system-prompt", "짧게 답하라"]
     assert argv[argv.index("--tools") + 1] == ""                     # 빈 문자열 인자 = 도구 0개
     for bad in ("--dangerously-skip-permissions", "--allowed-tools", "--disallowed-tools", "--permission-mode"):
         assert bad not in argv

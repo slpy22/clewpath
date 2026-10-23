@@ -247,7 +247,7 @@ def make_base(folder: str, prof: dict, timeout: int = 240) -> str:
     sid = str(uuid.uuid4())
     profiles.set_record(sid, **prof)
     argv = [config.claude_exe(), "-p", "--session-id", sid, "--output-format", "json"] + \
-        webapi._guardrail_args(policy.effective_guardrails(sid), True)
+        webapi._guardrail_args(policy.effective_guardrails(sid), True, resume=False)   # 새 세션 — 비용 상한이 제대로 듣는다
     try:
         r = subprocess.run(argv, input=BOOT_PROMPT, cwd=folder, env=ptyd.clean_env(), capture_output=True,
                            text=True, encoding="utf-8", errors="replace", timeout=timeout,

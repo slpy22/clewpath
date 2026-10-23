@@ -200,7 +200,8 @@ async def resume_session(session_id: str, prompt: str,
     answer: list[str] = []
     tool_uses: list[str] = []
     result_text = None
-    cost = None
+    from session_manager.webapi import RunCost
+    run_cost = RunCost()                  # total_cost_usd 는 이어받은 세션의 과거 누적이 섞인다 — 이번 실행분만
     is_error = False
 
     async with websockets.connect(url, max_size=None, open_timeout=20) as ws:
@@ -216,6 +217,7 @@ async def resume_session(session_id: str, prompt: str,
             raw = await asyncio.wait_for(ws.recv(), timeout=timeout_sec)
             ev = json.loads(raw)
             t = ev.get("type")
+            run_cost.feed(ev)
             if t == "assistant":
                 for b in ev.get("message", {}).get("content", []):
                     if b.get("type") == "text":
@@ -224,7 +226,6 @@ async def resume_session(session_id: str, prompt: str,
                         tool_uses.append(b.get("name", "?"))
             elif t == "result":
                 result_text = ev.get("result")
-                cost = ev.get("total_cost_usd")
                 is_error = bool(ev.get("is_error"))
                 break
             elif t in ("error", "closed"):
@@ -236,7 +237,7 @@ async def resume_session(session_id: str, prompt: str,
         "session_id": session_id,
         "answer": "".join(answer) or result_text,
         "result": result_text,
-        "cost_usd": cost,
+        "cost_usd": run_cost.usd(),
         "is_error": is_error,
         "tool_uses": tool_uses,
     }

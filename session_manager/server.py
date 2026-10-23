@@ -1534,6 +1534,17 @@ def create_app() -> FastAPI:
                 policy.audit({"event": "resume", **who, "session": session_id, "blocked": reason})
                 await websocket.close(code=1008)
                 return
+        cap = policy.effective_guardrails(session_id, svc).get("max_budget_usd") if (token or svc) else None
+        if cap and await asyncio.get_running_loop().run_in_executor(
+                None, webapi.estimate_resume_usd, session_id, float(cap)) is None:
+            # 호출당 비용 상한(실행 전 분량 어림 — 묻기와 같은 규칙). 이유를 알 수 있게 받고 나서 오류를 보내고 닫는다
+            policy.audit({"event": "resume", **who, "session": session_id, "blocked": f"too_big(>{cap}$)"})
+            await websocket.accept()
+            await websocket.send_text(json.dumps({"type": "error", "error": "too_big",
+                                                  "message": f"세션 대화가 너무 길어 호출당 비용 상한(${cap})을 넘습니다 — "
+                                                             f"세션이 압축된 뒤 다시 하세요"}, ensure_ascii=False))
+            await websocket.close(code=1008)
+            return
         skip = websocket.query_params.get("skip", "1") not in ("0", "false", "False")
         # 외부 API 세션 사용은 무조건 fork(원본 불변) + 위험 도구 하드 차단
         import uuid as _uuid
@@ -1900,6 +1911,14 @@ def create_app() -> FastAPI:
             return JSONResponse({"error": reason}, status_code=429)
 
         g = policy.effective_guardrails(session_id, svc)  # 전역 ∩ 세션 프로파일 ∩ 서비스 1회 한도
+        # 호출당 비용 상한 — 실행 전에 마지막 압축 이후 분량으로 어림해 막는다(claude 의 --max-budget-usd 는 이어받은 세션의
+        # 과거 누적 비용과 비교돼 엉뚱하게 실패했고, 한 턴 비용은 막지도 못했다 — webapi._guardrail_args)
+        # 사장님 본인(로컬·폰, 토큰 없음)은 하루 한도처럼 이 검사도 빼고 — 토큰·서비스 호출에만
+        if ((token or svc) and g.get("max_budget_usd")
+                and webapi.estimate_resume_usd(session_id, float(g["max_budget_usd"])) is None):
+            policy.audit({"event": "ask", **who, "session": session_id, "blocked": f"too_big(>{g['max_budget_usd']}$)"})
+            return JSONResponse({"error": f"세션 대화가 너무 길어 호출당 비용 상한(${g['max_budget_usd']})을 넘습니다 — "
+                                          f"세션이 압축된 뒤 다시 하세요", "code": "too_big"}, status_code=413)
         prompt = body.prompt or ""
         # 내용 필터(입력): 길이 제한 + 금지 정규식
         if g["max_prompt_chars"] and len(prompt) > g["max_prompt_chars"]:

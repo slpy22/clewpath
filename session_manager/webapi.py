@@ -91,8 +91,13 @@ def sweep_orphan_streams() -> int:
 # 되살리려면 사용자 사전 고지+승인(옵트인 설정) 게이트와 함께 협의부터 할 것.
 
 
-def _guardrail_args(g: dict, skip_permissions: bool) -> list[str]:
-    """실효 가드레일(dict)을 claude CLI 인자로 변환한다."""
+def _guardrail_args(g: dict, skip_permissions: bool, resume: bool = True) -> list[str]:
+    """실효 가드레일(dict)을 claude CLI 인자로 변환한다.
+
+    resume=True(기존 세션을 이어받는 실행)에는 --max-budget-usd 를 붙이지 않는다 — claude 는 이어받은 세션의 과거 누적 비용을
+    되살려 그 값과 비교하므로, 오래 쓴 세션은 API 호출도 하기 전에 error_max_budget_usd 로 엉뚱하게 실패했다(2026-10-23 실측,
+    감사 기록에도 9월 실패 6건). 이어받는 실행의 호출당 상한은 실행 전에 분량으로 어림해 막는다(estimate_resume_usd).
+    """
     args: list[str] = []
     if g.get("allowed_tools"):
         args += ["--allowed-tools", " ".join(g["allowed_tools"])]
@@ -102,7 +107,7 @@ def _guardrail_args(g: dict, skip_permissions: bool) -> list[str]:
         args += ["--model", str(g["model"])]
     if g.get("system_prompt"):
         args += ["--append-system-prompt", str(g["system_prompt"])]
-    if g.get("max_budget_usd") and g["max_budget_usd"] > 0:
+    if not resume and g.get("max_budget_usd") and g["max_budget_usd"] > 0:
         args += ["--max-budget-usd", str(g["max_budget_usd"])]
     # 권한 모드가 지정되면 그걸 쓰고, 아니면 비인터랙티브용 skip
     if g.get("permission_mode"):
@@ -110,6 +115,115 @@ def _guardrail_args(g: dict, skip_permissions: bool) -> list[str]:
     elif skip_permissions:
         args.append("--dangerously-skip-permissions")
     return args
+
+
+# ---- 이어받기 비용(2026-10-23) ----
+# claude 의 total_cost_usd·modelUsage 는 이어받은 세션의 과거 누적이 섞인다. 이번 실행분은 assistant 메시지마다의 usage(같은
+# 메시지가 여러 줄로 오면 마지막 것)이고, 단가는 누적 modelUsage 에서 거꾸로 구한다 — 가격표를 코드에 두지 않는다.
+# 가중치는 가격 비율: 입력 1 · 출력 5 · 캐시 읽기 0.1 · 캐시 쓰기 5분 1.25 · 1시간 2(실측 결과에 정확히 맞음).
+RESUME_USD_PER_MB = 1.9        # 실행 전 어림: 마지막 압축 이후 분량 1MB ≈ 1.9달러(T12 실측 250KB ≈ 0.47달러)
+
+
+def _cw_factor(u: dict) -> float:
+    cc = u.get("cache_creation") or {}
+    w5, w1 = int(cc.get("ephemeral_5m_input_tokens") or 0), int(cc.get("ephemeral_1h_input_tokens") or 0)
+    return 1.25 if (w5 + w1) == 0 else (1.25 * w5 + 2.0 * w1) / (w5 + w1)
+
+
+def _weighted_run(u: dict) -> tuple[float, float, int]:
+    """(캐시 쓰기를 뺀 가중 토큰, 캐시 쓰기 가중, 캐시 쓰기 토큰)."""
+    cw = int(u.get("cache_creation_input_tokens") or 0)
+    base = (int(u.get("input_tokens") or 0) + 5.0 * int(u.get("output_tokens") or 0)
+            + 0.1 * int(u.get("cache_read_input_tokens") or 0))
+    return base, _cw_factor(u) * cw, cw
+
+
+class RunCost:
+    """한 claude 실행(프로세스)의 이번 실행분 비용. feed(이벤트) 를 차례로 넣고 usd() 로 읽는다."""
+
+    def __init__(self):
+        self.msgs: dict = {}
+        self.model_usage: dict | None = None
+        self.total: float | None = None
+        self.result_usage: dict | None = None
+
+    def feed(self, ev: dict) -> None:
+        t = ev.get("type")
+        if t == "assistant":
+            m = ev.get("message") or {}
+            if m.get("usage"):
+                self.msgs[m.get("id") or f"_{len(self.msgs)}"] = (str(m.get("model") or ""), m["usage"])
+        elif t == "result":
+            if isinstance(ev.get("usage"), dict):
+                self.result_usage = ev["usage"]
+            if ev.get("modelUsage"):
+                self.model_usage = ev["modelUsage"]
+            if ev.get("total_cost_usd") is not None:
+                self.total = float(ev["total_cost_usd"])
+
+    def usd(self) -> float | None:
+        if not self.msgs:
+            # assistant 사용량이 하나도 없다: 결과 줄의 이번 실행분 usage 가 0 이면 API 호출 없이 끝난 것(0달러 — 보고된 total 은
+            # 이어받은 과거 누적뿐), usage 칸 자체가 없으면(옛 claude) 보고값 그대로
+            if self.result_usage is None:
+                return self.total
+            b, w, _ = _weighted_run(self.result_usage)
+            return 0.0 if (b + w) == 0 else self.total
+        if not self.model_usage:
+            return self.total
+        cost = 0.0
+        by: dict = {}
+        for model, u in self.msgs.values():
+            b, w, cw = _weighted_run(u)
+            x = by.setdefault(model, [0.0, 0.0, 0])
+            x[0] += b
+            x[1] += w
+            x[2] += cw
+        for model, (b, w, cw) in by.items():
+            mu = self.model_usage.get(model)
+            if not mu or not mu.get("costUSD"):
+                return self.total
+            f = (w / cw) if cw else 1.25                  # 누적의 캐시 쓰기 5분·1시간 비율은 이번 실행분을 따른다
+            w_cum = (float(mu.get("inputTokens") or 0) + 5.0 * float(mu.get("outputTokens") or 0)
+                     + 0.1 * float(mu.get("cacheReadInputTokens") or 0) + f * float(mu.get("cacheCreationInputTokens") or 0))
+            if w_cum <= 0:
+                return self.total
+            cost += float(mu["costUSD"]) / w_cum * (b + w)
+        if self.total is not None:
+            cost = min(cost, self.total)
+        return round(cost, 6)
+
+
+def resume_tail_bytes(sid: str, limit: int, chunk: int = 256 * 1024) -> int | None:
+    """그 세션 기록에서 마지막 압축 지점(compact_boundary) 이후 바이트 — 이어받을 때 실리는 분량의 어림(읽기만).
+    limit 을 넘으면 None(너무 큼). 끝에서부터 limit 만큼만 거꾸로 읽는다(수백 MB 기록도 전부 읽지 않게)."""
+    m = scan_one(sid)
+    if not m:
+        return 0
+    mark = b'"compact_boundary"'
+    with open(m.jsonl_path, "rb") as f:
+        f.seek(0, 2)
+        size = f.tell()
+        pos, buf = size, b""
+        while pos > 0 and size - pos <= limit + chunk:
+            step = min(chunk, pos)
+            pos -= step
+            f.seek(pos)
+            buf = f.read(step) + buf
+            i = buf.rfind(mark)
+            if i >= 0:
+                start = buf.rfind(b"\n", 0, i) + 1
+                tail = size - (pos + start)
+                return tail if tail <= limit else None
+        return size if size <= limit else None
+
+
+def estimate_resume_usd(sid: str, cap: float) -> float | None:
+    """이어받기 한 번의 어림 비용(달러). cap 을 넘으면 None(실행하지 말 것)."""
+    tail = resume_tail_bytes(sid, int(cap / RESUME_USD_PER_MB * 1_000_000))
+    if tail is None:
+        return None
+    return round(max(tail, 1) / 1_000_000 * RESUME_USD_PER_MB, 3)
 
 
 def _claude_argv(session_id: str, skip_permissions: bool = True,
@@ -169,12 +283,13 @@ async def run_resume_api(ws, session_id: str, skip_permissions: bool = True,
 
     fork_id 가 있으면 원본을 건드리지 않는 fork 로 재개하고, 연결 종료 시 fork 를 삭제한다.
     guardrails 는 실효 가드레일(도구·권한·모델 등).
-    on_finish(total_cost_usd) 는 종료 시 누적 비용을 콜백으로 넘긴다(사용량 집계용).
+    on_finish(usd) 는 종료 시 이 실행의 비용(RunCost — 이어받은 과거 누적 제외, 여러 턴 합)을 콜백으로 넘긴다(사용량 집계용).
     allow() 가 있으면 턴마다 물어 False 면 끊는다(서비스 정지·폐기, 서비스 대장 S2).
     호출 측에서 ws.accept()/인증은 끝난 상태로 가정.
     """
     loop = asyncio.get_event_loop()
     cost_state = {"usd": 0.0, "turns": 0}
+    run_cost = RunCost()
 
     meta = scan_one(session_id)
     cwd = resolve_launch_cwd(meta) if meta else None
@@ -223,11 +338,13 @@ async def run_resume_api(ws, session_id: str, skip_permissions: bool = True,
                 line = raw.decode("utf-8", "replace").rstrip("\r\n")
                 if not line.strip():
                     continue
-                # 턴 종료(result) 이벤트에서 비용 누적
+                # 비용: 턴 종료(result)마다 이 실행분 전체를 다시 계산한다(total_cost_usd 는 프로세스·이어받은 과거 누적이라
+                # 예전처럼 턴마다 더하면 몇 배로 셌다)
                 try:
                     ev = json.loads(line)
-                    if ev.get("type") == "result" and ev.get("total_cost_usd") is not None:
-                        cost_state["usd"] += float(ev["total_cost_usd"])
+                    run_cost.feed(ev)
+                    if ev.get("type") == "result":
+                        cost_state["usd"] = run_cost.usd() or 0.0
                         cost_state["turns"] += 1
                 except Exception:  # noqa: BLE001
                     pass
@@ -366,7 +483,7 @@ def ephemeral_ask(session_id: str, prompt: str, skip_permissions: bool = True,
     answer: list[str] = []
     tool_uses: list[str] = []
     result_text = None
-    cost = None
+    run_cost = RunCost()
     is_error = False
     proc = None
     t0 = time.monotonic()
@@ -399,6 +516,7 @@ def ephemeral_ask(session_id: str, prompt: str, skip_permissions: bool = True,
             except Exception:  # noqa: BLE001
                 continue
             t = o.get("type")
+            run_cost.feed(o)
             if t == "assistant":
                 for b in o.get("message", {}).get("content", []):
                     if b.get("type") == "text":
@@ -407,7 +525,6 @@ def ephemeral_ask(session_id: str, prompt: str, skip_permissions: bool = True,
                         tool_uses.append(b.get("name", "?"))
             elif t == "result":
                 result_text = o.get("result")
-                cost = o.get("total_cost_usd")
                 is_error = bool(o.get("is_error"))
     finally:
         duration_s = round(time.monotonic() - t0, 2)
@@ -432,7 +549,7 @@ def ephemeral_ask(session_id: str, prompt: str, skip_permissions: bool = True,
         "fork_id": fork_id,
         "answer": "".join(answer) or result_text,
         "result": result_text,
-        "cost_usd": cost,
+        "cost_usd": run_cost.usd(),           # 이번 실행분(이어받은 과거 누적 제외)
         "is_error": is_error,
         "tool_uses": tool_uses,
         "fork_deleted": fork_deleted,
