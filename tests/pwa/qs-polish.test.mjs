@@ -171,3 +171,23 @@ test("T107 목록 줄·알림으로 '다른 기기가 가져간 터미널'을 �
     "알림|중지된 탭": { asked: 0, at: "detail:a", newTerm: 0, lists: 1, tabs: 0 },
   });
 });
+
+// ---------------------------------------------------------------- 4. 탭 닫기·⏹ 종료 뒤 최근 본 탭
+test("T108 보던 탭을 닫거나(× → 화면만 닫기·⏹ 세션 종료) 터미널 막대 ⏹ 종료로 끝내면 첫 탭이 아니라 '최근에 본 탭'으로 간다", async () => {
+  const ids = ["a", "b", "c", "d", "e"].map((c) => c.repeat(8) + "-1111-2222-3333-444444444444");
+  const { ctx, pd } = await boot({ mem: { tabs: ids },
+    pre: `SESSIONS = ${JSON.stringify(ids.map((id, i) => ({ session_id: id, title: id[0].toUpperCase(), live_terminal: true, cwd: "E:/p" + i, mtime: 9 - i })))};
+      globalThis.__modal = null; openModal = (t, b, btns) => { __modal = { t, btns }; }; closeModal = () => {};` });
+  for (const k of ["a", "e", "d", "c", "b"]) { ev(ctx, `switchTab('${ids["abcde".indexOf(k)]}')`); await tick(RENDER); }   // 본 차례 a → e → d → c → b(지금)
+  const got = { start: at(ctx) };
+  ev(ctx, `closeTab('${ids[1]}')`); __modalBtn(ctx, "화면만 닫기").onclick(); await tick(RENDER);
+  got.closeView = at(ctx);
+  const stop = pd.children[0].children.find((b) => b.textContent === "⏹ 종료");
+  await stop.onclick(); await tick(RENDER);
+  got.barStop = at(ctx);
+  ev(ctx, `closeTab('${ids[3]}')`); await __modalBtn(ctx, "⏹ 세션 종료").onclick(); await tick(RENDER);
+  got.closeStop = at(ctx);
+  got.tabs = ev(ctx, "TABS.list.map((t) => sessLabel(t.s)).join(',')");
+  assert.deepEqual(got, { start: "terminal:b", closeView: "terminal:c", barStop: "terminal:d", closeStop: "terminal:e", tabs: "A,E" });
+});
+function __modalBtn(ctx, label) { return ev(ctx, "__modal.btns").find((b) => b.textContent === label); }

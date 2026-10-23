@@ -2946,6 +2946,8 @@ const TABS={ list:[], active:null, mru:[] };   // mru = 최근 본 순서(key, �
 const tabKey=(s)=>(s.fork_id||s.session_id);
 const findTab=(key)=>TABS.list.find(t=>t.key===key)||null;
 function tabSeen(key){ TABS.mru=[key, ...TABS.mru.filter(k=>k!==key)]; }
+// 보던 탭을 닫거나 끝낸 뒤 갈 탭 — 최근에 본 탭(남은 탭 중 mru 맨 앞), 본 적 없는 탭뿐이면 첫 탭(quick-switch 6단계)
+function recentTab(){ for(const k of TABS.mru){ const t=findTab(k); if(t) return t; } return TABS.list[0]||null; }
 // 이 페이지가 스스로 놓은 화면 id(탭 인스턴스 해체·새로 띄우기). 20초 목록의 screen 이 아직 이 값이면 내 옛 화면이지
 // 다른 기기가 아니다 — 정리한 터미널로 금방 돌아올 때 가짜 인계 확인창을 막는다(quick-switch 1-1). 오래된 것부터 버림.
 const RELEASED_SCREENS=[];
@@ -3278,8 +3280,8 @@ function closeTab(key){
     const wasActive=(TABS.active===key);
     removeTab(key); saveTabs();
     if(!wasActive){ renderTabBar(); return; }
-    // 전경 탭을 닫았다: 이웃 탭으로, 없으면 뷰를 떠난다
-    const next=TABS.list[0];
+    // 전경 탭을 닫았다: 최근에 본 탭으로, 없으면 뷰를 떠난다
+    const next=recentTab();
     if(next){ switchTab(next.key); } else { leaveTerminalView(); loadDetail(s); }
   };
   const bDetach=el('button','btn',t.dead?'탭 닫기':'화면만 닫기');
@@ -3584,7 +3586,7 @@ async function loadTerminal(s, safe, opt){
     const c=cur(), ck=TABS.active;
     if(!await stopSessionTerminal(c)) return;
     removeTab(ck); saveTabs();              // PTY 가 죽었으니 탭도 내린다
-    const next=TABS.list[0];
+    const next=recentTab();                 // 최근에 본 탭으로
     if(next){ switchTab(next.key); } else { leaveTerminalView(); loadDetail(c); }
   };
   bar.appendChild(stop);
