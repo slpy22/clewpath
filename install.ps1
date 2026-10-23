@@ -421,8 +421,11 @@ if ($DryRun -or -not $uv) {
 Say ""
 Say "[5/6] 설정 파일 생성 + 자격증명 발급"
 
-# 앱과 동일한 규칙: SESSION_MANAGER_CLAUDE_HOME 이 있으면 그쪽(테스트/격리용)
+# 앱(session_manager/config.py claude_home)과 같은 순서: SESSION_MANAGER_CLAUDE_HOME(테스트/격리용) > CLAUDE_CONFIG_DIR
+# (클로드 폴더를 옮겨 쓰는 PC) > ~\.claude. CLAUDE_CONFIG_DIR 을 빠뜨리면 그런 PC 에선 여기서 만든 설정·자격증명을 Host 가
+# 못 찾는다(Host 는 옮긴 폴더 아래 session_manager 를 본다). tests/test_appconfig.py 가 Host 계산과 같은지 본다.
 $claudeHome = if ($env:SESSION_MANAGER_CLAUDE_HOME) { $env:SESSION_MANAGER_CLAUDE_HOME }
+              elseif ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR }
               else { Join-Path $env:USERPROFILE ".claude" }
 $dataDir  = Join-Path $claudeHome "session_manager"
 $credFile = Join-Path $dataDir "cp_credentials.json"

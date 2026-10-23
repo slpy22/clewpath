@@ -136,6 +136,43 @@ def test_template_matches_install_ps1(extra):
         assert mine[section] == body, section
 
 
+@pytest.mark.skipif(not __import__("shutil").which("powershell"), reason="Windows powershell.exe 5.1 필요(맥·리눅스는 건너뜀)")
+def test_install_ps1_data_dir_matches_host(tmp_path, monkeypatch):
+    """⑤ install.ps1 이 설정·자격증명을 쓰는 데이터 폴더 = Host 의 config.data_dir() — 같은 순서
+    SESSION_MANAGER_CLAUDE_HOME > CLAUDE_CONFIG_DIR > ~\\.claude. 고치기 전엔 CLAUDE_CONFIG_DIR 을 빠뜨려, 클로드 폴더를 옮겨 쓰는 PC 에선
+    설치가 만든 clewpath.toml·cp_credentials.json 을 Host 가 못 찾았다. install.ps1 의 [5/6] 계산 줄을 그대로 5.1 로 돌린다."""
+    import base64
+    import subprocess
+    from pathlib import Path
+
+    from session_manager import config
+    src = (Path(__file__).resolve().parents[1] / "install.ps1").read_text(encoding="utf-8-sig")
+    i = src.index('Say "[5/6] ')
+    i = src.index("\n", i) + 1
+    snippet = src[i:src.index("$credFile", i)]
+    assert "$dataDir" in snippet, snippet
+    sm, cfg = tmp_path / "격리 home", tmp_path / "옮긴 claude"
+    cases = [(None, None), (None, cfg), (sm, cfg), (sm, None)]
+
+    def ps_set(name, v):
+        return f"$env:{name} = '{str(v).replace(chr(39), chr(39) * 2)}'" if v else f"Remove-Item Env:\\{name} -ErrorAction SilentlyContinue"
+    out = tmp_path / "data-dirs.txt"
+    body = "\n".join(f"{ps_set('SESSION_MANAGER_CLAUDE_HOME', a)}\n{ps_set('CLAUDE_CONFIG_DIR', b)}\n$r += (& $calc)" for a, b in cases)
+    cmd = (f"function Say {{}}\n$calc = {{\n{snippet}\n$dataDir\n}}\n$r = @()\n{body}\n"
+           f"[IO.File]::WriteAllLines('{str(out).replace(chr(39), chr(39) * 2)}', [string[]]$r, (New-Object System.Text.UTF8Encoding($false)))")
+    r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand",
+                        base64.b64encode(cmd.encode("utf-16-le")).decode("ascii")], capture_output=True, timeout=120)
+    assert r.returncode == 0 and out.is_file(), r.stderr.decode("utf-8", "replace")
+    got = out.read_text(encoding="utf-8").splitlines()
+    want = []
+    for a, b in cases:
+        for name, v in (("SESSION_MANAGER_CLAUDE_HOME", a), ("CLAUDE_CONFIG_DIR", b)):
+            monkeypatch.setenv(name, str(v)) if v else monkeypatch.delenv(name, raising=False)
+        want.append(str(config.data_dir()))
+    assert got == want
+    assert got[1] == str(cfg / "session_manager")                 # CLAUDE_CONFIG_DIR 만 있을 때(고치기 전엔 ~\.claude\session_manager)
+
+
 # ---- 포트 폴백 ----
 
 def test_resolve_returns_requested_port_when_free():
