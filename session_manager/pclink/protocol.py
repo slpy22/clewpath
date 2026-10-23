@@ -31,7 +31,6 @@ PV = 0
 AAD_PREFIX = b"clewpath-pclink/0\n"
 KINDS = frozenset({"hello", "list", "list_result", "ask", "accepted", "poll", "answer", "pending",
                    "refused", "error", "pair_cred", "pair_done", "unpair"})
-HOST_KINDS = frozenset({"hello", "list", "list_result", "pair_cred", "pair_done", "unpair"})  # session 이 null 일 수 있는 종류
 SKEW_S = 60            # 두 PC 시계 차 허용
 MAX_TTL_S = 600        # 이보다 먼 만료는 거부 — 중복 장부가 무한히 자라지 않게
 DEFAULT_TTL_S = 120
@@ -92,7 +91,7 @@ def _check_addr(a, kind: str, side: str) -> None:
         raise ProtocolError("bad_header", f"{side}")
     s = a.get("session")
     if s is None:
-        if kind not in HOST_KINDS and side == "to":
+        if kind == "ask" and side == "to":          # 묻기만은 받는 세션이 꼭 있다(나머지는 Host 단위일 수 있음)
             raise ProtocolError("bad_header", f"{side}.session")
     elif not (isinstance(s, str) and _ID_RE.match(s)):
         raise ProtocolError("bad_header", f"{side}.session")

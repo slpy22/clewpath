@@ -120,7 +120,7 @@ def test_expiry_window_with_skew():
     assert _err(P.open_env, KEY, far, my_host=B, peer_host=A, now=NOW) == "expired"
 
 
-def test_session_null_only_for_host_kinds():
+def test_only_ask_requires_target_session():
     h = P.header("hello", P.addr(A), P.addr(B), now=NOW)
     P.open_env(KEY, P.seal(KEY, h, {"pv": 0}), my_host=B, peer_host=A, now=NOW)
     with pytest.raises(P.ProtocolError):

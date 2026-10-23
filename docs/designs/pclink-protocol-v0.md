@@ -35,7 +35,7 @@
   인증 데이터 = `b"clewpath-pclink/0\n" + canonical(h)`, 평문 = `canonical(body)`.
   `canonical(x)` = `json.dumps(x, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")`.
 - 한 짝 키를 두 방향이 같이 쓴다. 방향은 머리의 `from`·`to` 가 묶는다(받는 쪽은 `from.host` = 그 짝 상대, `to.host` = 자기인지 확인 — 반사 공격 차단).
-- `session` 은 Host 단위 종류(`hello`·`list`·`unpair`·`pair_*`)에서 `null`.
+- `session` 은 Host 단위 글(`hello`·`list`·`unpair`·`pair_*`)과 그 답, `poll` 에서 `null` 일 수 있다. `ask` 의 `to.session` 만은 반드시 있다.
 
 ### 종류(kind)
 

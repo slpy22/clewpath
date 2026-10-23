@@ -126,9 +126,10 @@ async def _on_envelope(pol: POL.Policy, env, reply: Reply) -> None:
         await reply(True, data={"env": done})
     elif k == "unpair":
         name = pol.pair_name(peer)
+        ack = seal("unpair", {"ack": True})            # 키를 지우기 전에 봉인한 확인을 만든다
         await _off(pol.unpair, peer, notified=True)
         _notify(f"🖥 PC '{name or peer[:8]}' 가 짝을 해제했습니다", "이 PC 쪽 짝 정보도 지웠습니다.")
-        await reply(True, data={})
+        await reply(True, data=ack)
     else:
         raise P.ProtocolError("bad_kind", k)
 

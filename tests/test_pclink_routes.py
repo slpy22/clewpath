@@ -160,7 +160,8 @@ def test_timeout_then_poll_returns_stored_answer_without_rerun(env, monkeypatch)
     gate = {"hold": True}
 
     def slow_clone(sid, prompt, ask_id):
-        while gate["hold"]:
+        t_end = time.monotonic() + 10                  # 시험이 실패해도 스레드가 남아 pytest 가 끝나지 못하는 일이 없게
+        while gate["hold"] and time.monotonic() < t_end:
             time.sleep(0.02)
         calls.append((sid, prompt))
         return "answer", {"ask_id": ask_id, "answer": "늦은 답", "truncated": False}
