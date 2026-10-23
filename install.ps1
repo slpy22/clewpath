@@ -739,6 +739,12 @@ if ($DryRun) {
 # 안내문에 pwsh 를 박아두면 5.1 만 있는 PC 사용자가 그대로 복붙하다 막힌다
 $shellName = "powershell"
 if (Get-Command pwsh -ErrorAction SilentlyContinue) { $shellName = "pwsh" }
+# 중지 명령은 터미널 관리 프로세스(명령줄에 session_manager.ptyd — 열린 터미널의 claude 를 들고 있다)를 뺀다(update_runner.ps1 의
+# 롤백과 같은 규칙). 명령줄은 5.1 의 Get-Process 엔 없어 Get-CimInstance 로, 설치 폴더는 전체 경로로(폴더 이름 'app' 만 보면
+# AppData 아래 다른 파이썬까지 걸렸다). 작은따옴표는 두 번 — 경로가 '...' 안에 들어간다.
+$rootLit = $Root.Replace("'", "''")
+$stopCmd = "Get-CimInstance Win32_Process -Filter `"Name='python.exe'`" | Where-Object { `$_.ExecutablePath -like '$rootLit\*' " +
+           "-and `$_.CommandLine -notlike '*session_manager.ptyd*' } | ForEach-Object { Stop-Process -Id `$_.ProcessId }"
 Say ""
 Say "=== 설치 완료 ==="
 Say ""
@@ -746,7 +752,7 @@ Say "  1) 이 PC 에서 열기 :  http://127.0.0.1:$Port/"
 Say "  2) 폰에서 쓰려면   :  로컬 웹 우측 상단 [📱] -> '새 기기 추가' -> QR 스캔"
 Say "  3) 서비스 관리     :"
 Say "       시작 : Start-ScheduledTask $taskName"
-Say "       중지 : Get-Process python | Where-Object { `$_.Path -like '*$([IO.Path]::GetFileName($Root))*' } | Stop-Process"
+Say "       중지 : $stopCmd"
 Say "       수동 : $shellName -File `"$startPs`""
 Say ""
 Say "  설정 파일: $confFile"
