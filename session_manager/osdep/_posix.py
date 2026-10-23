@@ -185,7 +185,9 @@ def ensure_launcher(root: Path, data_dir: Path, conf_file: Path, port: int) -> s
         res = write_launcher(root, data_dir=data_dir, conf_file=conf_file, port=keep or int(port))
         return "launcher: ok (posix v2)" if res == "unchanged" else "launcher: regenerated (posix v2)"
     except Exception as e:  # noqa: BLE001
-        return f"launcher: regenerate failed: {type(e).__name__}: {e}"
+        # 실패는 예외로 알린다 — 문자열로 돌려주면 liveness 가 성공으로 보고 표식을 써서 그 버전 동안 다시 하지 않는다
+        # (Windows 의 같은 결함을 2026-10-22 노트북에서 찾아 고침, _win.ensure_launcher 와 같은 규칙)
+        raise RuntimeError(f"launcher: regenerate failed: {type(e).__name__}: {e}") from e
 
 
 def port_free(host: str, port: int) -> bool:

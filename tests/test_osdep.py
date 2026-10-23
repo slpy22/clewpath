@@ -150,8 +150,8 @@ def test_ensure_launcher_failure_keeps_old_launcher(tmp_path):
     assert _posix.ensure_launcher(_install_root(tmp_path, tpl=None), _D, _C, 5100) == "launcher: template missing — skip"
     root = _install_root(tmp_path / "b", tpl=_TPL + "X={{ROOT}}\n")
     (root / _posix.START_SCRIPT).write_bytes(b"#!/bin/sh\n# old\n")
-    out = _posix.ensure_launcher(root, _D, _C, 5100)
-    assert out.startswith("launcher: regenerate failed:")
+    with pytest.raises(RuntimeError, match="^launcher: regenerate failed:"):   # 실패는 예외로(liveness 가 표식을 안 쓰게)
+        _posix.ensure_launcher(root, _D, _C, 5100)
     assert (root / _posix.START_SCRIPT).read_bytes() == b"#!/bin/sh\n# old\n"
 
 
