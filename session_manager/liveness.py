@@ -80,6 +80,7 @@ def pid_alive(pid: int) -> bool:
 
 
 LAUNCHER_MARK = b"=== launcher start"     # 맥·리눅스 런처가 기동 직전 host.log 에 넣는 구분줄(이어쓰기라 옛 꼬리가 남는다)
+_PUSHED_FRESH = 900                       # Windows 런처가 민 host.log.1 을 이번 기동의 것으로 보는 시간(초)
 
 
 def log_tail(n: int = 10) -> list[str]:
@@ -87,7 +88,8 @@ def log_tail(n: int = 10) -> list[str]:
 
     마지막 런처 구분줄이 있으면 그 앞까지만 — 새 Host 가 이미 찍은 첫 줄들이 죽은 Host 의 꼬리에 섞이지 않게.
     그 앞이 비었으면 런처가 기동 직전(구분줄 바로 앞)에 5MB 회전을 한 것 — 죽은 Host 의 꼬리는 host.log.1 에 있다.
-    구분줄이 없는 로그(Windows)는 .1 을 보지 않는다.
+    구분줄이 없는 로그(Windows — Start-Process 가 새로 쓴다): 런처 v3 은 띄우기 직전 옛 로그 끝에 구분줄을 붙여 host.log.1 로
+    민다. .1 이 구분줄로 끝나고(뒤에 아무것도 없음) 방금 밀린 것이면 그 앞이 죽은 Host 의 꼬리, 아니면(옛 런처) host.log 그대로.
     """
     def tail_of(p: Path) -> bytes | None:
         try:
@@ -103,14 +105,24 @@ def log_tail(n: int = 10) -> list[str]:
         return [_ANSI.sub("", ln).strip()[:200] for ln in raw.decode("utf-8", "replace").splitlines() if ln.strip()]
 
     p = config.data_dir() / "host.log"
+    dot1 = p.with_name(p.name + ".1")
     raw = tail_of(p)
-    if raw is None:
-        return []
-    cut = raw.rfind(LAUNCHER_MARK)
-    out = lines_of(raw[:cut] if cut >= 0 else raw)
-    if cut >= 0 and not out:
-        out = lines_of(tail_of(p.with_name(p.name + ".1")) or b"")
-    return out[-n:]
+    cut = raw.rfind(LAUNCHER_MARK) if raw is not None else -1
+    if cut >= 0:
+        out = lines_of(raw[:cut])
+        if not out:
+            out = lines_of(tail_of(dot1) or b"")
+        return out[-n:]
+    r1 = tail_of(dot1)
+    if r1:
+        c1 = r1.rfind(LAUNCHER_MARK)
+        try:
+            fresh = time.time() - dot1.stat().st_mtime < _PUSHED_FRESH
+        except OSError:
+            fresh = False
+        if c1 >= 0 and fresh and not r1[c1:].partition(b"\n")[2].strip():
+            return lines_of(r1[:c1])[-n:]
+    return lines_of(raw)[-n:] if raw is not None else []
 
 
 def check_previous_exit() -> dict | None:
@@ -188,9 +200,25 @@ def ensure_launcher(port: int | None = None) -> str | None:
         if out is None:
             return None
         marker.write_text(out, encoding="utf-8")
+        _drop_other_markers(marker)
         return out
     except Exception as e:  # noqa: BLE001
         return f"ensure failed: {e}"
+
+
+def _drop_other_markers(keep: Path) -> None:
+    """다른 버전의 launcher-ensured-<버전> 표식을 지운다 — 옛 것을 안 지워 버전마다 쌓였다(이 PC 90여 개). 못 지워도 그만.
+    롤백으로 옛 버전이 다시 뜨면 그 버전의 표식이 없어 런처 보장을 한 번 더 한다(그 버전 템플릿으로 — 맥·리눅스 러너가 되돌림 때
+    그 버전 표식을 지우는 것과 같은 결과)."""
+    try:
+        for p in keep.parent.glob("launcher-ensured-*"):
+            if p.name != keep.name:
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
+    except OSError:
+        pass
 
 
 def on_startup_async(port: int | None) -> None:

@@ -163,7 +163,7 @@ PC 에서만 되는 항목(2차 인증·외부 접속 기기·휴지통·워커/
 | 하고 싶은 것 | 방법 |
 |---|---|
 | 지금 켜기 | `Start-ScheduledTask ClewPathHost` |
-| 지금 끄기 | `Get-Process python \| Where-Object { $_.Path -like "*<설치폴더>*" } \| Stop-Process` |
+| 지금 끄기 | `Get-CimInstance Win32_Process -Filter "Name='python.exe'" \| Where-Object { $_.ExecutablePath -like "*<설치폴더>*" -and $_.CommandLine -notlike "*session_manager.ptyd*" } \| ForEach-Object { Stop-Process -Id $_.ProcessId }` — 터미널 관리 프로세스(`session_manager.ptyd`)는 남긴다: 열린 터미널의 claude 가 계속 돈다(업데이트와 같다) |
 | 자동시작 끄기 | `Disable-ScheduledTask ClewPathHost` |
 | 포트 등 설정 바꾸기 | `~/.claude/session_manager/clewpath.toml` 수정 후 재시작 (아래 "설정 파일" 절) |
 | 실제 열린 주소 확인 | `~/.claude/session_manager/runtime.json` |

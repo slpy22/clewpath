@@ -421,8 +421,11 @@ if ($DryRun -or -not $uv) {
 Say ""
 Say "[5/6] 설정 파일 생성 + 자격증명 발급"
 
-# 앱과 동일한 규칙: SESSION_MANAGER_CLAUDE_HOME 이 있으면 그쪽(테스트/격리용)
+# 앱(session_manager/config.py claude_home)과 같은 순서: SESSION_MANAGER_CLAUDE_HOME(테스트/격리용) > CLAUDE_CONFIG_DIR
+# (클로드 폴더를 옮겨 쓰는 PC) > ~\.claude. CLAUDE_CONFIG_DIR 을 빠뜨리면 그런 PC 에선 여기서 만든 설정·자격증명을 Host 가
+# 못 찾는다(Host 는 옮긴 폴더 아래 session_manager 를 본다). tests/test_appconfig.py 가 Host 계산과 같은지 본다.
 $claudeHome = if ($env:SESSION_MANAGER_CLAUDE_HOME) { $env:SESSION_MANAGER_CLAUDE_HOME }
+              elseif ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR }
               else { Join-Path $env:USERPROFILE ".claude" }
 $dataDir  = Join-Path $claudeHome "session_manager"
 $credFile = Join-Path $dataDir "cp_credentials.json"
@@ -520,15 +523,20 @@ Set-Location -Path `$PSScriptRoot
 `$env:PYTHONIOENCODING = "utf-8" # 로그 인코딩 고정 - 없으면 로케일(cp949)이라 특수문자에 취약
 `$log = "$dataDir\host.log"
 `$err = "$dataDir\host.err.log"
-# 무한 성장 방지 — 5MB 넘으면 한 세대 밀어둔다(돌고 있는 서버가 잡고 있으면 건너뜀)
+# 옛 로그는 한 세대(.1) 밀어 둔다 — 아래 리다이렉트는 파일을 새로 써서 직전 로그가 사라진다(돌고 있는 서버가 잡고 있으면 건너뜀).
+# host.log 끝의 구분줄은 새 Host 가 .1 에서 죽은 Host 의 꼬리를 찾는 표시(템플릿 런처 v3 과 같다)
+`$stamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
 foreach (`$f in @(`$log, `$err)) {
-    try { if ((Test-Path `$f) -and ((Get-Item `$f).Length -gt 5MB)) { Move-Item `$f "`$f.1" -Force } } catch {}
+    if (-not (Test-Path -LiteralPath `$f)) { continue }
+    if (`$f -eq `$log) { try { [IO.File]::AppendAllText(`$f, "``r``n=== launcher start `$stamp ===``r``n") } catch {} }
+    try { Move-Item -LiteralPath `$f -Destination "`$f.1" -Force } catch {}
 }
 Start-Process -FilePath "`$PSScriptRoot\.venv\Scripts\python.exe" ``
     -ArgumentList "-m","session_manager.server" ``
     -WindowStyle Hidden -RedirectStandardOutput `$log -RedirectStandardError `$err
 "@ }
-$launcherV2 = ($cfg -match "clewpath-launcher v2")
+# 멱등 런처(v2 이상 — v3 은 옛 host.log 한 세대 보존까지)일 때만 5분 반복 트리거를 단다(아래 [6/6])
+$launcherV2 = ($cfg -match "clewpath-launcher v[2-9]\b")
 if ($DryRun) {
     Warn "DryRun: $startPs 생성 건너뜀"
 } else {
@@ -731,6 +739,12 @@ if ($DryRun) {
 # 안내문에 pwsh 를 박아두면 5.1 만 있는 PC 사용자가 그대로 복붙하다 막힌다
 $shellName = "powershell"
 if (Get-Command pwsh -ErrorAction SilentlyContinue) { $shellName = "pwsh" }
+# 중지 명령은 터미널 관리 프로세스(명령줄에 session_manager.ptyd — 열린 터미널의 claude 를 들고 있다)를 뺀다(update_runner.ps1 의
+# 롤백과 같은 규칙). 명령줄은 5.1 의 Get-Process 엔 없어 Get-CimInstance 로, 설치 폴더는 전체 경로로(폴더 이름 'app' 만 보면
+# AppData 아래 다른 파이썬까지 걸렸다). 작은따옴표는 두 번 — 경로가 '...' 안에 들어간다.
+$rootLit = $Root.Replace("'", "''")
+$stopCmd = "Get-CimInstance Win32_Process -Filter `"Name='python.exe'`" | Where-Object { `$_.ExecutablePath -like '$rootLit\*' " +
+           "-and `$_.CommandLine -notlike '*session_manager.ptyd*' } | ForEach-Object { Stop-Process -Id `$_.ProcessId }"
 Say ""
 Say "=== 설치 완료 ==="
 Say ""
@@ -738,7 +752,7 @@ Say "  1) 이 PC 에서 열기 :  http://127.0.0.1:$Port/"
 Say "  2) 폰에서 쓰려면   :  로컬 웹 우측 상단 [📱] -> '새 기기 추가' -> QR 스캔"
 Say "  3) 서비스 관리     :"
 Say "       시작 : Start-ScheduledTask $taskName"
-Say "       중지 : Get-Process python | Where-Object { `$_.Path -like '*$([IO.Path]::GetFileName($Root))*' } | Stop-Process"
+Say "       중지 : $stopCmd"
 Say "       수동 : $shellName -File `"$startPs`""
 Say ""
 Say "  설정 파일: $confFile"
