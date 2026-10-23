@@ -6291,12 +6291,15 @@ function maybeShowIosHint(){
 }
 // 서버까지 해제되는 PC 인가: 기기 자격(cs/cp)이 있고 Host 가 0.11.0 규약(pv≥2)을 안다(E-D17). 아니면 '이 폰에서만'.
 function serverUnpairable(pc){ return !!(pc&&pc.cs&&pc.cp&&(pc.pv|0)>=2); }
+// 저장된 pv 가 2 미만이어도 기기 자격이 있으면 서버(CP) 폐기를 시도한다 — 0.10.x 때 페어링해 pv=1 로 저장된 PC 도 PC 를 0.11 이상으로
+// 올렸으면 실제로 폐기·📵 반영된다. 그래서 확인 시트는 결과를 단정하지 않고, 결과 문구·상황 줄은 실제 폐기 결과(revokeFlush 의 done)로 정한다
+const UNPAIR_SUB_TRY='이 폰의 접속 자격 폐기를 서버에 요청합니다 — 결과는 해제한 뒤 알려 드립니다.';
 function unpairPc(room){
   const pc=pcsLoad().find(x=>x.room===room); const name=pc?pcName(pc):room;
-  const full=serverUnpairable(pc);
+  const full=serverUnpairable(pc), creds=!!(pc&&pc.cs&&pc.cp);
   return confirmSheet({title:'이 PC 페어링 해제', main:'"'+name+'" 의 페어링을 해제할까요?',
     sub: full ? '이 폰의 접속 자격을 서버에서 폐기하고 PC 의 기기 목록에도 📵 로 표시됩니다(오프라인이면 다음 접속 때 처리).'
-              : UNPAIR_SUB_LOCAL,
+         : creds ? UNPAIR_SUB_TRY : UNPAIR_SUB_LOCAL,
     action:'페어링 해제', danger:true, busyText:'해제 중…',
     run: async()=>{
       const cur=LS.getItem('sm_room')===room;
@@ -6306,7 +6309,7 @@ function unpairPc(room){
       }
       pcsRemove(room); forgetPcMem(room);                    // ③ 로컬 제거(그 PC 의 화면 기억도)
       let fl={done:[]}; try{ fl=await Promise.race([revokeFlush(), new Promise(r=>setTimeout(()=>r({done:[]}),5000))]); }catch(e){}
-      const serverDone=full && (fl.done||[]).includes(room);
+      const serverDone=(fl.done||[]).includes(room);        // 저장된 pv 가 아니라 실제 폐기 결과(TODOS 폰 해제 결과 문구)
       pc && (pc._unpairResult=serverDone);
       if(!cur) return;
       // 현재 PC 였으면: 다른 PC 가 있으면 최근 것으로 전환, 없으면 #pair(상황 줄)로.
