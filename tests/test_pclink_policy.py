@@ -367,15 +367,19 @@ def test_device_revoked_disables_pair(two):
 
 # ---------------------------------------------------------------- 저장·fail-closed
 
-def test_secrets_are_not_plaintext_on_windows(two):
+def test_secrets_are_protected(two):
+    """짝 키·상대 자격 비밀 — Windows 는 DPAPI 로 감싸고, DPAPI 가 없는 OS 는 0600 파일(방 키와 같은 보호, 설계 4.3)."""
     import os
+    import stat
     a, b, _ = two
     _pair(a, b)
-    raw = (b.base / "state.json").read_text(encoding="utf-8")
+    f = b.base / "state.json"
+    raw = f.read_text(encoding="utf-8")
     key = b.peer_out(a.host_id())["key"]
-    assert P.b64u(key) not in raw
     if os.name == "nt":
-        assert "secret-A-cred" not in raw                     # 상대 자격 비밀은 DPAPI 로 감쌌다
+        assert P.b64u(key) not in raw and "secret-A-cred" not in raw
+    else:
+        assert stat.S_IMODE(f.stat().st_mode) == 0o600
 
 
 def test_corrupt_state_fails_closed(two):
