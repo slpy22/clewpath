@@ -296,7 +296,8 @@ test("T92 단축키가 터미널로 새지 않는다 — 릴레이 xterm 은 이
   assert.deepEqual(got, {
     relay: { handlers: 1, alt1to4: [false, false, false, false], others: [true, true, true, true, false] },   // keyup 도 같은 조합이면 삼킨다
     relayGo: "files:a.py",
-    local: [[["keydown", true, true]], [["keydown", true, true]]],
+    // 두 번째 감시는 목록 칸 접기(Ctrl+Shift+B, onSideKey — 0.32.3 qs-polish T112)
+    local: [[["keydown", true, true], ["keydown", false, undefined]], [["keydown", true, true], ["keydown", false, undefined]]],
     localGo: { at: "viewer:b", prevented: 1 },
   });
 });

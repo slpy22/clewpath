@@ -275,3 +275,32 @@ test("T111 편집기 위 이동 경로(경로 조각)를 누르면 왼쪽 목록
     "폰": { ...PC, pane: "list" },
   });
 });
+
+// ---------------------------------------------------------------- 7. Ctrl+Shift+B 가 터미널 안에서도
+test("T112 Ctrl+Shift+B(목록 칸 접기·펼치기)는 릴레이 터미널(xterm 숨은 입력칸)·편집기 본문에 커서가 있어도 먹는다 — 진짜 입력칸(검색·이름·글쓰기 칸)에서는 그대로 무시, 릴레이 xterm 은 이 조합을 claude 로 보내지 않고, 로컬 터미널 창(iframe) 안에도 같은 감시를 붙인다", async () => {
+  const { ctx, app } = await boot({ mem: {} });
+  ev(ctx, "globalThis.__ckh = []; { const X = Terminal; Terminal = class { constructor(o) { const t = new X(o); t.attachCustomKeyEventHandler = (f) => __ckh.push(f); return t; } }; }");
+  await press(ctx, "terminal");
+  const h = ev(ctx, "__ckh[0]");
+  const xt = () => Object.assign(stubEl("textarea"), { className: "xterm-helper-textarea", closest: (s) => (s === ".xterm" ? stubEl("div") : null) });
+  const mo = () => Object.assign(stubEl("textarea"), { closest: (s) => (s === ".monaco-editor" ? stubEl("div") : null) });
+  const key = (target, o = {}) => ({ type: "keydown", ctrlKey: true, shiftKey: true, altKey: false, metaKey: false, key: "B", code: "KeyB", target,
+    prevented: 0, preventDefault() { this.prevented++; }, stopPropagation() {}, ...o });
+  const cases = { "터미널": [xt()], "편집기 본문": [mo()], "본문": [stubEl("body")], "검색칸": [stubEl("input")], "글쓰기 칸": [stubEl("textarea")],
+    "고르기": [stubEl("select")], "Ctrl+B(Shift 없음)": [xt(), { shiftKey: false, key: "b" }], "맥 ⌘+Shift+B": [xt(), { ctrlKey: false, metaKey: true }] };
+  const got = {};
+  for (const [name, [t, o]] of Object.entries(cases)) {
+    const before = app.classList.contains("side-off"), e = key(t, o);
+    ctx.onSideKey(e);
+    got[name] = { toggled: app.classList.contains("side-off") !== before, prevented: e.prevented };
+  }
+  got.xtermSends = [h(key(xt())), h(key(xt(), { shiftKey: false, key: "b" }))];   // Ctrl+Shift+B 는 claude 로 안 보냄, Ctrl+B 는 그대로(백그라운드로 보내기)
+  const w = { ls: [], addEventListener(t, f, c) { this.ls.push([t, f, c]); } };
+  ctx.quickKeyWatch(w);
+  got.frame = w.ls.map(([t, f]) => t + ":" + (f === ev(ctx, "onSideKey") ? "side" : f === ev(ctx, "onQuickKey") ? "quick" : "?")).join(",");
+  const on = { toggled: true, prevented: 1 }, off = { toggled: false, prevented: 0 };
+  assert.deepEqual(got, {
+    "터미널": on, "편집기 본문": on, "본문": on, "검색칸": off, "글쓰기 칸": off, "고르기": off, "Ctrl+B(Shift 없음)": off, "맥 ⌘+Shift+B": on,
+    xtermSends: [false, true], frame: "keydown:quick,keydown:side",
+  });
+});
