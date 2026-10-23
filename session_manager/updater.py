@@ -486,7 +486,12 @@ def apply(manifest: dict[str, Any], staged: Path, restart_cmd: str | None = None
         connector.request_bye("update")
     except Exception:  # noqa: BLE001
         pass
-    _popen(args, close_fds=True, **osdep.detached_popen_kwargs(),
+    # 러너 → 새 Host 는 이 env 를 물려받는다. 이 Host 가 clewpath.toml 에서 채운 값(appconfig.filled_env)은 뺀다 — 그대로 넘기면
+    # env 가 파일보다 우선이라 새 Host 가 옛 설정값으로 떠 그사이 고친 clewpath.toml 이 가려진다(TODOS Q15·R10).
+    # 사용자(런처)가 원래 준 env 는 그대로. 채운 게 없으면 예전처럼 통째로 물려받는다(env=None).
+    drop = appconfig.filled_env()
+    env = {k: v for k, v in os.environ.items() if k not in drop} if drop else None
+    _popen(args, close_fds=True, env=env, **osdep.detached_popen_kwargs(),
            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
            stdin=subprocess.DEVNULL)
     return write_state(applying=manifest["ver"], apply_log=str(log),

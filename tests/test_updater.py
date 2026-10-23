@@ -457,3 +457,34 @@ def test_check_and_stage_prunes_after_staging(fake_claude_home, monkeypatch):
         raise OSError("정리 실패")
     monkeypatch.setattr(updater, "prune_work_dir", boom)
     assert updater.check_and_stage()["staged"].endswith("stage-0.32.3")
+
+
+def test_runner_env_drops_values_the_host_filled_from_config(fake_claude_home, monkeypatch):
+    """TODOS 133행 Q15·R10: 러너(→ 새 Host)는 이 Host 의 env 를 물려받는다. Host 가 clewpath.toml 에서 채운 SM_* 까지 넘기면
+    env 가 파일보다 우선이라 새 Host 가 옛 설정값으로 떠 업데이트 사이에 고친 clewpath.toml 이 가려졌다. 채운 것만 빼고
+    사용자(런처)가 원래 준 env 는 그대로 넘긴다."""
+    from session_manager import appconfig
+    monkeypatch.setattr(appconfig, "_FILLED", {"SM_PORT", "SM_CP_URL"})
+    monkeypatch.setenv("SM_PORT", "5333")                  # 이 Host 가 파일에서 채운 값
+    monkeypatch.setenv("SM_CP_URL", "https://old-cp.test")
+    monkeypatch.setenv("SM_HOST", "127.0.0.1")             # 런처가 준 값
+    captured = {}
+    monkeypatch.setattr(updater, "_popen", lambda args, *a, **k: captured.update(k))
+    staged = fake_claude_home / "stage"
+    staged.mkdir()
+    updater.apply({"ver": "9.9.9", "platforms": ["win", "mac", "linux"]}, staged, restart_cmd="")
+    env = captured["env"]
+    assert "SM_PORT" not in env and "SM_CP_URL" not in env
+    assert env["SM_HOST"] == "127.0.0.1"
+    assert {k.upper() for k in env} >= {"PATH"}                # 나머지 env 도 그대로
+
+
+def test_runner_env_is_inherited_as_is_when_nothing_was_filled(fake_claude_home, monkeypatch):
+    from session_manager import appconfig
+    monkeypatch.setattr(appconfig, "_FILLED", set())
+    captured = {}
+    monkeypatch.setattr(updater, "_popen", lambda args, *a, **k: captured.update(k))
+    staged = fake_claude_home / "stage"
+    staged.mkdir()
+    updater.apply({"ver": "9.9.9", "platforms": ["win", "mac", "linux"]}, staged, restart_cmd="")
+    assert captured.get("env") is None                     # 그대로 물려받는다(예전과 같음)
