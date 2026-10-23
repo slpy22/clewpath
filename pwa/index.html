@@ -1603,8 +1603,11 @@ function showListPane(){ $('#app').setAttribute('data-view','list'); }
 function showDetailPane(){ $('#app').setAttribute('data-view','detail'); }
 // 빈 상세 칸 — 안내 한 줄 + (PC) '최근 화면' 단추(renderEmptyPane, quick-switch §3-6). 바깥 상자는 그대로 'detail-empty' 하나
 let EMPTY_BOX=null;
-function detailPlaceholder(txt){ paneEnter('empty'); const p=paneDetail(); closeInlineMonitor(); p.classList.remove('term-mode','fb-mode','mon-mode'); p.innerHTML='';
+function detailPlaceholder(txt){ paneEnter('empty'); const p=paneDetail(); closeInlineMonitor(); p.classList.remove('term-mode','fb-mode','mon-mode'); p.innerHTML=''; headList();
   const box=el('div','detail-empty'); box._txt=txt||''; box._shape=''; box._btns=[]; EMPTY_BOX=box; p.appendChild(box); renderEmptyPane(); }
+// 머리 줄 제목(#head) — 상세 칸 화면이 저마다 적는다(세션 상세·뷰어·파일·관제·터미널 재개…). 폰은 한 칸씩이라 목록 칸으로 오면 '세션'.
+// PC 는 두 칸이 함께 보여 제목이 상세 칸 화면 이름을 따른다 — 목록을 새로 받을 때(⟳·보기 전환·재연결) 덮지 않고, 상세 칸이 비면 '세션'(quick-switch 6단계)
+function headList(){ if(innerWidth<880||PANE_NOW.kind==='empty') $('#head').textContent='세션'; }
 function highlightSelected(){ document.querySelectorAll('.srow').forEach(r=>
   r.classList.toggle('sel', r.dataset.sid===SELECTED_ID)); }
 // ---- 화면 진입 기록(quick-switch §8 2단계) ----
@@ -1739,7 +1742,7 @@ let LIST_READY=false;   // 지금 PC 의 첫 목록을 받았나(PC 전환 때 f
 let LIST_AT=0;          // 지금 SESSIONS 를 서버에 청한 시각(ms) — 그 뒤에 이 페이지가 본 것(방금 띄운 터미널)은 목록이 아직 모른다(tabSeenLive)
 let LIST_FAIL=false;    // 목록 칸이 '목록 실패'를 보이는 중인가 — PC 가 돌아오면(pcBack) 처음부터 다시 받는다(20초 갱신은 옛 목록 칸에 그린다)
 async function loadList(q){
-  const main=paneList(); $('#head').textContent='세션';
+  const main=paneList(); headList();
   main.innerHTML=''; syncTabbar();
   // 세션 목록 ↔ 관제 그룹 목록 전환(2026-10-11 사장님: 그룹을 팝업에서 고르지 말고 목록으로)
   const seg=el('div','lview');
