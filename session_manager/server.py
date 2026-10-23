@@ -748,7 +748,7 @@ def create_app() -> FastAPI:
         st["dev"] = updater.is_dev_checkout()   # 개발 소스면 자동적용 불가 → UI 가 안내만
         try:
             last = json.loads((updater.work_dir() / "last_apply.json")
-                              .read_text(encoding="utf-8"))
+                              .read_text(encoding="utf-8-sig"))     # 5.1 러너는 BOM 을 붙인다(updater.recently_failed)
             st["last_apply"] = last
         except Exception:  # noqa: BLE001
             pass

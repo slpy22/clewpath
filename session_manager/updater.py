@@ -432,7 +432,9 @@ def recently_failed(version: str) -> bool:
     을 끊는다. last_apply.json 은 update_runner 가 롤백 후에도 ok=false 로 남긴다.
     """
     try:
-        last = json.loads((work_dir() / "last_apply.json").read_text(encoding="utf-8"))
+        # utf-8-sig: pwsh 가 없는 PC 는 러너가 powershell.exe(5.1)로 돌고, 5.1 의 Set-Content -Encoding UTF8 은 BOM 을 붙인다 —
+        # utf-8 로 읽으면 json 이 BOM 에서 실패해 '방금 실패한 버전'을 몰라 같은 버전을 다시 받아 롤백을 되풀이했다
+        last = json.loads((work_dir() / "last_apply.json").read_text(encoding="utf-8-sig"))
         return last.get("version") == version and last.get("ok") is False
     except Exception:  # noqa: BLE001
         return False
