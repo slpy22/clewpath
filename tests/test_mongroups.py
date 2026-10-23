@@ -86,3 +86,35 @@ def test_group_cap(fake_claude_home, monkeypatch):
     mongroups.save("a", M, []); mongroups.save("b", S1, [])
     with pytest.raises(ValueError):
         mongroups.save("c", S2, [])
+
+
+def test_concurrent_saves_keep_file_whole_and_lose_nothing(fake_claude_home):
+    """TODOS 59행: _save 에 잠금이 없고 임시 파일 이름이 같아, 두 탭이 동시에 저장하면 파일이 깨지거나(같은 .tmp 를 함께 씀)
+    서로의 그룹을 덮어써(읽고-고치고-쓰기 사이 끼어들기) 그룹이 사라졌다. 여러 스레드가 동시에 만들고 고쳐도 다 남아야 한다."""
+    import threading
+
+    base = mongroups.save("base", M, [S1])
+    errs: list[BaseException] = []
+    start = threading.Barrier(8)
+
+    def worker(i: int) -> None:
+        try:
+            start.wait()
+            for j in range(5):
+                mongroups.save(f"g{i}-{j}", f"{i:08d}-0000-0000-0000-{j:012d}", [S1])
+                mongroups.update(base["id"], name=f"base-{i}-{j}")
+                mongroups.list_groups()
+        except BaseException as e:  # noqa: BLE001
+            errs.append(e)
+
+    ts = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    assert errs == []
+    path = mongroups.groups_file()
+    data = json.loads(path.read_text(encoding="utf-8"))          # 깨지지 않은 JSON
+    assert len(data["groups"]) == 1 + 8 * 5                        # 덮어써 사라진 그룹 없음
+    assert {g["name"] for g in mongroups.list_groups()} >= {f"g{i}-{j}" for i in range(8) for j in range(5)}
+    assert [p.name for p in path.parent.iterdir() if p.name.endswith(".tmp")] == []    # 임시 파일이 남지 않음
