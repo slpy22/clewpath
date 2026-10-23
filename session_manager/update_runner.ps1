@@ -20,6 +20,7 @@
 #  ⚠ PowerShell 5.1 에서도 돌아야 한다 — pwsh 가 없는 PC 에선 updater.py 가
 #    powershell.exe 로 이 파일을 띄운다. PS7 전용 문법(?. ?? 삼항 && ||) 금지,
 #    저장은 UTF-8 BOM 포함 (tests/test_ps51_compat.py 가 검사).
+#  시험: tests/test_update_runner_ps1.py — 임시 폴더에서 5.1·7 로 끝까지 돌린다(파일을 쥐고 복사 실패 흉내 포함).
 # =====================================================================
 [CmdletBinding()]
 param(
@@ -45,14 +46,57 @@ function Log($m) {
     try { Add-Content -Path $LogFile -Value $line -Encoding UTF8 } catch {}
 }
 
+# 폴더 내용을 그 폴더 안으로 하나씩 덮어 복사하고 오류(ErrorRecord)들을 돌려준다 — 대상 폴더를 다 못 지웠을 때(Copy-Payload).
+# 하나씩인 이유: 5.1 의 Copy-Item 은 잠긴 대상 파일을 덮다 -ErrorAction 과 무관하게 종료 오류를 던져 그 뒤 파일을 건너뛴다(7 은 안 그런다).
+function Copy-Merge($src, $dst) {
+    $ge = $null
+    foreach ($rel in @(Get-ChildItem -LiteralPath $src -Recurse -Force -Name -ErrorAction SilentlyContinue -ErrorVariable ge)) {
+        $s = Join-Path $src $rel
+        $t = Join-Path $dst $rel
+        try {
+            if (Test-Path -LiteralPath $s -PathType Container) {
+                if (-not (Test-Path -LiteralPath $t)) { New-Item -ItemType Directory -Force -Path $t -ErrorAction Stop | Out-Null }
+            } else {
+                $pd = Split-Path $t
+                if (-not (Test-Path -LiteralPath $pd)) { New-Item -ItemType Directory -Force -Path $pd -ErrorAction Stop | Out-Null }
+                Copy-Item -LiteralPath $s -Destination $t -Force -ErrorAction Stop
+            }
+        } catch { $_ }
+    }
+    @($ge) | Where-Object { $_ }
+}
+
+# 교체 대상을 $from -> $to 로. 오류는 모아서 끝에 던진다 — 예전엔 -ErrorAction SilentlyContinue 뿐이라 복사가 실패해도 예외가
+# 없어 백업·교체 실패를 잡는 try/catch 가 사실상 돌지 않았다(반쪽 백업 위에 교체하면 롤백도 반쪽, 결과는 '성공').
+#  - 이름마다 한 번 더(1초 뒤) 해 본다 — 백신 검사 같은 잠깐의 잠금으로 업데이트를 실패시키지 않게.
+#  - 대상 폴더를 다 못 지웠으면(잠긴 파일) 폴더째 복사하지 않고 그 안으로 내용을 덮어 복사한다(Copy-Merge) — 폴더째 복사하면
+#    남은 폴더 안에 한 겹 더 생겼다(session_manager\session_manager). 롤백은 이 덕에 잠긴 파일 말고는 되돌린다. 어느 쪽이든 오류로 센다.
+#  - 이름 하나의 종료 오류(5.1 의 Copy-Item 은 잠긴 대상을 덮다 던진다)가 나머지 이름의 복사를 막지 않게 이름마다 try.
 function Copy-Payload($from, $to) {
-    New-Item -ItemType Directory -Force -Path $to | Out-Null
+    New-Item -ItemType Directory -Force -Path $to -ErrorAction Stop | Out-Null
+    $errs = New-Object System.Collections.Generic.List[string]
     foreach ($name in $Payload) {
         $src = Join-Path $from $name
         if (-not (Test-Path $src)) { continue }
         $dst = Join-Path $to $name
-        if (Test-Path $dst) { Remove-Item -Recurse -Force $dst -ErrorAction SilentlyContinue }
-        Copy-Item $src $dst -Recurse -Force -ErrorAction SilentlyContinue
+        for ($attempt = 1; $attempt -le 2; $attempt++) {
+            $e1 = $null; $e2 = $null; $e3 = @()
+            try {
+                if (Test-Path $dst) { Remove-Item -Recurse -Force $dst -ErrorAction SilentlyContinue -ErrorVariable e1 }
+                if ((Test-Path $dst) -and (Test-Path $src -PathType Container)) {
+                    $e3 = @(Copy-Merge $src $dst)
+                } else {
+                    Copy-Item $src $dst -Recurse -Force -ErrorAction SilentlyContinue -ErrorVariable e2
+                }
+            } catch { $e3 += $_ }
+            $bad = @(@($e1) + @($e2) + @($e3) | Where-Object { $_ })
+            if ($bad.Count -eq 0) { break }
+            if ($attempt -lt 2) { Start-Sleep -Seconds 1; continue }
+            foreach ($e in $bad) { $errs.Add(("{0}: {1}" -f $name, ($e.Exception.Message -replace '\s+', ' '))) }
+        }
+    }
+    if ($errs.Count -gt 0) {
+        throw ("복사 오류 {0}건 - {1}" -f $errs.Count, ((@($errs) | Select-Object -First 3) -join " | "))
     }
 }
 
@@ -140,7 +184,26 @@ function Start-Host2 {
     $psi.Arguments = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $RestartScript + '"'
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
-    [System.Diagnostics.Process]::Start($psi) | Out-Null
+    # 못 띄워도 러너는 끝까지 간다 — 예외로 끝나면 롤백·결과 기록·잠금 해제를 건너뛴다
+    try { [System.Diagnostics.Process]::Start($psi) | Out-Null } catch { Log "재기동 실패: $($_.Exception.Message)" }
+}
+
+# 결과를 state.json 옆에 남기고(다음 기동 때 UI 가 읽는다. ok=false 인 버전은 재기동 자동 적용이 다시 받지 않는다 —
+# updater.recently_failed) 동시 실행 방지 잠금을 푼다(updater.py 가 apply 시작 때 건다. 못 지워도 5분 뒤 만료).
+# 끝·실패·중단 어느 길이든 여기를 거친다 — 예전엔 백업 실패의 exit 1 이 둘 다 건너뛰어, 다음 적용이 5분 동안 거부되고
+# 재기동 자동 적용이 같은 버전을 또 받았다.
+function Write-ApplyResult($ok) {
+    try {
+        $res = @{
+            version   = $Version
+            ok        = [bool]$ok
+            finished_at = [int][double]::Parse((Get-Date -UFormat %s))
+            log       = $LogFile
+        } | ConvertTo-Json
+        Set-Content -Path (Join-Path (Split-Path $LogFile) "last_apply.json") -Value $res -Encoding UTF8
+    } catch {}
+    try { Remove-Item -Force (Join-Path (Split-Path $LogFile) "apply.lock") -ErrorAction SilentlyContinue } catch {}
+    Log "=== 종료 (성공: $([bool]$ok)) ==="
 }
 
 Log "=== 업데이트 적용 시작 -> $Version ==="
@@ -168,7 +231,9 @@ try {
     Copy-Payload $InstallRoot $BackupDir
     Log "백업 완료: $BackupDir"
 } catch {
-    Log "[FAIL] 백업 실패 - 되돌릴 수 없으므로 여기서 멈춥니다: $_"
+    Log "[FAIL] 백업 실패 - 되돌릴 수 없으므로 교체하지 않고 멈춥니다(설치 폴더는 그대로): $_"
+    # 결과·잠금 정리를 옛 Host 를 다시 띄우기 전에 — 뜨자마자 재기동 자동 적용이 같은 버전을 또 받지 않게
+    Write-ApplyResult $false
     Start-Host2
     exit 1
 }
@@ -180,7 +245,7 @@ try {
     $swapped = $true
     Log "파일 교체 완료"
 } catch {
-    Log "[FAIL] 교체 중 오류: $_"
+    Log "[FAIL] 교체 중 오류 - 백업으로 되돌립니다: $_"
 }
 
 # ── 4) 의존성 ───────────────────────────────────────────────
@@ -202,7 +267,7 @@ if (-not $healthy) {
         $failed = "$BackupDir-failed-$Version"
         if (Test-Path $failed) { Remove-Item -Recurse -Force $failed -ErrorAction SilentlyContinue }
         Copy-Payload $InstallRoot $failed
-    } catch {}
+    } catch { Log "  실패한 버전 보관 중 오류(계속): $_" }
 
     try {
         # 터미널 관리 프로세스(session_manager.ptyd)는 제외 — 열린 터미널을 들고 있고, 롤백과 무관하게 계속 산다
@@ -213,8 +278,14 @@ if (-not $healthy) {
             $_.Path -and $_.Path.StartsWith($InstallRoot, [StringComparison]::OrdinalIgnoreCase) -and ($keep -notcontains $_.Id)
         } | Stop-Process -Force -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 2
-        Copy-Payload $BackupDir $InstallRoot
-        Log "이전 버전 복원 완료"
+        # 복원이 일부 실패해도(잠긴 파일) 옛 Host 를 다시 띄우는 데까지는 간다 — 복사 오류가 예외로 보이게 된 뒤에도 예전처럼.
+        # 되돌릴 수 있는 것은 Copy-Payload 가 되돌렸다(못 지운 폴더엔 내용을 덮어 복사).
+        try {
+            Copy-Payload $BackupDir $InstallRoot
+            Log "이전 버전 복원 완료"
+        } catch {
+            Log "[FAIL] 이전 버전 복원 중 오류 - 되돌릴 수 있는 것만 되돌렸습니다, 수동 확인이 필요합니다: $_"
+        }
         # 파일만 되돌리면 dist-info 가 실패한 버전으로 남는다 → 자기를 신버전이라
         # 착각하고 다시는 업데이트를 안 받는다. 메타데이터까지 되돌려야 한다.
         Sync-Deps "롤백"
@@ -226,19 +297,5 @@ if (-not $healthy) {
     }
 }
 
-# 결과를 state.json 옆에 남긴다 — 다음 기동 때 UI 가 읽어서 보여준다
-try {
-    $res = @{
-        version   = $Version
-        ok        = $healthy
-        finished_at = [int][double]::Parse((Get-Date -UFormat %s))
-        log       = $LogFile
-    } | ConvertTo-Json
-    Set-Content -Path (Join-Path (Split-Path $LogFile) "last_apply.json") -Value $res -Encoding UTF8
-} catch {}
-
-# 동시 실행 방지 잠금 해제(updater.py 가 apply 시작 시 건다). 완료됐으니 다음 정상
-# 업데이트를 막지 않도록 지운다. 못 지워도 5분 뒤 자동 만료된다.
-try { Remove-Item -Force (Join-Path (Split-Path $LogFile) "apply.lock") -ErrorAction SilentlyContinue } catch {}
-
-Log "=== 종료 (성공: $healthy) ==="
+# 결과 기록 + 잠금 해제(Write-ApplyResult — 백업 실패로 멈추는 길도 같은 함수를 거친다)
+Write-ApplyResult $healthy
