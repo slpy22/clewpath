@@ -85,6 +85,8 @@
   .qtag.now{color:var(--accent);font-weight:650}
   .qtag.warn{color:var(--warn);font-weight:650}
   .pop .popi.qs-it.dim{opacity:.5}
+  .pop .popi.qs-it.attn .pi{position:relative}
+  .pop .popi.qs-it.attn .pi::after{content:'';position:absolute;top:-2px;right:-1px;width:7px;height:7px;border-radius:50%;background:#e8a03c}
   .popbg.qs-sheet{z-index:61}
   .pop.qs-sheet{z-index:62}   /* 폰 관제 덮개(z 60) 머리 ▾ 로 열어도 덮개 위에 */
   .backbar .vtitle{flex:1;min-width:0;padding:0 4px;font-weight:650;font-size:.9rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -101,6 +103,9 @@
     #qs button.dim{opacity:.45}                     /* 기억 없음·준비 중 — 누르면 안내 */
     #qs button.wait{cursor:progress}
     #qs .qi{font-size:.95rem;line-height:1}
+    #qs button{position:relative}
+    #qs button.attn::after{content:'';position:absolute;top:3px;right:3px;width:7px;height:7px;border-radius:50%;background:#e8a03c;
+      box-shadow:0 0 0 2px var(--bg)}               /* 볼 일 점 — 열린 탭 중 권한·입력 대기(🔔 배지와 같은 주황) */
     /* 빈 상세 칸 '최근 화면'(§3-6) — 폰은 빈 안내 자체가 숨어 있다 */
     .detail-empty{flex-direction:column;gap:16px}
     .qs-recent{display:flex;flex-direction:column;gap:10px;width:min(560px,100%)}
@@ -6864,6 +6869,9 @@ function quickTargets(){
         o.has=true; o.name=sessLabel(s); o.sub=[off?'꺼짐':(bd?bd.text:''), n>1?'탭 '+n+'개':''].filter(Boolean).join(' · ');
         o.taken=!off&&quickTermTaken(t,s); }
       else o.sub='열어 둔 터미널 없음';
+      // 볼 일 점(6단계): 열린 탭 중 권한·입력 대기 — 지금 보고 있는 탭은 뺀다. 20초 목록의 훅 상태만(신선도 게이트는 sessionBadge)
+      o.attn=TABS.list.filter(ok).filter(x=>!(o.cur&&termView.active===x.key)).map(x=>{ const s=find(x.s.session_id), bd=s&&sessionBadge(s);
+        return (bd&&(bd.text==='권한 대기'||bd.text==='입력 대기'))?sessLabel(s)+'('+bd.text+')':''; }).filter(Boolean);
     } else if(kind==='files'){
       const st=quickFbPeek();
       if(st.tabs.length){ const a=st.tabs.find(t=>fbId(t.root,t.path)===st.active)||st.tabs[0];
@@ -7024,7 +7032,8 @@ const QUICK_KEYS={terminal:'Alt+1', files:'Alt+2', viewer:'Alt+3', monitor:'Alt+
 function quickLine(o){ return [o.name, o.sub].filter(Boolean).join(' · '); }
 function quickTip(o){
   return o.label+' — '+(o.wait?'준비 중(목록을 받는 중)':(o.fail||quickLine(o)))+' · '+QUICK_KEYS[o.kind]
-    +(o.taken?'\n👀 다른 기기에서 보는 중 — 누르면 가져오기 확인':'');
+    +(o.taken?'\n👀 다른 기기에서 보는 중 — 누르면 가져오기 확인':'')
+    +(o.attn&&o.attn.length?'\n● 볼 일: '+o.attn.join(', '):'');
 }
 // PC 머리 줄 단추 4개(.grow 뒤·🔔 앞) — 파랑 = 지금 상세 칸 화면, 보통 = 기억 있음, 흐림 = 기억 없음·준비 중(첫 목록 전).
 // 단추는 한 번만 만들고 모습만 바꾼다(20초마다 다시 만들면 누르던 단추의 포커스를 잃는다). 폰은 CSS 가 숨긴다(제목 ▾ 시트)
@@ -7035,7 +7044,7 @@ function renderQuick(){
       for(const o of list){ const b=el('button'); b.type='button'; b.dataset.k=o.kind;
         b.appendChild(el('span','qi')); b.appendChild(el('span','ql')); b.onclick=()=>quickGo(o.kind); nav.appendChild(b); } }
     list.forEach((o,i)=>{ const b=nav.children[i];
-      b.className=[o.cur&&'on', o.dim&&!o.cur&&'dim', o.wait&&'wait', o.taken&&'taken'].filter(Boolean).join(' ');
+      b.className=[o.cur&&'on', o.dim&&!o.cur&&'dim', o.wait&&'wait', o.taken&&'taken', o.attn&&o.attn.length&&'attn'].filter(Boolean).join(' ');
       b.children[0].textContent=o.icon; b.children[1].textContent=o.kind==='monitor'?'관제':o.label;   // 결정 1: 💬 뷰어 ↔ ℹ 상세
       b.title=quickTip(o); b.setAttribute('aria-label',o.label); b.setAttribute('aria-current',o.cur?'true':'false'); });
   }
@@ -7093,7 +7102,7 @@ function showQuickSheet(anchor){
   for(const o of quickTargets()){
     const [tag,tc]=o.taken?['👀 가져오기','warn']:o.cur?['지금','now']:o.back?['바로 돌아가기','now']:o.wait?['준비 중','']
       :o.fail?[listErrText()[1],'']:!o.has?['고르기…','']:['',''];
-    const b=popItem(o.icon, o.label, o.fail||quickLine(o), ()=>quickGo(o.kind), 'qs-it'+(o.dim&&!o.cur&&!o.back?' dim':''));
+    const b=popItem(o.icon, o.label, o.fail||quickLine(o), ()=>quickGo(o.kind), 'qs-it'+(o.dim&&!o.cur&&!o.back?' dim':'')+(o.attn&&o.attn.length?' attn':''));
     b.dataset.k=o.kind;
     if(tag) b.appendChild(el('span','qtag'+(tc?' '+tc:''),tag));
     box.appendChild(b);

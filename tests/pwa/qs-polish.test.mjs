@@ -3,7 +3,8 @@
 // Ctrl+Shift+B · 이름 바꾸기·삭제가 보던 화면을 지우지 않음 · 업데이트 확인의 unsupported.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { load, ev, stubEl } from "./harness.mjs";
+import { readFileSync } from "node:fs";
+import { load, ev, stubEl, INDEX } from "./harness.mjs";
 
 const A = "aaaaaaaa-1111-2222-3333-444444444444";
 const B = "bbbbbbbb-1111-2222-3333-444444444444";
@@ -191,3 +192,41 @@ test("T108 보던 탭을 닫거나(× → 화면만 닫기·⏹ 세션 종료) �
   assert.deepEqual(got, { start: "terminal:b", closeView: "terminal:c", barStop: "terminal:d", closeStop: "terminal:e", tabs: "A,E" });
 });
 function __modalBtn(ctx, label) { return ev(ctx, "__modal.btns").find((b) => b.textContent === label); }
+
+// ---------------------------------------------------------------- 5. 🖥 단추의 '볼 일 점'
+test("T109 🖥 단추의 볼 일 점 — 열린 탭 중 권한·입력 대기 세션이 있으면 주황 점(툴팁에 그 탭), 지금 보고 있는 터미널 탭은 빼고, 낡은 신호(30분 넘음)는 빼며, 20초 목록만 쓴다(새 연결·요청 없음). 폰 시트 줄도 같은 점", async () => {
+  const { ctx, nav } = await boot({ mem: { tabs: [A, B] } });
+  const now = "Date.now() / 1000";
+  const calls = () => ev(ctx, "[__calls.length, __lists, __tc.length, __mon.length].join(',')");
+  const draw = () => { ev(ctx, "renderQuick()"); return btn(nav, 0); };
+  const got = {};
+  const c0 = calls();
+  got.none = draw();
+  ev(ctx, `SESSIONS[0].runtime = { phase: 'waiting', waiting_at: ${now} }`);
+  got.waitA = draw();
+  got.calls = calls() === c0;
+  await press(ctx, "terminal");                                       // 그 탭(A)을 보는 중 — 이미 보고 있으니 점 없음
+  got.onA = draw();
+  ev(ctx, `SESSIONS[1].runtime = { phase: 'permission', permission_at: ${now} }`);
+  got.permB = draw();
+  ev(ctx, `SESSIONS[1].runtime = { phase: 'permission', permission_at: ${now} - 31 * 60 }`);
+  got.stale = draw();
+  const W = "터미널 — A · 입력 대기 · 탭 2개 · Alt+1";
+  assert.deepEqual(got, {
+    none: ["", "터미널 — A · 탭 2개 · Alt+1"],
+    waitA: ["attn", W + "\n● 볼 일: A(입력 대기)"],
+    calls: true,
+    onA: ["on", W],
+    permB: ["on attn", W + "\n● 볼 일: B(권한 대기)"],
+    stale: ["on", W],
+  });
+  // 폰: 제목 ▾ 시트의 🖥 줄
+  const ph = await boot({ width: 390, mem: { tabs: [A, B] }, pre: `SESSIONS[1].runtime = { phase: 'waiting', waiting_at: ${now} };` });
+  ph.title.onclick();
+  const row = ev(ph.ctx, "POP.box.children[1].children")[0];
+  assert.deepEqual([row.dataset.k, row.classList.contains("attn")], ["terminal", true]);
+  // 점은 CSS 로 — PC 단추(머리 줄 880px 이상)·폰 시트 줄 아이콘, 🔔 배지와 같은 주황
+  const css = readFileSync(INDEX, "utf-8");
+  assert.match(css, /#qs button\.attn::after\{[^}]*background:#e8a03c/);
+  assert.match(css, /\.pop \.popi\.qs-it\.attn \.pi::after\{[^}]*background:#e8a03c/);
+});
