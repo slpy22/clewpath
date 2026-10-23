@@ -406,3 +406,16 @@ def test_audit_has_no_bodies(two):
     text = json.dumps(b.audit_tail(50), ensure_ascii=False)
     assert "secret-" not in text and "clewpath-pair:" not in text
     assert any(e["event"] == "paired" for e in b.audit_tail(50))
+
+
+def test_unapproved_pasted_invite_is_dropped(two):
+    a, b, clk = two
+    inv = b.create_invite(name="노트북", **ROOM_B)
+    st = a.stash_accept(b.invite_string(inv["inv"]))
+    mtime = (a.base / "state.json").stat().st_mtime_ns
+    a.sweep_handshakes()
+    assert (a.base / "state.json").stat().st_mtime_ns == mtime          # 바뀐 게 없으면 쓰지 않는다
+    clk.t += POL.ACCEPT_KEEP_S + 1
+    a.sweep_handshakes()
+    with pytest.raises(POL.PolicyError):
+        a.take_accept(st["accept_id"])

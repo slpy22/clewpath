@@ -45,7 +45,8 @@ DAY_BUDGET_USD = 20.0
 USD_PER_MB = 1.9
 HOST_CONCURRENCY = 2
 HOST_QUEUE = 4
-CLEANUP_KEEP_S = 7 * 86400        # 해제 알림을 못 보낸 짝을 '상대 쪽 정리 대기'로 두는 기간
+CLEANUP_KEEP_S = 7 * 86400
+ACCEPT_KEEP_S = 3600             # 붙여 넣은 초대를 승인 전까지 들고 있는 시간(승인 요청 30분 + 여유)        # 해제 알림을 못 보낸 짝을 '상대 쪽 정리 대기'로 두는 기간
 
 
 class PolicyError(Exception):
@@ -554,7 +555,11 @@ class Policy:
                 if r["state"] in ("open", "pairing") and r["exp"] < t:
                     r["state"] = "expired"
                     gone.append(r["cred_id"])
-            return gone or None
+            # 붙여 넣었지만 승인되지 않은 초대(승인 요청은 30분이면 만료) — 비밀을 오래 들고 있지 않는다
+            stale = [k for k, v in d["accepts"].items() if v["exp"] < t or t - int(v.get("created") or 0) > ACCEPT_KEEP_S]
+            for k in stale:
+                d["accepts"].pop(k)
+            return gone if (gone or stale) else None     # 바뀐 게 없으면 쓰지 않는다(30초마다 돈다)
         try:
             for cred in self._mutate(_f) or []:
                 self._revoke_or_queue(cred)
