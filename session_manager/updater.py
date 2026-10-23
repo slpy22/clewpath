@@ -33,6 +33,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -512,8 +513,74 @@ def recently_failed(version: str) -> bool:
         return False
 
 
+# ---------------------------------------------------------------- 작업 폴더 정리
+
+KEEP_PER_KIND = 2          # 종류별로 남기는 개수(TODOS Q16·R13)
+
+# 작업 폴더(updates/)에 업데이트마다 쌓이는 것 — 받은 zip·펼친 stage·러너의 백업·롤백 때 남긴 실패본.
+# 이름이 이 규칙에 딱 맞는 것만 다룬다(러너가 만드는 중인 backup-<v>.tmp.<pid>·잠금·로그·매니페스트·.part 는 건드리지 않는다).
+_V = r"(\d+(?:\.\d+)*)"
+_PRUNE_KINDS = (("zip", re.compile(rf"clewpath-host-{_V}\.zip")), ("stage", re.compile(rf"stage-{_V}")),
+                ("backup", re.compile(rf"backup-{_V}")), ("failed", re.compile(rf"backup-{_V}-failed-{_V}")))
+
+
+def _applying_now() -> bool:
+    """적용이 도는 중인가 — apply.lock(나이 무관: 시체여도 러너가 죽은 것이라 그 백업이 복구에 필요하다), 맥·리눅스 러너 잠금,
+    update.inprogress 표식."""
+    wd = work_dir()
+    return (wd / "apply.lock").exists() or (wd / "runner.lock.d").exists() or _marker_holder() is not None
+
+
+def prune_work_dir(keep: int = KEEP_PER_KIND) -> list[str]:
+    """작업 폴더의 zip·stage·backup·실패본을 종류별로 버전이 높은 keep 개만 남기고 지운다. 지운 이름들을 돌려준다.
+
+    절대 지우지 않는 것: 적용이 도는 중이면 아무것도(_applying_now), 아직 적용 안 한 스테이지(staged_version)와 마지막으로 적용한
+    버전(applying)의 zip·stage, 지금 설치본의 롤백 원본(지금 버전보다 낮은 백업 중 가장 새것 — 수동 되돌리기에 쓴다).
+    """
+    if _applying_now():
+        return []
+    wd = work_dir()
+    st = read_state()
+    pinned = {str(st.get(k)) for k in ("staged_version", "applying") if st.get(k)}
+    cur = _ver_tuple(current_version())
+    found: dict[str, list[tuple[tuple, Path]]] = {k: [] for k, _ in _PRUNE_KINDS}
+    try:
+        entries = list(wd.iterdir())
+    except OSError:
+        return []
+    for p in entries:
+        for kind, rx in _PRUNE_KINDS:
+            m = rx.fullmatch(p.name)
+            if not m:
+                continue
+            if kind in ("zip", "stage") and m.group(1) in pinned:
+                break
+            key = (_ver_tuple(m.group(2)), _ver_tuple(m.group(1))) if kind == "failed" else (_ver_tuple(m.group(1)),)
+            found[kind].append((key, p))
+            break
+    older = [(k, p) for k, p in found["backup"] if k[0] < cur]
+    rollback = max(older, key=lambda kp: kp[0])[1] if older else None
+    removed: list[str] = []
+    for kind, items in found.items():
+        items.sort(key=lambda kp: kp[0], reverse=True)
+        for _, p in items[keep:]:
+            if p == rollback or p.is_symlink():
+                continue
+            try:
+                if p.is_dir():
+                    shutil.rmtree(p)
+                else:
+                    p.unlink()
+                removed.append(p.name)
+            except OSError as e:
+                print(f"[update] 작업 폴더 정리 실패(무시): {p.name}: {type(e).__name__}", flush=True)
+    if removed:
+        print(f"[update] 작업 폴더 정리: {len(removed)}개 지움({', '.join(sorted(removed))})", flush=True)
+    return removed
+
+
 def check_and_stage() -> dict[str, Any]:
-    """확인 -> (있으면) 다운로드 -> 검증 -> 스테이징. 적용 직전까지."""
+    """확인 -> (있으면) 다운로드 -> 검증 -> 스테이징. 적용 직전까지. 펼친 뒤 작업 폴더를 정리한다(실패해도 스테이징은 그대로)."""
     st = check()
     if not st.get("available") or not st.get("manifest"):
         return st
@@ -521,4 +588,9 @@ def check_and_stage() -> dict[str, Any]:
     m = verify_manifest(token)          # 다시 검증 — 저장/전달 중 바뀌었을 수 있다
     zip_path = download(m, token)
     staged = stage(zip_path, m)
-    return write_state(staged=str(staged), staged_version=m["ver"])
+    st = write_state(staged=str(staged), staged_version=m["ver"])
+    try:
+        prune_work_dir()
+    except Exception as e:  # noqa: BLE001 — 정리는 덤이다. 업데이트를 막지 않는다
+        print(f"[update] 작업 폴더 정리 건너뜀: {type(e).__name__}", flush=True)
+    return st
