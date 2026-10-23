@@ -13,6 +13,7 @@ import json
 import os
 import secrets
 import struct
+import threading
 import time
 
 from session_manager import config
@@ -88,8 +89,16 @@ def _hotp(secret_b32: str, counter: int, digits: int = 6) -> str:
     return str(code).zfill(digits)
 
 
+_USED_LOCK = threading.Lock()
+_LAST_STEP: dict[tuple[str, str], int] = {}     # (데이터 폴더, 비밀) → 마지막으로 통과한 스텝
+
+
 def verify(code: str | None, window: int = 1, period: int = 30) -> bool:
-    """현재 시각 기준 ±window 스텝 내에서 6자리 코드를 검증한다."""
+    """현재 시각 기준 ±window 스텝 내에서 6자리 코드를 검증한다.
+
+    한 번 통과한 코드(와 그보다 앞 스텝의 코드)는 다시 받지 않는다(RFC 6238 5.2) — 엿본 코드를 30초 안에 한 번 더 써서
+    다른 승인·특권 동작을 통과시키지 못하게(2026-10-23 pclink 두 Host e2e 에서 발견). 기억은 Host 프로세스 메모리.
+    """
     s = secret()
     if not s or not code:
         return False
@@ -99,6 +108,11 @@ def verify(code: str | None, window: int = 1, period: int = 30) -> bool:
     now = int(time.time()) // period
     for w in range(-window, window + 1):
         if _hotp(s, now + w) == code:
+            key = (str(config.data_dir()), s)    # 비밀이 바뀌면(재설정) 기억도 새로
+            with _USED_LOCK:
+                if now + w <= _LAST_STEP.get(key, -1):
+                    return False
+                _LAST_STEP[key] = now + w
             return True
     return False
 
