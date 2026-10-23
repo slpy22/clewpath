@@ -5834,10 +5834,21 @@ function pclinkAllowRow(s, d, before){
     row.classList.toggle('on',cur); };
   btn.onclick=async()=>{ if(btn.disabled) return; btn.disabled=true;
     try{ const r=await pclinkSetAllow(s.session_id,!cur); if(r!=null){ cur=r; draw(); } } finally{ btn.disabled=false; } };
-  row._ready=Promise.resolve().then(()=>T.api('GET','/api/owner/pclink/sessions/'+encodeURIComponent(s.session_id))).then(r=>{
+  const fetchNow=()=>T.api('GET','/api/owner/pclink/sessions/'+encodeURIComponent(s.session_id)).then(r=>{
     if(!r||typeof r.allow!=='boolean') return false;
     cur=r.allow; draw(); d.insertBefore(row, before); return true;
   }).catch(()=>false);
+  // 상태는 그 자리(더 보기 바로 위)가 화면에 보일 때 받는다 — 상세 칸을 열 때마다(폰 릴레이 포함) GET 이 한 번씩 더 나가지 않게(0.32.3).
+  // 보이기 전에 다른 화면으로 갔으면(gen) 받지 않는다. 보이는지 알 수 없으면(IntersectionObserver 없음) 지금처럼 바로 받는다
+  const gen=PANE_NOW.gen;
+  row._ready=new Promise(res=>{
+    if(typeof IntersectionObserver!=='function'||!before) return res(Promise.resolve().then(fetchNow));
+    try{ const io=new IntersectionObserver(ents=>{
+        if(PANE_NOW.gen!==gen){ io.disconnect(); return res(false); }
+        if(ents.some(e=>e.isIntersecting)){ io.disconnect(); res(fetchNow()); } });
+      io.observe(before); }
+    catch(e){ res(fetchNow()); }
+  });
   return row;
 }
 
