@@ -33,6 +33,7 @@ import base64
 import hashlib
 import json
 import os
+import secrets
 import shutil
 import subprocess
 import time
@@ -335,6 +336,83 @@ def _marker_holder() -> str | None:
     return by or "?"
 
 
+APPLY_LOCK_TTL_S = 300     # apply.lock 만료(초) — 러너가 못 지운 시체 잠금은 이만큼 지나면 치운다(자기치유)
+
+
+def _lock_age(lock: Path) -> float:
+    """잠금 파일의 나이(초). 없으면 FileNotFoundError."""
+    return time.time() - lock.stat().st_mtime
+
+
+def _put_back(grave: Path, lock: Path) -> None:
+    """옮겨 온 새 잠금을 제자리로 — 그새 또 다른 잠금이 섰으면 덮지 않는다(Windows rename·POSIX link 는 대상이 있으면 실패)."""
+    try:
+        if os.name == "nt":
+            os.rename(grave, lock)
+        else:
+            os.link(grave, lock)
+            os.unlink(grave)
+        return
+    except FileExistsError:
+        pass                                     # 그새 다른 적용이 잡았다 — 그쪽 잠금을 둔다
+    except OSError:
+        try:
+            os.replace(grave, lock)              # 하드 링크를 못 쓰는 파일 시스템
+            return
+        except OSError:
+            pass
+    try:
+        grave.unlink()
+    except OSError:
+        pass
+
+
+def _take_apply_lock(lock: Path) -> None:
+    """apply.lock 을 O_EXCL 로 잡는다. APPLY_LOCK_TTL_S 안의 잠금이 있으면 UpdateError.
+
+    '있나 보고 → 쓰기' 는 둘이 동시에 '없음'을 보면 둘 다 쓴다(러너 둘 = 2026-09-04 사고) — 만들기 자체가 확인이어야 한다.
+    시체 잠금(러너가 죽어 못 지움)은 치우되 치우기도 경합 안전하게: 바로 지우지 않고 고유 이름으로 옮긴 뒤 옮겨 온 것의 나이를
+    다시 본다 — 둘이 같은 시체를 보고 그냥 지우면, 늦게 지운 쪽이 그 사이 먼저 잡은 쪽의 새 잠금을 지운다. 옮겨 온 것이 새
+    잠금이면 제자리에 돌려놓고 거부. 잠금을 다룰 수 없는 폴더(권한 등)면 예전처럼 잠금 없이 진행한다.
+    """
+    busy = UpdateError("이미 업데이트 적용이 진행 중입니다 — 완료를 기다려 주세요(재기동까지 최대 1~2분).")
+    for _ in range(3):
+        try:
+            fd = os.open(lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+        except FileExistsError:
+            pass
+        except OSError:
+            return
+        else:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(str(time.time()))
+            return
+        try:
+            if _lock_age(lock) < APPLY_LOCK_TTL_S:
+                raise busy
+        except FileNotFoundError:
+            continue                                 # 그새 풀렸다 — 다시 잡아 본다
+        except OSError:
+            return
+        grave = lock.with_name(f"{lock.name}.stale-{os.getpid()}-{secrets.token_hex(4)}")
+        try:
+            os.replace(lock, grave)
+        except OSError:
+            continue                                 # 다른 쪽이 먼저 치웠거나 잡고 있다 — 다시 본다
+        try:
+            fresh = _lock_age(grave) < APPLY_LOCK_TTL_S
+        except OSError:
+            fresh = False
+        if fresh:                                    # 그새 다른 적용이 잡은 새 잠금을 옮겨 왔다
+            _put_back(grave, lock)
+            raise busy
+        try:
+            grave.unlink()
+        except OSError:
+            pass
+    raise busy
+
+
 def apply(manifest: dict[str, Any], staged: Path, restart_cmd: str | None = None) -> dict:
     """분리된 updater 를 띄우고 우리가 죽을 준비를 한다.
 
@@ -357,19 +435,8 @@ def apply(manifest: dict[str, Any], staged: Path, restart_cmd: str | None = None
         raise UpdateError("다른 업데이트가 진행 중이라(update.inprogress) 적용하지 않습니다 — 끝난 뒤 다시 하세요.")
     # ★ 동시 실행 방지 잠금(실사고 2026-09-04): 사용자가 업데이트를 연달아 누르거나
     #   재기동 자동적용이 겹치면 runner 가 2개 이상 동시에 돌아 포트 경합으로 서비스가
-    #   완전히 죽는다. 5분 내 진행 중인 apply 가 있으면 거부한다(만료 시 자기치유).
-    import time as _time
-    lock = work_dir() / "apply.lock"
-    try:
-        if lock.is_file() and (_time.time() - lock.stat().st_mtime) < 300:
-            raise UpdateError("이미 업데이트 적용이 진행 중입니다 — 완료를 기다려 주세요"
-                              "(재기동까지 최대 1~2분).")
-    except OSError:
-        pass
-    try:
-        lock.write_text(str(_time.time()), encoding="utf-8")
-    except OSError:
-        pass
+    #   완전히 죽는다. 5분 내 진행 중인 apply 가 있으면 거부한다(만료 시 자기치유). 잡기는 O_EXCL(_take_apply_lock).
+    _take_apply_lock(work_dir() / "apply.lock")
 
     root = install_root()
     runner_src = runner_script()

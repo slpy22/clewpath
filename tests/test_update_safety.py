@@ -163,3 +163,97 @@ def test_runner_spawn_patch_does_not_reach_other_threads(fake_claude_home, monke
     t.join(60)
     assert out.get("rc") == 0                       # 다른 스레드의 subprocess 는 진짜로 돌았고
     assert len(calls) == 1 and any("9.9.9" == str(x) for x in calls[0])     # 러너 기동만 가짜로 왔다
+
+
+def _race_apply(n: int = 2) -> list[str]:
+    """apply 를 n 스레드로 동시에 — 각자 'ok'(러너 띄움) 또는 'busy'(잠금에 막힘)."""
+    import threading
+    from session_manager import config, updater
+    staged = config.data_dir() / "stage-race"
+    staged.mkdir(parents=True, exist_ok=True)
+    out: list[str] = []
+
+    def go():
+        try:
+            updater.apply({"ver": "9.9.9", "platforms": _ALL_OS}, staged, restart_cmd="")
+            out.append("ok")
+        except updater.UpdateError as e:
+            out.append("busy" if "진행 중" in str(e) else f"err:{e}")
+    ts = [threading.Thread(target=go) for _ in range(n)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join(30)
+    return sorted(out)
+
+
+def test_apply_lock_is_taken_atomically(fake_claude_home, monkeypatch):
+    """TODOS 136행: '있고 5분 안이면 거부' 를 본 뒤 쓰기라, 두 적용이 동시에 '없음'을 보면 둘 다 잠금을 쓰고 러너를 둘 띄웠다
+    (2026-09-04 사고와 같은 모양 — 포트 경합). 잠금은 만들기 자체가 확인이어야 한다(O_EXCL) — 먼저 잡은 쪽만 띄운다."""
+    import pathlib
+    import threading
+    from session_manager import updater
+    calls = []
+    monkeypatch.setattr(updater, "_popen", lambda args, *a, **k: calls.append(1))
+    both_looked = threading.Barrier(2, timeout=2)
+    real_is_file = pathlib.Path.is_file
+
+    def is_file(self, *a, **k):                    # 옛 구현의 '있나 보기' 를 둘이 함께 지나가게 — 그 뒤에 각자 쓴다
+        r = real_is_file(self, *a, **k)
+        if self.name == "apply.lock":
+            try:
+                both_looked.wait()
+            except threading.BrokenBarrierError:
+                pass
+        return r
+    monkeypatch.setattr(pathlib.Path, "is_file", is_file)
+    assert _race_apply(2) == ["busy", "ok"]
+    assert len(calls) == 1
+    assert real_is_file(updater.work_dir() / "apply.lock")
+
+
+def test_stale_lock_cleared_by_only_one_of_two(fake_claude_home, monkeypatch):
+    """5분 넘은 시체 잠금을 둘이 동시에 보면: 하나만 치우고 잡는다. 늦게 온 쪽이 먼저 잡은 쪽의 새 잠금을 치우면 안 된다."""
+    import os
+    import threading
+    from session_manager import updater
+    calls = []
+    monkeypatch.setattr(updater, "_popen", lambda args, *a, **k: calls.append(1))
+    lock = updater.work_dir() / "apply.lock"
+    lock.write_text("old", encoding="utf-8")
+    old = lock.stat().st_mtime - 400
+    os.utime(lock, (old, old))
+    both_saw = threading.Barrier(2, timeout=2)
+    real_age = updater._lock_age
+    seen = {"n": 0}
+
+    def age(p):                                    # 둘 다 '시체' 판정을 본 뒤에 치우러 간다
+        a = real_age(p)
+        if p.name == "apply.lock" and seen["n"] < 2:
+            seen["n"] += 1
+            try:
+                both_saw.wait()
+            except threading.BrokenBarrierError:
+                pass
+        return a
+    monkeypatch.setattr(updater, "_lock_age", age)
+    assert _race_apply(2) == ["busy", "ok"]
+    assert len(calls) == 1
+    assert lock.read_text(encoding="utf-8") != "old"                     # 새 잠금이 섰다
+    assert [p.name for p in lock.parent.iterdir() if ".stale-" in p.name] == []
+
+
+def test_stale_check_then_fresh_lock_is_put_back(fake_claude_home, monkeypatch):
+    """'시체'로 본 뒤 옮겨 오니 그새 다른 적용이 잡은 새 잠금이었다 → 제자리에 돌려놓고 거부한다(지우지 않는다)."""
+    from session_manager import updater
+    monkeypatch.setattr(updater, "_popen", lambda *a, **k: pytest.fail("러너를 띄우면 안 된다"))
+    lock = updater.work_dir() / "apply.lock"
+    lock.write_text("fresh-from-other-apply", encoding="utf-8")          # 막 잡힌 새 잠금
+    real_age = updater._lock_age
+    monkeypatch.setattr(updater, "_lock_age", lambda p: 999.0 if p.name == "apply.lock" else real_age(p))
+    staged = fake_claude_home / "stage"
+    staged.mkdir()
+    with pytest.raises(updater.UpdateError, match="진행 중"):
+        updater.apply({"ver": "9.9.9", "platforms": _ALL_OS}, staged, restart_cmd="")
+    assert lock.read_text(encoding="utf-8") == "fresh-from-other-apply"
+    assert [p.name for p in lock.parent.iterdir() if ".stale-" in p.name] == []
