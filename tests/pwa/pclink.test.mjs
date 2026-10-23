@@ -433,3 +433,21 @@ test("📱 기기 목록: kind pc 기기는 🖥 배지 'PC 짝 — pclink 만' 
   assert.ok(pcOff.text.includes("해제됨") && !pcOff.text.includes("pclink 만"));
   same(pcOff.children[1].children.map((b) => b.textContent), ["삭제"]);
 });
+
+test("승인 시트(pclink_*): 승인됐지만 실행이 실패해 '승인됨' 으로 남은 요청은 「다시 실행」(같은 인자로 execute)", async () => {
+  const ctx = await boot(false, {
+    "POST /api/owner/approvals/ap_c/execute": { ...CONTACT_AP, status: "executed", result: { peer: H1, session_id: "sid-1" } } });
+  ev(ctx, "showApprovalSheet(" + JSON.stringify({ ...CONTACT_AP, status: "approved" }) + ")");
+  const m = lastModal(ctx);
+  assert.ok(m.body.text.includes("다시 실행할 수 있습니다"));
+  assert.equal(m.foot.length, 1);
+  assert.equal(m.foot[0].textContent, "다시 실행");
+  assert.equal(m.body.children.find((c) => c.placeholder === "2차 인증 6자리"), undefined, "이미 승인됨 — 코드 칸 없음");
+  assert.equal(await ev(ctx, "globalThis.__approvalRetry()"), "executed");
+  assert.equal(calls(ctx, "POST", "/api/owner/approvals/ap_c/execute").length, 1);
+  assert.equal(toasts(ctx).at(-1), "실행했습니다");
+  // 다른 종류(팀 등)의 '승인됨' 은 지금처럼 버튼 없이
+  const other = await boot(false, {});
+  ev(other, "showApprovalSheet(" + JSON.stringify({ ...CONTACT_AP, kind: "team_create", args: { name: "x" }, status: "approved" }) + ")");
+  assert.equal(lastModal(other).foot.length, 0);
+});

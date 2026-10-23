@@ -6603,6 +6603,23 @@ function showApprovalSheet(a, opts){
     }finally{ busy=false; }
   };
   globalThis.__approvalDecide=decide;      // 테스트 훅
+  // pclink: 승인은 됐는데 실행이 실패해 '승인됨' 으로 남은 요청(상대 PC 가 꺼져 있었다 등) — 같은 인자로 다시 실행
+  const retry=async()=>{
+    if(busy) return 'busy';
+    busy=true; err.textContent='다시 실행하는 중…';
+    try{
+      const x=await T.api('POST','/api/owner/approvals/'+encodeURIComponent(a.id)+'/execute');
+      if(x && x.error) throw new Error(x.error);
+      closeModal(); toast('실행했습니다'); if(opts.onDone) opts.onDone(x&&x.result); return 'executed';
+    }catch(e){ const c=pclinkCode(e); err.textContent=PCLINK_ERR[c]||approvalErrText(c); return 'error'; }
+    finally{ busy=false; }
+  };
+  globalThis.__approvalRetry=retry;        // 테스트 훅
+  if(pcl && a.status==='approved'){
+    body.appendChild(el('div','cwd','승인은 됐지만 실행이 끝나지 않았습니다(상대 PC 연결 실패 등). 다시 실행할 수 있습니다.'));
+    const again=el('button','btn','다시 실행'); again.onclick=()=>retry();
+    openModal('✅ 승인 요청', body, [again]); return;
+  }
   if(a.status!=='pending'){ openModal('✅ 승인 요청', body, []); return; }
   const yes=el('button','btn','승인'); yes.onclick=()=>decide(true);
   const no=el('button','btn ghost','거절'); no.onclick=()=>decide(false);
