@@ -2219,6 +2219,8 @@ def main():
 
     from session_manager import systls
     systls.use_system_trust()   # 회사 TLS 인터셉션 대응 — httpx 가 OS 인증서를 쓰게(멱등)
+    from session_manager import logredact
+    logredact.install()         # 받은 웹소켓 주소의 ?token=(mcp_server·PWA)이 uvicorn 로그·host.log 에 남지 않게(멱등)
 
     # 설정 파일을 env 로 펼친다. 반드시 앱을 만들기 전에 — BASE_PATH 등이 여기서 정해진다.
     filled = appconfig.apply_env()

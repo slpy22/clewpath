@@ -177,6 +177,39 @@ def audit(entry: dict) -> None:
     jsonl_log.append(_audit_file(), {"ts": _now_iso(), **entry}, ts_key=None)
 
 
+def _tail_records(path, n: int) -> list[dict]:
+    """path 의 마지막 유효 기록 n 개(오래된 것 먼저). 회전 파일(.1)은 8MB 까지 자라므로 끝에서 블록으로 거꾸로 읽는다."""
+    out: list[dict] = []
+    if n <= 0:
+        return out
+    try:
+        with open(path, "rb") as fh:
+            pos = fh.seek(0, os.SEEK_END)
+            rest = b""
+            while pos > 0 and len(out) < n:
+                step = min(65536, pos)
+                pos -= step
+                fh.seek(pos)
+                lines = (fh.read(step) + rest).split(b"\n")
+                rest = lines.pop(0) if pos > 0 else b""    # 블록 머리는 줄 중간일 수 있다 — 앞 블록과 붙여 다시 본다
+                for ln in reversed(lines):
+                    ln = ln.strip()
+                    if not ln:
+                        continue
+                    try:
+                        e = json.loads(ln.decode("utf-8"))
+                    except Exception:  # noqa: BLE001
+                        continue
+                    if isinstance(e, dict):
+                        out.append(e)
+                        if len(out) >= n:
+                            break
+    except OSError:
+        return []
+    out.reverse()
+    return out
+
+
 def usage_summary(recent_n: int = 30) -> dict:
     """감사 로그 + 오늘 사용량을 세션별·토큰별·일자별로 롤업한다(API 비용 모니터링)."""
     today = _today()
@@ -224,6 +257,11 @@ def usage_summary(recent_n: int = 30) -> dict:
                     d = by_day.setdefault(day, {"day": day, "calls": 0, "usd": 0.0})
                     d["calls"] += 1
                     d["usd"] = round(d["usd"] + cost, 4)
+    # 회전(jsonl_log, 8MB → .1) 직후엔 새 파일이 짧다 — '최근 n건'이 모자라면 직전 세대(.1)의 끝에서 채운다.
+    # 롤업 합계는 지금처럼 현재 파일만 본다(오늘 한도는 별도 usage 파일이라 무영향).
+    if len(recent) < recent_n:
+        from session_manager import jsonl_log
+        recent = _tail_records(jsonl_log.rotated_path(af), recent_n - len(recent)) + recent
 
     return {
         "today": today,

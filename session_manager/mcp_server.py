@@ -25,6 +25,11 @@ import httpx
 import websockets
 from mcp.server.fastmcp import FastMCP
 
+from session_manager import logredact
+
+# 로컬 Host 주소 쿼리에 ?token=<API 토큰> 이 실린다 — websockets DEBUG 로그(요청 줄)에 남지 않게(멱등)
+logredact.install()
+
 API_BASE = os.environ.get("SM_API_BASE", "http://127.0.0.1:5100").rstrip("/")
 API_TOKEN = os.environ.get("SM_API_TOKEN", "")
 

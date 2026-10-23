@@ -295,7 +295,7 @@ def test_apply_refuses_other_os_release(fake_claude_home, monkeypatch):
     """check 를 거치지 않은 경로가 생겨도 마지막 관문(apply)에서 막는다 — 러너를 띄우지 않고 잠금도 남기지 않는다."""
     from session_manager import osdep
     monkeypatch.setattr(osdep, "NAME", "linux")
-    monkeypatch.setattr(updater.subprocess, "Popen", lambda *a, **k: pytest.fail("러너를 띄우면 안 된다"))
+    monkeypatch.setattr(updater, "_popen", lambda *a, **k: pytest.fail("러너를 띄우면 안 된다"))
     with pytest.raises(updater.UpdateError, match="지원하지 않습니다"):
         updater.apply({"ver": "9.9.9", "platforms": ["win"]}, fake_claude_home, restart_cmd="")
     assert not (updater.work_dir() / "apply.lock").exists()
@@ -304,7 +304,7 @@ def test_apply_refuses_other_os_release(fake_claude_home, monkeypatch):
 def test_apply_refuses_while_maintenance_flag(fake_claude_home, monkeypatch):
     """유지보수 표식이 있으면 런처가 아무것도 띄우지 않는다 → 적용하면 재기동이 막혀 롤백되고 Host 가 꺼진 채 남는다."""
     from session_manager import config
-    monkeypatch.setattr(updater.subprocess, "Popen", lambda *a, **k: pytest.fail("러너를 띄우면 안 된다"))
+    monkeypatch.setattr(updater, "_popen", lambda *a, **k: pytest.fail("러너를 띄우면 안 된다"))
     d = config.data_dir()
     d.mkdir(parents=True, exist_ok=True)
     (d / "maintenance.flag").write_text("by=stop\n", encoding="utf-8")
@@ -333,7 +333,7 @@ def test_apply_refuses_while_an_install_holds_the_marker(fake_claude_home, monke
                                              encoding="utf-8")
         monkeypatch.setattr(osdep, "NAME", "win" if case == "windows" else "linux")
         calls = []
-        monkeypatch.setattr(updater.subprocess, "Popen", lambda *a, **k: calls.append(a))
+        monkeypatch.setattr(updater, "_popen", lambda *a, **k: calls.append(a))
         staged = fake_claude_home / "stage"
         staged.mkdir()
         m = {"ver": "9.9.9", "platforms": ["win", "mac", "linux"]}
@@ -376,3 +376,115 @@ def test_recently_failed_blocks_rollback_loop(tmp_path, monkeypatch):
     (wd / "last_apply.json").write_text(
         json.dumps({"version": "9.9.9", "ok": True}), encoding="utf-8")
     assert updater.recently_failed("9.9.9") is False      # 성공 이력이면 통과
+
+
+# ---------- 작업 폴더 정리(TODOS 134행 Q16·R13) ----------
+
+def _fill_work_dir(wd: Path) -> None:
+    for v in ("0.9.0", "0.30.0", "0.31.0", "0.32.1", "0.32.2", "0.32.3"):
+        (wd / f"clewpath-host-{v}.zip").write_bytes(b"z")
+        (wd / f"stage-{v}" / "session_manager").mkdir(parents=True)
+    for v in ("0.9.0", "0.30.0", "0.32.1", "0.33.0", "0.33.1"):
+        (wd / f"backup-{v}" / "session_manager").mkdir(parents=True)
+    for v, f in (("0.30.0", "0.31.0"), ("0.31.0", "0.32.0"), ("0.32.1", "0.32.2"), ("0.9.0", "0.30.0")):
+        (wd / f"backup-{v}-failed-{f}" / "session_manager").mkdir(parents=True)
+    # 정리 대상이 아닌 것들 — 이름 규칙에 안 맞으면 버전이 있어 보여도 건드리지 않는다
+    for n in ("last_apply.json", "update_runner.ps1", "apply-0.9.0.log", "manifest-0.9.0.jwt",
+              "clewpath-host-0.9.0.part", "notes.zip"):
+        (wd / n).write_text("x", encoding="utf-8")
+    for n in ("stage-notes", "backup-0.32.1.tmp.77", "runner-trash"):
+        (wd / n).mkdir()
+
+
+def test_prune_work_dir_keeps_two_newest_per_kind(fake_claude_home, monkeypatch):
+    """updates/ 아래 zip·stage·backup(·실패본)이 업데이트마다 쌓였다 → 종류별로 버전이 높은 2개만 남긴다(문자열이 아니라 버전 순:
+    0.9.0 < 0.30.0). 아직 적용 안 한 스테이지(staged_version)·적용한 버전(applying)·지금 설치본의 롤백 원본(지금 버전보다 낮은
+    백업 중 가장 새것)은 몇 번째든 지우지 않는다."""
+    monkeypatch.setattr(updater, "current_version", lambda: "0.32.2")
+    monkeypatch.setattr(updater, "_marker_holder", lambda: None)
+    wd = updater.work_dir()
+    _fill_work_dir(wd)
+    updater.write_state(staged_version="0.30.0", applying="0.31.0")
+    removed = updater.prune_work_dir()
+    names = {p.name for p in wd.iterdir()}
+    assert {n for n in names if n.endswith(".zip") and n.startswith("clewpath-host-")} == {
+        "clewpath-host-0.32.3.zip", "clewpath-host-0.32.2.zip", "clewpath-host-0.30.0.zip", "clewpath-host-0.31.0.zip"}
+    assert {n for n in names if n.startswith("stage-")} == {
+        "stage-0.32.3", "stage-0.32.2", "stage-0.30.0", "stage-0.31.0", "stage-notes"}
+    assert {n for n in names if n.startswith("backup-") and "-failed-" not in n} == {
+        "backup-0.33.1", "backup-0.33.0", "backup-0.32.1", "backup-0.32.1.tmp.77"}      # 0.32.1 = 지금(0.32.2)의 롤백 원본
+    assert {n for n in names if "-failed-" in n} == {"backup-0.32.1-failed-0.32.2", "backup-0.31.0-failed-0.32.0"}
+    for n in ("state.json", "last_apply.json", "update_runner.ps1", "apply-0.9.0.log", "manifest-0.9.0.jwt",
+              "clewpath-host-0.9.0.part", "notes.zip", "runner-trash"):
+        assert n in names, n
+    assert sorted(removed) == sorted(["clewpath-host-0.9.0.zip", "clewpath-host-0.32.1.zip", "stage-0.9.0", "stage-0.32.1",
+                                      "backup-0.9.0", "backup-0.30.0",
+                                      "backup-0.30.0-failed-0.31.0", "backup-0.9.0-failed-0.30.0"])
+
+
+@pytest.mark.parametrize("busy", ["apply.lock", "runner.lock.d", "marker"])
+def test_prune_work_dir_does_nothing_while_applying(fake_claude_home, monkeypatch, busy):
+    """적용이 도는 중(apply.lock — 나이 무관, 맥·리눅스 러너 잠금·update.inprogress 표식)에는 아무것도 지우지 않는다 —
+    러너가 그 백업으로 롤백하고 그 스테이지로 교체한다."""
+    monkeypatch.setattr(updater, "current_version", lambda: "0.32.2")
+    monkeypatch.setattr(updater, "_marker_holder", lambda: "runner" if busy == "marker" else None)
+    wd = updater.work_dir()
+    _fill_work_dir(wd)
+    if busy == "apply.lock":
+        import os
+        (wd / "apply.lock").write_text("1", encoding="utf-8")
+        os.utime(wd / "apply.lock", (1, 1))                 # 시체 잠금이어도 — 러너가 죽었으면 그 백업이 복구에 필요하다
+    elif busy == "runner.lock.d":
+        (wd / "runner.lock.d").mkdir()
+    before = {p.name for p in wd.iterdir()}
+    assert updater.prune_work_dir() == []
+    assert {p.name for p in wd.iterdir()} == before
+
+
+def test_check_and_stage_prunes_after_staging(fake_claude_home, monkeypatch):
+    """새 버전을 펼친 직후 정리한다. 정리가 실패해도 스테이징 결과는 그대로 돌려준다."""
+    wd = updater.work_dir()
+    monkeypatch.setattr(updater, "check", lambda: {"available": True, "manifest": "tok"})
+    monkeypatch.setattr(updater, "verify_manifest", lambda t: {"ver": "0.32.3"})
+    monkeypatch.setattr(updater, "download", lambda m, t: wd / "clewpath-host-0.32.3.zip")
+    monkeypatch.setattr(updater, "stage", lambda z, m: wd / "stage-0.32.3")
+    calls = []
+    monkeypatch.setattr(updater, "prune_work_dir", lambda: calls.append(1) or [])
+    st = updater.check_and_stage()
+    assert calls == [1] and st["staged_version"] == "0.32.3"
+
+    def boom():
+        raise OSError("정리 실패")
+    monkeypatch.setattr(updater, "prune_work_dir", boom)
+    assert updater.check_and_stage()["staged"].endswith("stage-0.32.3")
+
+
+def test_runner_env_drops_values_the_host_filled_from_config(fake_claude_home, monkeypatch):
+    """TODOS 133행 Q15·R10: 러너(→ 새 Host)는 이 Host 의 env 를 물려받는다. Host 가 clewpath.toml 에서 채운 SM_* 까지 넘기면
+    env 가 파일보다 우선이라 새 Host 가 옛 설정값으로 떠 업데이트 사이에 고친 clewpath.toml 이 가려졌다. 채운 것만 빼고
+    사용자(런처)가 원래 준 env 는 그대로 넘긴다."""
+    from session_manager import appconfig
+    monkeypatch.setattr(appconfig, "_FILLED", {"SM_PORT", "SM_CP_URL"})
+    monkeypatch.setenv("SM_PORT", "5333")                  # 이 Host 가 파일에서 채운 값
+    monkeypatch.setenv("SM_CP_URL", "https://old-cp.test")
+    monkeypatch.setenv("SM_HOST", "127.0.0.1")             # 런처가 준 값
+    captured = {}
+    monkeypatch.setattr(updater, "_popen", lambda args, *a, **k: captured.update(k))
+    staged = fake_claude_home / "stage"
+    staged.mkdir()
+    updater.apply({"ver": "9.9.9", "platforms": ["win", "mac", "linux"]}, staged, restart_cmd="")
+    env = captured["env"]
+    assert "SM_PORT" not in env and "SM_CP_URL" not in env
+    assert env["SM_HOST"] == "127.0.0.1"
+    assert {k.upper() for k in env} >= {"PATH"}                # 나머지 env 도 그대로
+
+
+def test_runner_env_is_inherited_as_is_when_nothing_was_filled(fake_claude_home, monkeypatch):
+    from session_manager import appconfig
+    monkeypatch.setattr(appconfig, "_FILLED", set())
+    captured = {}
+    monkeypatch.setattr(updater, "_popen", lambda args, *a, **k: captured.update(k))
+    staged = fake_claude_home / "stage"
+    staged.mkdir()
+    updater.apply({"ver": "9.9.9", "platforms": ["win", "mac", "linux"]}, staged, restart_cmd="")
+    assert captured.get("env") is None                     # 그대로 물려받는다(예전과 같음)

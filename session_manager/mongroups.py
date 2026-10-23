@@ -3,6 +3,8 @@
 왜 저장하는가: 관제 오버레이의 그룹은 WS 연결 단위(서버 메모리)라 앱을 닫으면 사라진다.
 앱이 닫혀 있어도 "관리 턴 종료·하위 응답 완료" 푸시를 받으려면 Host 가 그룹을 알아야 한다.
 labels 사이드카와 같은 방식: 데이터 폴더의 JSON 하나, 원본 jsonl 무접촉, 손상돼도 기동 유지.
+동시 쓰기 안전: 모듈 잠금(읽고-고치고-쓰기 한 덩어리) + 쓰기마다 다른 임시 파일 → os.replace(TODOS 59행 — 두 탭이 동시에
+저장하면 같은 .tmp 를 함께 써 파일이 깨지거나, 서로의 그룹을 덮어써 그룹이 사라졌다).
 
 알림 소스는 훅이다(실증 2026-09-12: `claude -p` 헤드리스 하위 세션도 Stop/UserPromptSubmit
 훅이 Host 에 도달) — push.notify_from_event 가 소속 그룹의 notify 플래그로 라우팅한다.
@@ -12,6 +14,8 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import tempfile
+import threading
 from datetime import datetime, timezone
 
 from session_manager import config
@@ -21,6 +25,9 @@ from session_manager import config
 # monwatch(관리 jsonl tail)가 감지한다. 기존 저장 파일에 키가 없으면 기본 on.
 DEFAULT_NOTIFY = {"manager_stop": True, "sub_stop": True, "sub_start": False, "error": True}
 _MAX_GROUPS = 50
+# 읽기도 잡는다 — Windows 는 다른 스레드가 열어 둔 파일 위로 os.replace 하면 PermissionError 가 나고, 읽기 실패는 빈 저장소로
+# 보여 다음 저장이 그룹을 전부 지운다. RLock — 잠금 안에서 다른 공개 함수를 불러도 막히지 않게.
+_LOCK = threading.RLock()
 
 
 def groups_file():
@@ -46,12 +53,19 @@ def _load() -> dict:
 
 
 def _save(data: dict) -> None:
+    """_LOCK 아래서 부른다. 임시 파일은 쓰기마다 고유 이름(같은 폴더) — 다른 프로세스가 같은 파일을 써도 서로의 임시 파일을 덮지 않는다."""
     path = groups_file()
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)  # 원자적 교체
+    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp, path)  # 원자적 교체
+    finally:
+        try:
+            os.unlink(tmp)       # 교체됐으면 이미 없다 — 실패한 경우의 찌꺼기만 치운다
+        except OSError:
+            pass
 
 
 def norm_notify(n) -> dict:
@@ -85,13 +99,15 @@ def _norm_group(g: dict) -> dict:
 
 def list_groups() -> list[dict]:
     """최근 갱신 순."""
-    gs = [_norm_group(g) for g in _load()["groups"].values()]
+    with _LOCK:
+        gs = [_norm_group(g) for g in _load()["groups"].values()]
     gs.sort(key=lambda g: g.get("updated_at") or "", reverse=True)
     return gs
 
 
 def get(gid: str) -> dict | None:
-    g = _load()["groups"].get(str(gid or ""))
+    with _LOCK:
+        g = _load()["groups"].get(str(gid or ""))
     return _norm_group(g) if g else None
 
 
@@ -104,6 +120,12 @@ def save(name: str, manager: str, subs, labels=None, notify=None, gid: str | Non
         if isinstance(labels, dict) else {}
     subs_c = _clean_sids(subs, manager)
     name = str(name or "").strip() or labels.get(manager) or manager[:8]
+    with _LOCK:
+        return _save_locked(name, manager, subs_c, labels, notify, gid)
+
+
+def _save_locked(name: str, manager: str, subs_c: list[str], labels: dict, notify, gid: str | None) -> dict:
+    """save 의 읽고-고치고-쓰기 — _LOCK 아래서 부른다."""
     data = _load()
     groups = data["groups"]
     if gid and gid in groups:
@@ -127,43 +149,46 @@ def save(name: str, manager: str, subs, labels=None, notify=None, gid: str | Non
 def set_manager(gid: str, manager: str) -> dict | None:
     """관리 세션 교체(이어받기 추적용). subs 에서 새 manager 는 빼고 옛 manager 는 그대로 둔다."""
     manager = str(manager or "").strip()
-    data = _load()
-    g = data["groups"].get(str(gid or ""))
-    if g is None or not manager:
-        return None
-    g["manager"] = manager
-    g["subs"] = _clean_sids(g.get("subs") or [], manager)
-    g["updated_at"] = _now()
-    _save(data)
-    return g
+    with _LOCK:
+        data = _load()
+        g = data["groups"].get(str(gid or ""))
+        if g is None or not manager:
+            return None
+        g["manager"] = manager
+        g["subs"] = _clean_sids(g.get("subs") or [], manager)
+        g["updated_at"] = _now()
+        _save(data)
+        return g
 
 
 def update(gid: str, name: str | None = None, notify=None) -> dict | None:
     """이름·알림 플래그만 바꾼다(부분 갱신). 없으면 None."""
-    data = _load()
-    g = data["groups"].get(str(gid or ""))
-    if not g:
-        return None
-    if name is not None and str(name).strip():
-        g["name"] = str(name).strip()
-    if isinstance(notify, dict):
-        cur = norm_notify(g.get("notify"))
-        for k in DEFAULT_NOTIFY:
-            if k in notify:
-                cur[k] = bool(notify[k])
-        g["notify"] = cur
-    g["updated_at"] = _now()
-    _save(data)
-    return g
+    with _LOCK:
+        data = _load()
+        g = data["groups"].get(str(gid or ""))
+        if not g:
+            return None
+        if name is not None and str(name).strip():
+            g["name"] = str(name).strip()
+        if isinstance(notify, dict):
+            cur = norm_notify(g.get("notify"))
+            for k in DEFAULT_NOTIFY:
+                if k in notify:
+                    cur[k] = bool(notify[k])
+            g["notify"] = cur
+        g["updated_at"] = _now()
+        _save(data)
+        return g
 
 
 def delete(gid: str) -> bool:
-    data = _load()
-    if str(gid or "") not in data["groups"]:
-        return False
-    data["groups"].pop(str(gid))
-    _save(data)
-    return True
+    with _LOCK:
+        data = _load()
+        if str(gid or "") not in data["groups"]:
+            return False
+        data["groups"].pop(str(gid))
+        _save(data)
+        return True
 
 
 def groups_for_session(session_id: str) -> list[tuple[dict, str]]:
@@ -172,7 +197,9 @@ def groups_for_session(session_id: str) -> list[tuple[dict, str]]:
     out: list[tuple[dict, str]] = []
     if not sid:
         return out
-    for g in _load()["groups"].values():
+    with _LOCK:
+        groups = list(_load()["groups"].values())
+    for g in groups:
         if g.get("manager") == sid:
             out.append((_norm_group(g), "manager"))
         elif sid in (g.get("subs") or []):

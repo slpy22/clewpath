@@ -258,3 +258,17 @@ def test_clewpath_probe_ignores_http_proxy(monkeypatch):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+def test_apply_env_remembers_what_it_filled(conf, monkeypatch):
+    """apply_env 가 파일로 채운 이름만 기억한다(filled_env) — 사용자(런처)가 원래 준 env 와 구분해 업데이트 러너에 물려주지 않게."""
+    _write(conf, '[server]\nhost = "0.0.0.0"\nport = 5333\n[update]\nmanifest_url = "https://m.test/x"\n')
+    monkeypatch.setattr(appconfig, "_FILLED", set())
+    for k in ("SM_PORT", "SM_UPDATE_MANIFEST_URL"):      # 시험이 끝나면 지운다(apply_env 가 os.environ 에 직접 쓴다)
+        monkeypatch.setenv(k, "x")
+        monkeypatch.delenv(k)
+    monkeypatch.setenv("SM_HOST", "127.0.0.1")
+    filled = appconfig.apply_env()
+    assert sorted(filled) == ["SM_PORT", "SM_UPDATE_MANIFEST_URL"]
+    assert appconfig.filled_env() == {"SM_PORT", "SM_UPDATE_MANIFEST_URL"}
+    assert appconfig.apply_env() == [] and appconfig.filled_env() == {"SM_PORT", "SM_UPDATE_MANIFEST_URL"}  # 두 번째 호출에도 유지

@@ -56,6 +56,9 @@ _MAP: dict[str, dict[str, str]] = {
 _cache: dict[str, Any] | None = None
 _cache_path: Path | None = None
 
+# 이 프로세스에서 apply_env 가 설정 파일로 채운 env 이름들 — 사용자(런처)가 원래 준 env 와 구분할 때 쓴다(filled_env).
+_FILLED: set[str] = set()
+
 
 def machine_name() -> str:
     """이 PC 의 표시 이름(컴퓨터 이름). 원격/로컬 화면이 '지금 어느 PC 의 세션을
@@ -164,7 +167,17 @@ def apply_env() -> list[str]:
                 continue
             os.environ[env_name] = str(v)
             filled.append(env_name)
+            _FILLED.add(env_name)
     return filled
+
+
+def filled_env() -> frozenset[str]:
+    """apply_env 가 이 프로세스에서 설정 파일로 채운 env 이름들(여러 번 불러도 처음 채운 것까지 다).
+
+    자식에게 '런처가 준 그대로의 env' 를 물려줄 때 뺀다 — 업데이트 러너가 띄우는 새 Host 가 옛 설정값을 env 로 받으면 env 가
+    파일보다 우선이라 그사이 고친 clewpath.toml 이 가려진다(TODOS Q15·R10).
+    """
+    return frozenset(_FILLED)
 
 
 TEMPLATE = """\
