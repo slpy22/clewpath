@@ -558,3 +558,19 @@ def test_day_budget_is_reserved_before_running(env, monkeypatch):
             break
         n += 1
     assert n == int(POL.DAY_BUDGET_USD // 1.9) and r["code"] == "limit" and r["retry_after"] > 0
+
+
+def test_allowed_sessions_carry_titles(fake_claude_home, tmp_path):
+    """목록에 세션 제목이 실린다(SessionMeta 에 title 칸이 없어 늘 비던 결함 — 노트북 실기에서 발견)."""
+    from tests.conftest import write_session
+    write_session(fake_claude_home, "P--x", "s-titled", [{"type": "user", "cwd": "C:/x", "message": {"role": "user", "content": "hi"}},
+                                                         {"type": "custom-title", "customTitle": "배포 정리"}])
+    write_session(fake_claude_home, "P--x", "s-plain", [{"type": "user", "cwd": "C:/x", "message": {"role": "user", "content": "hi"}}])
+    pol = POL.Policy(tmp_path / "pol")
+    pol.set_allow("s-titled", True)
+    pol.set_allow("s-plain", True)
+    pol.set_allow("s-gone", True)                                    # 기록이 없는 세션은 빠진다
+    got = {x["id"]: x for x in inbound._allowed_sessions(pol)}
+    assert set(got) == {"s-titled", "s-plain"}
+    assert got["s-titled"]["title"] == "배포 정리" and got["s-plain"]["title"] == "s-plain"[:8]
+    assert isinstance(got["s-titled"]["updated_at"], float)

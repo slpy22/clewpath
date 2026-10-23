@@ -146,6 +146,9 @@ def _state_reply(pol: POL.Policy, peer: str, ask_id: str, h: dict, seal) -> dict
 
 
 def _allowed_sessions(pol: POL.Policy) -> list[dict]:
+    """허용한 세션만(id·제목·마지막 수정). 제목은 화면과 같은 규칙(service.session_title — 네이티브 이름·ClewPath 라벨·AI 제목).
+    SessionMeta 에는 title 칸이 없다 — 예전엔 없는 칸을 읽어 늘 제목이 비었다(2026-10-23 노트북 실기에서 발견)."""
+    from session_manager.pclink import service
     from session_manager.scanner import scan_one
     out = []
     for sid in pol.allowed_sessions():
@@ -155,8 +158,7 @@ def _allowed_sessions(pol: POL.Policy) -> list[dict]:
             m = None
         if not m:
             continue
-        out.append({"id": sid, "title": getattr(m, "title", None) or (m.get("title") if isinstance(m, dict) else None),
-                    "updated_at": getattr(m, "mtime", None) or (m.get("mtime") if isinstance(m, dict) else None)})
+        out.append({"id": sid, "title": service.session_title(sid), "updated_at": m.mtime})
     return out
 
 
