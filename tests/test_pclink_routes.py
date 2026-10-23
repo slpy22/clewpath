@@ -501,3 +501,15 @@ def test_pclink_approval_execute_failure_stays_approved(client, monkeypatch):
     ap = approvals.create("pclink_contact", {"peer": "0f1e2d3c4b5a6978", "session_id": "s1"}, notify=False)
     r = client.post(f"/api/owner/approvals/{ap['id']}/decide", json={"approve": True, "otp": "1"})
     assert r.status_code == 409 and r.json()["error"] == "not_allowed" and r.json()["approval"]["status"] == "approved"
+
+
+def test_old_host_without_pclink_is_peer_outdated(env, monkeypatch):
+    """pclink 을 모르는 옛 Host 는 기기 인증 관문에서 auth_required 로 답한다 — 세션에는 peer_outdated 로."""
+    a, b, link, _, _, _ = env
+
+    async def old_host(method, params, cid, reply, pol=None):
+        await reply(False, error="auth_required")
+    monkeypatch.setattr(inbound, "handle", old_host)
+    with pytest.raises(routes.PclinkFail) as ei:
+        run(_ask(a, b))
+    assert ei.value.code == "peer_outdated"

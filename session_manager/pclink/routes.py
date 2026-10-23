@@ -100,6 +100,8 @@ async def _exchange(pol: POL.Policy, peer: str, link, key: bytes, kind: str, bod
         raise
     if "err" in got:
         code = got["err"].split(":", 1)[1] if got["err"].startswith("pclink:") else got["err"]
+        if code == "auth_required":              # pclink 을 모르는 옛 Host 는 인증 관문에서 막는다
+            raise PclinkFail("peer_outdated")
         raise PclinkFail("not_paired" if code == "not_paired" else "peer_error", detail=code[:60])
     return got["kind"], got["body"]
 
@@ -210,6 +212,8 @@ async def accept_invite(pol: POL.Policy, accept_id: str) -> dict:
         r1: dict = {}
         await _call(link, "pclink.pair", init, lambda res: r1.update(res) or True, SHORT_TIMEOUT_S)
         if not r1.get("ok"):
+            if r1.get("error") == "auth_required":
+                raise PclinkFail("peer_outdated", 409)
             raise PclinkFail("pair_refused", 409, detail=str(r1.get("error") or "")[:60])
         my = service.my_room()
         env3 = await loop.run_in_executor(None, lambda: pol.invitee_on_resp(ctx, r1.get("data") or {}, **my))
