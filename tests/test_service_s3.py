@@ -103,10 +103,21 @@ def test_folder_rules(env, fake_claude_home, tmp_path):
     assert chk["errors"]
 
 
-def test_home_is_rejected():
+def test_home_is_rejected(tmp_path, monkeypatch):
+    # 가짜 홈으로 본다(2026-10-23 맥 실기 3b-4): check_folder 는 받은 폴더를 훑는다 — 진짜 홈이면 ~/Library 의 다른 앱 데이터까지 닿아
+    # macOS 개인정보 확인 창이 뜨고, 답할 때까지 시험이 멈췄다(화면이 꺼진 맥, ClewPath 웹 터미널 안 전체 시험 7시간).
     import os
+    real = os.path.realpath(os.path.expanduser("~"))
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    walked = []
+    walk = os.walk
+    monkeypatch.setattr(servicereg.os, "walk", lambda top, *a, **k: (walked.append(os.path.realpath(top)), walk(top, *a, **k))[1])
     chk = servicereg.check_folder(os.path.expanduser("~"))
     assert any("홈" in e for e in chk["errors"])
+    assert real not in walked, "진짜 홈을 훑었다"
 
 
 def test_adopt_requires_same_folder_and_profile(env, fake_claude_home):
