@@ -1866,10 +1866,12 @@ let CURRENT_TERM_SID=null;   // 지금 터미널 화면으로 보고 있는 세�
 // 알림 클릭은 사용자의 명시 동작이라 '🖥 터미널로 돌아가기' 버튼과 같은 등급으로 본다.
 // 2026-10-15 사장님: 정리 작업(4시간 무활동) 등으로 프로세스가 꺼진 세션은 탭을 눌러도 다시 띄우지 않는다 —
 // 그 탭을 닫고 상세로. 화면에 붙어 있는 탭은 목록이 아직 옛값이어도 산 것으로 본다(방금 띄운 직후).
+// 다른 기기가 가져간 탭(taken)은 화면이 떠 있어도 이 기기가 붙어 있지 않으니 목록대로 본다 — 가져간 뒤 claude 가 끝났는데 인계 확인을
+// 거쳐 다시 붙으면 새 claude 가 뜬다(바로가기·목록 줄·알림 공통, quick-switch 6단계)
 function tabGone(t, s){
   if(s.live_terminal) return false;
   const inst=termView.tabs&&termView.tabs[t.key];
-  return !(termView.sid===s.session_id&&!termView.disconnected&&!(inst&&inst.ended));
+  return !(termView.sid===s.session_id&&!termView.disconnected&&!(inst&&inst.ended)&&!t.taken);
 }
 function dropGoneTab(t){
   const onView=termView.active===t.key;
@@ -1911,8 +1913,9 @@ async function jumpToSession(s, fresh){
   const live=navTicket();
   let t=TABS.list.find(x=>x.s.session_id===s.session_id), listed=!!fresh;
   // 목록(20초)은 꺼졌다는데 이 페이지는 그 뒤에 살아 있음을 봤다(방금 띄운 터미널) — 판정 전에 한 번 새로 받는다(§4-1). 탭을 버리지 않게.
-  // 그런 관찰이 없는 탭(새로고침 뒤 '중지됨'으로 되살린 탭 등)은 목록대로 바로 판정한다 — 받는 동안 아무 반응 없이 기다리지 않게
-  if(t&&!fresh&&tabGone(t,s)&&tabSeenLive(t)){
+  // 다른 기기가 가져간 탭도 — 가져갈 때는 살아 있었다(목록이 옛값일 수 있다). 그런 관찰이 없는 탭(새로고침 뒤 '중지됨'으로 되살린
+  // 탭 등)은 목록대로 바로 판정한다 — 받는 동안 아무 반응 없이 기다리지 않게
+  if(t&&!fresh&&tabGone(t,s)&&(tabSeenLive(t)||t.taken)){
     const recent=tabSeenRecently(t);
     const f=await freshSessShown(s.session_id);
     if(!live()) return;           // 기다리는 사이 다른 누름·다른 화면·PC 전환 — 늦게 끝난 이 누름은 화면을 바꾸지 않는다
@@ -1941,9 +1944,10 @@ async function openSessionById(sid){
   // 끊겼거나 다른 기기가 가져간 화면이면 아래 탭 규칙(switchTab — 같은 탭에 다시 붙기·인계 확인)으로 — 죽은 화면만 보이지 않게
   if(CURRENT_TERM_SID===sid){ const cur=findTab(TABS.active);
     if(!termView.disconnected&&!(cur&&cur.taken)){ if(paneDetail().classList.contains('term-mode')) showDetailPane(); return; } }
-  // 배경 탭으로 열려 있는 세션이면 새 화면을 만들지 않고 그 탭으로 전환한다
+  // 배경 탭으로 열려 있는 세션이면 새 화면을 만들지 않고 그 탭으로 전환한다. 꺼졌거나(정리 등) 다른 기기가 가져간 뒤 끝난 것처럼
+  // 보이는 탭은 바로 열지 않고 아래에서 목록을 새로 받아 목록 줄과 같은 규칙(jumpToSession)으로 — 새 claude 를 띄우지 않게(6단계)
   const t=TABS.list.find(x=>x.s.session_id===sid || (x.s.session_id||'').startsWith(sid));
-  if(t){ switchTab(t.key); return; }
+  if(t&&!tabGone(t,_findSess(t.s.session_id)||t.s)){ switchTab(t.key); return; }
   // 목록은 20초 폴링이라 live_terminal 이 stale 일 수 있다 → 판단 전에 새로 받는다(실패 시 캐시)
   const pc=pcNow(), at=Date.now();
   try{ const d=await T.list({limit:0}); if(d&&d.sessions&&pc===pcNow()){ SESSIONS=d.sessions; LIST_AT=at; if(typeof d.now==='number') CLOCK_SKEW=d.now-Date.now()/1000; } }catch(e){}
@@ -6815,9 +6819,6 @@ function quickTermTaken(t, s){
   if(termView.active===t.key&&termView.sid===t.s.session_id&&!termView.disconnected&&!(inst&&inst.ended)) return false;
   return shouldConfirmTakeover(s, t);
 }
-// 꺼짐처럼 보이나 — 목록 줄 판정(tabGone)에 더해, 다른 기기가 가져간 탭은 화면이 떠 있어도 이 기기가 붙어 있지 않으니 목록대로 본다.
-// 가져간 뒤 claude 가 끝났는데 인계 확인을 거쳐 다시 붙으면 새 claude 가 뜬다
-function quickTabGone(t, s){ return tabGone(t,s)||(!!t.taken&&!s.live_terminal); }
 // 목록(20초)이 아직 모를 수 있는 탭인가 — 지금 상세 칸에 떠 있거나, 이 페이지가 그 목록 뒤에 살아 있음을 봤다(tabSeenLive). 방금 연
 // 🧑‍💼 비서가 그렇다: 목록은 claude -p 로 만든 세션을 살아 있을 때만 싣고, 비서는 목록 밖 세션 객체로 연다. 목록에 없다고 바로 내리지 않는다(검토)
 function quickTermFresh(t){ return (termView.active===t.key&&termView.mounted(paneDetail()))||tabSeenLive(t); }
@@ -6857,7 +6858,7 @@ function quickTargets(){
       // 목록에서 빠진 탭은 누르면 내린다 — 목록이 아직 모르는 탭(떠 있는 터미널·방금 본 터미널)은 그대로 보인다
       const ok=(t)=>!ready||!!find(t.s.session_id)||quickTermFresh(t), t=quickTermTab(ok), n=TABS.list.filter(ok).length;
       if(t){ const s=find(t.s.session_id)||t.s, inst=termView.tabs&&termView.tabs[t.key];
-        const off=!!(inst&&inst.ended)||(quickTabGone(t,s)&&!tabSeenLive(t)), bd=off?null:sessionBadge(s);
+        const off=!!(inst&&inst.ended)||(tabGone(t,s)&&!tabSeenLive(t)), bd=off?null:sessionBadge(s);
         o.has=true; o.name=sessLabel(s); o.sub=[off?'꺼짐':(bd?bd.text:''), n>1?'탭 '+n+'개':''].filter(Boolean).join(' · ');
         o.taken=!off&&quickTermTaken(t,s); }
       else o.sub='열어 둔 터미널 없음';
@@ -6936,7 +6937,7 @@ async function quickGoTerminal(live){
     let s=(SESSIONS||[]).find(x=>x.session_id===t.s.session_id);
     // 지워짐·이사 — 그 탭을 조용히 내리고 다음 최근 탭으로. 목록이 아직 모를 수 있는 탭(quickTermFresh)은 아래에서 한 번 새로 받아 판정한다
     if(!s&&(listed||!quickTermFresh(t))){ left=quickDropTab(t)||left; continue; }
-    if(!listed&&(!s||ended(t)||quickTabGone(t,s))){
+    if(!listed&&(!s||ended(t)||tabGone(t,s))){
       const recent=tabSeenRecently(t)&&!ended(t);
       const f=await freshSessShown(t.s.session_id);
       if(!live()) return;                                         // 기다리는 사이 다른 누름·다른 화면·PC 전환 — 이 누름은 화면을 바꾸지 않는다
@@ -6950,7 +6951,7 @@ async function quickGoTerminal(live){
       }
       s=f;
     }
-    if((ended(t)&&!s.live_terminal)||quickTabGone(t,s)){         // 꺼짐 — 그 탭을 닫고 그 세션 상세(▶ 재개)로, 새 claude 는 띄우지 않는다
+    if((ended(t)&&!s.live_terminal)||tabGone(t,s)){         // 꺼짐 — 그 탭을 닫고 그 세션 상세(▶ 재개)로, 새 claude 는 띄우지 않는다
       dropGoneTab(t); loadDetail(s); toast('꺼진 터미널이라 상세로 열었습니다 — ▶ 재개로 다시 띄울 수 있어요'); return; }
     switchTab(t.key, listed?{listed}:undefined); return;          // 2차 인증·다른 기기 인계 확인은 loadTerminal 이 — 끊긴 탭은 같은 탭에 다시 붙는다
   }

@@ -142,3 +142,32 @@ test("T106 첫 목록을 받지 못했으면(PC 꺼짐·연결 실패) 바로가
     "폰: PC 꺼짐": { shown: ["terminal", "PC 가 꺼져 있습니다", "PC 꺼짐", true], press: "PC 가 꺼져 있습니다 — 켜지면 자동으로 다시 불러옵니다", at: "empty" },
   });
 });
+
+// ---------------------------------------------------------------- 3. 목록 줄·알림 길의 '다른 기기가 가져간 뒤 claude 가 끝난 탭'
+// 바로가기 길(T86)과 같은 방어 — 가져간 뒤 끝났으면 인계 확인창 없이 탭을 닫고 상세로(새 claude 없음), 살아 있으면 확인창을 거쳐서만 가져온다
+test("T107 목록 줄·알림으로 '다른 기기가 가져간 터미널'을 열 때 — 가져간 뒤 claude 가 끝났으면 확인창 없이 그 탭을 닫고 상세로(새 claude 없음), 살아 있으면 인계 확인 뒤 가져온다. 알림으로 연 꺼진 탭(중지됨)도 새로 띄우지 않는다", async () => {
+  const DEAD = "SESSIONS[0].live_terminal = false; T.list = async () => { __lists++; return { sessions: SESSIONS.map((s) => ({ ...s, live_terminal: s.session_id === '" + A + "' ? false : s.live_terminal })) }; };";
+  const got = await each(["목록 줄|끝남", "목록 줄|살아 있음", "알림|끝남", "알림|살아 있음", "알림|중지된 탭"], async (p) => {
+    const [via, what] = p.split("|");
+    const { ctx } = await boot({ mem: {}, pre: what === "중지된 탭" ? "SESSIONS[0].live_terminal = false;" : "" });
+    if (what !== "중지된 탭") {
+      await press(ctx, "terminal");
+      ev(ctx, "__tc.at(-1).cb('\\r\\n' + TAKEOVER_NOTE + '\\r\\n'); __tc.at(-1).cb(null, true);");   // 다른 기기가 가져감(인계 통지 → 스트림 끝)
+      if (what === "끝남") ev(ctx, DEAD);
+      else ev(ctx, "SESSIONS[0].screen = { attached: true, screen_id: 'scr-other-device' }");
+    }
+    let asked = 0; ctx.confirm = () => { asked++; return true; };
+    const tc0 = ev(ctx, "__tc.length"), l0 = ev(ctx, "__lists");
+    if (via === "목록 줄") await ctx.jumpToSession(ev(ctx, "SESSIONS[0]"));
+    else await ctx.openSessionById(A);
+    await tick(RENDER);
+    return { asked, at: at(ctx), newTerm: ev(ctx, "__tc.length") - tc0, lists: ev(ctx, "__lists") - l0, tabs: ev(ctx, "TABS.list.length") };
+  });
+  assert.deepEqual(got, {
+    "목록 줄|끝남": { asked: 0, at: "detail:a", newTerm: 0, lists: 1, tabs: 0 },      // 판정 전에 목록을 한 번 새로 받는다(20초 목록이 옛값일 수 있다)
+    "목록 줄|살아 있음": { asked: 1, at: "terminal:a", newTerm: 1, lists: 0, tabs: 1 },
+    "알림|끝남": { asked: 0, at: "detail:a", newTerm: 0, lists: 1, tabs: 0 },
+    "알림|살아 있음": { asked: 1, at: "terminal:a", newTerm: 1, lists: 0, tabs: 1 },
+    "알림|중지된 탭": { asked: 0, at: "detail:a", newTerm: 0, lists: 1, tabs: 0 },
+  });
+});
