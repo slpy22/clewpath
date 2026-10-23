@@ -9,7 +9,9 @@
 
     SM_E2E_PCLINK=1 SM_E2E_007_DIR=<007 트리> python -m pytest -m e2e -q -p no:cacheprovider tests/e2e/test_pclink_two_hosts.py
 
-묻는 세션: 사용자 홈의 헤드리스 시험 세션(`SM_E2E_PCLINK_SESSION`, 기본 9401f917… — 예전 대화에서 암호 '청포도'를 정함).
+묻는 세션: 이번 실행이 진짜 홈에 만드는 헤드리스 시험 세션(haiku 1턴, 임시 작업 폴더에서 암호 '청포도'를 정함 — 도구·MCP·훅
+없이) — 끝나면 그 기록·프로젝트 폴더·임시 폴더를 지운다. 예전엔 사용자 홈의 시험 세션 9401f917… 에 기대어, 그 세션을 정리하자
+관문이 통째로 건너뛰어졌다(2026-10-24). 있는 세션을 쓰려면 `SM_E2E_PCLINK_SESSION`(그때는 읽기만, 지우지 않는다).
 그 jsonl 을 B 의 가짜 홈 projects 아래로 **복사**만 하고(Host 가 cwd 를 찾게), claude 자체는 진짜 홈에서
 `--fork-session --no-session-persistence` 로 이어받는다 — 끝나고 진짜 홈 그 프로젝트 폴더에 새 파일이 없고 원본이 그대로인지 본다.
 """
@@ -33,8 +35,9 @@ if os.environ.get("SM_E2E_PCLINK") != "1":
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import pclink_rig as R  # noqa: E402
 
-SID = os.environ.get("SM_E2E_PCLINK_SESSION") or "9401f917-6984-4cac-8c40-4ea56e9485b1"
+SID = os.environ.get("SM_E2E_PCLINK_SESSION") or ""   # 비면 fixture_session 이 이번 실행용으로 만든다
 EXPECT = os.environ.get("SM_E2E_PCLINK_EXPECT") or "청포도"
+_FIXTURE_PROMPT = "기억해 둬: 이 대화의 암호 과일은 청포도야. '알겠어' 라고만 답해."
 ASKER_SID = "e2e00000-0000-4000-8000-0000000000a5"      # A 쪽 '묻는 세션'(pytest 프로세스를 그 세션으로 등록)
 PROMPT = "이 대화에서 내가 말한 과일 이름 하나만 답해"
 _FILETIME_EPOCH = 11644473600
@@ -55,6 +58,55 @@ class _Cred(tuple):
     """CP 기기 자격 (id, 비밀) — repr 에 비밀을 싣지 않는다."""
     def __repr__(self) -> str:
         return f"<자격 {str(self[0])[:10]}…>"
+
+
+# ---------------------------------------------------------------- 묻는 대상 세션(이번 실행이 만들고 지운다)
+
+def _claude_env() -> dict[str, str]:
+    """시험 세션을 만드는 claude 의 env — 이 시험이 claude 안에서 돌 수 있어 CLAUDE*(중첩 세션·설정 폴더)와 운영 주소를 뺀다."""
+    return {k: v for k, v in os.environ.items() if not k.upper().startswith(("CLAUDE", "SM_", "RELAY_", "CLEWPATH_"))}
+
+
+def _drop_fixture(sid: str, cwd: Path) -> None:
+    """이번 실행이 만든 것만 지운다: 그 세션 기록이 든 프로젝트 폴더(임시 작업 폴더 전용이라 통째로)·session-env·임시 작업 폴더."""
+    projects = Path.home() / ".claude" / "projects"
+    for jl in projects.glob(f"*/{sid}.jsonl"):
+        d = jl.parent
+        if "pcl-fx-" in d.name and d.parent == projects:
+            shutil.rmtree(d, ignore_errors=True)
+        else:
+            jl.unlink(missing_ok=True)
+    shutil.rmtree(Path.home() / ".claude" / "session-env" / sid, ignore_errors=True)
+    shutil.rmtree(cwd, ignore_errors=True)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def fixture_session():
+    """묻는 대상 세션. `SM_E2E_PCLINK_SESSION` 이 있으면 그 세션(읽기만), 없으면 haiku 1턴으로 만들고 모듈이 끝나면 지운다."""
+    global SID
+    if SID:
+        yield SID
+        return
+    exe = shutil.which("claude")
+    if not exe:
+        pytest.skip("claude 가 없음")
+    import tempfile
+    import uuid
+    cwd = Path(tempfile.mkdtemp(prefix="pcl-fx-"))
+    sid = str(uuid.uuid4())
+    argv = [exe, "-p", _FIXTURE_PROMPT, "--session-id", sid, "--model", "haiku", "--tools", "",
+            "--strict-mcp-config", "--settings", json.dumps({"disableAllHooks": True})]
+    try:
+        r = subprocess.run(argv, cwd=cwd, env=_claude_env(), capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=180)
+        if r.returncode != 0 or not list((Path.home() / ".claude" / "projects").glob(f"*/{sid}.jsonl")):
+            pytest.skip(f"시험 세션을 만들지 못함(종료 {r.returncode})")
+        SID = sid
+        say(f"시험 세션 {sid[:8]} 만듦(끝나면 지움)")
+        yield sid
+    finally:
+        SID = ""
+        _drop_fixture(sid, cwd)
 
 
 # ---------------------------------------------------------------- 진짜 홈의 시험 세션(읽기만)
