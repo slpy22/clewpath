@@ -25,6 +25,7 @@ import asyncio
 import inspect
 import re
 import json
+import time
 import os
 import sys
 from urllib.parse import urlencode
@@ -260,6 +261,7 @@ class Connector:
         self.e2ee_key: bytes | None = None   # room E2EE 키(접속 시 로드)
         self.enc_cids: set = set()           # 암호화 봉투로 말한 기기들(cid)
         self.gone_cids: dict = {}            # 떠난 기기(cid) — 그 앞 프레임은 보내지 않는다(send). 삽입순 집합, 상한 있음
+        self.pc_denied_logged: dict = {}     # PC 기기 id -> 마지막 거부 로그 시각(1분에 한 줄)
         self.conn_gen = 0                    # 릴레이 연결 세대(_on_connected 마다 +1) — 이전 연결에서 받은 pclink 요청의 늦은 답은 버린다
 
     # ---- 릴레이 송신 ----
@@ -421,7 +423,10 @@ class Connector:
             # PC 등급 기기(kind=pc)는 pclink·ping 만 — 접속 토큰이 없어 원래 auth 될 수 없지만 이중 방어(문서 6절 끝)
             pc = self.authed.get(cid)
             if pc and pc.get("kind") == "pc" and method != "ping":
-                _log(f"[pclink] PC 기기 {str(pc.get('id'))[:8]} 의 {method} 요청 거부(pc_not_allowed)")
+                did = str(pc.get("id"))
+                if time.monotonic() - self.pc_denied_logged.get(did, -1e9) > 60:      # 같은 기기는 1분에 한 줄(로그 폭주 방지)
+                    self.pc_denied_logged[did] = time.monotonic()
+                    _log(f"[pclink] PC 기기 {did[:8]} 의 {method} 요청 거부(pc_not_allowed)")
                 await self._res(rid, False, error="pc_not_allowed")
                 return
 

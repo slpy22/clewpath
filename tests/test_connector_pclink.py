@@ -336,7 +336,7 @@ async def test_pc_device_gets_only_pclink_and_ping(gated, capsys):
                               "error": "pc_not_allowed"}, m
     assert len(c.sent) == len(PC_DENIED) and c.streams == {} and c.handled == []
     logs = [ln for ln in capsys.readouterr().out.splitlines() if "pc_not_allowed" in ln]
-    assert len(logs) == len(PC_DENIED) and "pc012345" in logs[0]
+    assert len(logs) == 1 and "pc012345" in logs[0]          # 같은 기기 거부 로그는 1분에 한 줄(로그 폭주 방지)
     # 통과: pclink·pclink.pair → 본체, ping → pong
     await c._on_frame(_req("cidPC", "k1", "pclink", {"env": ENV}))
     await c._on_frame(_req("cidPC", "k2", "pclink.pair", {"step": "init"}))

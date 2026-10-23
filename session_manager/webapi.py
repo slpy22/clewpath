@@ -309,8 +309,9 @@ async def run_resume_api(ws, session_id: str, skip_permissions: bool = True,
 
     argv = _claude_argv(session_id, skip_permissions, fork_id, guardrails)
     try:
+        from session_manager import ptyd
         proc = subprocess.Popen(
-            argv, cwd=cwd,
+            argv, cwd=cwd, env=ptyd.clean_env(),     # Host 가 claude 안에서 떠도 CLAUDE_CODE_* 를 넘기지 않는다(터미널 브로커와 같은 규칙)
             stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, bufsize=0,
         )
@@ -488,7 +489,8 @@ def ephemeral_ask(session_id: str, prompt: str, skip_permissions: bool = True,
     proc = None
     t0 = time.monotonic()
     try:
-        proc = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.DEVNULL,
+        from session_manager import ptyd
+        proc = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.DEVNULL, env=ptyd.clean_env(),   # CLAUDE_CODE_* 를 넘기지 않는다
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 creationflags=osdep.NO_WINDOW)
         # 고아 방지: Windows 는 Job Object 편입 — Host 가 어떻게 죽든 이 claude 도 함께 끝난다.

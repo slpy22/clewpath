@@ -100,9 +100,14 @@ def sync_once(notify=None) -> dict | None:
 
 
 def _push_phone_revoked(did: str, name: str) -> None:
-    """E-3 ②: 폰이 스스로 페어링을 해제함 → PC 웹푸시 1회."""
+    """E-3 ②: 폰이 스스로 페어링을 해제함 → PC 웹푸시 1회. PC 짝(pclink, kind=pc)이면 PC 문구로."""
     try:
-        from session_manager import push
+        from session_manager import devices, push
+        kind = next((r.get("kind") for r in devices.list_devices() if r["id"] == did), None)
+        if kind == "pc":
+            push.send("device", did, f"🖥 PC '{name}' 짝 자격이 폐기됨",
+                      "짝 PC 쪽에서 이 PC 와의 짝 자격을 폐기했습니다(그 PC 에서 해제했을 수 있습니다). 설정 → 🖥 PC 짝에서 정리하세요.")
+            return
         push.send("device", did, f"📱 {name} 페어링을 해제함", "폰에서 이 PC 의 페어링을 해제했습니다. 📱 기기 목록에서 정리하세요.")
     except Exception as e:  # noqa: BLE001
         _log(f"push 실패: {type(e).__name__}")
