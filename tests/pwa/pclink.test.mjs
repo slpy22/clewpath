@@ -278,7 +278,7 @@ test("상세 칸 「📡 원격 묻기 받기」: 켜기는 확인 시트(30일�
 test("폰(릴레이): 켜는 동작은 2차 인증(grace 또는 otp)을 싣고, 끄는 동작은 싣지 않는다 · 남은 grace 는 다시 묻지 않음", async () => {
   const S = "sid-9";
   const ctx = await boot(false, {
-    "GRANT": { grace: "g-1", exp: NOW + 3600 },
+    "GRANT": { grace: "g-1", exp: NOW + 3600, issued: NOW },
     "POST /api/owner/pclink/pause": { paused: false },
     "POST /api/owner/pclink/invite": { approval: PAIR_AP },
     [`GET /api/owner/pclink/invites/${INV}`]: { inv: INV, invite: "clewpath-pair:0:S" },
@@ -368,7 +368,7 @@ test("승인 시트(pclink_*): 폰에서도 2차 인증 칸 · 결정 body 에 o
   assert.equal(calls(ctx, "POST", /execute$/).length, 0);
   assert.equal(toasts(ctx).at(-1), "승인·실행했습니다");
   // 남은 grace 가 있으면 코드 없이 grace 로
-  ev(ctx, `LS.setItem('sm_grace', JSON.stringify({grace:'g-7', exp:${NOW + 3600}}))`);
+  ev(ctx, `LS.setItem('sm_grace', JSON.stringify({grace:'g-7', exp:${NOW + 3600}, issued:${NOW}}))`);
   ev(ctx, "showApprovalSheet(" + JSON.stringify(CONTACT_AP) + ")");
   assert.equal(await ev(ctx, "globalThis.__approvalDecide(true)"), "executed");
   same(calls(ctx, "POST", "/api/owner/approvals/ap_c/decide")[1][2].body, { approve: true, grace: "g-7" });
@@ -383,7 +383,7 @@ test("승인 시트(pclink_*): 폰에서도 2차 인증 칸 · 결정 body 에 o
     ["2fa_required", "2차 인증을 켜야 폰에서 할 수 있습니다 — PC 화면에서 하세요"], ["2fa_invalid", "2차 인증 코드가 틀렸습니다"],
     ["human_proof_required", "이 기기로는 승인할 수 없습니다(페어링을 확인하세요)."], ["not_pending", "이미 처리된 요청입니다."]];
   for (const [code, msg] of cases) {
-    ev(ctx, `LS.setItem('sm_grace', JSON.stringify({grace:'g-8', exp:${NOW + 3600}}))`);
+    ev(ctx, `LS.setItem('sm_grace', JSON.stringify({grace:'g-8', exp:${NOW + 3600}, issued:${NOW}}))`);
     ctx.__DATA["POST /api/owner/approvals/ap_c/decide"] = { __err: { error: code }, __status: 403 };
     ev(ctx, "showApprovalSheet(" + JSON.stringify(CONTACT_AP) + ")");
     assert.equal(await ev(ctx, "globalThis.__approvalDecide(true)"), "error");
@@ -450,4 +450,25 @@ test("승인 시트(pclink_*): 승인됐지만 실행이 실패해 '승인됨' �
   const other = await boot(false, {});
   ev(other, "showApprovalSheet(" + JSON.stringify({ ...CONTACT_AP, kind: "team_create", args: { name: "x" }, status: "approved" }) + ")");
   assert.equal(lastModal(other).foot.length, 0);
+});
+
+test("폰 pclink 켜는 동작: 10분 넘은 grace(또는 발급 시각 없는 옛 grace)는 쓰지 않고 코드를 다시 묻는다 · 서버 2fa_stale 이면 그 grace 를 다시 쓰지 않음(지우지는 않음)", async () => {
+  const ctx = await boot(false, {
+    "GRANT": { grace: "g-new", exp: NOW + 3600, issued: NOW },
+    "POST /api/owner/pclink/pause": { paused: false } });
+  ev(ctx, "globalThis.__asks = 0; askOtp = () => { globalThis.__asks++; return '123456'; };");
+  ev(ctx, `LS.setItem('sm_grace', JSON.stringify({grace:'g-old', exp:${NOW + 3600}, issued:${NOW - 700}}))`);
+  await ev(ctx, "pclinkPause(false)");
+  assert.equal(ev(ctx, "globalThis.__asks"), 1, "10분 넘은 grace 는 안 씀");
+  same(calls(ctx, "POST", "/api/owner/pclink/pause").at(-1)[2], { body: { on: false, grace: "g-new" } });
+  ev(ctx, `LS.setItem('sm_grace', JSON.stringify({grace:'g-legacy', exp:${NOW + 3600}}))`);
+  await ev(ctx, "pclinkPause(false)");
+  assert.equal(ev(ctx, "globalThis.__asks"), 2, "발급 시각 없는 옛 grace 도 안 씀");
+  // 서버가 2fa_stale(시계 차 등) → 그 grace 는 다시 쓰지 않되 지우지 않는다(터미널 특권은 그대로)
+  ev(ctx, `LS.setItem('sm_grace', JSON.stringify({grace:'g-s', exp:${NOW + 3600}, issued:${NOW}}))`);
+  ctx.__DATA["POST /api/owner/pclink/pause"] = { __err: { error: "2fa_stale" }, __status: 403 };
+  await ev(ctx, "pclinkPause(false)");
+  assert.ok(toasts(ctx).at(-1).includes("10분 안에 넣은 2차 인증 코드"));
+  assert.ok(ev(ctx, "LS.getItem('sm_grace')").includes("g-s"), "grace 는 지우지 않는다");
+  assert.equal(ev(ctx, "pclinkGrace()"), "", "같은 grace 는 다시 쓰지 않는다");
 });

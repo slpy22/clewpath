@@ -5547,6 +5547,7 @@ const PCLINK_ERR={
   e2ee_required:'이 폰 연결이 암호화돼 있지 않습니다 — PC 화면에서 하거나 폰을 다시 페어링하세요',
   '2fa_required':'2차 인증을 켜야 폰에서 할 수 있습니다 — PC 화면에서 하세요',
   '2fa_invalid':'2차 인증 코드가 틀렸습니다',
+  '2fa_stale':'PC 짝 동작은 10분 안에 넣은 2차 인증 코드가 필요합니다 — 다시 하면 코드를 묻습니다',
   cp_unavailable:'서버(CP)에 닿지 못했습니다 — 잠시 뒤 다시 하세요',
   relay_unavailable:'이 PC 의 원격 연결이 꺼져 있습니다',
   already_paired:'이미 짝지은 PC 입니다',
@@ -5570,9 +5571,17 @@ const PCLINK_EV={invite_created:'🎟 초대 만듦', invite_cancelled:'🚫 초
 // T.api 예외 → 오류 코드. 서버 거절은 본문 {error}/{code}, 커넥터 거절(2FA·local_only)은 message 로만 온다.
 function pclinkCode(e){ const j=(e&&e.json)||{}; return String(j.error||j.code||(e&&e.message)||e||''); }
 function pclinkErrText(e){ const c=pclinkCode(e); return PCLINK_ERR[c]||('실패: '+c); }
-function pclinkFail(e){ const c=pclinkCode(e); if(c==='2fa_invalid'||c==='2fa_required') clearGrace(); toast(pclinkErrText(e)); }
+// pclink '켜는' 동작은 10분 안에 코드를 넣고 받은 grace 만(서버 2fa_stale) — 터미널 특권의 8시간 유예는 그대로 두고 여기서만 안 쓴다.
+// 발급 시각이 없는 옛 grace·서버가 오래됐다고 한 grace 는 쓰지 않고 코드를 다시 묻는다(grace 는 지우지 않는다 — 다른 특권은 계속).
+const PCLINK_FRESH_S=600;
+let PCL_STALE='';
+function pclinkStale(c){ if(c!=='2fa_stale') return;
+  try{ PCL_STALE=String((JSON.parse(LS.getItem('sm_grace')||'null')||{}).grace||''); }catch(e){} }
+function pclinkFail(e){ const c=pclinkCode(e); if(c==='2fa_invalid'||c==='2fa_required') clearGrace(); pclinkStale(c); toast(pclinkErrText(e)); }
 function pclinkGrace(){ let g=null; try{ g=JSON.parse(LS.getItem('sm_grace')||'null'); }catch(e){}
-  return (g&&g.grace&&g.exp&&g.exp*1000>Date.now()+5000)?String(g.grace):''; }
+  if(!(g&&g.grace&&g.exp&&g.exp*1000>Date.now()+5000)) return '';
+  if(!g.issued || Date.now()/1000-g.issued>PCLINK_FRESH_S-30 || String(g.grace)===PCL_STALE) return '';
+  return String(g.grace); }
 // 폰의 '켜는' 동작 자격: 남은 grace → 없으면 코드 1회(grant 로 grace 를 받아 다음 단계·승인 시트도 코드 없이). 로컬은 {}, 취소면 null.
 // ensurePriv 와 달리 2FA '강제'가 꺼져 있어도 묻는다 — pclink 관문은 비밀이 있으면 늘 코드를 요구한다.
 async function pclinkCred(){
@@ -5717,7 +5726,7 @@ function pclinkPaste(){
     const cred=await pclinkCred(); if(cred===null) return;
     go.disabled=true; err.textContent='';
     let r; try{ r=await T.api('POST','/api/owner/pclink/accept',{body:Object.assign({invite:s},cred)}); }
-    catch(e){ const c=pclinkCode(e); if(c==='2fa_invalid'||c==='2fa_required') clearGrace(); err.textContent=pclinkErrText(e); go.disabled=false; return; }
+    catch(e){ const c=pclinkCode(e); if(c==='2fa_invalid'||c==='2fa_required') clearGrace(); pclinkStale(c); err.textContent=pclinkErrText(e); go.disabled=false; return; }
     go.disabled=false;
     if(!r||!r.approval){ err.textContent='요청을 만들지 못했습니다'; return; }
     closeModal();
@@ -6596,7 +6605,7 @@ function showApprovalSheet(a, opts){
       }
       closeModal(); toast('승인했습니다 — 요청한 세션이 실행합니다'); return 'approved';
     }catch(e){
-      if(pcl){ const c=pclinkCode(e); if(c==='2fa_invalid'||c==='2fa_required') clearGrace();
+      if(pcl){ const c=pclinkCode(e); if(c==='2fa_invalid'||c==='2fa_required') clearGrace(); pclinkStale(c);
         err.textContent=(c!=='human_proof_required'&&PCLINK_ERR[c])||approvalErrText(c); }
       else err.textContent=approvalErrText(e.message||e);
       return 'error';
