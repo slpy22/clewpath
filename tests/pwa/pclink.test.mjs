@@ -275,6 +275,30 @@ test("상세 칸 「📡 원격 묻기 받기」: 켜기는 확인 시트(30일�
   assert.equal(calls(ctx, "GET", "/api/owner/pclink").length, g0 + 1);
 });
 
+test("상세 칸 「📡 원격 묻기 받기」 상태는 그 자리(더 보기 바로 위)가 화면에 보일 때만 받는다 — 상세 칸을 열기만 해서는 GET 이 나가지 않고, 보이면 한 번, 보기 전에 다른 화면으로 가면 받지 않는다(0.32.3)", async () => {
+  const S = "11111111-2222-3333-4444-555555555555";
+  const ctx = await boot(true, { [`GET /api/owner/pclink/sessions/${S}`]: { session_id: S, allow: true } });
+  ev(ctx, "globalThis.__io = []; IntersectionObserver = class { constructor(cb) { this.cb = cb; this.on = true; __io.push(this); } observe(t) { this.t = t; } disconnect() { this.on = false; } unobserve() {} };");
+  const pd = stubEl("div");
+  ctx.document.querySelector = (s) => (s === "#paneDetail" ? pd : stubEl());
+  const n = () => calls(ctx, "GET", `/api/owner/pclink/sessions/${S}`).length;
+  const has = () => pd.children[1].children.some((c) => String(c.className).includes("pcl-allow"));
+  const got = {};
+  await ctx.loadDetail({ session_id: S, title: "배포", message_count: 1, size_bytes: 1, cwd: "F:/p" }); await tick();
+  const io = ev(ctx, "__io.at(-1)");
+  got.opened = { gets: n(), row: has(), watches: String(io.t.className) };
+  io.cb([{ isIntersecting: false, target: io.t }]); await tick();
+  got.hidden = n();
+  io.cb([{ isIntersecting: true, target: io.t }]); await tick();
+  got.shown = { gets: n(), row: has(), stopped: !io.on };
+  await ctx.loadDetail({ session_id: S, title: "배포", message_count: 1, size_bytes: 1, cwd: "F:/p" }); await tick();
+  const io2 = ev(ctx, "__io.at(-1)");
+  ev(ctx, "detailPlaceholder()");                                       // 보기 전에 다른 화면으로
+  io2.cb([{ isIntersecting: true, target: io2.t }]); await tick();
+  got.left = { gets: n(), stopped: !io2.on };
+  assert.deepEqual(got, { opened: { gets: 0, row: false, watches: "dmorebox" }, hidden: 0, shown: { gets: 1, row: true, stopped: true }, left: { gets: 1, stopped: true } });
+});
+
 test("폰(릴레이): 켜는 동작은 2차 인증(grace 또는 otp)을 싣고, 끄는 동작은 싣지 않는다 · 남은 grace 는 다시 묻지 않음", async () => {
   const S = "sid-9";
   const ctx = await boot(false, {

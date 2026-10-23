@@ -85,6 +85,8 @@
   .qtag.now{color:var(--accent);font-weight:650}
   .qtag.warn{color:var(--warn);font-weight:650}
   .pop .popi.qs-it.dim{opacity:.5}
+  .pop .popi.qs-it.attn .pi{position:relative}
+  .pop .popi.qs-it.attn .pi::after{content:'';position:absolute;top:-2px;right:-1px;width:7px;height:7px;border-radius:50%;background:#e8a03c}
   .popbg.qs-sheet{z-index:61}
   .pop.qs-sheet{z-index:62}   /* 폰 관제 덮개(z 60) 머리 ▾ 로 열어도 덮개 위에 */
   .backbar .vtitle{flex:1;min-width:0;padding:0 4px;font-weight:650;font-size:.9rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -101,6 +103,9 @@
     #qs button.dim{opacity:.45}                     /* 기억 없음·준비 중 — 누르면 안내 */
     #qs button.wait{cursor:progress}
     #qs .qi{font-size:.95rem;line-height:1}
+    #qs button{position:relative}
+    #qs button.attn::after{content:'';position:absolute;top:3px;right:3px;width:7px;height:7px;border-radius:50%;background:#e8a03c;
+      box-shadow:0 0 0 2px var(--bg)}               /* 볼 일 점 — 열린 탭 중 권한·입력 대기(🔔 배지와 같은 주황) */
     /* 빈 상세 칸 '최근 화면'(§3-6) — 폰은 빈 안내 자체가 숨어 있다 */
     .detail-empty{flex-direction:column;gap:16px}
     .qs-recent{display:flex;flex-direction:column;gap:10px;width:min(560px,100%)}
@@ -1603,8 +1608,11 @@ function showListPane(){ $('#app').setAttribute('data-view','list'); }
 function showDetailPane(){ $('#app').setAttribute('data-view','detail'); }
 // 빈 상세 칸 — 안내 한 줄 + (PC) '최근 화면' 단추(renderEmptyPane, quick-switch §3-6). 바깥 상자는 그대로 'detail-empty' 하나
 let EMPTY_BOX=null;
-function detailPlaceholder(txt){ paneEnter('empty'); const p=paneDetail(); closeInlineMonitor(); p.classList.remove('term-mode','fb-mode','mon-mode'); p.innerHTML='';
+function detailPlaceholder(txt){ paneEnter('empty'); const p=paneDetail(); closeInlineMonitor(); p.classList.remove('term-mode','fb-mode','mon-mode'); p.innerHTML=''; headList();
   const box=el('div','detail-empty'); box._txt=txt||''; box._shape=''; box._btns=[]; EMPTY_BOX=box; p.appendChild(box); renderEmptyPane(); }
+// 머리 줄 제목(#head) — 상세 칸 화면이 저마다 적는다(세션 상세·뷰어·파일·관제·터미널 재개…). 폰은 한 칸씩이라 목록 칸으로 오면 '세션'.
+// PC 는 두 칸이 함께 보여 제목이 상세 칸 화면 이름을 따른다 — 목록을 새로 받을 때(⟳·보기 전환·재연결) 덮지 않고, 상세 칸이 비면 '세션'(quick-switch 6단계)
+function headList(){ if(innerWidth<880||PANE_NOW.kind==='empty') $('#head').textContent='세션'; }
 function highlightSelected(){ document.querySelectorAll('.srow').forEach(r=>
   r.classList.toggle('sel', r.dataset.sid===SELECTED_ID)); }
 // ---- 화면 진입 기록(quick-switch §8 2단계) ----
@@ -1738,8 +1746,14 @@ function setListView(v){ LIST_VIEW=LIST_VIEWS.includes(v)?v:'sessions'; try{ LS.
 let LIST_READY=false;   // 지금 PC 의 첫 목록을 받았나(PC 전환 때 false) — SESSIONS 가 이 PC 것이라 믿고 기억을 걸러도 되는가(quick-switch 3단계)
 let LIST_AT=0;          // 지금 SESSIONS 를 서버에 청한 시각(ms) — 그 뒤에 이 페이지가 본 것(방금 띄운 터미널)은 목록이 아직 모른다(tabSeenLive)
 let LIST_FAIL=false;    // 목록 칸이 '목록 실패'를 보이는 중인가 — PC 가 돌아오면(pcBack) 처음부터 다시 받는다(20초 갱신은 옛 목록 칸에 그린다)
+let LIST_ERR='';        // 마지막으로 목록을 받지 못한 까닭(오류 코드) — 첫 목록 전 바로가기가 '받는 중'과 'PC 꺼짐·연결 실패'를 가른다. 다시 받기 시작하면 ''
+// 첫 목록을 받지 못한 까닭을 바로가기 말로 — [툴팁·시트 보조 글, 시트 꼬리표, 누름 알림]
+function listErrText(){
+  return LIST_ERR==='agent_offline'?['PC 가 꺼져 있습니다','PC 꺼짐',connErrText(LIST_ERR)]
+    :['목록을 받지 못했습니다','연결 실패','목록을 받지 못했습니다 — 연결을 확인하세요'];
+}
 async function loadList(q){
-  const main=paneList(); $('#head').textContent='세션';
+  const main=paneList(); headList();
   main.innerHTML=''; syncTabbar();
   // 세션 목록 ↔ 관제 그룹 목록 전환(2026-10-11 사장님: 그룹을 팝업에서 고르지 말고 목록으로)
   const seg=el('div','lview');
@@ -1770,6 +1784,7 @@ async function loadList(q){
   // 탭 막대 전환(2026-10-14 사장님): 오른쪽 칸은 그대로 — 비어 있을 때만 안내를 그린다(보던 상세·관제·파일·뷰어 유지)
   if(!paneDetail().children.length) detailPlaceholder();
   const pc=pcNow(), at=Date.now();        // 이 목록을 청한 PC·시각
+  if(LIST_ERR){ LIST_ERR=''; renderQuickSoon(); }   // 다시 받는 중 — 바로가기는 'PC 꺼짐'에서 '받는 중'으로
   try{
     const data=await T.list({limit:0});
     // 받는 사이 릴레이로 PC 를 바꿨다 — 늦게 온 옛 PC 목록은 버린다(새 PC 의 loadList 가 따로 돈다). 옛 목록으로 새 PC 의
@@ -1788,7 +1803,8 @@ async function loadList(q){
     LIST_CTX={rerender};
     refreshTodo();                 // 🔔 배지(승인 요청 수는 서버에서, 권한·입력 대기는 방금 받은 목록에서)           // 자동 갱신(뱃지 실시간화)이 쓸 컨텍스트
   }catch(e){ if(pc!==pcNow()) return;   // 받는 사이 PC 를 바꿨다 — 새 PC 의 loadList 가 따로 돈다
-    LIST_FAIL=true; listWrap.innerHTML=''; listWrap.appendChild(el('div','empty','목록 실패: '+connErrText(e.message))); }
+    LIST_FAIL=true; listWrap.innerHTML=''; listWrap.appendChild(el('div','empty','목록 실패: '+connErrText(e.message)));
+    LIST_ERR=String((e&&e.message)||'error'); renderQuickSoon(); }   // 첫 목록 전이면 바로가기가 '받는 중' 대신 이 까닭을 알린다
 }
 
 // ---- 목록 자동 갱신: 훅 상태 뱃지를 실시간처럼 (화면 보일 때만, 스크롤 보존) ----
@@ -1855,10 +1871,12 @@ let CURRENT_TERM_SID=null;   // 지금 터미널 화면으로 보고 있는 세�
 // 알림 클릭은 사용자의 명시 동작이라 '🖥 터미널로 돌아가기' 버튼과 같은 등급으로 본다.
 // 2026-10-15 사장님: 정리 작업(4시간 무활동) 등으로 프로세스가 꺼진 세션은 탭을 눌러도 다시 띄우지 않는다 —
 // 그 탭을 닫고 상세로. 화면에 붙어 있는 탭은 목록이 아직 옛값이어도 산 것으로 본다(방금 띄운 직후).
+// 다른 기기가 가져간 탭(taken)은 화면이 떠 있어도 이 기기가 붙어 있지 않으니 목록대로 본다 — 가져간 뒤 claude 가 끝났는데 인계 확인을
+// 거쳐 다시 붙으면 새 claude 가 뜬다(바로가기·목록 줄·알림 공통, quick-switch 6단계)
 function tabGone(t, s){
   if(s.live_terminal) return false;
   const inst=termView.tabs&&termView.tabs[t.key];
-  return !(termView.sid===s.session_id&&!termView.disconnected&&!(inst&&inst.ended));
+  return !(termView.sid===s.session_id&&!termView.disconnected&&!(inst&&inst.ended)&&!t.taken);
 }
 function dropGoneTab(t){
   const onView=termView.active===t.key;
@@ -1900,8 +1918,9 @@ async function jumpToSession(s, fresh){
   const live=navTicket();
   let t=TABS.list.find(x=>x.s.session_id===s.session_id), listed=!!fresh;
   // 목록(20초)은 꺼졌다는데 이 페이지는 그 뒤에 살아 있음을 봤다(방금 띄운 터미널) — 판정 전에 한 번 새로 받는다(§4-1). 탭을 버리지 않게.
-  // 그런 관찰이 없는 탭(새로고침 뒤 '중지됨'으로 되살린 탭 등)은 목록대로 바로 판정한다 — 받는 동안 아무 반응 없이 기다리지 않게
-  if(t&&!fresh&&tabGone(t,s)&&tabSeenLive(t)){
+  // 다른 기기가 가져간 탭도 — 가져갈 때는 살아 있었다(목록이 옛값일 수 있다). 그런 관찰이 없는 탭(새로고침 뒤 '중지됨'으로 되살린
+  // 탭 등)은 목록대로 바로 판정한다 — 받는 동안 아무 반응 없이 기다리지 않게
+  if(t&&!fresh&&tabGone(t,s)&&(tabSeenLive(t)||t.taken)){
     const recent=tabSeenRecently(t);
     const f=await freshSessShown(s.session_id);
     if(!live()) return;           // 기다리는 사이 다른 누름·다른 화면·PC 전환 — 늦게 끝난 이 누름은 화면을 바꾸지 않는다
@@ -1930,9 +1949,10 @@ async function openSessionById(sid){
   // 끊겼거나 다른 기기가 가져간 화면이면 아래 탭 규칙(switchTab — 같은 탭에 다시 붙기·인계 확인)으로 — 죽은 화면만 보이지 않게
   if(CURRENT_TERM_SID===sid){ const cur=findTab(TABS.active);
     if(!termView.disconnected&&!(cur&&cur.taken)){ if(paneDetail().classList.contains('term-mode')) showDetailPane(); return; } }
-  // 배경 탭으로 열려 있는 세션이면 새 화면을 만들지 않고 그 탭으로 전환한다
+  // 배경 탭으로 열려 있는 세션이면 새 화면을 만들지 않고 그 탭으로 전환한다. 꺼졌거나(정리 등) 다른 기기가 가져간 뒤 끝난 것처럼
+  // 보이는 탭은 바로 열지 않고 아래에서 목록을 새로 받아 목록 줄과 같은 규칙(jumpToSession)으로 — 새 claude 를 띄우지 않게(6단계)
   const t=TABS.list.find(x=>x.s.session_id===sid || (x.s.session_id||'').startsWith(sid));
-  if(t){ switchTab(t.key); return; }
+  if(t&&!tabGone(t,_findSess(t.s.session_id)||t.s)){ switchTab(t.key); return; }
   // 목록은 20초 폴링이라 live_terminal 이 stale 일 수 있다 → 판단 전에 새로 받는다(실패 시 캐시)
   const pc=pcNow(), at=Date.now();
   try{ const d=await T.list({limit:0}); if(d&&d.sessions&&pc===pcNow()){ SESSIONS=d.sessions; LIST_AT=at; if(typeof d.now==='number') CLOCK_SKEW=d.now-Date.now()/1000; } }catch(e){}
@@ -2931,6 +2951,8 @@ const TABS={ list:[], active:null, mru:[] };   // mru = 최근 본 순서(key, �
 const tabKey=(s)=>(s.fork_id||s.session_id);
 const findTab=(key)=>TABS.list.find(t=>t.key===key)||null;
 function tabSeen(key){ TABS.mru=[key, ...TABS.mru.filter(k=>k!==key)]; }
+// 보던 탭을 닫거나 끝낸 뒤 갈 탭 — 최근에 본 탭(남은 탭 중 mru 맨 앞), 본 적 없는 탭뿐이면 첫 탭(quick-switch 6단계)
+function recentTab(){ for(const k of TABS.mru){ const t=findTab(k); if(t) return t; } return TABS.list[0]||null; }
 // 이 페이지가 스스로 놓은 화면 id(탭 인스턴스 해체·새로 띄우기). 20초 목록의 screen 이 아직 이 값이면 내 옛 화면이지
 // 다른 기기가 아니다 — 정리한 터미널로 금방 돌아올 때 가짜 인계 확인창을 막는다(quick-switch 1-1). 오래된 것부터 버림.
 const RELEASED_SCREENS=[];
@@ -2994,8 +3016,9 @@ const termView={
         theme:{background:'#0d1117',foreground:'#e6edf3',cursor:'#58a6ff'}});
       const fit=new FitAddon.FitAddon(); term.loadAddon(fit); term.open(host);
       t.term=term; t.fit=fit;
-      // Alt+1~4 는 화면 바로가기(결정 8) — claude 로 보내지 않는다. 받는 일은 창 감시(onQuickKey)가 한다. 맥 Option 이 만든 글자는 보낸다
-      try{ term.attachCustomKeyEventHandler(e=>!quickKeyKind(e)||quickKeyTyping(e)); }catch(e){}
+      // Alt+1~4 는 화면 바로가기(결정 8)·Ctrl+Shift+B 는 목록 칸 접기 — claude 로 보내지 않는다. 받는 일은 창 감시(onQuickKey·onSideKey)가
+      // 한다. 맥 Option 이 만든 글자는 보낸다
+      try{ term.attachCustomKeyEventHandler(e=>!sideKeyCombo(e)&&(!quickKeyKind(e)||quickKeyTyping(e))); }catch(e){}
       // 모바일 터치 UX(탭별). 입력은 이 탭이 전경일 때만 보낸다 — 숨은 xterm 이 포커스를 얻어도 유실/오전송 없음
       t.ux=attachMobileTermUX(host, term, {
         send:(d)=>{ if(this.active===key) this.send({type:'input',data:d}); },
@@ -3263,8 +3286,8 @@ function closeTab(key){
     const wasActive=(TABS.active===key);
     removeTab(key); saveTabs();
     if(!wasActive){ renderTabBar(); return; }
-    // 전경 탭을 닫았다: 이웃 탭으로, 없으면 뷰를 떠난다
-    const next=TABS.list[0];
+    // 전경 탭을 닫았다: 최근에 본 탭으로, 없으면 뷰를 떠난다
+    const next=recentTab();
     if(next){ switchTab(next.key); } else { leaveTerminalView(); loadDetail(s); }
   };
   const bDetach=el('button','btn',t.dead?'탭 닫기':'화면만 닫기');
@@ -3569,7 +3592,7 @@ async function loadTerminal(s, safe, opt){
     const c=cur(), ck=TABS.active;
     if(!await stopSessionTerminal(c)) return;
     removeTab(ck); saveTabs();              // PTY 가 죽었으니 탭도 내린다
-    const next=TABS.list[0];
+    const next=recentTab();                 // 최근에 본 탭으로
     if(next){ switchTab(next.key); } else { leaveTerminalView(); loadDetail(c); }
   };
   bar.appendChild(stop);
@@ -3600,6 +3623,7 @@ const _leftResumes=new Set();
 function closeLiveResume(now){ const r=_liveResume; _liveResume=null; if(r){ try{ r.close(now); }catch(e){} }
   if(now) for(const x of [..._leftResumes]){ try{ x.close(true); }catch(e){} } }
 
+let VIEWER_TITLE=null;   // 뷰어 막대의 세션 이름 {gen(그 화면의 PANE_NOW.gen), el}
 async function loadViewer(s){
   closeLiveViewer();
   paneEnter('viewer', s); const gen=PANE_NOW.gen;   // 칸을 비우기 바로 앞. gen: 응답을 기다리는 사이 다른 화면으로 가면 늦게 그리지 않게(T5)
@@ -3607,6 +3631,7 @@ async function loadViewer(s){
   const bar=listBack();
   // 무엇을 보는지 — 바로가기로 들어오면 목록 줄을 거치지 않아 화면에 세션 이름이 없었다(quick-switch §4-3)
   const vt=el('span','vtitle',sessLabel(s)); vt.title=sessLabel(s)+(s.cwd?' · '+s.cwd:''); bar.appendChild(vt);
+  VIEWER_TITLE={gen, el:vt};               // 이 세션 이름을 바꾸면 막대 이름만 고친다(renameNative) — 이 화면(gen) 동안만
   const badge=el('div','vlive off'); badge.appendChild(el('span','vdot'));
   const bt=el('span',null,'실시간 연결 중…'); badge.appendChild(bt); bar.appendChild(badge);
   main.appendChild(bar);
@@ -3844,7 +3869,13 @@ async function renameNative(s){
     toast(r&&r.peer_name_conflict ? '이름 변경됨 — ⚠ 같은 이름으로 불리는 세션이 이미 있어 이름으로 부르면 헷갈립니다'
         : (r&&r.peer_name_after_restart) ? '이름 변경됨 — 다른 세션이 부르는 이름은 이 세션을 다시 열 때 바뀝니다'
         : '이름 변경됨 (네이티브 반영)');
-    loadDetail(s);
+    // 보던 화면은 그대로 — 지금 그 세션을 상세 칸에서 보고 있을 때만 그 화면의 이름을 새로(상세는 다시 그림·뷰어는 막대 이름).
+    // 전엔 ⋯ 메뉴로 다른 세션 이름을 바꿔도 보던 터미널·파일이 그 세션 상세로 바뀌었다(quick-switch 6단계)
+    if(PANE_NOW.sid===s.session_id&&PANE_NOW.kind==='detail') loadDetail(s);
+    else if(PANE_NOW.sid===s.session_id&&PANE_NOW.kind==='viewer'&&VIEWER_TITLE&&VIEWER_TITLE.gen===PANE_NOW.gen){
+      VIEWER_TITLE.el.textContent=t; VIEWER_TITLE.el.title=t+(s.cwd?' · '+s.cwd:''); }
+    if(paneDetail().classList.contains('term-mode')) renderTabBarSoon();   // 터미널 탭 칩 이름
+    renderQuickSoon();                                                     // 바로가기 단추의 세션 이름
   }catch(e){
     if(e.status===409) toast('실행 중 세션이라 변경 불가');
     else toast('실패: '+e.message);
@@ -3854,7 +3885,10 @@ async function doDelete(s){
   if(!confirm('이 세션을 휴지통으로 보낼까요?\n영구 삭제가 아니라 복구할 수 있습니다(🗑 휴지통에서 되살리기).'))return;
   try{ const r=await T.api('POST',`/api/sessions/${s.session_id}/delete`,{body:{dry_run:false}});
     toast(r&&r.recoverable ? '휴지통으로 이동됨 (복구 가능)' : '삭제됨');
-    if(SELECTED_ID===s.session_id){SELECTED_ID=null; detailPlaceholder('삭제됨');}
+    // 지금 그 세션을 상세 칸에서 보고 있을 때만 칸을 비운다 — 전엔 마지막으로 연 상세(SELECTED_ID) 기준이라 그 뒤 다른 화면을 보는 중에도
+    // 칸을 지웠다(quick-switch 6단계)
+    if(SELECTED_ID===s.session_id) SELECTED_ID=null;
+    if(PANE_NOW.sid===s.session_id) detailPlaceholder('삭제됨');
     loadList();
   }catch(e){
     if(e.status===409) toast('실행 중인 세션은 삭제할 수 없습니다 — 터미널/프로세스를 먼저 종료하세요');
@@ -4437,9 +4471,14 @@ function fbTreeKey(ev){
   if(done&&ev.preventDefault) ev.preventDefault();
 }
 function fbToggle(id){ if(FB.open.has(id)) FB.open.delete(id); else { FB.open.add(id); delete FB.errs[id]; } fbSaveState(); return fbRenderTree(); }
-// 이동 경로를 누르면 탐색기에서 그 폴더까지 펼쳐 보여준다(모바일은 탐색기 화면으로)
+// 이동 경로를 누르면 탐색기에서 그 폴더까지 펼쳐 보여준다(모바일은 탐색기 화면으로). 왼쪽 목록 칸이 다른 보기(세션·👥 팀)거나
+// 접혀 있으면 📁 탐색기로 바꿔 펼친다 — 전엔 보이지 않는 탐색기에만 그려 아무 일도 없는 것처럼 보였다(quick-switch 6단계).
+// 탐색기가 떠 있으면 그 자리에서 다시 그리고, 아니면 목록 칸을 새로 그린다(그 그리기가 FB.reveal 로 그 폴더를 고른다). 상세 칸은 그대로
 function fbReveal(id){ let p=id; while(p!==null){ FB.open.add(p); p=fbParentId(p); }
-  FB.sel=id; FB.reveal=id; FB.q=''; fbSaveState(); fbRenderTree();
+  FB.sel=id; FB.reveal=id; FB.q=''; fbSaveState();
+  const app=$('#app'); if(innerWidth>=880&&app&&app.classList.contains('side-off')) setSideOff(false);
+  if(LIST_VIEW!=='files'||!LIST_CTX||!FB.wrap){ setListView('files'); return loadList(); }   // 폰도 목록 칸으로(loadList)
+  fbRenderTree();
   if(innerWidth<880) showListPane(); }
 
 // ---- 편집기: 탭 · 이동 경로 · 본문(Monaco / Markdown / 이미지 / 정보) ----
@@ -4509,6 +4548,9 @@ function fbRenderCrumb(t){ const c=FB.crumbEl; if(!c) return; c.innerHTML='';
     const b=el('button',null,seg);
     b.onclick=()=>fbReveal(fbId(t.root, parts.slice(0, i===parts.length-1?i:i+1).join('/'))); c.appendChild(b); });
   const tools=el('div','tools'); const d=t.data;
+  // ⟳ 다시 읽기(6단계) — 바깥(claude·다른 편집기)에서 고친 내용을 새로 받는다. 받지 못했던 파일(오류)도
+  const br=el('button',null,'⟳'); br.title='다시 읽기 — PC 에서 이 파일을 새로 받습니다'; br.setAttribute('aria-label','다시 읽기');
+  br.onclick=()=>fbReload(t); tools.appendChild(br);
   if(d&&d.kind==='text'&&fbIsMd(t.name)){
     const bv=el('button',null,t.view==='preview'?'원문':'미리보기');
     bv.onclick=()=>{ t.view=t.view==='preview'?'source':'preview'; fbRenderActive(); }; tools.appendChild(bv); }
@@ -4521,6 +4563,13 @@ function fbRenderCrumb(t){ const c=FB.crumbEl; if(!c) return; c.innerHTML='';
   if(!(t.err&&t.err.error==='protected')){ const bd=el('button',null,'⬇'); bd.title='내려받기'+(MODE==='relay'?'(2차 인증)':'');
     bd.onclick=()=>fbDownload(t); tools.appendChild(bd); }
   c.appendChild(tools);
+}
+// 열어 둔 파일을 다시 받는다 — 내용·모델·그림을 버리고 그린다(fbRenderActive 가 받는다). 스크롤 위치는 두었다가 새 내용에 다시 놓는다
+function fbReload(t){
+  if(!t||!FB.tabs.includes(t)) return;
+  if(t.id===FB.active) fbKeepView();
+  fbDisposeTab(t); t.data=null; t.err=null; t.img=null;
+  if(t.id===FB.active) return fbRenderActive();
 }
 function fbShowAlt(node){ if(FB.edHost) FB.edHost.style.display='none';
   if(!FB.alt) return; FB.alt.style.display=''; FB.alt.innerHTML=''; FB.alt.appendChild(node); }
@@ -5785,10 +5834,21 @@ function pclinkAllowRow(s, d, before){
     row.classList.toggle('on',cur); };
   btn.onclick=async()=>{ if(btn.disabled) return; btn.disabled=true;
     try{ const r=await pclinkSetAllow(s.session_id,!cur); if(r!=null){ cur=r; draw(); } } finally{ btn.disabled=false; } };
-  row._ready=Promise.resolve().then(()=>T.api('GET','/api/owner/pclink/sessions/'+encodeURIComponent(s.session_id))).then(r=>{
+  const fetchNow=()=>T.api('GET','/api/owner/pclink/sessions/'+encodeURIComponent(s.session_id)).then(r=>{
     if(!r||typeof r.allow!=='boolean') return false;
     cur=r.allow; draw(); d.insertBefore(row, before); return true;
   }).catch(()=>false);
+  // 상태는 그 자리(더 보기 바로 위)가 화면에 보일 때 받는다 — 상세 칸을 열 때마다(폰 릴레이 포함) GET 이 한 번씩 더 나가지 않게(0.32.3).
+  // 보이기 전에 다른 화면으로 갔으면(gen) 받지 않는다. 보이는지 알 수 없으면(IntersectionObserver 없음) 지금처럼 바로 받는다
+  const gen=PANE_NOW.gen;
+  row._ready=new Promise(res=>{
+    if(typeof IntersectionObserver!=='function'||!before) return res(Promise.resolve().then(fetchNow));
+    try{ const io=new IntersectionObserver(ents=>{
+        if(PANE_NOW.gen!==gen){ io.disconnect(); return res(false); }
+        if(ents.some(e=>e.isIntersecting)){ io.disconnect(); res(fetchNow()); } });
+      io.observe(before); }
+    catch(e){ res(fetchNow()); }
+  });
   return row;
 }
 
@@ -6070,16 +6130,22 @@ function setSideOff(off){
   renderEmptyPane();                       // 빈 상세 칸 안내 — 접혀 있으면 '왼쪽에서 …'는 틀린 말(quick-switch §3-6)
 }
 function toggleSide(){ const app=$('#app'); setSideOff(!(app&&app.classList.contains('side-off'))); }
+// Ctrl+B 는 claude 터미널(백그라운드로 보내기)이 쓰므로 Ctrl+Shift+B(맥 ⌘+Shift+B). 진짜 입력칸(검색·이름·글쓰기 칸)에서는 무시하되
+// 터미널(xterm 숨은 입력칸)·편집기 본문(Monaco)에서는 받는다 — 터미널에 커서가 있을 때 가장 많이 쓴다(quick-switch 6단계, 전엔 TEXTAREA 라 무시).
+// 릴레이 xterm 은 이 조합을 claude 로 보내지 않고(sideKeyCombo), 로컬 터미널 창(iframe) 안의 키는 quickKeyWatch 가 같은 감시를 붙인다
+function sideKeyCombo(e){ return !!e&&!!(e.ctrlKey||e.metaKey)&&!!e.shiftKey&&String(e.key).toLowerCase()==='b'; }
+function onSideKey(e){
+  if(!sideKeyCombo(e)) return;
+  const t=(e.target&&e.target.tagName)?e.target:document.activeElement;
+  const inTermOrEd=!!t&&typeof t.closest==='function'&&!!(t.closest('.xterm')||t.closest('.monaco-editor'));
+  if(t&&!inTermOrEd&&(/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName||'')||t.isContentEditable===true)) return;
+  e.preventDefault&&e.preventDefault(); toggleSide();
+}
 (function initSide(){
   let off=false; try{ off=LS.getItem(SIDE_KEY)==='1'; }catch(e){}
   if(off) setSideOff(true);
   const b=$('#btn-side'); if(b) b.onclick=toggleSide;
-  // Ctrl+B 는 claude 터미널(백그라운드로 보내기)이 쓰므로 Ctrl+Shift+B. 입력칸에서는 무시
-  document.addEventListener('keydown',(e)=>{
-    if(!(e.ctrlKey||e.metaKey)||!e.shiftKey||String(e.key).toLowerCase()!=='b') return;
-    const t=document.activeElement; if(t&&/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName||'')) return;
-    e.preventDefault&&e.preventDefault(); toggleSide();
-  });
+  document.addEventListener('keydown', onSideKey);
 })();
 
 // ---- 이 기기의 접속 자격이 해제됐을 때: 놓칠 수 없는 안내 + 재페어링 유도 ----
@@ -6236,12 +6302,15 @@ function maybeShowIosHint(){
 }
 // 서버까지 해제되는 PC 인가: 기기 자격(cs/cp)이 있고 Host 가 0.11.0 규약(pv≥2)을 안다(E-D17). 아니면 '이 폰에서만'.
 function serverUnpairable(pc){ return !!(pc&&pc.cs&&pc.cp&&(pc.pv|0)>=2); }
+// 저장된 pv 가 2 미만이어도 기기 자격이 있으면 서버(CP) 폐기를 시도한다 — 0.10.x 때 페어링해 pv=1 로 저장된 PC 도 PC 를 0.11 이상으로
+// 올렸으면 실제로 폐기·📵 반영된다. 그래서 확인 시트는 결과를 단정하지 않고, 결과 문구·상황 줄은 실제 폐기 결과(revokeFlush 의 done)로 정한다
+const UNPAIR_SUB_TRY='이 폰의 접속 자격 폐기를 서버에 요청합니다 — 결과는 해제한 뒤 알려 드립니다.';
 function unpairPc(room){
   const pc=pcsLoad().find(x=>x.room===room); const name=pc?pcName(pc):room;
-  const full=serverUnpairable(pc);
+  const full=serverUnpairable(pc), creds=!!(pc&&pc.cs&&pc.cp);
   return confirmSheet({title:'이 PC 페어링 해제', main:'"'+name+'" 의 페어링을 해제할까요?',
     sub: full ? '이 폰의 접속 자격을 서버에서 폐기하고 PC 의 기기 목록에도 📵 로 표시됩니다(오프라인이면 다음 접속 때 처리).'
-              : UNPAIR_SUB_LOCAL,
+         : creds ? UNPAIR_SUB_TRY : UNPAIR_SUB_LOCAL,
     action:'페어링 해제', danger:true, busyText:'해제 중…',
     run: async()=>{
       const cur=LS.getItem('sm_room')===room;
@@ -6251,7 +6320,7 @@ function unpairPc(room){
       }
       pcsRemove(room); forgetPcMem(room);                    // ③ 로컬 제거(그 PC 의 화면 기억도)
       let fl={done:[]}; try{ fl=await Promise.race([revokeFlush(), new Promise(r=>setTimeout(()=>r({done:[]}),5000))]); }catch(e){}
-      const serverDone=full && (fl.done||[]).includes(room);
+      const serverDone=(fl.done||[]).includes(room);        // 저장된 pv 가 아니라 실제 폐기 결과(TODOS 폰 해제 결과 문구)
       pc && (pc._unpairResult=serverDone);
       if(!cur) return;
       // 현재 PC 였으면: 다른 PC 가 있으면 최근 것으로 전환, 없으면 #pair(상황 줄)로.
@@ -6804,9 +6873,6 @@ function quickTermTaken(t, s){
   if(termView.active===t.key&&termView.sid===t.s.session_id&&!termView.disconnected&&!(inst&&inst.ended)) return false;
   return shouldConfirmTakeover(s, t);
 }
-// 꺼짐처럼 보이나 — 목록 줄 판정(tabGone)에 더해, 다른 기기가 가져간 탭은 화면이 떠 있어도 이 기기가 붙어 있지 않으니 목록대로 본다.
-// 가져간 뒤 claude 가 끝났는데 인계 확인을 거쳐 다시 붙으면 새 claude 가 뜬다
-function quickTabGone(t, s){ return tabGone(t,s)||(!!t.taken&&!s.live_terminal); }
 // 목록(20초)이 아직 모를 수 있는 탭인가 — 지금 상세 칸에 떠 있거나, 이 페이지가 그 목록 뒤에 살아 있음을 봤다(tabSeenLive). 방금 연
 // 🧑‍💼 비서가 그렇다: 목록은 claude -p 로 만든 세션을 살아 있을 때만 싣고, 비서는 목록 밖 세션 객체로 연다. 목록에 없다고 바로 내리지 않는다(검토)
 function quickTermFresh(t){ return (termView.active===t.key&&termView.mounted(paneDetail()))||tabSeenLive(t); }
@@ -6831,14 +6897,14 @@ function quickMonMem(teams){
   return t?{mem:{team:t.code, gid:last, name:t.name||''}, team:t, old:true}:null;
 }
 // 네 칸의 지금 모습 — [{kind, icon, label, has(돌아갈 기억), name, sub(보조 글), dim(흐림), taken(👀), wait(첫 목록 전 — 준비 중),
-// cur(지금 보이는 상세 칸 화면), back(숨겨 둔 화면 — 폰 '‹ 목록'·관제 덮개 밑)}]. 20초 목록·받아 둔 팀 목록·기억만 본다 — 새 연결
-// 없이(목록 끝·20초 갱신마다 그려도 된다). 검증·정리는 누를 때(quickGo).
+// fail(첫 목록을 받지 못한 까닭 — PC 꺼짐 등, 그동안은 wait 아님), cur(지금 보이는 상세 칸 화면), back(숨겨 둔 화면 — 폰 '‹ 목록'·관제 덮개 밑)}].
+// 20초 목록·받아 둔 팀 목록·기억만 본다 — 새 연결 없이(목록 끝·20초 갱신마다 그려도 된다). 검증·정리는 누를 때(quickGo).
 function quickTargets(){
   const ready=LIST_READY, find=(sid)=>(SESSIONS||[]).find(x=>x.session_id===sid)||null;
-  const ov=!!MON_OV, hid=detailHiddenOnPhone(), pk=PANE_NOW.kind;
+  const ov=!!MON_OV, hid=detailHiddenOnPhone(), pk=PANE_NOW.kind, fail=(!ready&&LIST_ERR)?listErrText()[0]:'';
   return QUICK_KINDS.map(kind=>{
     const [icon,label]=QUICK_META[kind];
-    const o={kind, icon, label, has:false, name:'', sub:'', dim:false, taken:false, wait:!ready, cur:false, back:false};
+    const o={kind, icon, label, has:false, name:'', sub:'', dim:false, taken:false, wait:!ready&&!fail, fail, cur:false, back:false};
     const here=kind==='viewer'?(pk==='viewer'||pk==='detail'):pk===kind;
     if(kind==='monitor'){ o.cur=ov||(here&&!hid); o.back=!ov&&here&&hid; }   // 폰 관제는 화면 전체 덮개
     else { o.cur=here&&!ov&&!hid; o.back=here&&(ov||hid); }
@@ -6846,10 +6912,13 @@ function quickTargets(){
       // 목록에서 빠진 탭은 누르면 내린다 — 목록이 아직 모르는 탭(떠 있는 터미널·방금 본 터미널)은 그대로 보인다
       const ok=(t)=>!ready||!!find(t.s.session_id)||quickTermFresh(t), t=quickTermTab(ok), n=TABS.list.filter(ok).length;
       if(t){ const s=find(t.s.session_id)||t.s, inst=termView.tabs&&termView.tabs[t.key];
-        const off=!!(inst&&inst.ended)||(quickTabGone(t,s)&&!tabSeenLive(t)), bd=off?null:sessionBadge(s);
+        const off=!!(inst&&inst.ended)||(tabGone(t,s)&&!tabSeenLive(t)), bd=off?null:sessionBadge(s);
         o.has=true; o.name=sessLabel(s); o.sub=[off?'꺼짐':(bd?bd.text:''), n>1?'탭 '+n+'개':''].filter(Boolean).join(' · ');
         o.taken=!off&&quickTermTaken(t,s); }
       else o.sub='열어 둔 터미널 없음';
+      // 볼 일 점(6단계): 열린 탭 중 권한·입력 대기 — 지금 보고 있는 탭은 뺀다. 20초 목록의 훅 상태만(신선도 게이트는 sessionBadge)
+      o.attn=TABS.list.filter(ok).filter(x=>!(o.cur&&termView.active===x.key)).map(x=>{ const s=find(x.s.session_id), bd=s&&sessionBadge(s);
+        return (bd&&(bd.text==='권한 대기'||bd.text==='입력 대기'))?sessLabel(s)+'('+bd.text+')':''; }).filter(Boolean);
     } else if(kind==='files'){
       const st=quickFbPeek();
       if(st.tabs.length){ const a=st.tabs.find(t=>fbId(t.root,t.path)===st.active)||st.tabs[0];
@@ -6904,7 +6973,7 @@ async function quickGo(kind){
     // 폰 관제 덮개(z 60)가 알림(z 20)을 가린다 — 다른 화면을 골랐으면(끊긴 덮개의 🎬 도) 덮개를 닫고 알린다(§5-3, 검토). 관제 알림이 첫 목록보다
     // 먼저 덮개를 열었을 때다. 살아 있는 덮개의 🎬 는 이미 그 화면이라 알릴 것이 없다
     if(MON_OV){ if(kind==='monitor'&&!MON_OV.dead()) return; MON_OV.close(); }
-    toast('목록을 받는 중입니다'); return; }
+    toast(LIST_ERR?listErrText()[2]:'목록을 받는 중입니다'); return; }   // 받지 못했으면(PC 꺼짐 등) 그 까닭 — 받는 중과 가른다
   if(kind!=='monitor'&&MON_OV) MON_OV.close();   // 폰 관제 덮개에서 다른 화면을 고르면 덮개(와 관제 연결)를 닫고 간다 — 알림은 닫은 뒤에(§5-3)
   const live=navTicket();
   if(kind==='terminal') return quickGoTerminal(live);
@@ -6925,7 +6994,7 @@ async function quickGoTerminal(live){
     let s=(SESSIONS||[]).find(x=>x.session_id===t.s.session_id);
     // 지워짐·이사 — 그 탭을 조용히 내리고 다음 최근 탭으로. 목록이 아직 모를 수 있는 탭(quickTermFresh)은 아래에서 한 번 새로 받아 판정한다
     if(!s&&(listed||!quickTermFresh(t))){ left=quickDropTab(t)||left; continue; }
-    if(!listed&&(!s||ended(t)||quickTabGone(t,s))){
+    if(!listed&&(!s||ended(t)||tabGone(t,s))){
       const recent=tabSeenRecently(t)&&!ended(t);
       const f=await freshSessShown(t.s.session_id);
       if(!live()) return;                                         // 기다리는 사이 다른 누름·다른 화면·PC 전환 — 이 누름은 화면을 바꾸지 않는다
@@ -6939,7 +7008,7 @@ async function quickGoTerminal(live){
       }
       s=f;
     }
-    if((ended(t)&&!s.live_terminal)||quickTabGone(t,s)){         // 꺼짐 — 그 탭을 닫고 그 세션 상세(▶ 재개)로, 새 claude 는 띄우지 않는다
+    if((ended(t)&&!s.live_terminal)||tabGone(t,s)){         // 꺼짐 — 그 탭을 닫고 그 세션 상세(▶ 재개)로, 새 claude 는 띄우지 않는다
       dropGoneTab(t); loadDetail(s); toast('꺼진 터미널이라 상세로 열었습니다 — ▶ 재개로 다시 띄울 수 있어요'); return; }
     switchTab(t.key, listed?{listed}:undefined); return;          // 2차 인증·다른 기기 인계 확인은 loadTerminal 이 — 끊긴 탭은 같은 탭에 다시 붙는다
   }
@@ -7009,8 +7078,9 @@ const QUICK_KEYS={terminal:'Alt+1', files:'Alt+2', viewer:'Alt+3', monitor:'Alt+
 // 무엇이 열릴지 한 줄(이름 · 보조 글) — 툴팁·시트·빈 칸이 같이 쓴다
 function quickLine(o){ return [o.name, o.sub].filter(Boolean).join(' · '); }
 function quickTip(o){
-  return o.label+' — '+(o.wait?'준비 중(목록을 받는 중)':quickLine(o))+' · '+QUICK_KEYS[o.kind]
-    +(o.taken?'\n👀 다른 기기에서 보는 중 — 누르면 가져오기 확인':'');
+  return o.label+' — '+(o.wait?'준비 중(목록을 받는 중)':(o.fail||quickLine(o)))+' · '+QUICK_KEYS[o.kind]
+    +(o.taken?'\n👀 다른 기기에서 보는 중 — 누르면 가져오기 확인':'')
+    +(o.attn&&o.attn.length?'\n● 볼 일: '+o.attn.join(', '):'');
 }
 // PC 머리 줄 단추 4개(.grow 뒤·🔔 앞) — 파랑 = 지금 상세 칸 화면, 보통 = 기억 있음, 흐림 = 기억 없음·준비 중(첫 목록 전).
 // 단추는 한 번만 만들고 모습만 바꾼다(20초마다 다시 만들면 누르던 단추의 포커스를 잃는다). 폰은 CSS 가 숨긴다(제목 ▾ 시트)
@@ -7021,7 +7091,7 @@ function renderQuick(){
       for(const o of list){ const b=el('button'); b.type='button'; b.dataset.k=o.kind;
         b.appendChild(el('span','qi')); b.appendChild(el('span','ql')); b.onclick=()=>quickGo(o.kind); nav.appendChild(b); } }
     list.forEach((o,i)=>{ const b=nav.children[i];
-      b.className=[o.cur&&'on', o.dim&&!o.cur&&'dim', o.wait&&'wait', o.taken&&'taken'].filter(Boolean).join(' ');
+      b.className=[o.cur&&'on', o.dim&&!o.cur&&'dim', o.wait&&'wait', o.taken&&'taken', o.attn&&o.attn.length&&'attn'].filter(Boolean).join(' ');
       b.children[0].textContent=o.icon; b.children[1].textContent=o.kind==='monitor'?'관제':o.label;   // 결정 1: 💬 뷰어 ↔ ℹ 상세
       b.title=quickTip(o); b.setAttribute('aria-label',o.label); b.setAttribute('aria-current',o.cur?'true':'false'); });
   }
@@ -7077,8 +7147,9 @@ function quickRecentFill(b, o){
 function showQuickSheet(anchor){
   const box=el('div');
   for(const o of quickTargets()){
-    const [tag,tc]=o.taken?['👀 가져오기','warn']:o.cur?['지금','now']:o.back?['바로 돌아가기','now']:o.wait?['준비 중','']:!o.has?['고르기…','']:['',''];
-    const b=popItem(o.icon, o.label, quickLine(o), ()=>quickGo(o.kind), 'qs-it'+(o.dim&&!o.cur&&!o.back?' dim':''));
+    const [tag,tc]=o.taken?['👀 가져오기','warn']:o.cur?['지금','now']:o.back?['바로 돌아가기','now']:o.wait?['준비 중','']
+      :o.fail?[listErrText()[1],'']:!o.has?['고르기…','']:['',''];
+    const b=popItem(o.icon, o.label, o.fail||quickLine(o), ()=>quickGo(o.kind), 'qs-it'+(o.dim&&!o.cur&&!o.back?' dim':'')+(o.attn&&o.attn.length?' attn':''));
     b.dataset.k=o.kind;
     if(tag) b.appendChild(el('span','qtag'+(tc?' '+tc:''),tag));
     box.appendChild(b);
@@ -7117,8 +7188,9 @@ function onQuickKey(e){
   quickGo(kind);
 }
 window.addEventListener('keydown', onQuickKey, true);
-// 로컬 터미널 창(iframe, 같은 출처)은 커서가 그 안에 있으면 키가 바깥 창으로 오지 않는다 — 창이 뜰 때마다 같은 감시를 그 창에 붙인다(§3-7)
-function quickKeyWatch(w){ try{ if(w&&typeof w.addEventListener==='function') w.addEventListener('keydown', onQuickKey, true); }catch(e){} }
+// 로컬 터미널 창(iframe, 같은 출처)은 커서가 그 안에 있으면 키가 바깥 창으로 오지 않는다 — 창이 뜰 때마다 같은 감시를 그 창에 붙인다(§3-7).
+// 목록 칸 접기(Ctrl+Shift+B, onSideKey)도 같이(6단계)
+function quickKeyWatch(w){ try{ if(w&&typeof w.addEventListener==='function'){ w.addEventListener('keydown', onQuickKey, true); w.addEventListener('keydown', onSideKey); } }catch(e){} }
 
 // ---- 🧑‍💼 개인 비서(단계 3, A-7) — 헤더 버튼: PC·폰 어디서든 비서 세션 터미널 ----
 async function openAssistant(){
@@ -7547,7 +7619,7 @@ function pcSwitchReset(){
   FB.tabs.forEach(t=>fbDisposeTab(t));         // 파일 내용(Monaco 모델) 해제 — 탐색기·편집기 상태도 모두 처음으로
   Object.assign(FB,{tabs:[], active:null, sel:'', open:new Set(), kids:{}, errs:{}, ent:{}, rootMap:null, restored:false, migrate:false, reveal:null, q:'', autoShow:false});
   FB.treeGen++;                                // 받는 중이던 이전 PC 의 폴더 응답은 버린다(파일 응답은 FB.active=null 로 이미 버려진다)
-  LIST_READY=false;
+  LIST_READY=false; LIST_ERR='';
   // 목록 칸의 이전 PC 줄·탐색기도 지운다 — 새 PC 연결을 기다리는 사이 옛 줄·파일을 누르면 이전 PC 세션·파일이 새 PC 기억 키에
   // 적히고 이전 PC 세션을 새 PC 로 열었다. 새 PC 첫 목록(loadList)이 다시 그리고, 20초 갱신도 그때까지 쉰다(LIST_CTX)
   SESSIONS=[]; LIST_CTX=null;
@@ -7620,6 +7692,10 @@ async function checkUpdateNow(cur){
     const s=await T.api('GET','/api/owner/update/status',{query:{refresh:1}});
     if(s && s.dev){ status.textContent=`개발 소스에서 실행 중입니다 (v${s.current||cur}). 이 PC 는 git 으로 갱신하세요 — 자동 업데이트는 소스 트리 보호를 위해 막혀 있습니다.`; }
     else if(s && s.available && s.latest){ closeModal(); showUpdateApply(s.current||cur, s.latest); }
+    // 받을 수 없는 까닭이 있으면 '최신'이라 하지 않는다 — 업데이트 서버에 못 닿음(error), 최신 릴리스가 이 OS 용이 아님(unsupported,
+    // 맥·리눅스 판이 아직 없을 때). 서버 응답 모양: session_manager/updater.py check → server.py owner_update_status
+    else if(s && s.error){ status.textContent=`현재 v${s.current||cur} — 업데이트 서버에서 새 버전을 확인하지 못했습니다(${s.error}). 잠시 뒤 다시 확인하세요.`; }
+    else if(s && s.unsupported){ status.textContent=`현재 v${s.current||cur} — 새 버전${s.latest?' v'+s.latest:''} 은 아직 이 PC 에서 받을 수 없습니다(${s.unsupported}). 이 운영체제용 판이 나오면 여기서 업데이트할 수 있습니다.`; }
     else{ status.textContent=`현재 v${(s&&s.current)||cur} — 최신 버전입니다.`; }
   }catch(e){ status.textContent='업데이트 서버에 연결하지 못했습니다.'; }
 }

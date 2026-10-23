@@ -63,16 +63,36 @@ test("unpairPc(pv≥2, 현재 PC): 큐 영속화 → bye_device → 로컬 제�
   assert.ok(ev(ctx, "globalThis.__toasts").at(-1).includes("서버 폐기 완료"));
 });
 
-test("unpairPc(pv<2 Host): bye 없이 '이 폰에서만', 큐는 남아 다음에 재시도(CP 404)", async () => {
+test("unpairPc(pv<2 Host): bye 없이, 확인 시트는 '서버 폐기 시도'(중립) — 서버가 못 받으면(CP 404) 큐는 남아 다음에 재시도, 결과는 '이 폰에서 제거'", async () => {
   const ctx = await load(); ev(ctx, QUIET);
   ev(ctx, "globalThis.__req = 0; confirmSheet = async (o) => { globalThis.__sub = o.sub; await o.run(); return true; }; conn.req = async () => { globalThis.__req++; };");
   fakeFetch(ctx, () => 404);
   ev(ctx, "pcsUpsert({room:'rmA', cs:'ca', cp:'pa', dev:'da', pv:1}); pcsActivate('rmA')");
   await ev(ctx, "unpairPc('rmA')");
   assert.equal(ev(ctx, "globalThis.__req"), 0);
-  assert.ok(ev(ctx, "globalThis.__sub").includes("이 폰에서만"), "구 Host 는 이 폰에서만 문구");
+  // 0.10.x 때 페어링해 pv=1 로 저장된 PC 도 PC 를 올렸으면 서버 폐기가 된다 — 시트는 결과를 미리 단정하지 않는다(TODOS 폰 해제 결과 문구)
+  assert.ok(ev(ctx, "globalThis.__sub").includes("서버에 요청") && !ev(ctx, "globalThis.__sub").includes("이 폰에서만"), "자격이 있으면 중립 문구");
+  assert.ok(ev(ctx, "globalThis.__toasts").at(-1).includes("PC 에서도 기기를 삭제"), "서버가 받지 않았으면 PC 에서도 삭제 안내");
   assert.equal(ev(ctx, "revokeQLoad().length"), 1, "404 는 남긴다");
   const r = JSON.parse(ctx.localStorage.getItem("sm_pair_reason")); assert.equal(r.k, "unpaired");
+});
+
+test("unpairPc 결과 문구는 저장된 pv 가 아니라 실제 서버 폐기 결과로 — pv=1 로 저장됐어도 CP 가 폐기하면 '서버 폐기 완료'·unpaired_server, 기기 자격이 없는 PC(공유토큰)는 '이 폰에서만'", async () => {
+  const got = {};
+  for (const [name, pc, st] of [["pv1·CP 폐기됨", "{room:'rmA', cs:'ca', cp:'pa', dev:'da', pv:1}", 200], ["자격 없음(공유토큰)", "{room:'rmA', cs:'', cp:'', dev:'da'}", 200]]) {
+    const ctx = await load(); ev(ctx, QUIET);
+    ev(ctx, "globalThis.__req = 0; confirmSheet = async (o) => { globalThis.__sub = o.sub; await o.run(); return true; }; conn.req = async () => { globalThis.__req++; };");
+    fakeFetch(ctx, () => st);
+    ev(ctx, `pcsUpsert(${pc}); pcsActivate('rmA')`);
+    await ev(ctx, "unpairPc('rmA')");
+    got[name] = { sub: ev(ctx, "globalThis.__sub"), bye: ev(ctx, "globalThis.__req"), reason: JSON.parse(ctx.localStorage.getItem("sm_pair_reason")).k,
+                  toast: ev(ctx, "globalThis.__toasts").at(-1) };
+  }
+  assert.deepEqual(got, {
+    "pv1·CP 폐기됨": { sub: "이 폰의 접속 자격 폐기를 서버에 요청합니다 — 결과는 해제한 뒤 알려 드립니다.", bye: 0, reason: "unpaired_server",
+      toast: '"PC rmA" 페어링 해제됨(서버 폐기 완료)' },
+    "자격 없음(공유토큰)": { sub: ev(await load(), "UNPAIR_SUB_LOCAL"), bye: 0, reason: "unpaired", toast: '"PC rmA" 이 폰에서 제거함 — PC 에서도 기기를 삭제하세요' },
+  });
 });
 
 test("resetDevice: 모든 PC 를 큐에 넣고 초기화 — 큐 키는 초기화가 지우지 않는다", async () => {
