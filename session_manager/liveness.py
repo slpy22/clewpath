@@ -200,9 +200,25 @@ def ensure_launcher(port: int | None = None) -> str | None:
         if out is None:
             return None
         marker.write_text(out, encoding="utf-8")
+        _drop_other_markers(marker)
         return out
     except Exception as e:  # noqa: BLE001
         return f"ensure failed: {e}"
+
+
+def _drop_other_markers(keep: Path) -> None:
+    """다른 버전의 launcher-ensured-<버전> 표식을 지운다 — 옛 것을 안 지워 버전마다 쌓였다(이 PC 90여 개). 못 지워도 그만.
+    롤백으로 옛 버전이 다시 뜨면 그 버전의 표식이 없어 런처 보장을 한 번 더 한다(그 버전 템플릿으로 — 맥·리눅스 러너가 되돌림 때
+    그 버전 표식을 지우는 것과 같은 결과)."""
+    try:
+        for p in keep.parent.glob("launcher-ensured-*"):
+            if p.name != keep.name:
+                try:
+                    p.unlink()
+                except OSError:
+                    pass
+    except OSError:
+        pass
 
 
 def on_startup_async(port: int | None) -> None:

@@ -186,6 +186,34 @@ def test_ensure_launcher_failure_writes_no_marker(fake_claude_home, tmp_path, mo
     assert liveness.ensure_launcher(5100) is None                 # 성공한 버전은 다시 안 함
 
 
+def test_ensure_launcher_drops_other_versions_markers(fake_claude_home, tmp_path, monkeypatch):
+    """⑥ 표식이 버전마다 쌓였다(이 PC 90여 개, 노트북 16개). 새 표식을 쓸 때 다른 버전의 표식을 지운다 — 실패(표식 안 씀)면
+    아무것도 지우지 않고, 못 지우는 것이 있어도 보장 결과는 그대로. 표식이 아닌 파일은 건드리지 않는다."""
+    from session_manager import osdep
+    root = tmp_path / "app"
+    root.mkdir()
+    (root / osdep.START_SCRIPT).write_text("# 런처\n", encoding="utf-8")
+    monkeypatch.setattr(liveness, "_install_root", lambda: root)
+    monkeypatch.setattr(liveness, "_version", lambda: "0.32.3")
+    d = config.data_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    for v in ("0.10.5", "0.31.1", "0.32.2"):
+        (d / f"launcher-ensured-{v}").write_text("", encoding="utf-8")
+    (d / "launcher-ensured-0.9.9").mkdir()                        # 못 지우는 것(폴더) — 무시하고 넘어간다
+    (d / "launcher.log").write_text("x", encoding="utf-8")
+    (d / "launcher-ensured").write_text("x", encoding="utf-8")    # 버전 없는 이름은 표식이 아니다
+
+    def boom(*a):
+        raise RuntimeError("ensure_task exit 1")
+    monkeypatch.setattr(osdep, "ensure_launcher", boom)
+    assert liveness.ensure_launcher(5100).startswith("ensure failed")
+    assert len(list(d.glob("launcher-ensured-*"))) == 4           # 실패면 그대로
+    monkeypatch.setattr(osdep, "ensure_launcher", lambda *a: "launcher: ok (v3)\ntask: ok (repetition present)")
+    assert liveness.ensure_launcher(5100) == "launcher: ok (v3)\ntask: ok (repetition present)"
+    assert sorted(p.name for p in d.glob("launcher-ensured-*")) == ["launcher-ensured-0.32.3", "launcher-ensured-0.9.9"]
+    assert (d / "launcher.log").is_file() and (d / "launcher-ensured").is_file()
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="맥·리눅스 런처(start-connector.sh) 경로")
 def test_ensure_launcher_posix_regenerates_once_per_version(fake_claude_home, tmp_path, monkeypatch):
     """업데이트 뒤 첫 기동이 새 템플릿으로 런처를 다시 렌더한다(버전당 1회). 폴백 포트로 떴어도 DEFAULT_PORT 는 그대로."""
