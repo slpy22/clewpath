@@ -4459,9 +4459,14 @@ function fbTreeKey(ev){
   if(done&&ev.preventDefault) ev.preventDefault();
 }
 function fbToggle(id){ if(FB.open.has(id)) FB.open.delete(id); else { FB.open.add(id); delete FB.errs[id]; } fbSaveState(); return fbRenderTree(); }
-// 이동 경로를 누르면 탐색기에서 그 폴더까지 펼쳐 보여준다(모바일은 탐색기 화면으로)
+// 이동 경로를 누르면 탐색기에서 그 폴더까지 펼쳐 보여준다(모바일은 탐색기 화면으로). 왼쪽 목록 칸이 다른 보기(세션·👥 팀)거나
+// 접혀 있으면 📁 탐색기로 바꿔 펼친다 — 전엔 보이지 않는 탐색기에만 그려 아무 일도 없는 것처럼 보였다(quick-switch 6단계).
+// 탐색기가 떠 있으면 그 자리에서 다시 그리고, 아니면 목록 칸을 새로 그린다(그 그리기가 FB.reveal 로 그 폴더를 고른다). 상세 칸은 그대로
 function fbReveal(id){ let p=id; while(p!==null){ FB.open.add(p); p=fbParentId(p); }
-  FB.sel=id; FB.reveal=id; FB.q=''; fbSaveState(); fbRenderTree();
+  FB.sel=id; FB.reveal=id; FB.q=''; fbSaveState();
+  const app=$('#app'); if(innerWidth>=880&&app&&app.classList.contains('side-off')) setSideOff(false);
+  if(LIST_VIEW!=='files'||!LIST_CTX||!FB.wrap){ setListView('files'); return loadList(); }   // 폰도 목록 칸으로(loadList)
+  fbRenderTree();
   if(innerWidth<880) showListPane(); }
 
 // ---- 편집기: 탭 · 이동 경로 · 본문(Monaco / Markdown / 이미지 / 정보) ----
@@ -4531,6 +4536,9 @@ function fbRenderCrumb(t){ const c=FB.crumbEl; if(!c) return; c.innerHTML='';
     const b=el('button',null,seg);
     b.onclick=()=>fbReveal(fbId(t.root, parts.slice(0, i===parts.length-1?i:i+1).join('/'))); c.appendChild(b); });
   const tools=el('div','tools'); const d=t.data;
+  // ⟳ 다시 읽기(6단계) — 바깥(claude·다른 편집기)에서 고친 내용을 새로 받는다. 받지 못했던 파일(오류)도
+  const br=el('button',null,'⟳'); br.title='다시 읽기 — PC 에서 이 파일을 새로 받습니다'; br.setAttribute('aria-label','다시 읽기');
+  br.onclick=()=>fbReload(t); tools.appendChild(br);
   if(d&&d.kind==='text'&&fbIsMd(t.name)){
     const bv=el('button',null,t.view==='preview'?'원문':'미리보기');
     bv.onclick=()=>{ t.view=t.view==='preview'?'source':'preview'; fbRenderActive(); }; tools.appendChild(bv); }
@@ -4543,6 +4551,13 @@ function fbRenderCrumb(t){ const c=FB.crumbEl; if(!c) return; c.innerHTML='';
   if(!(t.err&&t.err.error==='protected')){ const bd=el('button',null,'⬇'); bd.title='내려받기'+(MODE==='relay'?'(2차 인증)':'');
     bd.onclick=()=>fbDownload(t); tools.appendChild(bd); }
   c.appendChild(tools);
+}
+// 열어 둔 파일을 다시 받는다 — 내용·모델·그림을 버리고 그린다(fbRenderActive 가 받는다). 스크롤 위치는 두었다가 새 내용에 다시 놓는다
+function fbReload(t){
+  if(!t||!FB.tabs.includes(t)) return;
+  if(t.id===FB.active) fbKeepView();
+  fbDisposeTab(t); t.data=null; t.err=null; t.img=null;
+  if(t.id===FB.active) return fbRenderActive();
 }
 function fbShowAlt(node){ if(FB.edHost) FB.edHost.style.display='none';
   if(!FB.alt) return; FB.alt.style.display=''; FB.alt.innerHTML=''; FB.alt.appendChild(node); }

@@ -51,6 +51,8 @@ async function boot({ width = 1400, local = false, mem = null, ready = true, pre
       if (p === '/api/owner/teams') { const t = typeof __teams === 'function' ? await __teams() : __teams;
         if (t === 'fail') throw new Error('agent_offline'); return { teams: JSON.parse(JSON.stringify(t)) }; }
       if (p === '/api/owner/monitor/groups') return { groups: [] };
+      if (p.endsWith('/files')) { const at = (o.query || {}).path || '';   // 탐색기 폴더 — 뿌리엔 src 폴더, 그 안엔 a.py
+        return { path: at, truncated: false, entries: at ? [{ name: 'a.py', type: 'file', size: 5, mtime: 1 }] : [{ name: 'src', type: 'dir', mtime: 1 }] }; }
       if (p.endsWith('/file')) { globalThis.__fileN = (globalThis.__fileN || 0) + 1; return { path: o.query.path, name: o.query.path, size: 5, mtime: 1, kind: 'text', text: 'x' + __fileN }; }
       return {}; };
     fetchRecentMessages = async () => [];
@@ -229,4 +231,47 @@ test("T109 🖥 단추의 볼 일 점 — 열린 탭 중 권한·입력 대기 �
   const css = readFileSync(INDEX, "utf-8");
   assert.match(css, /#qs button\.attn::after\{[^}]*background:#e8a03c/);
   assert.match(css, /\.pop \.popi\.qs-it\.attn \.pi::after\{[^}]*background:#e8a03c/);
+});
+
+// ---------------------------------------------------------------- 6. 파일 ⟳ 다시 읽기 · 이동 경로 → 📁 탐색기
+const crumbTool = (ctx, label) => { const c = ev(ctx, "FB.crumbEl").children; return c[c.length - 1].children.find((b) => b.textContent === label); };
+test("T110 파일 막대의 ⟳ 다시 읽기는 열어 둔 파일을 PC 에서 새로 받는다(스크롤 위치는 그대로) — 받지 못했던 파일(오류)도 다시 받는다", async () => {
+  const { ctx } = await boot({ mem: { files: ["a.py"] } });
+  await press(ctx, "files");
+  const got = { first: [ev(ctx, "__fileN"), ev(ctx, "FB.ed.model.t")] };
+  const old = ev(ctx, "FB.ed.model");
+  const r = crumbTool(ctx, "⟳");
+  got.tip = r && r.title;
+  await r.onclick(); await tick(QS);
+  got.again = [ev(ctx, "__fileN"), ev(ctx, "FB.ed.model.t"), old.disposed, JSON.stringify(ev(ctx, "FB.ed.restored"))];
+  ev(ctx, "FB.tabs[0].err = { error: 'no_session' }; FB.tabs[0].data = null; fbRenderActive();"); await tick(QS);   // 목록 전에 열어 굳은 오류
+  got.errTool = !!crumbTool(ctx, "⟳");
+  await crumbTool(ctx, "⟳").onclick(); await tick(QS);
+  got.afterErr = [ev(ctx, "__fileN"), ev(ctx, "FB.tabs[0].err"), ev(ctx, "FB.ed.model.t")];
+  got.at = at(ctx);
+  assert.deepEqual(got, {
+    first: [1, "x1"], tip: "다시 읽기 — PC 에서 이 파일을 새로 받습니다",
+    again: [2, "x2", true, '{"top":1}'],
+    errTool: true, afterErr: [3, null, "x3"], at: "files:a.py",
+  });
+});
+test("T111 편집기 위 이동 경로(경로 조각)를 누르면 왼쪽 목록 칸을 📁 탐색기로 바꿔(접혀 있으면 펼쳐) 그 폴더를 고른다 — 상세 칸 편집기는 그대로, 폰은 탐색기 화면으로", async () => {
+  const got = await each(["PC: 세션 보기", "PC: 접힌 목록 칸", "PC: 이미 탐색기", "폰"], async (p) => {
+    const phone = p === "폰";
+    const { ctx, app } = await boot({ width: phone ? 390 : 1400, mem: { files: ["src/a.py"] },
+      setup: (sb) => { if (p === "PC: 이미 탐색기") sb.localStorage.setItem("sm_list_view", "files"); } });
+    await press(ctx, "files");
+    if (p === "PC: 접힌 목록 칸") ev(ctx, "setSideOff(true)");
+    const l0 = ev(ctx, "__lists");
+    const seg = ev(ctx, "FB.crumbEl").children.find((b) => b.textContent === "src");
+    await seg.onclick(); await tick(QS);
+    return { view: ev(ctx, "LIST_VIEW"), lists: ev(ctx, "__lists") - l0, side: app.classList.contains("side-off"), sel: ev(ctx, "FB.sel"),
+             open: ev(ctx, "FB.open.has('e:/p|src')"), at: at(ctx), ...(phone ? { pane: app.getAttribute("data-view") } : {}) };   // PC 는 두 칸이 함께 보인다
+  });
+  const PC = { view: "files", lists: 1, side: false, sel: "e:/p|src", open: true, at: "files:src/a.py" };
+  assert.deepEqual(got, {
+    "PC: 세션 보기": PC, "PC: 접힌 목록 칸": PC,
+    "PC: 이미 탐색기": { ...PC, lists: 0 },                               // 떠 있는 탐색기를 그 자리에서 다시 그린다
+    "폰": { ...PC, pane: "list" },
+  });
 });
