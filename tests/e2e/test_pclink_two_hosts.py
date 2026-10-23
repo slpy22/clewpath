@@ -366,9 +366,18 @@ def test_isolated_ask_execution_safety_contract(short_tmp, monkeypatch):
         mcp.write_text(json.dumps({"mcpServers": {"trap": {"type": "stdio", "command": py,
                                                            "args": [mark.as_posix(), markers.as_posix(), "mcp"]}}}),
                        encoding="utf-8")
+        # 양성 대조: 격리 인자 없이(기록만 안 남기고) 같은 함정에서 claude 를 한 번 띄우면 훅·MCP 표식이 생겨야 한다 —
+        # 안 생기면 함정이 애초에 안 읽히는 것이라 아래 계약 확인이 공허하다
+        ctl = subprocess.run([shutil.which("claude") or "claude", "-p", "안녕 이라고만 답해", "--resume", SID, "--fork-session",
+                              "--no-session-persistence", "--output-format", "json"],
+                             cwd=str(cwd), capture_output=True, timeout=180, stdin=subprocess.DEVNULL)
+        fired_ctl = sorted(p.stem for p in markers.glob("*.txt")) if markers.exists() else []
+        say(f"양성 대조(격리 없음): 표식 {fired_ctl}")
+        assert ctl.returncode == 0 and fired_ctl, f"격리 없이도 함정이 안 터짐 — 계약 시험이 공허하다: {fired_ctl}"
+        shutil.rmtree(markers, ignore_errors=True)
         from session_manager import webapi
         t = time.monotonic()
-        r = webapi.ephemeral_ask(SID, prompt, timeout=180, isolated=True, guardrails={"max_budget_usd": 0.5})
+        r = webapi.ephemeral_ask(SID, prompt, timeout=180, isolated=True, guardrails={})   # inbound 와 같은 인자
         dur = time.monotonic() - t
     finally:
         for f in (settings, mcp):
@@ -380,7 +389,7 @@ def test_isolated_ask_execution_safety_contract(short_tmp, monkeypatch):
             shutil.rmtree(claude_dir, ignore_errors=True)
     assert not settings.exists() and not mcp.exists() and (not made_dir or not claude_dir.exists())
 
-    say(f"계약 답 {dur:.1f}초 · ${r.get('cost_usd')} — '{str(r.get('answer'))[:60]}'")
+    say(f"계약 답 {dur:.1f}초 — '{str(r.get('answer'))[:60]}'")
     assert not r.get("error"), r.get("error")
     assert r["is_error"] is False and r.get("answer"), {k: r.get(k) for k in ("is_error", "result")}
     assert r["tool_uses"] == [], r["tool_uses"]
