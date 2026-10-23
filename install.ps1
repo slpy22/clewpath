@@ -520,15 +520,20 @@ Set-Location -Path `$PSScriptRoot
 `$env:PYTHONIOENCODING = "utf-8" # 로그 인코딩 고정 - 없으면 로케일(cp949)이라 특수문자에 취약
 `$log = "$dataDir\host.log"
 `$err = "$dataDir\host.err.log"
-# 무한 성장 방지 — 5MB 넘으면 한 세대 밀어둔다(돌고 있는 서버가 잡고 있으면 건너뜀)
+# 옛 로그는 한 세대(.1) 밀어 둔다 — 아래 리다이렉트는 파일을 새로 써서 직전 로그가 사라진다(돌고 있는 서버가 잡고 있으면 건너뜀).
+# host.log 끝의 구분줄은 새 Host 가 .1 에서 죽은 Host 의 꼬리를 찾는 표시(템플릿 런처 v3 과 같다)
+`$stamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
 foreach (`$f in @(`$log, `$err)) {
-    try { if ((Test-Path `$f) -and ((Get-Item `$f).Length -gt 5MB)) { Move-Item `$f "`$f.1" -Force } } catch {}
+    if (-not (Test-Path -LiteralPath `$f)) { continue }
+    if (`$f -eq `$log) { try { [IO.File]::AppendAllText(`$f, "``r``n=== launcher start `$stamp ===``r``n") } catch {} }
+    try { Move-Item -LiteralPath `$f -Destination "`$f.1" -Force } catch {}
 }
 Start-Process -FilePath "`$PSScriptRoot\.venv\Scripts\python.exe" ``
     -ArgumentList "-m","session_manager.server" ``
     -WindowStyle Hidden -RedirectStandardOutput `$log -RedirectStandardError `$err
 "@ }
-$launcherV2 = ($cfg -match "clewpath-launcher v2")
+# 멱등 런처(v2 이상 — v3 은 옛 host.log 한 세대 보존까지)일 때만 5분 반복 트리거를 단다(아래 [6/6])
+$launcherV2 = ($cfg -match "clewpath-launcher v[2-9]\b")
 if ($DryRun) {
     Warn "DryRun: $startPs 생성 건너뜀"
 } else {

@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 from pathlib import Path
 from types import SimpleNamespace
@@ -95,7 +97,7 @@ class Box:
 def _assert_good_launcher(path: Path):
     raw = path.read_bytes()
     assert raw.startswith(BOM), "런처가 BOM 으로 시작하지 않음"
-    assert as_ps51_reads(raw).splitlines()[0].startswith("# clewpath-launcher v2")
+    assert as_ps51_reads(raw).splitlines()[0].startswith("# clewpath-launcher v3")
     emu = write_as_ps51_reads(raw, path.with_name("cp1252-emu.ps1"))
     assert ps51_parse_errors(path, emu) == [[], []]                 # 이 PC 의 5.1 + 영어 Windows 5.1 흉내 모두 구문 0 오류
 
@@ -104,12 +106,12 @@ def _assert_good_launcher(path: Path):
 
 @on_windows_ps
 @pytest.mark.parametrize("engine", ENGINES)
-def test_v1_launcher_becomes_v2_with_bom(tmp_path, engine):
-    """노트북 그대로: v1 런처 → 템플릿으로 v2 재생성(BOM·구문 0 오류·자리표시 채움·한글 그대로), 작업이 없으면 성공(exit 0)."""
+def test_v1_launcher_becomes_v3_with_bom(tmp_path, engine):
+    """노트북 그대로: v1 런처 → 템플릿으로 v3 재생성(BOM·구문 0 오류·자리표시 채움·한글 그대로), 작업이 없으면 성공(exit 0)."""
     box = Box(tmp_path)
     r = box.run(engine)
     assert r.returncode == 0, (r.out, r.err)
-    assert "launcher: regenerated (v2)" in r.out and "task: not registered - skip" in r.out, r.out
+    assert "launcher: regenerated (v3)" in r.out and "task: not registered - skip" in r.out, r.out
     assert box.launcher.read_bytes() == box.expected_launcher()
     _assert_good_launcher(box.launcher)
 
@@ -136,7 +138,7 @@ def test_template_missing_fails_without_touching_launcher(tmp_path):
 @on_windows_ps
 def test_broken_render_restores_original_launcher(tmp_path):
     """다시 쓴 런처가 구문 검사를 못 넘으면 원래 런처(바이트 그대로)로 되돌리고 트리거 단계로 가지 않는다(exit 1 → 표식 없음 → 다음 기동에 재시도)."""
-    bad = BOM + "# clewpath-launcher v2 (깨진 템플릿)\r\n$x = \"unterminated\r\n".encode("utf-8")
+    bad = BOM + "# clewpath-launcher v3 (깨진 템플릿)\r\n$x = \"unterminated\r\n".encode("utf-8")
     box = Box(tmp_path, template=bad)
     r = box.run("powershell")
     assert r.returncode == 1, (r.out, r.err)
@@ -146,14 +148,124 @@ def test_broken_render_restores_original_launcher(tmp_path):
 
 
 @on_windows_ps
-def test_good_v2_launcher_is_left_alone(tmp_path):
+def test_good_v3_launcher_is_left_alone(tmp_path):
     box = Box(tmp_path)
     box.launcher.write_bytes(box.expected_launcher())
     before = box.launcher.stat().st_mtime_ns
     r = box.run("powershell")
     assert r.returncode == 0, (r.out, r.err)
-    assert "launcher: ok (v2)" in r.out
+    assert "launcher: ok (v3)" in r.out
     assert box.launcher.stat().st_mtime_ns == before
+
+
+@on_windows_ps
+def test_good_v2_launcher_is_upgraded_to_v3(tmp_path):
+    """0.32.2 까지의 멀쩡한 v2 런처(host.log 를 덮어써 사고 직전 로그가 사라짐)도 v3 으로 다시 만든다. 업데이트는 런처를 다시 쓰지
+    않으므로(PAYLOAD 밖) 기존 설치본에 닿는 길은 Host 기동 때의 이 경로뿐 — 템플릿 첫 줄 표식을 올려야 'ok' 로 넘기지 않는다."""
+    box = Box(tmp_path)
+    box.launcher.write_bytes(box.expected_launcher().replace(b"clewpath-launcher v3", b"clewpath-launcher v2", 1))
+    r = box.run("powershell")
+    assert r.returncode == 0, (r.out, r.err)
+    assert "launcher: regenerated (v3) - was: not v3" in r.out, r.out
+    assert box.launcher.read_bytes() == box.expected_launcher()
+    _assert_good_launcher(box.launcher)
+
+
+# ---------------------------------------------------------------- 런처를 실제로 돌리기(host.log 한 세대 보존)
+# 가짜 설치 루트에 venv(--without-pip)와 가짜 session_manager/server.py(첫 줄을 찍고 끝남)를 두고 런처를 그대로 실행한다.
+# 포트는 비어 있는 것, runtime.json 은 없음 → 런처는 '죽어 있음' 으로 보고 띄운다. 진짜 Host·작업·데이터 폴더는 안 건드린다.
+
+_FAKE_SERVER = 'import sys\nprint("new host first line", flush=True)\nsys.stderr.write("new host err\\n")\nsys.stderr.flush()\n'
+
+
+@pytest.fixture(scope="module")
+def venv_dir(tmp_path_factory):
+    d = tmp_path_factory.mktemp("launcher-venv") / ".venv"
+    subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(d)], check=True, timeout=180, creationflags=_NO_WINDOW)
+    return d
+
+
+def _free_port() -> int:
+    import socket
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _launch_box(tmp_path: Path, venv: Path) -> Box:
+    box = Box(tmp_path, launcher=None)
+    box.port = _free_port()
+    shutil.copytree(venv, box.root / ".venv")
+    (box.root / "session_manager" / "__init__.py").write_text("", encoding="utf-8")
+    (box.root / "session_manager" / "server.py").write_text(_FAKE_SERVER, encoding="utf-8")
+    (box.data / "host.log").write_bytes("old 1\r\nold 2: Traceback 마지막\r\n".encode("utf-8"))
+    (box.data / "host.err.log").write_bytes(b"old err\r\n")
+    return box
+
+
+def _run_launcher(box: Box, engine: str = "powershell") -> str:
+    """런처를 작업 스케줄러처럼 -File 로 돌리고, 새 Host(가짜)의 첫 줄이 host.log 에 찍힐 때까지 기다려 그 내용을 돌려준다."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("SM_", "PYTHON", "VIRTUAL_ENV"))}
+    r = subprocess.run([engine, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(box.launcher)],
+                       capture_output=True, timeout=120, creationflags=_NO_WINDOW, env=env)
+    assert r.returncode == 0, (_dec(r.stdout), _dec(r.stderr))
+    log = box.data / "host.log"
+    for _ in range(300):
+        if log.is_file() and b"new host first line" in log.read_bytes():
+            return log.read_bytes().decode("utf-8")
+        time.sleep(0.1)
+    raise AssertionError(f"가짜 Host 가 안 떴다: {log.read_bytes() if log.is_file() else '(host.log 없음)'} / "
+                         f"{(box.data / 'launcher.log').read_text(encoding='utf-8-sig') if (box.data / 'launcher.log').is_file() else ''}")
+
+
+def _assert_pushed_aside(box: Box, monkeypatch, new_log: str):
+    """옛 로그는 .1 로(host.log 는 끝에 런처 구분줄), 새 로그는 새 Host 것만, 새 Host 의 사고 꼬리는 죽은 Host 의 마지막 줄."""
+    dot1 = (box.data / "host.log.1").read_bytes().decode("utf-8")
+    assert re.fullmatch(r"old 1\r\nold 2: Traceback 마지막\r\n\r\n=== launcher start \d{4}-\d\d-\d\d \d\d:\d\d:\d\d ===\r\n", dot1), dot1
+    assert (box.data / "host.err.log.1").read_bytes() == b"old err\r\n"
+    assert "old" not in new_log and "launcher start" not in new_log, new_log
+    monkeypatch.setattr(config, "data_dir", lambda: box.data)
+    assert liveness.log_tail(10) == ["old 1", "old 2: Traceback 마지막"]
+
+
+@on_windows_ps
+@pytest.mark.parametrize("engine", ENGINES)
+def test_launcher_keeps_the_previous_host_log(tmp_path, venv_dir, monkeypatch, engine):
+    """③ Start-Process 의 리다이렉트는 파일을 새로 쓴다 — 고치기 전엔 죽은 Host 를 다시 띄우면 직전 로그가 지워져(5MB 미만이면
+    회전도 안 했다) 자기 회복의 사고 기록이 새 Host 의 첫 줄이었다. 이제 띄우기 전에 한 세대 밀어 둔다."""
+    box = _launch_box(tmp_path, venv_dir)
+    box.launcher.write_bytes(box.expected_launcher())
+    _assert_pushed_aside(box, monkeypatch, _run_launcher(box, engine))
+    assert "start:" in (box.data / "launcher.log").read_text(encoding="utf-8-sig")
+
+
+def test_install_ps1_treats_v2_and_later_as_idempotent():
+    """install.ps1 은 멱등 런처(v2 이상)일 때만 5분 반복 트리거를 단다 — 템플릿 표식을 v3 으로 올려도 새 설치에서 반복 트리거가
+    빠지지 않게(빠지면 Host 가 죽었을 때 다음 로그온까지 안 뜬다). 템플릿 없는 옛 zip 의 v1 인라인 런처는 멱등이 아니다."""
+    src = (ROOT / "install.ps1").read_text(encoding="utf-8-sig")
+    m = re.search(r'^\$launcherV2 = \(\$cfg -match "([^"]+)"\)', src, re.M)
+    assert m, "install.ps1 의 멱등 판정 줄을 못 찾음"
+    rx = re.compile(m.group(1), re.I)                                  # PowerShell -match 는 대소문자 무시
+    assert rx.search(TEMPLATE.read_text(encoding="utf-8-sig").splitlines()[0])
+    assert rx.search("# clewpath-launcher v2 — 자동 생성됨")
+    assert not rx.search("# 자동 생성됨 (install.ps1) — 재설치하면 덮어써집니다.")
+
+
+@on_windows_ps
+def test_install_ps1_v1_fallback_launcher_keeps_the_previous_host_log(tmp_path, venv_dir, monkeypatch):
+    """템플릿 없는 옛 zip 용 인라인 런처(install.ps1 의 v1 폴백)도 같은 원칙 — install.ps1 의 here-string 을 그대로 펼쳐 돌린다."""
+    src = (ROOT / "install.ps1").read_text(encoding="utf-8-sig").replace("\r\n", "\n")
+    i = src.index('if (-not $cfg) { $cfg = @"\n') + len('if (-not $cfg) { $cfg = @"\n')
+    body = src[i:src.index('\n"@ }', i)]
+    box = _launch_box(tmp_path, venv_dir)
+    cmd = (f"$confFile = '{_q(box.conf)}'; $dataDir = '{_q(box.data)}'\n$cfg = @\"\n{body}\n\"@\n"
+           f"[IO.File]::WriteAllText('{_q(box.launcher)}', $cfg, (New-Object System.Text.UTF8Encoding($true)))")
+    r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", ps_encoded(cmd)],
+                       capture_output=True, timeout=120, creationflags=_NO_WINDOW)
+    assert r.returncode == 0 and box.launcher.is_file(), (_dec(r.stdout), _dec(r.stderr))
+    assert box.launcher.read_text(encoding="utf-8-sig").startswith("# 자동 생성됨 (install.ps1)")
+    assert ps51_parse_errors(box.launcher) == [[]]
+    _assert_pushed_aside(box, monkeypatch, _run_launcher(box))
 
 
 @on_windows_ps
@@ -166,7 +278,7 @@ def test_broken_v2_launcher_is_regenerated(tmp_path):
     box.launcher.write_bytes(BOM + misread.encode("utf-8"))
     r = box.run("powershell")
     assert r.returncode == 0, (r.out, r.err)
-    assert "launcher: regenerated (v2)" in r.out and "syntax" in r.out, r.out
+    assert "launcher: regenerated (v3)" in r.out and "syntax" in r.out, r.out
     _assert_good_launcher(box.launcher)
 
 
@@ -188,12 +300,12 @@ def _host_path(monkeypatch, box: Box, engine: str = "powershell"):
 @on_windows_ps
 def test_laptop_cp1252_scenario_heals_through_host_path(fake_claude_home, tmp_path, monkeypatch):
     """노트북 재현: 설치본의 ensure_task.ps1 을 '영어 Windows 5.1 이 읽는 글자' 로 바꿔 놓고 Host 기동 경로를 그대로 탄다.
-    고치기 전: 파스 에러 → 빈 출력이 표식에 써지고 런처는 v1 그대로. 고친 뒤: v2 재생성 + 표식에 결과."""
+    고치기 전: 파스 에러 → 빈 출력이 표식에 써지고 런처는 v1 그대로. 고친 뒤: v3 재생성 + 표식에 결과."""
     box = Box(tmp_path)
     write_as_ps51_reads(ENSURE.read_bytes(), box.root / "session_manager" / "ensure_task.ps1")
     marker = _host_path(monkeypatch, box, "powershell")
     out = liveness.ensure_launcher(box.port)
-    assert out and "launcher: regenerated (v2)" in out, out
+    assert out and "launcher: regenerated (v3)" in out, out
     assert marker.read_text(encoding="utf-8") == out
     _assert_good_launcher(box.launcher)
 

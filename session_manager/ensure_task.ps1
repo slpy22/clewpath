@@ -1,14 +1,16 @@
 ﻿# 자기 회복 보장(v0.9.2) — 기존 설치본을 새 런처·반복 트리거로 맞춘다. Host 가 기동 때 버전당 한 번 부른다
 # (liveness.ensure_launcher → osdep._win.ensure_launcher). exit 0 이면 Host 가 출력을 launcher-ensured-<버전> 표식에 적고,
 # exit 1 이면 표식을 쓰지 않는다 → 다음 기동에 다시 한다.
-#  1) start-connector.ps1 이 'v2(멱등) + 구문 정상' 이 아니면 패키지 템플릿으로 다시 만든다 — BOM 붙여 쓰고 구문 검사,
-#     못 넘으면 원래 런처(바이트 그대로)로 되돌린다
+#  1) start-connector.ps1 이 '지금 표식(v3) + 구문 정상' 이 아니면 패키지 템플릿으로 다시 만든다 — BOM 붙여 쓰고 구문 검사,
+#     못 넘으면 원래 런처(바이트 그대로)로 되돌린다. 업데이트는 런처를 다시 쓰지 않으므로(PAYLOAD 밖) 런처 고침이 기존 설치본에
+#     닿는 길은 이것뿐 — 템플릿을 고치면 표식을 올린다($LauncherVer, 템플릿 첫 줄과 같게). v2 = 멱등(0.9.2),
+#     v3 = + 띄우기 전에 옛 host.log 한 세대 보존(0.32.3, 사고 직전 로그가 덮어써져 사라지던 것).
 #  2) ClewPathHost 작업에 5분 반복 트리거가 없으면 단다(로그온 트리거 유지, 중복 인스턴스 무시). 작업 동작이 우리 기본 모양이면
 #     conhost --headless 로 감싼다(5분마다 콘솔 창이 깜박이지 않게) — 반복 트리거를 다는 그 Set-ScheduledTask 에서, 또는
 #     반복 트리거가 이미 있으면 동작만 바꾼다(2026-10-23 사장님 결정: 이미 5분 확인이 도는 PC 도 깜박임을 없앤다).
 #     사람이 바꾼 모양(이미 conhost·다른 실행 파일·다른 인자)은 어느 경우든 건드리지 않는다.
 # ⚠ 순서가 안전의 전부: 런처가 멱등이 아닌데 반복 트리거를 달면 5분마다 서버가 겹쳐 뜬다.
-#    그래서 1) 이 실패하면 2) 는 하지 않는다. 순서는 런처 v2 → 동작 → 트리거(동작과 트리거는 한 번의 Set-ScheduledTask).
+#    그래서 1) 이 실패하면 2) 는 하지 않는다. 순서는 런처(v2 이상 = 멱등) → 동작 → 트리거.
 # ⚠ 인코딩(2026-10-22 노트북 사고): 영어 Windows(ANSI cp1252)의 powershell.exe 5.1 은 BOM 없는 파일을 cp1252 로 읽는다.
 #    이 파일에 BOM 이 없던 동안 「—」(E2 80 94)의 0x94 가 ” 로 읽혀 파스 에러 → 0.10.5~0.31.1 내내 한 줄도 안 돌았다.
 #    그래서 이 파일은 UTF-8 BOM + 코드 줄의 문자열은 ASCII 만(한글은 주석에만 — tests/test_ps51_compat.py 가 검사),
@@ -22,6 +24,10 @@ param(
     [string]$TaskName = "ClewPathHost",
     [switch]$LibOnly        # 함수만 정의하고 끝(점 소싱용 — 시험·install.ps1). 파일·작업은 건드리지 않는다
 )
+
+# 지금 런처 표식 — 템플릿(start-connector.template.ps1) 첫 줄 「# clewpath-launcher v3 —」 과 같아야 한다(tests/test_liveness.py)
+$LauncherVer = "v3"
+$LauncherTag = "clewpath-launcher $LauncherVer"
 
 # ---------------------------------------------------------------- 런처
 
@@ -53,14 +59,14 @@ function Get-Ps1SyntaxError([string]$Path) {
     return $null
 }
 
-# 런처를 그대로 둬도 되면 $null, 아니면 이유. v2 표식만 보지 않는다 — 고치기 전 install.ps1 이 영어 Windows 5.1 에서 만든
+# 런처를 그대로 둬도 되면 $null, 아니면 이유. 표식만 보지 않는다 — 고치기 전 install.ps1 이 영어 Windows 5.1 에서 만든
 # v2 런처는 템플릿을 cp1252 로 읽어 구문이 깨져 있는데 표식은 있다. 표식만 보면 그런 PC 는 영영 안 고쳐진다.
 function Get-LauncherProblem([string]$Path) {
     if (-not (Test-Path -LiteralPath $Path)) { return "missing" }
     $head = Get-Content -LiteralPath $Path -TotalCount 1 -Encoding UTF8 -ErrorAction SilentlyContinue
-    if (-not ("$head" -match "clewpath-launcher v2")) { return "not v2" }
+    if (-not ("$head" -match $LauncherTag)) { return "not $LauncherVer" }
     $e = Get-Ps1SyntaxError $Path
-    if ($e) { return "v2 but syntax error ($e)" }
+    if ($e) { return "$LauncherVer but syntax error ($e)" }
     return $null
 }
 
@@ -73,7 +79,7 @@ function Write-Launcher([string]$Template, [string]$Target, [string]$DataDir, [s
     try {
         $c = Get-Content -LiteralPath $Template -Raw -Encoding UTF8 -ErrorAction Stop
         $c = $c.TrimStart([char]0xFEFF).Replace("{{DATA_DIR}}", $DataDir).Replace("{{CONF_FILE}}", $ConfFile).Replace("{{PORT}}", "$Port")
-        if (-not $c.StartsWith("# clewpath-launcher v2", [StringComparison]::Ordinal)) { throw "template is not a v2 launcher" }
+        if (-not $c.StartsWith("# $LauncherTag", [StringComparison]::Ordinal)) { throw "template is not a $LauncherVer launcher" }
         if ($c -match "\{\{[A-Z_]+\}\}") { throw "template placeholder left: $($Matches[0])" }
         [IO.File]::WriteAllText($Target, $c, (New-Object System.Text.UTF8Encoding($true)))
         if (-not (Test-Utf8Bom $Target)) { throw "written launcher has no BOM" }
@@ -173,7 +179,7 @@ $startPs = Join-Path $Root "start-connector.ps1"
 # 1) 런처
 $problem = Get-LauncherProblem $startPs
 if (-not $problem) {
-    "launcher: ok (v2)"
+    "launcher: ok ($LauncherVer)"
 } elseif (-not (Test-Path -LiteralPath $tpl)) {
     "launcher: template missing - skip (launcher $problem)"
     "task: skip (launcher not idempotent)"
@@ -185,10 +191,10 @@ if (-not $problem) {
         "task: skip (launcher not idempotent)"
         exit 1
     }
-    "launcher: regenerated (v2) - was: $problem"
+    "launcher: regenerated ($LauncherVer) - was: $problem"
 }
 
-# 2) 예약 작업 — 여기까지 왔으면 런처는 v2(멱등)·구문 정상
+# 2) 예약 작업 — 여기까지 왔으면 런처는 지금 표식(멱등)·구문 정상
 $gerr = $null
 $t = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue -ErrorVariable gerr
 if (-not $t) {

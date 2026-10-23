@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -90,7 +92,7 @@ def test_log_tail_stops_at_last_launcher_mark(fake_claude_home):
 
 def test_log_tail_reads_the_rotated_log_when_the_mark_opens_the_file(fake_claude_home):
     """맥·리눅스 런처는 5MB 회전을 기동 직전(구분줄 바로 앞)에 한다 — 그러면 host.log 는 구분줄로 시작하고 죽은 Host 의 꼬리는
-    host.log.1 에 있다. 구분줄 앞이 비었을 때만 .1 을 본다(구분줄이 없는 Windows 로그는 .1 이 있어도 그대로)."""
+    host.log.1 에 있다. 구분줄 앞이 비었을 때만 .1 을 본다(구분줄 없는 로그는 .1 이 구분줄로 끝날 때만 — 아래 Windows 시험)."""
     d = config.data_dir()
     d.mkdir(parents=True, exist_ok=True)
     (d / "host.log.1").write_text("=== launcher start 2026-10-19 09:00:00 ===\nold 1\nold 2: Traceback 마지막\n\n",
@@ -100,10 +102,33 @@ def test_log_tail_reads_the_rotated_log_when_the_mark_opens_the_file(fake_claude
     assert liveness.log_tail(1) == ["old 2: Traceback 마지막"]
     _log(["old 3", "=== launcher start 2026-10-20 10:00:00 ===", "new"])   # 구분줄 앞에 꼬리가 있으면 그것
     assert liveness.log_tail(10) == ["old 3"]
-    _log(["no mark a"])                                                     # Windows(구분줄 없음)
+    _log(["no mark a"])                                                     # 구분줄 없는 로그 + 구분줄로 안 끝나는 .1
     assert liveness.log_tail(10) == ["no mark a"]
-    (d / "host.log").write_bytes(b"")                                       # 구분줄 없는 빈 로그도 .1 을 보지 않는다
+    (d / "host.log").write_bytes(b"")                                       # 구분줄 없는 빈 로그도 그런 .1 은 보지 않는다
     assert liveness.log_tail(10) == []
+
+
+def test_log_tail_reads_windows_log_pushed_aside_with_a_closing_mark(fake_claude_home):
+    """Windows 런처(v3)는 Start-Process 의 리다이렉트가 host.log 를 새로 쓰기 전에 옛 로그 끝에 구분줄을 붙여 host.log.1 로 민다.
+    새 Host 의 host.log 엔 구분줄이 없고 죽은 Host 의 꼬리는 host.log.1 의 마지막 구분줄 앞이다(구분줄 뒤엔 아무것도 없다).
+    고치기 전엔 새 Host 가 막 찍은 첫 줄들을 사고 꼬리로 보냈다(죽은 Host 의 로그는 덮어써져 없었다)."""
+    d = config.data_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    dot1 = d / "host.log.1"
+    dot1.write_bytes("old 1\r\nold 2: Traceback 마지막\r\n\r\n=== launcher start 2026-10-24 09:00:00 ===\r\n".encode("utf-8"))
+    _log(["[config] 새 프로세스 첫 줄", "[serve] http://127.0.0.1:5100"])
+    assert liveness.log_tail(10) == ["old 1", "old 2: Traceback 마지막"]
+    assert liveness.log_tail(1) == ["old 2: Traceback 마지막"]
+    dot1.write_bytes(b"\r\n=== launcher start 2026-10-24 09:00:00 ===\r\n")       # 죽은 Host 가 아무것도 안 찍었다
+    assert liveness.log_tail(10) == []
+    (d / "host.log").unlink()                                                  # 새 Host 의 로그가 아직 없어도
+    dot1.write_bytes(b"old 3\r\n=== launcher start 2026-10-24 09:00:00 ===\r\n")
+    assert liveness.log_tail(10) == ["old 3"]
+    # 오래된 .1(옛 런처로 되돌아간 뒤 남은 것 등)은 이번 기동의 것이 아니다 — 예전처럼 host.log 그대로
+    _log(["new a"])
+    old = time.time() - 3600
+    os.utime(dot1, (old, old))
+    assert liveness.log_tail(10) == ["new a"]
 
 
 def test_notify_incident_payload(fake_claude_home, monkeypatch):
@@ -119,10 +144,13 @@ def test_launcher_template_and_ensure_script_contract():
     tpl = Path(liveness.__file__).parent / "start-connector.template.ps1"
     ens = Path(liveness.__file__).parent / "ensure_task.ps1"
     t = tpl.read_text(encoding="utf-8-sig")                     # BOM 붙은 UTF-8(5.1 이 ANSI 로 읽지 않게)
-    assert t.splitlines()[0].startswith("# clewpath-launcher v2")
+    assert t.splitlines()[0].startswith("# clewpath-launcher v3")     # v3 = v2(멱등) + 옛 host.log 한 세대 보존
     for needle in ("/api/health", "maintenance.flag", "launcher.lock", "runtime.json", "{{DATA_DIR}}", "{{CONF_FILE}}", "{{PORT}}", "launcher.log"):
         assert needle in t
+    assert liveness.LAUNCHER_MARK.decode() in t                       # 옛 로그 끝에 붙이는 구분줄 = log_tail 이 찾는 것
     e = ens.read_text(encoding="utf-8-sig")
+    m = re.search(r'^\$LauncherVer = "(v\d+)"', e, re.M)              # ensure_task 가 보는 표식 = 템플릿 첫 줄
+    assert m and t.startswith(f"# clewpath-launcher {m.group(1)} "), m
     # 런처가 멱등이 아니면 반복 트리거를 달지 않는다(겹쳐 뜨는 사고 방지) — 순서 계약. 트리거 생성은 함수(New-RepeatTrigger)라
     # 정의는 위에 있고, 실제로 다는 곳(Set-ScheduledTask … New-RepeatTrigger)이 런처 검사 뒤여야 한다
     assert e.index("launcher not idempotent") < e.index("(New-RepeatTrigger)")
