@@ -575,6 +575,27 @@ launch_logs() {   # 띄우기 직전(start·foreground 같은 규칙) — 로그
   { printf '=== launcher start %s ===\n' "$(date '+%Y-%m-%d %H:%M:%S')" >>"$DATA_DIR/host.log"; } 2>/dev/null
 }
 
+# 러너가 업데이트 중 stop --hold 를 보면 헬스 없이 커밋하고(held) 표지 updates/held-commit(version= from= backup= at=)를 남긴다.
+# 그 새 버전은 자동 롤백이 없으니 그 뒤 첫 기동이 실패하면 그렇다고 알리고 백업 위치를 보여 준다. 뜨면(ok·up) 표지를 지운다
+held_ok() {
+  [ -f "$DATA_DIR/updates/held-commit" ] || return 0
+  rm -f "$DATA_DIR/updates/held-commit" 2>/dev/null && llog "held 커밋 뒤 기동 확인 — 표지 제거(updates/held-commit)"
+  return 0
+}
+
+held_fail() {
+  _hf="$DATA_DIR/updates/held-commit"
+  [ -f "$_hf" ] || return 0
+  _hv=$(sed -n 's/^version=\([0-9A-Za-z.+-]\{1,64\}\)[[:space:]]*$/\1/p' "$_hf" 2>/dev/null | head -n 1)
+  _ho=$(sed -n 's/^from=\([0-9A-Za-z.+?-]\{1,64\}\)[[:space:]]*$/\1/p' "$_hf" 2>/dev/null | head -n 1)
+  _hb=$(sed -n 's/^backup=\(\/.*\)$/\1/p' "$_hf" 2>/dev/null | head -n 1)
+  llog "held 커밋 뒤 첫 기동 실패(버전 ${_hv:-?}) — 자동 롤백 없음, 백업 ${_hb:-?}"
+  say "이 버전(${_hv:-?})은 업데이트 중 멈춤(stop --hold) 때문에 헬스체크 없이 커밋돼 자동 롤백이 없습니다"
+  say "  이전 버전(${_ho:-?})의 백업: ${_hb:-$DATA_DIR/updates/backup-*}"
+  say "  의존성을 다시 맞춰 보려면: sh \"$ROOT/install.sh\" --reinstall  (기동 로그: $DATA_DIR/host.err.log)"
+  return 0
+}
+
 launchd_ours() {   # 0 = [mac] 이 설치본의 launchd 작업이 올라 있다 — 등록 파일이 이 런처를 부르고(같은 이름의 다른 설치본 작업은
   # 깨우지 않는다) launchctl 이 그 작업을 안다. 리눅스·등록 없음·못 읽음이면 1
   [ "$OS" = mac ] || return 1
@@ -603,7 +624,8 @@ launchd_start() {
     _kn=$((_kn + 1))
     probe_now || continue
     case "$P_STATE" in
-      ok|busy) llog "start: $_kw → launchd 에 맡김(kickstart) pid $P_PID"
+      ok|busy) [ "$P_STATE" = ok ] && held_ok
+               llog "start: $_kw → launchd 에 맡김(kickstart) pid $P_PID"
                note "기동했습니다(launchd 작업) — pid $P_PID (로그: $DATA_DIR/host.log)"
                return 0 ;;
       foreign) port_taken ;;
@@ -629,7 +651,7 @@ cmd_start() {
   case $? in 0) ;; 10) exit 0 ;; *) exit 1 ;; esac
   probe_or_die
   case "$P_STATE" in
-    ok) note "이미 실행 중입니다 — pid $P_PID, http://127.0.0.1:$P_PORT/"; exit 0 ;;
+    ok) held_ok; note "이미 실행 중입니다 — pid $P_PID, http://127.0.0.1:$P_PORT/"; exit 0 ;;
     busy) llog "skip: pid $P_PID 살아 있음(health 없음 — 기동 중이거나 응답 불능)"
           note "pid $P_PID 가 살아 있지만 응답이 없습니다(기동 중이거나 응답 불능) — 겹쳐 띄우지 않습니다"
           exit 0 ;;
@@ -665,6 +687,7 @@ cmd_start() {
   if ! S_OUT=$("$PY" -I -c "$SPAWN_PY" "$ROOT" "$DATA_DIR" "$CONF_FILE" spawn 2>>"$DATA_DIR/launcher.log"); then
     llog "fail: spawn 실패"
     say "Host 를 띄우지 못했습니다 — $DATA_DIR/launcher.log 를 보세요"
+    held_fail
     exit 1
   fi
   S_PID=${S_OUT%% *}
@@ -672,9 +695,11 @@ cmd_start() {
   case "$S_PID" in ''|*[!0-9]*) llog "fail: spawn 결과를 읽지 못함($S_OUT)"; exit 1 ;; esac
   case "$S_ST" in
     up) llog "spawned pid $S_PID"
+        held_ok
         note "기동했습니다 — pid $S_PID (로그: $DATA_DIR/host.log)" ;;
     exited:*) llog "fail: 기동 직후 종료(pid $S_PID, rc=${S_ST#exited:})"
               say "Host 가 기동 직후 끝났습니다(rc=${S_ST#exited:}) — $DATA_DIR/host.err.log 를 보세요"
+              held_fail
               [ "$P_STATE" = other ] && say "  (포트 $P_PORT 를 다른 프로그램이 쓰고 있습니다 — 옆 포트도 다 찼거나 $CONF_FILE 의 [server] port_fallback 이 0 일 수 있습니다)"
               exit 1 ;;
     *) llog "spawned pid $S_PID (runtime.json 아직 없음 — 기동 중)"

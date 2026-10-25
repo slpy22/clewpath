@@ -961,10 +961,24 @@ deps_note() {   # 커밋할 때 — 새 버전 의존성을 잠금 밖(uv pip in
 # 막혀 Host 는 어차피 꺼져 있다). 교체·의존성 동기화는 끝났으니 커밋하고 '보류'로 끝낸다 — last_apply 는 ok=true·held=true
 # (updater.recently_failed 는 ok=false 만 본다). 다시 켜면(resume) 새 버전이 뜬다. 헬스를 거치지 않았으니 새 버전이 못 뜨면
 # 자동 롤백은 없다(백업은 $BackupDir 에 남는다 — install.sh 로 다시 설치). 버전이 어긋난 대답(2)·런처 실패는 그대로 롤백
+# 런처가 그 뒤 첫 기동이 실패하면 '자동 롤백 없음'과 백업 위치를 알리도록 held 커밋 표지(WORK/held-commit: version= from= backup=
+# at=)를 남긴다 — 런처가 새 버전이 뜨는 것을 보면 지운다. 다음 러너가 커밋·롤백하면 지운다(그 표지의 백업은 이제 맞지 않다)
+held_note() {
+  _hn="$WORK/.held-commit.$$.tmp"
+  if { printf 'version=%s\nfrom=%s\nbackup=%s\nat=%s\n' "$Version" "${OLD_VER:-?}" "$BackupDir" "$(date +%s)" >"$_hn"; } 2>/dev/null \
+     && mv -f "$_hn" "$WORK/held-commit" 2>/dev/null; then
+    return 0
+  fi
+  rm -f "$_hn" 2>/dev/null
+  log "  [WARN] held 커밋 표지를 쓰지 못했습니다: $WORK/held-commit"
+  return 0
+}
+
 hold_commit() {
   log "maintenance.flag 가 있어(사용자가 멈춤 — stop --hold) 롤백하지 않고 새 버전으로 둡니다 — 다시 켜기: resume"
   commit_swap
   deps_note
+  held_note
   write_result true "" "$RES_X,\"held\":true"
   log "업데이트 적용 - 보류(헬스체크 없이 커밋, $Version)"
   finish true 0
@@ -1001,6 +1015,7 @@ rollback() {   # 8. 실패한 새 버전을 되돌린다 — 돌아오지 않는
     sync_deps "롤백" || log "  [WARN] 롤백 의존성 동기화 실패"
   fi
   launcher_forget "$Version"
+  rm -f "$WORK/held-commit" 2>/dev/null           # 지난 held 커밋 표지 — 그 백업은 이제 이 설치와 맞지 않다
   _rb=1                                           # e. 옛 버전 재기동·헬스 — 옛 버전을 기대(옛 코드가 새 버전을 말하는 어긋남도 잡는다)
   H_PRE=$(json_pid "$DATA/runtime.json")          #    (재기동 직전 runtime.json 의 pid — 실패한 새 Host — 의 대답은 치지 않는다)
   if restart_host 1; then
@@ -1206,6 +1221,7 @@ main() {
   fi
   if [ "$M_HC" = 0 ]; then
     commit_swap
+    rm -f "$WORK/held-commit" 2>/dev/null           # 지난 held 커밋 표지 — 이번 버전이 헬스를 통과했다
     deps_note
     log "헬스체크 통과 - 업데이트 성공 ($Version)"
     write_result true "" "$RES_X"

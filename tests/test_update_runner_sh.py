@@ -1389,6 +1389,35 @@ def test_hold_during_the_update_keeps_the_new_version(upd, when, as_data_dir):
     assert r.returncode == 0 and upd.running_tag() == "new", upd.diag(r.stderr.decode("utf-8", "replace"))
 
 
+def test_held_commit_then_failing_first_start_says_there_is_no_rollback(upd):
+    """보류(held) 커밋은 헬스를 거치지 않아 새 버전이 resume 때 못 뜨면 자동 롤백이 없다 — 말없이 '기동 직후 끝남'만 보였다.
+    러너가 held 커밋 표지(updates/held-commit: 버전·옛 버전·백업)를 남기고, 런처는 그 뒤 첫 기동이 실패하면 롤백이 없다는 것과
+    백업 위치를 알린다. 뜨면 표지를 지운다(그 뒤엔 다시 알리지 않는다)."""
+    upd.uv_conf(sleep_sync=3)
+    old = upd.start_old()
+    p = upd.spawn(upd.argv(wait_pid=old), stop_host=old)
+    assert _wait(lambda: (upd.ctl / "syncing").exists(), 30), upd.diag()
+    r = subprocess.run(["/bin/sh", str(upd.launcher), "stop", "--hold"], env=upd.env(), capture_output=True, timeout=60,
+                       cwd=str(upd.home))
+    assert r.returncode == 0 and p.wait(timeout=120) == 0, upd.diag()
+    assert upd.last()["held"] is True
+    held = _kv((upd.work / "held-commit").read_text(encoding="utf-8"))
+    assert held["version"] == NEW and held["from"] == OLD and held["backup"] == str(upd.backup)
+    upd.set_fake(upd.root, exit_now=True)                        # 새 버전이 뜨자마자 끝난다
+    r = subprocess.run(["/bin/sh", str(upd.launcher), "resume"], env=upd.env(), capture_output=True, timeout=60,
+                       cwd=str(upd.home))
+    err = r.stderr.decode("utf-8", "replace")
+    assert r.returncode == 1 and upd.hosts() == [], upd.diag(err)
+    assert "자동 롤백이 없습니다" in err and str(upd.backup) in err and NEW in err, err
+    assert "held 커밋 뒤 첫 기동 실패" in upd.text(upd.data / "launcher.log")
+    assert (upd.work / "held-commit").exists(), "뜰 때까지 남긴다"
+    upd.set_fake(upd.root, exit_now=False)
+    r = subprocess.run(["/bin/sh", str(upd.launcher), "start"], env=upd.env(), capture_output=True, timeout=60,
+                       cwd=str(upd.home))
+    assert r.returncode == 0 and upd.running_tag() == "new", upd.diag(r.stderr.decode("utf-8", "replace"))
+    assert not (upd.work / "held-commit").exists() and "자동 롤백" not in r.stderr.decode("utf-8", "replace")
+
+
 # ---------------------------------------------------------------- S24·S31 도는 동안: 표식·잠금·하트비트, 감독자는 기다린다
 
 def test_supervisor_waits_while_the_runner_works(upd):
