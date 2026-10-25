@@ -419,6 +419,7 @@ watch_unlock() { lock_release "$DATA_DIR/watch.lock.d"; }
 update_live() {   # 0 = 업데이트·설치 진행 중(update.inprogress 의 pid 가 그 프로그램으로 살아 있고 30분 안). $1=clean 이면 시체를 지운다
   _uf="$DATA_DIR/update.inprogress"   # (at 은 앞자리 0 금지 — $(( )) 가 8진수로 읽다 셸째 끝난다. install.sh·uninstall.sh 와 같은 규칙)
   [ -f "$_uf" ] || return 1
+  _uc=$(cat "$_uf" 2>/dev/null)
   _up=$(sed -n 's/^pid=\([0-9]\{1,10\}\)[[:space:]]*$/\1/p' "$_uf" 2>/dev/null | head -n 1)
   _ua=$(sed -n 's/^at=\([1-9][0-9]\{0,11\}\)[[:space:]]*$/\1/p' "$_uf" 2>/dev/null | head -n 1)
   _ub=$(sed -n 's/^by=\([a-z]*\)[[:space:]]*$/\1/p' "$_uf" 2>/dev/null | head -n 1)
@@ -431,9 +432,14 @@ update_live() {   # 0 = 업데이트·설치 진행 중(update.inprogress 의 pi
       *) return 0 ;;
     esac
   fi
-  if [ "${1:-}" = clean ]; then
-    rm -f "$_uf"
-    llog "stale update marker 제거(pid ${_up:-?}, by=${_ub:-?})"
+  # 시체 치우기는 표식 잠금(설치·러너가 '확인 → 쓰기'를 묶는 .update.inprogress.lock) 안에서 내용이 그대로일 때만 — 그 사이
+  # 설치·러너가 이 시체를 보고 새로 쓴 표식을 지우지 않게. 잠금을 남이 쥐고 있으면(누군가 쓰는 중) 지우지 않는다
+  if [ "${1:-}" = clean ] && mkdir "$DATA_DIR/.update.inprogress.lock" 2>/dev/null; then
+    if [ "$(cat "$_uf" 2>/dev/null)" = "$_uc" ]; then
+      rm -f "$_uf"
+      llog "stale update marker 제거(pid ${_up:-?}, by=${_ub:-?})"
+    fi
+    rmdir "$DATA_DIR/.update.inprogress.lock" 2>/dev/null
   fi
   return 1
 }

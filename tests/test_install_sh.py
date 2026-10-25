@@ -940,6 +940,26 @@ def test_refuses_while_an_update_runs(box):
     assert r.returncode == 1 and "러너" in r.stdout.decode("utf-8") and box.host_pids() == [pid]
 
 
+def test_marker_is_checked_and_written_under_the_shared_lock(box):
+    """표식 잡기가 '확인 → 쓰기'라 러너와 같은 수 ms 안에 둘 다 '비었음'을 보고 둘 다 썼다. 러너와 같은 mkdir 잠금
+    (.update.inprogress.lock)으로 묶는다 — 남이 쥐고 있으면 기다렸다가 끝내 못 잡으면 멈춘다(아무것도 바꾸지 않는다).
+    1분 넘게 남은 잠금은 쥔 채 죽은 것이라 치우고 잡는다."""
+    box.fresh()
+    pid = box.host_pid()
+    readme = box.text(box.root / "README.md")
+    lock = box.data / ".update.inprogress.lock"
+    lock.mkdir()
+    r = box.install()
+    assert r.returncode == 1 and "표식을 다른 프로그램이 잡는 중" in r.stdout.decode("utf-8"), box.diag(r)
+    assert box.host_pids() == [pid] and box.text(box.root / "README.md") == readme
+    assert lock.is_dir() and not (box.data / "update.inprogress").exists()
+    past = time.time() - 120
+    os.utime(lock, (past, past))
+    r = box.install()
+    assert r.returncode == 0, box.diag(r)
+    assert not lock.exists() and not (box.data / "update.inprogress").exists()
+
+
 @pytest.mark.parametrize("argv,rc,said", [
     (["--bogus"], 2, "모르는 인자: --bogus"),
     (["--port", "0"], 2, "--port"),

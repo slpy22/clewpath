@@ -874,6 +874,25 @@ def test_live_install_marker_also_exits_3(upd):
     assert "업데이트·설치가 진행 중입니다" in upd.logtext()
 
 
+def test_marker_is_checked_and_written_under_the_shared_lock(upd):
+    """표식 잡기가 '확인 → 쓰기'라 install.sh 와 러너가 같은 수 ms 안에 둘 다 '비었음'을 보고 둘 다 썼다(나중 것이 이김 —
+    둘 다 자기가 쥔 줄 안다). 확인·쓰기를 install.sh 와 같은 mkdir 잠금(.update.inprogress.lock)으로 묶는다: 남이 쥐고
+    있으면 기다렸다가(쥐는 동안은 수 ms) 끝내 못 잡으면 종료코드 3. 1분 넘게 남은 잠금은 쥔 채 죽은 것이라 치운다."""
+    lock = upd.data / ".update.inprogress.lock"
+    lock.mkdir()
+    rc = upd.run(upd.argv(wait_pid=DEAD_PID))
+    assert rc == 3, upd.diag()
+    assert lock.is_dir() and not (upd.data / "update.inprogress").exists() and upd.uv_calls() == []
+    assert not upd.backup.exists() and not (upd.work / "runner.lock.d").exists()
+    assert "표식을 다른 프로그램이 잡는 중" in upd.logtext()
+    past = time.time() - 120                                      # 쥔 채 죽은 잠금
+    os.utime(lock, (past, past))
+    rc = upd.run(upd.argv(wait_pid=DEAD_PID))
+    assert rc == 0, upd.diag()
+    assert upd.running_tag() == "new"
+    upd.clean_after()
+
+
 def test_dead_runner_lock_and_marker_are_taken_over(upd):
     lock = upd.work / "runner.lock.d"
     lock.mkdir()

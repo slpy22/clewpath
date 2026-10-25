@@ -518,6 +518,22 @@ def test_stale_update_marker_is_removed(inst, why):
     assert not marker.exists() and "stale update marker 제거" in inst.llog()
 
 
+def test_stale_marker_is_not_removed_while_someone_takes_it(inst):
+    """시체 표식 치우기도 '확인 → 지우기'라, 그 사이 설치·러너가 시체를 보고 새로 쓴 표식을 런처가 지웠다. 표식 잠금
+    (.update.inprogress.lock — 설치·러너가 확인·쓰기를 묶는 것)을 잡고 다시 본 뒤에만 지운다. 잡지 못하면 지우지 않는다."""
+    marker = inst.marker(DEAD_PID)
+    lock = inst.data / ".update.inprogress.lock"
+    lock.mkdir()                                                  # 누군가 표식을 잡는 중
+    inst.started(inst.run("start"))
+    assert marker.exists() and "stale update marker 제거" not in inst.llog(), inst.diag()
+    assert lock.is_dir(), "남의 잠금은 그대로"
+    inst.kill_host()
+    lock.rmdir()
+    inst.started(inst.run("start"))
+    assert not marker.exists() and "stale update marker 제거" in inst.llog()
+    assert not lock.exists(), "잡은 잠금은 놓는다"
+
+
 @with_shells
 def test_marker_time_with_a_leading_zero_is_not_octal(inst, shell):
     """표식의 at= 앞자리가 0 이면(손상·손편집 — `at=09`) $(( )) 가 8진수로 읽다 셸째 끝났다(start·status 가 rc 2).

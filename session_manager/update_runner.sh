@@ -279,7 +279,42 @@ marker_live() {   # 0 = 다른 프로그램(설치·다른 러너)이 쥔 살아
   esac
 }
 
-mark_take() {   # update.inprogress 를 내 것으로 — 임시 파일에 쓰고 mv(런처가 반쯤 쓴 표식을 읽지 않게)
+# 표식 잠금 — 표식의 '확인(marker_live) → 쓰기(mark_take)'를 묶는다(install.sh·런처와 같은 폴더 $DATA/.update.inprogress.lock).
+# 안 묶으면 설치와 러너가 같은 수 ms 안에 둘 다 '비었음'을 보고 둘 다 쓴다(나중 것이 이기고 둘 다 자기가 쥔 줄 안다).
+# 쥐는 동안은 수 ms 라 남이 쥐고 있으면 반초씩 기다린다(약 10초, 반초 수). 1분 넘게 남은 잠금은 쥔 채 죽은 것 — 치우는
+# 권리(옆 폴더 .reclaim)를 쥔 하나만 다시 보고 rmdir 한다(안에 아무것도 두지 않는 빈 폴더). 0 잡음 / 1 못 잡음
+mark_lock_reap() {
+  [ -n "$(find "$1" -maxdepth 0 -mmin +1 2>/dev/null)" ] || return 1
+  if ! mkdir "$1.reclaim" 2>/dev/null; then
+    [ -n "$(find "$1.reclaim" -maxdepth 0 -mmin +1 2>/dev/null)" ] || return 1
+    rmdir "$1.reclaim" 2>/dev/null
+    mkdir "$1.reclaim" 2>/dev/null || return 1
+  fi
+  _mr=1
+  [ -n "$(find "$1" -maxdepth 0 -mmin +1 2>/dev/null)" ] && rmdir "$1" 2>/dev/null && _mr=0
+  rmdir "$1.reclaim" 2>/dev/null
+  [ "$_mr" = 0 ] && log "쥔 채 남은 표식 잠금을 치웁니다: $1"
+  return "$_mr"
+}
+
+mark_lock() {
+  NAP_T=0
+  while ! mkdir "$DATA/.update.inprogress.lock" 2>/dev/null; do
+    mark_lock_reap "$DATA/.update.inprogress.lock" && continue
+    [ "$NAP_T" -ge 20 ] && return 1
+    nap
+  done
+  HAVE_MLOCK=1
+  return 0
+}
+
+mark_unlock() {
+  [ "$HAVE_MLOCK" = 1 ] && rmdir "$DATA/.update.inprogress.lock" 2>/dev/null
+  HAVE_MLOCK=0
+  return 0
+}
+
+mark_take() {   # update.inprogress 를 내 것으로 — 임시 파일에 쓰고 mv(런처가 반쯤 쓴 표식을 읽지 않게). 표식 잠금 안에서 부른다
   _mt="$DATA/.update.inprogress.$$.tmp"
   if { printf 'pid=%s\nat=%s\nby=runner\n' "$$" "$(date +%s)" >"$_mt"; } 2>/dev/null \
      && mv -f "$_mt" "$DATA/update.inprogress" 2>/dev/null; then
@@ -334,18 +369,29 @@ take_lock_and_mark() {   # 1. 러너는 한 번에 하나(살아 있는 러너·
     *) fail_args "러너 잠금을 쓸 수 없습니다: $RL" ;;
   esac
   HAVE_LOCK=1
+  if ! mark_lock; then                                     # 확인·쓰기를 install.sh 와 같은 잠금으로 묶는다
+    log "업데이트 표식을 다른 프로그램이 잡는 중입니다($DATA/.update.inprogress.lock) — 이번 실행은 건너뜁니다"
+    KEEP_APPLY_LOCK=1
+    finish false 3
+  fi
   if marker_live; then
+    mark_unlock
     log "업데이트·설치가 진행 중입니다(update.inprogress: pid ${MK_PID:-?}, by=${MK_BY:-?}) — 이번 실행은 건너뜁니다"
     KEEP_APPLY_LOCK=1
     finish false 3
   fi
-  mark_take || fail_args "update.inprogress 를 쓸 수 없습니다: $DATA"
+  if ! mark_take; then
+    mark_unlock
+    fail_args "update.inprogress 를 쓸 수 없습니다: $DATA"
+  fi
+  mark_unlock
 }
 
 release_all() {   # 모든 종료 길에서 — apply.lock(적용일 때)·표식(내 것)·헬퍼·러너 잠금(내 것)
   if [ "$RECOVER_ONLY" != 1 ] && [ "$LOG_OK" = 1 ] && [ "$KEEP_APPLY_LOCK" != 1 ]; then
     rm -f "$WORK/apply.lock" 2>/dev/null
   fi
+  mark_unlock
   if [ "$HAVE_MARK" = 1 ]; then
     [ "$(sed -n 's/^pid=//p' "$DATA/update.inprogress" 2>/dev/null | head -n 1)" = "$$" ] && rm -f "$DATA/update.inprogress"
     HAVE_MARK=0
@@ -1084,6 +1130,7 @@ main() {
   RESUMABLE=0
   HAVE_LOCK=0
   HAVE_MARK=0
+  HAVE_MLOCK=0
   KEEP_APPLY_LOCK=0
   HOST_GONE=0
   WORK=''

@@ -303,7 +303,41 @@ runner_live() {   # $1=데이터 폴더 — 업데이트 러너가 잠금(update
   pid_alive "$_lp" && cmd_has "$_lp" update_runner
 }
 
-mark_take() {   # $1=데이터 폴더 — update.inprogress 를 내 것으로(임시 파일에 쓰고 mv — 반쯤 쓴 표식을 남이 읽지 않게)
+# 표식 잠금 — 표식의 '확인(marker_busy) → 쓰기(mark_take)'를 묶는다(러너·런처와 같은 폴더 <데이터 폴더>/.update.inprogress.lock).
+# 안 묶으면 설치와 러너가 같은 수 ms 안에 둘 다 '비었음'을 보고 둘 다 쓴다(나중 것이 이기고 둘 다 자기가 쥔 줄 안다).
+# 쥐는 동안은 수 ms 라 남이 쥐고 있으면 반초씩 기다린다(약 10초, 반초 수). 1분 넘게 남은 잠금은 쥔 채 죽은 것 — 치우는
+# 권리(옆 폴더 .reclaim)를 쥔 하나만 다시 보고 rmdir 한다(안에 아무것도 두지 않는 빈 폴더). 0 잡음 / 1 못 잡음
+mark_lock_reap() {
+  [ -n "$(find "$1" -maxdepth 0 -mmin +1 2>/dev/null)" ] || return 1
+  if ! mkdir "$1.reclaim" 2>/dev/null; then
+    [ -n "$(find "$1.reclaim" -maxdepth 0 -mmin +1 2>/dev/null)" ] || return 1
+    rmdir "$1.reclaim" 2>/dev/null
+    mkdir "$1.reclaim" 2>/dev/null || return 1
+  fi
+  _mr=1
+  [ -n "$(find "$1" -maxdepth 0 -mmin +1 2>/dev/null)" ] && rmdir "$1" 2>/dev/null && _mr=0
+  rmdir "$1.reclaim" 2>/dev/null
+  return "$_mr"
+}
+
+mark_lock() {   # $1=데이터 폴더
+  _mn=0
+  while ! mkdir "$1/.update.inprogress.lock" 2>/dev/null; do
+    mark_lock_reap "$1/.update.inprogress.lock" && continue
+    [ "$_mn" -ge 20 ] && return 1
+    if sleep 0.5 2>/dev/null; then _mn=$((_mn + 1)); else sleep 1; _mn=$((_mn + 2)); fi
+  done
+  MLOCK_DIR=$1
+  return 0
+}
+
+mark_unlock() {
+  [ -n "$MLOCK_DIR" ] && rmdir "$MLOCK_DIR/.update.inprogress.lock" 2>/dev/null
+  MLOCK_DIR=
+  return 0
+}
+
+mark_take() {   # $1=데이터 폴더 — update.inprogress 를 내 것으로(임시 파일에 쓰고 mv — 반쯤 쓴 표식을 남이 읽지 않게). 표식 잠금 안에서
   _mt="$1/.update.inprogress.$$.tmp"
   if ( umask 077; printf 'pid=%s\nat=%s\nby=install\n' "$$" "$(date +%s)" >"$_mt" ) 2>/dev/null \
      && mv -f "$_mt" "$1/update.inprogress" 2>/dev/null; then
@@ -329,17 +363,24 @@ take_marker() {   # $1=데이터 폴더 — 업데이트·다른 설치가 돌�
   if runner_live "$1"; then
     die "업데이트가 진행 중입니다(러너, $1/updates/runner.lock.d) — 끝난 뒤 다시 실행하세요"
   fi
-  if marker_busy "$1"; then
-    die "업데이트·설치가 진행 중입니다(pid ${MK_PID:-?}, by=${MK_BY:-?}) — 끝난 뒤 다시 실행하세요"
-  fi
-  if [ ! -d "$1" ]; then
+  if [ ! -d "$1" ]; then                         # (없던 폴더면 표식도 없다 — 만든 뒤 잠금 안에서 확인·쓰기)
     mkdir -p "$1" 2>/dev/null || die "데이터 폴더를 만들 수 없습니다: $1"
   fi
   chmod 700 "$1" 2>/dev/null                     # 폴더 권한만 좁힌다(umask 는 그대로)
-  mark_take "$1" || die "update.inprogress 를 쓸 수 없습니다: $1"
+  mark_lock "$1" || die "업데이트 표식을 다른 프로그램이 잡는 중입니다($1/.update.inprogress.lock) — 잠시 뒤 다시 실행하세요"
+  if marker_busy "$1"; then
+    mark_unlock
+    die "업데이트·설치가 진행 중입니다(pid ${MK_PID:-?}, by=${MK_BY:-?}) — 끝난 뒤 다시 실행하세요"
+  fi
+  if ! mark_take "$1"; then
+    mark_unlock
+    die "update.inprogress 를 쓸 수 없습니다: $1"
+  fi
+  mark_unlock
 }
 
 on_exit() {
+  mark_unlock
   mark_release
   [ -n "$I_TMP" ] && rm -rf "$I_TMP"
   # get.sh 가 넘긴 임시 stage(설치 루트 옆 .clewpath-get.*) — 서막이 중간에 멈춰도 남기지 않는다(같은 명령이 다시 받는다)
@@ -1281,6 +1322,7 @@ main() {
   I_TMP=''
   GET_TMP=''
   MARK_DIR=''
+  MLOCK_DIR=''
   UV=''
   PYEXE=''
   PY_PREF=''
