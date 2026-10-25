@@ -632,8 +632,8 @@ prelude() {   # --from-stage: 옮긴 뒤 설치 루트의 install.sh 로 이어 
   done
   if [ -n "$GET_TMP" ]; then rm -rf "$GET_TMP"; GET_TMP=''; fi    # 다 옮겼다 — 빈 stage 와 임시 폴더를 치운다
   ok "설치 폴더에 옮김: $DIR"
-  set -- --cp-url "$CP_URL" --relay-url "$RELAY_URL" --app-url "$APP_URL" --port "$PORT" --python "$PYVER" \
-         --uv-version "$UV_VERSION"
+  set -- --cp-url "$CP_URL" --relay-url "$RELAY_URL" --app-url "$APP_URL" --python "$PYVER" --uv-version "$UV_VERSION"
+  [ "$PORT_GIVEN" = 1 ] && set -- "$@" --port "$PORT"   # 준 값일 때만(재설치 헛 경고 — step_config)
   [ "$SYSTEM_UV" = 1 ] && set -- "$@" --system-uv
   [ "$REINSTALL" = 1 ] && set -- "$@" --reinstall
   [ "$NO_AUTOSTART" = 1 ] && set -- "$@" --no-autostart
@@ -1072,7 +1072,10 @@ step_config() {
   fi
   hostctl "$I_TMP/secure.out" secure-data-dir --data-dir "$DATA_DIR" \
     || warn "데이터 폴더 권한을 좁히지 못했습니다(비밀이 든 폴더 — 직접 chmod 700 하세요): $DATA_DIR"
-  set -- write-config --conf-file "$CONF_FILE" --port "$PORT" --cp-url "$CP_URL" --relay-url "$RELAY_URL" --app-url "$APP_URL"
+  set -- write-config --conf-file "$CONF_FILE" --cp-url "$CP_URL" --relay-url "$RELAY_URL" --app-url "$APP_URL"
+  # --port 는 사용자가 준 값일 때만 — 기본값(5100)을 넘기면 재설치 때 설정 파일의 포트와 달라 '--port 는 새로 만들 때만' 헛 경고가
+  # 뜬다. 안 주면 새로 만들 때 hostctl 이 Host 기본값을 쓴다
+  [ "$PORT_GIVEN" = 1 ] && set -- "$@" --port "$PORT"
   [ -n "${CLAUDE_CONFIG_DIR:-}" ] && set -- "$@" --claude-config-dir "$CLAUDE_CONFIG_DIR"
   hostctl_tokens "$I_TMP/config.out" "$@" || die "설정 파일을 만들지 못했습니다: $CONF_FILE"
   EFF_PORT=$(kv port "$I_TMP/config.out")
@@ -1240,7 +1243,7 @@ parse_args() {
       --cp-url) CP_URL=$PA_V ;;
       --relay-url) RELAY_URL=$PA_V ;;
       --app-url) APP_URL=$PA_V ;;
-      --port) PORT=$PA_V ;;
+      --port) PORT=$PA_V; PORT_GIVEN=1 ;;
       --python) PYVER=$PA_V ;;
       --uv-version) UV_VERSION=$PA_V ;;
       --from-stage) FROM_STAGE=$PA_V ;;
@@ -1304,6 +1307,7 @@ main() {
   RELAY_URL="wss://clewpath.pyongso.com/relay/ws"
   APP_URL="https://clewpath.pyongso.com/relay/app"
   PORT=5100
+  PORT_GIVEN=0
   PYVER=3.11
   UV_VERSION=$UV_DEFAULT
   SYSTEM_UV=0

@@ -433,7 +433,7 @@ parse_args() {
     case "$PA_K" in
       --cp-url) CP_URL=$PA_V ;;
       --dir) DIR=$PA_V; DIR_GIVEN=1 ;;
-      --port) PORT=$PA_V ;;
+      --port) PORT=$PA_V; PORT_GIVEN=1 ;;
       --relay-url) RELAY_URL=$PA_V ;;
       --app-url) APP_URL=$PA_V ;;
       --client-token) CLIENT_TOKEN=$PA_V; TOKEN_ARGV=1 ;;
@@ -474,6 +474,7 @@ main() {
   DIR=''
   DIR_GIVEN=0
   PORT=5100
+  PORT_GIVEN=0
   RELAY_URL=''
   APP_URL=''
   NO_AUTOSTART=0
@@ -588,7 +589,9 @@ main() {
   ok "압축 해제"
 
   # G8. 넘기기 — stage 는 install.sh 가 옮기고 지운다(실패해도 그쪽이 치운다). 토큰은 env 로만
-  set -- --from-stage "$G_TMP/stage" --dir "$DIR" --cp-url "$CP_URL" --port "$PORT"
+  set -- --from-stage "$G_TMP/stage" --dir "$DIR" --cp-url "$CP_URL"
+  # --port 는 준 값일 때만 — 기본값을 넘기면 재설치 때 설정 파일의 포트와 달라 install.sh 가 헛 경고를 낸다
+  if [ "$PORT_GIVEN" = 1 ]; then set -- "$@" --port "$PORT"; fi
   if [ -n "$RELAY_URL" ]; then set -- "$@" --relay-url "$RELAY_URL"; fi
   if [ -n "$APP_URL" ]; then set -- "$@" --app-url "$APP_URL"; fi
   if [ "$NO_AUTOSTART" = 1 ]; then set -- "$@" --no-autostart; fi

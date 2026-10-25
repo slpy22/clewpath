@@ -168,6 +168,20 @@ def test_write_config_reports_the_port_the_host_will_use(home, capsys, body, wan
     assert rc == 0 and kv["config"] == "kept" and kv["port"] == want and conf.read_text(encoding="utf-8") == body
 
 
+def test_write_config_port_is_optional_and_warns_only_when_given(home, capsys):
+    """재설치 때 --port 를 주지 않아도 install.sh·get.sh 가 기본값(5100)을 넘겨, 설정 파일의 포트가 다르면 '--port 5100 은 새로
+    만들 때만' 헛 경고가 떴다. --port 는 선택 — 없으면 새로 만들 때 Host 기본값, 유지할 때는 경고하지 않는다."""
+    rc, kv, err = run(capsys, "write-config", "--cp-url", "https://cp.example/cp")
+    conf = Path(kv["path"])
+    assert rc == 0 and kv["config"] == "created" and kv["port"] == "5100"
+    assert tomllib.loads(conf.read_text(encoding="utf-8"))["server"]["port"] == 5100
+    conf.write_text(conf.read_text(encoding="utf-8").replace("port = 5100", "port = 6123"), encoding="utf-8")
+    rc, kv, err = run(capsys, "write-config", "--cp-url", "https://cp.example/cp")
+    assert rc == 0 and kv == {"config": "kept", "path": str(conf), "port": "6123"} and "[WARN]" not in err, err
+    rc, kv, err = run(capsys, "write-config", "--port", "5100", "--cp-url", "https://cp.example/cp")
+    assert rc == 0 and kv["port"] == "6123" and "--port 5100 는 설정 파일을 새로 만들 때만" in err, err
+
+
 def test_write_config_kept_warns_when_given_values_differ(home, capsys, monkeypatch):
     """유지(kept)할 때 인자의 주소·env 토큰을 말없이 버렸다 — 다르면 설정 파일 값을 쓴다고 알린다(토큰 값은 찍지 않는다)."""
     monkeypatch.setenv("CLEWPATH_CLIENT_TOKEN", "tok-OLD-1")

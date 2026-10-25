@@ -377,7 +377,7 @@ curl -fsSL …/get.sh | CLEWPATH_CLIENT_TOKEN=… sh                 # 토큰은
    - 토큰은 env로 export한다.
    - 다음을 실행한다. 인자는 `set -- …`로 쌓는다.
      ```
-     exec /bin/sh "$tmp/stage/install.sh" --from-stage "$tmp/stage" --dir "$DIR" --cp-url "$CP" --port "$PORT" [전달 인자…] </dev/null
+     exec /bin/sh "$tmp/stage/install.sh" --from-stage "$tmp/stage" --dir "$DIR" --cp-url "$CP" [--port "$PORT" — 준 값일 때만] [전달 인자…] </dev/null
      ```
    - 표준 입력은 이미 다 읽힌 파이프다. 뒤따르는 스크립트는 대화형 입력을 받지 않는다.
 
@@ -523,7 +523,7 @@ curl -fsSL …/get.sh | CLEWPATH_CLIENT_TOKEN=… sh                 # 토큰은
 
 **I8. [5/6] 설정·권한·런처·기록·자격증명**
 1. `hostctl secure-data-dir`: `DATA_DIR`을 0700으로 만들고, 그 아래 파일·폴더에서 group·other 권한을 뺀다(심볼릭 링크는 건너뜀).
-2. `hostctl write-config --port --cp-url --relay-url --app-url [--claude-config-dir "$CLAUDE_CONFIG_DIR"]`. 토큰은 env로만 넘긴다. 파일이 이미 있으면 손대지 않는다(`config=kept`). 새로 만들 때는 0600, BOM 없음, tomllib 검증을 통과한 뒤 원자적으로 쓴다.
+2. `hostctl write-config [--port — 사용자가 준 값일 때만, 0.32.4] --cp-url --relay-url --app-url [--claude-config-dir "$CLAUDE_CONFIG_DIR"]`. 토큰은 env로만 넘긴다. 파일이 이미 있으면 손대지 않는다(`config=kept`). 새로 만들 때는 0600, BOM 없음, tomllib 검증을 통과한 뒤 원자적으로 쓴다.
 3. `hostctl render-launcher --root "$ROOT" --data-dir --conf-file --port`로 `start-connector.sh`를 만든다(0755, 원자적). 템플릿이 없으면 `[FAIL]`이다. POSIX에는 v1 폴백이 필요 없다.
 4. `.clewpath-install`을 기록한다(printf로 임시 파일에 쓰고 mv).
 5. 자격증명(install.ps1:535-570에 대응):
@@ -593,7 +593,7 @@ curl -fsSL …/get.sh | CLEWPATH_CLIENT_TOKEN=… sh                 # 토큰은
 - `--from-stage`: stage는 이 install.sh가 있는 폴더여야 한다. 최상위 이름 검사는 아무것도 바꾸기 전에 한다(점으로 시작·`start-connector.sh`·제어문자·역슬래시·심볼릭 링크). `--dir`이 비어 있지 않은데 ClewPath 설치본(`.clewpath-install`, 또는 session_manager와 이름이 clewpath-host인 pyproject)이 아니면 거부한다(남의 폴더의 같은 이름 항목을 지우지 않게). `--dry-run`과 함께 쓰면 거부(2). 옮긴 뒤 교체 잔재(`.clewpath-swap.*`)는 버린다 — 받은 파일이 교체 대상을 모두 새로 덮었으므로, 남은 저널을 되돌리면 방금 놓은 파일이 옛 것으로 돌아간다(시험으로 고정). 지우지 못하면 그 자리에서 멈춘다.
 - 교체 잔재가 있는 채로 `sh install.sh`(stage 없이)를 다시 치면 — 런처가 "install.sh 로 복구하세요"라고 안내하는 길 — 표식을 잡기 전에 Host를 멈추고 러너(데이터 폴더 사본 → 설치 루트 → 잔재 안의 것 순)를 임시 사본으로 `-RecoverOnly` 한다. 자기 표식(서막이 잡고 exec 로 이어 온 같은 pid)이 있으면 먼저 내려놓는다 — 러너가 '설치 중'으로 보고 비켜서면(3) 아무도 되돌리지 못한다. 3이면 60초까지 다른 복구가 끝나기를 기다리고, 끝내 남으면 get.sh 재설치를 안내하고 1.
 - 표식은 데이터 폴더가 없고 클로드 `projects`도 없으면 잡지 않는다(그 설치는 [3/6]에서 멈춘다 — 클로드 폴더를 우리가 만들지 않게). 표식의 `at`은 앞자리 0을 받지 않는다(`$(( ))`가 8진수로 읽어 셸이 끝난다).
-- 기존 설정 파일이 있으면 그 파일의 포트(없거나 읽을 수 없으면 Host 기본값 5100)를 런처 렌더·기동 확인·안내에 쓴다. `--port`가 다르면 경고만 한다.
+- 기존 설정 파일이 있으면 그 파일의 포트(없거나 읽을 수 없으면 Host 기본값 5100)를 런처 렌더·기동 확인·안내에 쓴다. `--port`가 다르면 경고만 한다(0.32.4: 사용자가 `--port`를 줬을 때만 넘기고 그때만 견준다 — 기본값을 늘 넘겨 재설치마다 헛 경고가 떴다).
 - 이미 떠 있는 Host는 `running`뿐 아니라 응답 없는 Host(`starting`)도 멈춘다 — status 의 `pid=`(살아 있는 Host 만)로 판단한다. 우리 표식이 있으면 status 는 응답 없는 Host 를 `updating`으로 보이기 때문이다. maintenance.flag 가 있으면 멈추지도 띄우지도 않는다.
 - DryRun 의 컨트롤플레인 도달 확인은 루프백만 프록시를 건너뛴다(`--noproxy 127.0.0.1,localhost,::1`) — 원격 CP 는 사내 프록시가 필요할 수 있다.
 - 인자는 `--opt 값`과 `--opt=값`을 다 받는다. 모르는 위치 인자는 값을 화면에 찍지 않는다(토큰을 잘못 붙였을 수 있다).

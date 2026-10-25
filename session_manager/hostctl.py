@@ -276,7 +276,7 @@ def cmd_write_config(a) -> int:
     if conf.exists() or conf.is_symlink():                         # 사용자가 고친 값을 지킨다 — 재설치도 덮지 않는다
         port = _toml_port(conf)
         ok(f"기존 설정 파일 유지: {conf}")
-        if port != a.port:
+        if a.port is not None and port != a.port:                 # 준 값일 때만(install.sh·get.sh 는 사용자가 준 --port 만 넘긴다)
             warn(f"설정 파일의 포트({port})를 씁니다 — --port {a.port} 는 설정 파일을 새로 만들 때만 씁니다"
                  f"(바꾸려면 [server] port 를 고친 뒤 재시작)")
         _warn_kept_differences(conf, a, client, agent)
@@ -287,7 +287,8 @@ def cmd_write_config(a) -> int:
                     ("CLEWPATH_AGENT_TOKEN", agent or "")):
         if _CTRL.search(v):
             raise HostctlError(f"{name} 에 줄바꿈·제어문자가 있습니다")
-    text = appconfig.render_template(port=a.port, cp_url=a.cp_url.rstrip("/"), relay_url=a.relay_url,
+    new_port = _HOST_DEFAULT_PORT if a.port is None else a.port
+    text = appconfig.render_template(port=new_port, cp_url=a.cp_url.rstrip("/"), relay_url=a.relay_url,
                                      app_url=a.app_url, client_token=client, agent_token=agent,
                                      claude_config_dir=a.claude_config_dir or None)
     import tomllib
@@ -300,7 +301,7 @@ def cmd_write_config(a) -> int:
     if not client and not a.cp_url:      # 컨트롤플레인이 있으면 QR 은 기기 전용 자격증명을 싣는다(공유 토큰 불필요 — 맥 실기 3b)
         warn("폰 접속 토큰(CLEWPATH_CLIENT_TOKEN)이 없습니다 — 컨트롤플레인 없이 폰 페어링 QR 을 쓰려면 설정 파일의 "
              "client_token 을 채우세요.")
-    _out(config="created", path=conf, port=a.port)
+    _out(config="created", path=conf, port=new_port)
     return 0
 
 
@@ -635,7 +636,7 @@ def _parser() -> argparse.ArgumentParser:
     s = sub.add_parser("secure-data-dir", help="데이터 폴더 권한(0700, group·other 제거)")
     s.add_argument("--data-dir")
     s = sub.add_parser("write-config", help="clewpath.toml(없을 때만). 토큰은 env CLEWPATH_CLIENT_TOKEN·CLEWPATH_AGENT_TOKEN")
-    s.add_argument("--port", type=_port, default=_HOST_DEFAULT_PORT)
+    s.add_argument("--port", type=_port, default=None, help="새로 만들 때만(없으면 Host 기본값). 유지할 때는 준 값이 다르면 경고")
     s.add_argument("--cp-url", default="https://clewpath.pyongso.com/cp")
     s.add_argument("--relay-url", default="wss://clewpath.pyongso.com/relay/ws")
     s.add_argument("--app-url", default="https://clewpath.pyongso.com/relay/app")
