@@ -264,7 +264,8 @@ class Connector:
         self.req_cid: dict = {}              # rid -> cid (응답을 요청 기기로 라우팅)
         self.authed: dict[str, dict] = {}    # cid -> 인증된 기기{id,name}
         self.e2ee_key: bytes | None = None   # room E2EE 키(접속 시 로드)
-        self.enc_cids: set = set()           # 암호화 봉투로 말한 기기들(cid)
+        self.enc_cids: set = set()           # 암호화 봉투로 말한 기기들(cid) — 이 cid 의 평문 요청은 받지 않는다(_on_frame)
+        self.plain_refused_logged: set = set()   # 평문 거부를 로그에 적은 cid(기기마다 한 줄)
         self.gone_cids: dict = {}            # 떠난 기기(cid) — 그 앞 프레임은 보내지 않는다(send). 삽입순 집합, 상한 있음
         self.pc_denied_logged: dict = {}     # PC 기기 id -> 마지막 거부 로그 시각(1분에 한 줄)
         self.conn_gen = 0                    # 릴레이 연결 세대(_on_connected 마다 +1) — 이전 연결에서 받은 pclink 요청의 늦은 답은 버린다
@@ -790,6 +791,7 @@ class Connector:
                         task.cancel()
                 self.authed.pop(cid, None)
                 self.enc_cids.discard(cid)
+                self.plain_refused_logged.discard(cid)
                 self._mark_gone(cid)          # 해제한 기기 앞으로 늦게 나가는 응답(평문이 됐다)도 보내지 않는다
                 n += 1
             if n:
@@ -821,12 +823,19 @@ class Connector:
             if frame.get("cid") is not None:
                 self.enc_cids.add(frame["cid"])
         elif self.e2ee_key is not None:
-            # 평문 프레임: require 모드면 실질 요청(req/stream_in)을 거부한다.
+            # 평문 프레임: require 모드면, 아니어도 봉투로 말한 적 있는 기기(cid)면 실질 요청(req/stream_in/stream_close)을 거부한다.
+            # 봉투로 말한 기기는 모든 프레임을 봉투로 보낸다(PWA _tx — 인증 auth 도) — 그 cid 의 평문은 릴레이가 넣은 것이다.
+            # 예전엔 require 가 꺼져 있으면(기본) 받아, 릴레이가 인증된 폰 cid 로 평문 요청을 넣어 실행시킬 수 있었고(바로가기 검토
+            # 4회차 inject 재현) 그 요청은 E2EE 표시(enc_cids)까지 달고 Host 로 갔다. 봉투를 쓴 적 없는 기기(옛 앱·키 없는 기기)는 그대로.
             from session_manager import appconfig
             # pclink 은 예외 — 짝 PC 는 방 키가 없고, 안쪽 봉투가 짝 키로 봉인돼 있어야만 받는다(문서 pclink-protocol-v0 6절 끝)
             pclink_req = frame.get("type") == "req" and frame.get("method") in ("pclink", "pclink.pair")
-            if (appconfig.get_bool("e2ee", "require", False) and not pclink_req
+            sealed_cid = frame.get("cid") is not None and frame["cid"] in self.enc_cids
+            if ((sealed_cid or appconfig.get_bool("e2ee", "require", False)) and not pclink_req
                     and frame.get("type") in ("req", "stream_in", "stream_close")):
+                if sealed_cid and frame["cid"] not in self.plain_refused_logged:   # 기기마다 한 줄(릴레이가 쏟아부어도 로그 폭주 없음)
+                    self.plain_refused_logged.add(frame["cid"])
+                    _log(f"[e2ee] 봉투로 말하던 기기의 평문 {frame.get('type')} 거부(cid {str(frame['cid'])[:8]}) — 릴레이 주입 의심")
                 await self._plain_send({"v": 1, "type": "res", "id": frame.get("id"),
                                         "ok": False, "error": "e2ee_required",
                                         **({"cid": frame["cid"]} if frame.get("cid") is not None else {})})
@@ -861,6 +870,7 @@ class Connector:
                 cid = frame.get("cid")
                 self.authed.pop(cid, None)
                 self.enc_cids.discard(cid)
+                self.plain_refused_logged.discard(cid)
                 self._mark_gone(cid)          # 긴 요청의 늦은 응답은 보내지 않는다 — 평문으로 방 전체에 갔다(검토 2회차)
                 # ★ 그 기기가 잡고 있던 스트림 파이프 해체. 이게 빠져 있어서 폰이
                 # 소리 없이 사라지면(앱 스와이프 종료·탭 닫기·전파 단절) 파이프가
@@ -961,6 +971,7 @@ class Connector:
         for cid in old:
             self._mark_gone(cid)
         self.enc_cids.clear()
+        self.plain_refused_logged.clear()
         self.authed.clear()
         self.req_cid.clear()
 
