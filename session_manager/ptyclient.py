@@ -18,6 +18,10 @@ import time
 
 from session_manager import osdep, ptyd
 
+# 브로커 기동에 쓰는 Popen 참조(updater._popen 과 같은 규칙). 시험은 이것만 바꿔 끼운다 — subprocess.Popen(표준 모듈 그 자체)을
+# 바꾸면 같은 프로세스의 다른 스레드(앞 시험 앱의 orphan-sweep 등)가 부르는 subprocess 까지 가짜로 가 단언이 가끔 틀어진다.
+_popen = subprocess.Popen
+
 _lock = threading.Lock()
 _ctl = None                 # 제어 연결(요청-응답, _lock 으로 직렬화)
 _last_hello: dict = {}
@@ -94,9 +98,9 @@ def launch() -> None:
     ptyd.authkey(create=True)
     log = ptyd.state_path().with_name("ptyd.log")
     with open(log, "ab") as fh:     # 분리 기동 — 콘솔 창 사고(2026-10-10)는 osdep._win.detached_popen_kwargs
-        subprocess.Popen([sys.executable, "-m", "session_manager.ptyd"], stdin=subprocess.DEVNULL,
-                         stdout=fh, stderr=subprocess.STDOUT, **osdep.detached_popen_kwargs(), close_fds=True,
-                         env=ptyd.clean_env(), cwd=str(ptyd.state_path().parent))
+        _popen([sys.executable, "-m", "session_manager.ptyd"], stdin=subprocess.DEVNULL,
+               stdout=fh, stderr=subprocess.STDOUT, **osdep.detached_popen_kwargs(), close_fds=True,
+               env=ptyd.clean_env(), cwd=str(ptyd.state_path().parent))
 
 
 def ensure(start: bool = True) -> dict:

@@ -291,13 +291,12 @@ def test_status_and_restart_api(broker, monkeypatch):
 
 def test_launch_uses_hidden_console_not_detached(fake_claude_home, monkeypatch):
     """DETACHED_PROCESS 면 venv 런처 아래 진짜 python 이 새 콘솔 창을 띄우고, 그 창을 닫으면 브로커·터미널이 다 죽는다(2026-10-10)."""
-    import subprocess
     seen = {}
 
     class P:
         def __init__(self, args, **kw):
             seen.update(kw, args=args)
-    monkeypatch.setattr(subprocess, "Popen", P)
+    monkeypatch.setattr(ptyclient, "_popen", P)     # 표준 subprocess.Popen 은 그대로(다른 스레드의 호출이 섞이지 않게)
     ptyclient.launch()
     from session_manager import osdep
     from session_manager.osdep import _posix, _win

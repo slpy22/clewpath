@@ -157,8 +157,13 @@ def test_assistant_set_portfolio_and_same_agent_on_replace(env, monkeypatch):
 def test_assistant_create_session_and_info_is_pure_read(env, monkeypatch):
     import subprocess
     calls = []
-    monkeypatch.setattr(subprocess, "run", lambda args, **k: calls.append((args, k)) or
-                        type("R", (), {"stdout": json.dumps({"session_id": "s-new"}), "returncode": 0})())
+    real_run = subprocess.run
+
+    def only_boot(fake):
+        # 비서 세션 만들기(claude -p … _BOOT)만 잡는다 — 앞 시험 앱의 배경 스레드가 부르는 다른 명령은 진짜 run 으로
+        return lambda args, *a, **k: fake(args, **k) if isinstance(args, list) and A._BOOT in args else real_run(args, *a, **k)
+    monkeypatch.setattr(subprocess, "run", only_boot(lambda args, **k: calls.append((args, k)) or
+                        type("R", (), {"stdout": json.dumps({"session_id": "s-new"}), "returncode": 0})()))
     info = _ok("assistant_set", {"create": True})["result"]
     assert info["session_id"] == "s-new" and calls[0][0][1:3] == ["-p", "--output-format"]
     assert calls[0][1]["cwd"].endswith("assistant")
@@ -168,7 +173,7 @@ def test_assistant_create_session_and_info_is_pure_read(env, monkeypatch):
     before = c.execute("SELECT COUNT(*) FROM agent_sessions").fetchone()[0]
     assert A.assistant_info()["session_id"] == "s-new2"
     assert c.execute("SELECT COUNT(*) FROM agent_sessions").fetchone()[0] == before, "원격 조회는 쓰지 않는다(A-7)"
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: type("R", (), {"stdout": "oops", "returncode": 1})())
+    monkeypatch.setattr(subprocess, "run", only_boot(lambda *a, **k: type("R", (), {"stdout": "oops", "returncode": 1})()))
     with pytest.raises(team.TeamError) as e:
         A.create_assistant_session()
     assert e.value.code.startswith("assistant_create_failed")
