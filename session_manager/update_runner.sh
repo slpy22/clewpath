@@ -260,10 +260,10 @@ lock_live() {   # $1=잠금 폴더 $2=쥔 프로세스 명령줄의 글자 — �
 }
 
 marker_live() {   # 0 = 다른 프로그램(설치·다른 러너)이 쥔 살아 있는 update.inprogress(pid 가 그 프로그램으로 살아 있고 30분 안)
-  _uf="$DATA/update.inprogress"
+  _uf="$DATA/update.inprogress"   # (at 은 앞자리 0 금지 — $(( )) 가 8진수로 읽다 셸째 끝난다. install.sh·uninstall.sh 와 같은 규칙)
   [ -f "$_uf" ] || return 1
   MK_PID=$(sed -n 's/^pid=\([0-9]\{1,10\}\)[[:space:]]*$/\1/p' "$_uf" 2>/dev/null | head -n 1)
-  _ua=$(sed -n 's/^at=\([0-9]\{1,12\}\)[[:space:]]*$/\1/p' "$_uf" 2>/dev/null | head -n 1)
+  _ua=$(sed -n 's/^at=\([1-9][0-9]\{0,11\}\)[[:space:]]*$/\1/p' "$_uf" 2>/dev/null | head -n 1)
   MK_BY=$(sed -n 's/^by=\([a-z]*\)[[:space:]]*$/\1/p' "$_uf" 2>/dev/null | head -n 1)
   [ "$MK_PID" = "$$" ] && return 1
   if [ -z "$MK_PID" ] || [ -z "$_ua" ]; then

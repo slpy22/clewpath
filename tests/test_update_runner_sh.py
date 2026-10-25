@@ -886,6 +886,20 @@ def test_dead_runner_lock_and_marker_are_taken_over(upd):
     upd.clean_after()
 
 
+@with_shells
+def test_marker_time_with_a_leading_zero_is_not_octal(upd, shell):
+    """표식의 at= 앞자리가 0 이면(손상·손편집 — `at=09`) marker_live 의 $(( )) 가 8진수로 읽다 러너째 끝났다(잠금을 쥔 채).
+    그런 at 은 없는 것으로 본다 — 1분 넘게 묵은 표식은 시체라 넘겨받는다."""
+    marker = upd.data / "update.inprogress"
+    marker.write_text(f"pid={upd.holder('install.sh').pid}\nat=09\nby=install\n", encoding="utf-8")
+    past = time.time() - 120
+    os.utime(marker, (past, past))
+    rc = upd.run(upd.argv(wait_pid=DEAD_PID), shell=shell)
+    assert rc == 0, upd.diag()
+    assert upd.running_tag() == "new"
+    upd.clean_after()
+
+
 # ---------------------------------------------------------------- R⑦ 교체 도중 실패
 
 def test_swap_failure_mid_way_puts_moved_items_back(upd):

@@ -518,6 +518,20 @@ def test_stale_update_marker_is_removed(inst, why):
     assert not marker.exists() and "stale update marker 제거" in inst.llog()
 
 
+@with_shells
+def test_marker_time_with_a_leading_zero_is_not_octal(inst, shell):
+    """표식의 at= 앞자리가 0 이면(손상·손편집 — `at=09`) $(( )) 가 8진수로 읽다 셸째 끝났다(start·status 가 rc 2).
+    그런 at 은 없는 것으로 본다 — 1분 넘게 묵은 표식이면 시체로 치운다."""
+    marker = inst.data / "update.inprogress"
+    marker.write_text(f"pid={inst.holder('update_runner.sh').pid}\nat=09\nby=runner\n", encoding="utf-8")
+    past = time.time() - 120
+    os.utime(marker, (past, past))
+    st = inst.run("status", shell=shell)
+    assert st.returncode == 1 and _kv(st.stdout.decode())["state"] == "stopped", inst.diag(st)
+    inst.started(inst.run("start", shell=shell))
+    assert not marker.exists() and "stale update marker 제거" in inst.llog()
+
+
 # ---------------------------------------------------------------- L⑦ 좀비·pid 재사용
 
 def test_zombie_pid_counts_as_dead(inst):

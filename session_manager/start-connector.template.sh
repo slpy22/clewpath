@@ -417,10 +417,10 @@ start_unlock() { lock_release "$DATA_DIR/launcher.lock"; }
 watch_unlock() { lock_release "$DATA_DIR/watch.lock.d"; }
 
 update_live() {   # 0 = 업데이트·설치 진행 중(update.inprogress 의 pid 가 그 프로그램으로 살아 있고 30분 안). $1=clean 이면 시체를 지운다
-  _uf="$DATA_DIR/update.inprogress"
+  _uf="$DATA_DIR/update.inprogress"   # (at 은 앞자리 0 금지 — $(( )) 가 8진수로 읽다 셸째 끝난다. install.sh·uninstall.sh 와 같은 규칙)
   [ -f "$_uf" ] || return 1
   _up=$(sed -n 's/^pid=\([0-9]\{1,10\}\)[[:space:]]*$/\1/p' "$_uf" 2>/dev/null | head -n 1)
-  _ua=$(sed -n 's/^at=\([0-9]\{1,12\}\)[[:space:]]*$/\1/p' "$_uf" 2>/dev/null | head -n 1)
+  _ua=$(sed -n 's/^at=\([1-9][0-9]\{0,11\}\)[[:space:]]*$/\1/p' "$_uf" 2>/dev/null | head -n 1)
   _ub=$(sed -n 's/^by=\([a-z]*\)[[:space:]]*$/\1/p' "$_uf" 2>/dev/null | head -n 1)
   if [ -z "$_up" ] || [ -z "$_ua" ]; then
     [ -z "$(find "$_uf" -mmin +1 2>/dev/null)" ] && return 0      # 막 쓰는 중일 수 있다 — 1분은 기다린다
