@@ -40,25 +40,59 @@ def test_spawn_pty_echo_input_resize_terminate(tmp_path):
     assert not p.isalive()
 
 
-def test_pty_child_dies_with_its_owner(tmp_path):
-    """Windows Job 과 같은 약속: 주인(브로커)이 kill -9 로 죽어도 pty 안의 프로세스가 남지 않는다(SIGHUP)."""
+@pytest.mark.parametrize("owner_ignores", [False, True], ids=["plain", "nohup"])
+def test_pty_child_dies_with_its_owner(tmp_path, owner_ignores):
+    """Windows Job 과 같은 약속: 주인(브로커)이 kill -9 로 죽어도 pty 안의 프로세스가 남지 않는다(SIGHUP).
+    nohup: 주인이 nohup·'&' 아래 떠 HUP·INT·QUIT 를 무시해도 — 무시는 exec 로 물려가므로 spawn_pty 가 자식 쪽에서 되돌린다
+    (맥 4회차: nohup 아래에서 늘 깨졌다)."""
     from session_manager import osdep
+    ignore = "for s in (signal.SIGHUP, signal.SIGINT, signal.SIGQUIT): signal.signal(s, signal.SIG_IGN)" if owner_ignores else ""
     owner = subprocess.Popen([sys.executable, "-c", textwrap.dedent("""
-        import sys, time
+        import signal, sys, time
         from session_manager import osdep
+        %s
         p = osdep.spawn_pty(["sleep", "300"], ".", 24, 80)
         print(p.pid, flush=True)
         time.sleep(300)
-    """)], stdout=subprocess.PIPE, text=True, cwd=str(tmp_path),
+    """) % ignore], stdout=subprocess.PIPE, text=True, cwd=str(tmp_path),
         env={**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)})
     child = int(owner.stdout.readline())
-    assert osdep.pid_alive(child)
-    owner.kill()
-    owner.wait()
-    end = time.time() + 5
-    while time.time() < end and osdep.pid_alive(child):
-        time.sleep(0.1)
-    assert not osdep.pid_alive(child), "주인이 죽으면 pty 자식도 끝나야 한다"
+    try:
+        assert osdep.pid_alive(child)
+        owner.kill()
+        owner.wait()
+        end = time.time() + 5
+        while time.time() < end and osdep.pid_alive(child):
+            time.sleep(0.1)
+        assert not osdep.pid_alive(child), "주인이 죽으면 pty 자식도 끝나야 한다"
+    finally:
+        owner.kill()
+        owner.wait()
+        if osdep.pid_alive(child):      # 실패했을 때 sleep 300 이 다음 시험까지 남지 않게
+            osdep.kill(child)
+
+
+def test_pid_alive_is_false_when_reaped_between_checks(monkeypatch):
+    """os.kill(pid, 0) 은 좀비라 통과했는데 psutil 이 볼 때는 거둬지는 중(리눅스 X = STATUS_DEAD)이거나 이미 거둬졌으면
+    (NoSuchProcess) 죽은 것. 예전엔 좀비만 죽음으로 봐 죽은 직후 한 번 True 로 튀었다 — 위 시험이 리눅스에서 가끔 깨진 원인(실측).
+    pid 는 이 프로세스(os.kill 0 이 진짜로 통과) — 전역 os.kill·psutil.Process 는 바꾸지 않는다."""
+    import psutil
+
+    from session_manager.osdep import _posix
+    me = os.getpid()
+    for state, alive in ((psutil.STATUS_ZOMBIE, False), (psutil.STATUS_DEAD, False),
+                         (psutil.STATUS_SLEEPING, True), (psutil.STATUS_RUNNING, True)):
+        monkeypatch.setattr(_posix, "_ps_status", lambda pid, st=state: st)
+        assert _posix.pid_alive(me) is alive, state
+
+    for exc, alive in ((psutil.NoSuchProcess(me), False), (psutil.ZombieProcess(me), False),
+                       (psutil.AccessDenied(me), True)):
+        def raise_(pid, e=exc):
+            raise e
+        monkeypatch.setattr(_posix, "_ps_status", raise_)
+        assert _posix.pid_alive(me) is alive, type(exc).__name__
+    monkeypatch.undo()
+    assert _posix.pid_alive(me) is True, "진짜 psutil 로 — 살아 있는 자기 자신"
 
 
 def test_orphans_adopted_by_init_count_as_parentless():
