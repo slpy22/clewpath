@@ -4,6 +4,34 @@
 설계 근거: `docs/2026-09-03-multi-session-monitoring-design.md`,
 `docs/2026-09-10-multi-terminal-tabs-design.md`
 
+## 기획: PC 사이 세션 통신(pclink) — docs/designs/cross-pc-messaging.md (2026-10-22 사장님 결정)
+범위는 크로스체크(3/4)로 정함: 이 프로젝트에서는 **조회 전용 원격 묻기까지**. 실시간·작업 지시는 별도 허브 프로젝트(`docs/spec-pclink-hub-handoff.md`).
+작업은 작업 트리 `pclink/<단계>` 브랜치, 새 패키지 `session_manager/pclink/` 위주 — 맥 측 파일(런처·설치/제거·hostctl·osdep·docs/mac-*·conftest)은 건드리지 않는다(설계 4.6).
+### Phase 1 (이번 사이클) — **0.32.0 출시(2026-10-23, main a37c83b)** — 남은 것: 이 PC ↔ 노트북 실기
+검토로 정해진 것: 새 모듈 4개(protocol·link·policy·routes) + ephemeral_ask 넓힘(D3) · B 는 묻기를 별도 작업으로(D4) · 짝짓기는 초대 문자열 복사(D5), 1회용·24시간(D8), 초대엔 1회용 비밀만·운영 키는 X25519 로 새로(D12) · 한 번에 양쪽(D6) · 물을 때만 붙기(D7) · 폰에서도 짝짓기·허용(D9), 단 폰 경유는 E2EE 봉투 + 2FA 필수(D11) · 회귀 4종 + 두 Host 실 e2e(D10) · 승인 = 그 세션 지금·앞으로 전체 열람·30일(D13) · 결과 10분 보관·같은 id 재조회(D14)
+- [x] 1-0 프로토콜 약속 v0 문서(T9, 761754e) `docs/designs/pclink-protocol-v0.md` — 3층(전송·암호 / 정책 / 실행 어댑터)·봉투(v·id·reply_to·kind·from·to·expires_at·body, 머리를 AEAD 인증 데이터에)·주소 host_id/session_id·상태·버전 협상·거부 규칙
+- [x] 1-1 짝 통로 보안(T1 protocol.py, 고정 시험 벡터) — 짝별 키(폰 방 키와 분리)·평문 거부·nonce·만료·재시작 뒤에도 남는 중복 id 장부
+- [x] 1-2 PC 짝짓기(T2 policy·T7 PWA — 단위·두 Host 흉내 시험까지, 실 e2e 는 T8) — 코드 + 양쪽 폰 승인, **PC 전용 자격(pclink 동작만, 폰 권한 아님)**, 짝 목록·해제(즉시 끊기·키 폐기)·원격 통신 끄기 스위치(설정 + 폰)·상대 버전 확인
+- [x] 1-3 조회 전용 원격 묻기(T3 커넥터·T4 routes/inbound/sender·T5 link·T6 webapi 격리) — 보낸 세션을 프로세스로 확인, 세션별 「원격 묻기 받기」(기본 끔)·첫 연락 폰 승인(보낸 PC·세션/받는 세션/범위에 묶음), 도구·MCP·훅 없는 복제본, 한도, 양쪽 감사 장부(본문 없음), 답은 외부 데이터 표시
+- [x] 1-4 세션용 안내(clewpath-workers 스킬 「다른 PC 세션에 묻기」 절)(스킬 절 또는 새 스킬 — 기존 📦 설치 버튼 방식)
+- [x] 1-5 (병행) 007 보강 — c023816 push, 서비스 모니터 반영 2026-10-23 08:56(확인 a~h 통과). 폐기한 폰 자격으로 12시간 재접속되던 실제 빈틈도 막음 — 릴레이 fail-closed·토큰 세대 대조, CP `/internal/*` 인증(서비스 모니터)
+- [x] CLAUDE.md 승인된 예외에 「원격 묻기 = 허용된 세션의 도구 없는 복제본」 기록(통합 브랜치)
+- [x] T8 두 Host 실 e2e(007 CP·릴레이를 로컬 시험 프로세스로, Host 2개 별도 프로세스) + 실행 안전성 계약 시험(함정 훅·MCP, 양성 대조) — 출시 전 게이트: `SM_E2E_PCLINK=1 SM_E2E_007_DIR=<007 트리> python -m pytest -m e2e tests/e2e/test_pclink_two_hosts.py`(약 20초·0.002달러). 발견: 2FA 코드 재사용(RFC 6238 5.2) → 수리
+- [x] T12 재측정(2026-10-23) — `--max-budget-usd` 가 과거 누적 비용과 비교돼 지금 쓰는 세션에 늘 실패 → 사장님 결정 「묻기당 2달러·짝당 하루 20달러」, 마지막 압축 뒤 분량으로 실행 전 어림(da7f23d)
+- [x] 서비스 토큰 묻기·재개의 `--max-budget-usd` 엉뚱한 실패(감사 기록 9월 6건)·사용량 부풀림(누적값·턴마다 합산) — 이어받기엔 비용 인자 없이, 호출당 상한은 실행 전 분량 어림(토큰·서비스만), 비용은 이번 실행분(83a8138, 0.32.2 출시)
+- [x] main 병합·0.32.0 출시(2026-10-23 사장님 결정, 시험 1109 통과·이 PC 적용·헬스 통과, main·macos push)
+- [x] 0.32.1(2026-10-23): 노트북 0.32.0 확인에서 PS 5.1 분기의 [TimeSpan]::MaxValue 트리거를 Windows 11 작업 스케줄러가 거부(conhost 동작까지 실패) → 무기한(거부되면 10년)·동작/트리거 분리, 서비스 모니터가 이 PC 에서 5.1·7 실제 등록 확인(ops/tools/verify-task-trigger.ps1)
+- [x] 노트북 0.32.1(2026-10-23 11:46 적용) 서비스 모니터·인프라 담당 ①~⑤ 모두 통과 — 런처 v2·5분 반복(지속 시간 빈 값)·conhost --headless·반복 실행 0x0, install.ps1 재실행 금지 해제
+- [x] 실기(2026-10-23, 노트북 0.32.1): 짝짓기(노트북 초대 → 이 PC 받기) · 목록 · 첫 묻기 pending_approval → 폰 승인 → 답(9.6초, untrusted) · 노트북 「모두 끄기」 → 묻기·목록 paused. 해제는 짝을 계속 쓰려고 생략(두 Host e2e 로 확인됨)
+- [x] 원격 세션 목록 제목이 비던 결함(a374e40, 0.32.2 출시)
+- 구현 중 나온 후속(작음) — 2026-10-23 고침(0.32.2 출시): 복제본·재개 CLAUDE_CODE_* 정리 · 승인 실행 실패 뒤 「다시 실행」(PWA) · PC 금지 요청 로그 1분에 한 줄 · PC 짝 폐기 알림 PC 문구. 폰 grace(8시간)가 pclink '켜는' 동작에도 통하던 것 → 10분 안에 받은 유예만(3d7b5f9·5bd6242, 0.32.3). 2026-10-24 고침(0.32.3): websockets·uvicorn 로그의 jwt·token 쿼리 가림(logredact.py) · 상세 칸 허용 상태 GET 은 그 자리가 보일 때만. 남은 것 없음 — PC 화면 승인 2FA 미설정은 0.32.7 에서 막히는 자리(PC 짝·승인 시트)에서 바로 설정·돌아오기로(보안 규칙 A-2·D11 그대로)
+- [ ] (D15 — 0.32.7 구현: 시스템 전체 조회가 막히면 같은 사용자 프로세스별 조회(길 A, 1초 상한, 남의 uid 안 읽음, 주인 둘이면 거부). **남은 것 = 맥 5회차 T3 실기**) (D15) 맥 pclink 경로 — 보낸 세션 확인(맥은 `psutil.net_connections` 권한 오류 → 내 사용자 프로세스별 연결·lsof), 맥 실기 짝짓기·묻기. 맥 정식 출시(platforms 에 mac) 뒤 맥 측 Claude 가 `docs/mac-dev-loop.md` 로 실험·수리 · **맥 4회차 조사(2026-10-23, 3b4 T4)**: 시스템 전체 `psutil.net_connections` = AccessDenied, sudo 없이 되는 두 길 — (A) 같은 사용자 프로세스마다 `Process(pid).net_connections('tcp')` 에서 laddr/raddr 포트 맞추기(약 450개, 31~34ms, login 1개만 AccessDenied) (B) `lsof -nP -iTCP@127.0.0.1:<c> -sTCP:ESTABLISHED -a -u $USER -Fpn`(31~39ms). 시작점 `session_manager/pclink/sender.py` `_owner_pid`
+- [x] (2026-10-26, 007 665cfdc) CP /internal 강제 스위치 SM_CP_INTERNAL_REQUIRE — 켜져 있는데 토큰이 없으면 /internal/* 503(기본 꺼짐, 노트북 P4-2 용, 서비스 모니터 의뢰·사장님 확인)
+### Phase 2 — 허브 프로젝트로 넘김(이 프로젝트에서 만들지 않음) — 스펙 `docs/spec-pclink-hub-handoff.md`
+- [ ] H1 실시간 주고받기(우체국 실험 결과 포함) · H2 원격 작업 지시(쓰임새 ①) · H3 관제·팀 연동 · H4 허브(계층 프로토콜·다자간·오프라인 큐·주소 서비스)
+### Deferred
+- [ ] 폰 연결 E2EE 강제·방 키 교체·재전송 방지(옛 폰 앱·PWA 호환 확인 뒤) · 원격 `/respond` 를 2FA 특권으로 · 주인 단위 PC 묶기(SaaS)
+
 ## 진행중: 상세 칸 화면 바로가기 — docs/designs/quick-switch.md (2026-10-20 기획, 사장님 결정 12개 모두 (가))
 - [x] 0.29.0 눈에 안 보이는 정리(0~3단계): 결함 재현 시험 T1~T11 먼저 → 결함 5건 · 화면 진입 기록(paneEnter) · PC 별 터미널·파일 기억
   - 검토 4회(재현된 것만 고침) + 실제 소켓 e2e(로컬 릴레이·격리 Host·진짜 PWA Conn, 0.28.1 대조). 함께 고친 폰 연결 결함:
@@ -15,35 +43,39 @@
   - 검토 두 관점(화면·기존 흐름 / 단축키·터미널·폰, 헤드리스 크롬 진짜 키 입력) → 재현된 10건 고침: PC 전환 뒤 이전 PC 팀이 보임,
     목록에 아직 없는 터미널(새 비서)을 🖥·Alt+1 이 허묾, 로컬 터미널 창에서 커서가 xterm 밖으로 빠짐, 맥 Option 글자를 삼킴,
     폰 머리 줄 ▾ 때문에 짧은 제목이 잘림, 앱 아래 탭바가 시트·토스트를 가림 등
-- [ ] 0.31.x 다듬기(6단계, 써 보신 뒤 고름) — 탭 닫은 뒤 최근 본 탭, 🖥 볼 일 점, 파일 ⟳, 터미널 '주차' 등
-  - 0.31.0 에서 남긴 것: PC 머리 줄 제목이 목록을 새로 받을 때 '세션'으로 덮임 · PC 가 꺼져 첫 목록에 실패해도 단추가 '준비 중'·
-    '목록을 받는 중입니다'('PC 가 꺼져 있습니다'가 더 정확) · 목록 줄·알림 길(jumpToSession → tabGone)에는 '다른 기기가 가져간 뒤
-    claude 가 끝난 탭'을 열면 인계 확인 뒤 새 claude 가 뜨는 빈틈이 남음(바로가기 길만 quickTabGone 으로 막음)
+- [x] 0.31.x 다듬기(6단계) — **0.32.3(2026-10-24, 사장님 "다 진행")**: PC 머리 줄 제목이 상세 칸 화면 이름을 따름 · PC 꺼짐이면
+  'PC 가 꺼져 있습니다' · 목록 줄·알림 길도 '가져간 뒤 끝난 탭' 방어(tabGone 에 합침, 알림 길은 목록을 새로 받아 판정) · 탭 닫기·⏹ 뒤
+  최근 본 탭 · 🖥 볼 일 점 · 파일 ⟳ 다시 읽기·이동 경로 → 📁 · Ctrl+Shift+B 가 릴레이 터미널·편집기 안에서도 · 이름 바꾸기·삭제는 그 세션을
+  보고 있을 때만 화면 반영 (시험 qs-polish.test.mjs T105~T114)
+- [ ] 6단계 남은 것: ~~뷰어 막대 'ℹ 상세'·'🖥 터미널' 단추~~(사장님 2026-10-26: 머리 줄 바로가기가 그 불편 때문에 만든 것이라 안 함 — 대신 맨 앞에 🏠 홈) · 터미널 '주차'(폰 릴레이 복귀 체감 실측 뒤, 결정 12) · 앱 아래 바 '터미널' → 바로가기(앱 재빌드 때)
 - [ ] 7단계 실기: PC 로컬·폰 릴레이에서 네 화면 왕복·◧ 접힘·새로고침·2차 인증 만료·PC 전환, Host 업데이트 직후 폰('PC 다시 연결됨'·⛔ 없음)
   - 0.31.0 실기로 확정할 것: Alt+1~4 충돌(claude·Windows 입력기·브라우저 확장, 리눅스 크롬의 Alt+1~8 탭 전환은 못 막음)·맥 Option 실키보드(US·UK·한글 배열)·
     PC 880~1100px 에 릴레이 🖧 와 긴 PC 이름·폰 360/390px 릴레이 머리 줄(헤드리스는 로컬 모드로만 봄)
   - 앱 재빌드 때: 아래 탭바 위로 시트·토스트 올림(native-bridge.js, 0.31.0)이 앱에 들어감 + 아래 바 '터미널' 단추 정리(설계 §5-5)
 
 ### 바로가기 작업에서 나온 후속(별건)
-- [ ] (보안, 0.28.1 부터) E2EE 를 켠 방에서도 [e2ee] require 가 꺼져 있으면(기본) 릴레이가 그 기기 cid 로 평문 요청을 넣어 실행시킬 수 있다
+- [x] (0.32.4 — 봉투로 말한 cid 의 평문 req·stream_in·stream_close 는 require 와 무관하게 거부, 진짜 소켓 e2e 14/14) (보안, 0.28.1 부터) E2EE 를 켠 방에서도 [e2ee] require 가 꺼져 있으면(기본) 릴레이가 그 기기 cid 로 평문 요청을 넣어 실행시킬 수 있다
+- [x] (0.32.4, 2026-10-26 노트북 실측·서비스 모니터) 루프백 무인증 통과가 서비스 토큰 범위 검사보다 앞이라 cps_ 토큰을 붙인 루프백 HTTP 가 남의 profile·세션 목록까지 200 — 토큰이 붙으면 루프백이어도 그 범위로만(ask·재개 WS 는 처리기가 이미 막음). 토큰 없는 루프백은 그대로 소유자
+- [x] (0.32.5, 2026-10-26 노트북 실측·서비스 모니터) 서비스 /ask 가 긴 프롬프트(리포트)에 WinError 206(명령줄 한도 32,767자)으로 500 — 명령줄이 2.4만 자를 넘으면 프롬프트를 stdin 으로(4만 자 실제 묻기 확인)
+- [x] (0.32.6 — Host 기동 90초 뒤 배경, 앱 내리면 취소·데이터 폴더 바뀌면 안 함) (관찰, 2026-10-26) 업데이트 작업 폴더 정리(prune_work_dir)가 apply 요청 안(check_and_stage)에서 돌아 첫 정리(이 PC 130개 버전분)가 1분 남짓 — release.ps1 의 30초 대기가 끊겼다(Host 는 혼자 적용 완료, 0.32.5 에서 대기 300초). 다음 업데이트부터는 빠름. 정리를 적용 뒤·배경으로 미룰지 검토. S
       (답은 봉투라 내용은 못 봄 — 검토 4회차 inject 재현). 방 키가 있으면 require 를 기본으로 켜거나, 봉투로 말하던 cid 의 평문 req 는 거부
 - [ ] (0.28.1 부터, 낮음) 커넥터가 프레임을 하나씩 처리해 Host 쪽 느린 요청 하나가 다른 기기 프레임을 잠시 막는다. 동시 처리는 0.29.0 에서
       되돌렸다 — 다시 하려면 기기별 순서 큐 + 전체 상한 + '받을 때 봉투 여부 결정' + 기기 표(epoch)까지 함께(검토 4회차 기록 qs0290_r4.json)
-- [ ] (0.28.1 부터) 관제 그룹 저장(mongroups._save)에 잠금이 없고 임시 파일 이름이 같아, 동시에 두 번 쓰면 파일이 깨져 그룹이 사라질 수 있다(로컬 두 탭에서도) — 잠금 + 고유 임시 이름
-- [ ] (릴레이 007) E2EE 봉투에 대한 agent_offline 응답이 id 를 못 싣고, 모르는 cid 앞 커넥터 프레임을 방 전체에 broadcast 한다 — 모르는 cid 는 버리게(이중 방어)
+- [x] (0.32.3 고침 — 모듈 잠금 + 쓰기마다 다른 임시 이름) (0.28.1 부터) 관제 그룹 저장(mongroups._save)에 잠금이 없고 임시 파일 이름이 같아, 동시에 두 번 쓰면 파일이 깨져 그룹이 사라질 수 있다(로컬 두 탭에서도) — 잠금 + 고유 임시 이름
+- [x] (2026-10-23 pclink T11 007 c023816 — 모르는 cid 프레임 버림) (릴레이 007) E2EE 봉투에 대한 agent_offline 응답이 id 를 못 싣고, 모르는 cid 앞 커넥터 프레임을 방 전체에 broadcast 한다 — 모르는 cid 는 버리게(이중 방어)
 - [ ] 예전 결함으로 폰에 이미 '⛔ 페어링 바뀜'이 저장된 PC 는 0.29.0 뒤에도 한 번 다시 페어링(QR)이 필요할 수 있다 — 페어링 화면 ⛔ 줄에 '그대로 다시 연결' 시도 검토
 - [ ] (앱) 아래 바 '세션' 단추(native-bridge.js)가 폰 웹 재개를 숨기기만 해 claude -p 가 계속 돈다 — 앱 재빌드 때 closeLiveResume 경유로
 - [ ] 사용 중인 실제 소켓 e2e 하네스(scratchpad qs-e2e)를 저장소 tests/ 로 옮겨 릴리스 전 회귀로 둘지 검토
 
 ## 진행중: 멀티 OS(Windows + macOS, 리눅스는 시험용) — docs/designs/multi-os.md (2026-10-15 사장님 결정)
 - [x] **맥·리눅스를 platforms 에 넣기 전 필수 — 2회차 적대적 검토(2026-10-21):** 다섯 스크립트·hostctl·1회차 수리 커밋을 검토자 6명(스크립트별 5 + 연동·맥 호환 1)이 일회용 컨테이너에서 재현하며 봤다. 지적 36건(겹침 빼면 약 30건)을 모두 회귀 시험을 먼저 쓰고 고쳤다 — 명세 9장. 큰 것: uninstall 이 설치 폴더를 통째 지워 zip 을 푼 폴더(~/Downloads 등)가 사라지던 것, 홈 가드가 글자 비교뿐이던 것, uninstall 이 맥 bash 3.2 에서 구문 오류로 시작도 못 하던 것(`$( )` 안 case), auto_apply 가 방금 롤백된 버전을 다시 적용해 끝없이 돌던 것(Windows 포함, server.py), 못 지운 교체 저널이 런처를 영구히 막던 것, 느린 첫 기동에 Host 가 둘 뜨던 것, Ctrl+C 가 mv 자식을 죽여 섞인 설치가 남던 것
-- [ ] (2회차 후속) 셸 쪽 update.inprogress 원자적 잡기 — install.sh·러너가 '확인 → 쓰기' 라 수 ms 경합 창이 있다(파이썬 apply 는 살아 있는 표식이면 거부하도록 고침). 둘이 같은 mkdir 잠금으로 확인·쓰기를 묶기. 시작점: `install.sh` 표식 잡기, `session_manager/update_runner.sh` mark_take. S
+- [x] (0.32.4 — .update.inprogress.lock mkdir 잠금) (2회차 후속) 셸 쪽 update.inprogress 원자적 잡기 — install.sh·러너가 '확인 → 쓰기' 라 수 ms 경합 창이 있다(파이썬 apply 는 살아 있는 표식이면 거부하도록 고침). 둘이 같은 mkdir 잠금으로 확인·쓰기를 묶기. 시작점: `install.sh` 표식 잡기, `session_manager/update_runner.sh` mark_take. S
 - [ ] (2회차 후속) `CLEWPATH_CONFIG` 가 브로커·claude 자식으로 샌다 — `ptyd.clean_env` 에 넣으면 되지만 브로커 해시가 바뀌어 Windows 도 브로커 업데이트 대기 1회. 다른 ptyd 변경과 묶어서. S
-- [ ] (2회차 후속) 런처 '포트를 남이 씀'(foreign) 판정은 지금 그 프로그램이 ClewPath 가 아니어도 거부한다 — 진단의 claude_home 으로 ClewPath 일 때만 거부하고 아니면 Host 의 port_fallback 에 맡기기 검토. 런처 `cmd_stop` 의 대기 마감(K_END)도 벽시계라 러너처럼 반초 수로. S
-- [ ] (2회차 후속, 안내) 러너가 업데이트 중 `stop --hold` 를 보면 헬스 없이 커밋하고 끝낸다(held=true) — 그 새 버전이 resume 때 못 뜨면 자동 롤백이 없다(백업은 updates/backup-*). 런처 resume 이 held 커밋 뒤 첫 기동 실패면 안내하게. 진단 응답에 pid 를 넣어 헬스가 응답한 프로세스를 직접 확인하는 것도 검토. S
+- [x] (0.32.4 — claude_home 없는 남의 HTTP 는 other → port_fallback, 대기는 반초 수) (2회차 후속) 런처 '포트를 남이 씀'(foreign) 판정은 지금 그 프로그램이 ClewPath 가 아니어도 거부한다 — 진단의 claude_home 으로 ClewPath 일 때만 거부하고 아니면 Host 의 port_fallback 에 맡기기 검토. 런처 `cmd_stop` 의 대기 마감(K_END)도 벽시계라 러너처럼 반초 수로. S
+- [x] (0.32.4 — updates/held-commit 표식 + 첫 기동 실패 안내, 진단 pid 는 안 함) (2회차 후속, 안내) 러너가 업데이트 중 `stop --hold` 를 보면 헬스 없이 커밋하고 끝낸다(held=true) — 그 새 버전이 resume 때 못 뜨면 자동 롤백이 없다(백업은 updates/backup-*). 런처 resume 이 held 커밋 뒤 첫 기동 실패면 안내하게. 진단 응답에 pid 를 넣어 헬스가 응답한 프로세스를 직접 확인하는 것도 검토. S
 - [x] 1단계(0.23.0): `session_manager/osdep/`(_win·_posix) 경계 — pty·자식 동반 종료·프로세스 목록/종료·DPAPI·런처·재개 창·경로·업데이트 러너. Windows 동작 불변, 가드 test_osdep.py
 - [x] 2단계(`macos` 브랜치, 2026-10-15 → **main 합침 0.28.0, 2026-10-20 재검증: 리눅스 컨테이너 612 통과·Windows 620 통과**): POSIX pty(ptyprocess)·pty 끊김 SIGHUP 동반 종료·브로커 유닉스 소켓(0600)·고아 판정 init 입양·범위 감시 POSIX 경로·테스트 OS 분기 — 리눅스 컨테이너 571 통과 + 브로커 통합 확인, Windows 579 통과. **main 배포 시 ptyd 해시가 바뀌어 브로커 업데이트 대기 1회**
-- [ ] (발견) extras `mcp>=1.0.0` 이 잠금에서 mcp 2.0.0 — 2.x 엔 `mcp.server.fastmcp` 가 없어 mcp_server 가 안 뜬다. 설치본엔 extra 가 안 들어가 운영 영향 없음. `<2` 고정 또는 2.x 대응(리눅스 컨테이너 pytest 에선 test_mcp_team 이 이 때문에 건너뛰어진다)
+- [x] (0.32.3 고침 — `mcp>=1.0.0,<2`, 잠금 mcp 1.30.0) (발견) extras `mcp>=1.0.0` 이 잠금에서 mcp 2.0.0 — 2.x 엔 `mcp.server.fastmcp` 가 없어 mcp_server 가 안 뜬다. 설치본엔 extra 가 안 들어가 운영 영향 없음. `<2` 고정 또는 2.x 대응(리눅스 컨테이너 pytest 에선 test_mcp_team 이 이 때문에 건너뛰어진다)
 
 ### 3a 맥·리눅스 공통 설치·업데이트 — `posix-install` 브랜치(2026-10-20~21), 명세 docs/designs/posix-install.md
 결정(2026-10-20 사장님): 훅 자동 등록은 승인 예외로 기록(CLAUDE.md, 모든 OS 같은 방식) · 제거 때 훅은 안내만 · 나머지 Q1~Q5·Q8~Q21 은
@@ -59,10 +91,11 @@
 - [x] 검토 반영(2026-10-21, 지적 11건 — 시험으로 재현한 뒤 고침, 시계 이동은 started_at 을 당겨 흉내): 훅 curl·커넥터 로컬 호출이 프록시 env 를 따르던 것(`--noproxy 127.0.0.1`·`trust_env=False`·`proxy=None`), 훅 백업 0600, install.sh 직접 실행 때 토큰 인자를 env 로 옮겨 다시 실행, 받은 파일 배치를 rename·신호 미루기로, nohup 이 둔 HUP 무시가 Host·브로커·pty 자식에 물려가던 것, 시체 잠금 치우기 경합(권리 폴더 `.reclaim`), probe 의 시각 비교(시계 이동) → 설치 경로로, 롤백·복구가 런처도 되돌림, sign_release 도 win 필수, 문서 계약 시험을 진행 상태에서 떼어 냄 — 명세 각 절의 '검토 반영'
 - [ ] main 합침·릴리스(`platforms=["win"]`): `quick-switch` 와 섞이지 않게 차례로, 합칠 때마다 Windows 전체·리눅스 컨테이너 다시 시험, 이 PC 에서 0.28.1 → 새 버전 업데이트 왕복(명세 R14, `release.ps1 -Apply`). CHANGELOG 는 릴리스 때(`-PrepareChangelog`)
 - [ ] mac·linux 를 넣는 릴리스는 그 릴리스 HEAD(버전·CHANGELOG 커밋 뒤)에서 `python -m pytest -m posix_e2e tests/test_posix_e2e.py` 를 다시 돌려 `ops/logs/posix-e2e-<ver>.json` 을 남겨야 `release.ps1 -Platforms` 게이트를 지난다
-- [ ] (후속, 작음) PWA 가 update/status 의 `unsupported` 를 몰라 '최신 버전입니다'로 보여 준다(서버 응답·적용 거부 사유에는 있다) — 맥 단계 전에. 시작점: `pwa/index.html` checkUpdateNow + tests/pwa. S
-- [ ] (후속, 작음) 런처·러너가 표식의 `at=` 를 `[0-9]{1,12}` 로 받아 앞자리 0(`at=09`)이면 `$(( ))` 8진수 오류로 셸이 끝난다 — 우리 스크립트는 늘 `date +%s` 를 쓰니 손상·손편집 때만. `[1-9]` 로. 시작점: `session_manager/start-connector.template.sh`·`session_manager/update_runner.sh`. S
-- [ ] (후속, 작음) 재설치 때 `--port` 헛 경고 — 사용자가 `--port` 를 주지 않아도 install.sh 가 기본값(5100)을 write-config 에 넘겨(get.sh 도 늘 넘긴다), 설정 파일의 포트가 다르면 '--port 는 새로 만들 때만 씁니다' 경고가 뜬다. 준 값일 때만 넘기면 된다. 시작점: `install.sh` step_config, `session_manager/hostctl.py` write-config. S
-- [ ] (후속, 작음) `-RecoverOnly` 가 떠 있는 Host 때문에 보류(종료코드 3)하는 동안 교체 잔재를 status 가 알리지 않는다(그 Host 가 내려가면 다음 재기동·업데이트가 되돌림) — 런처 status 에 `swap=` 줄 검토. S
+- [x] (0.32.3 고침 — unsupported·error 사유 표시) (후속, 작음) PWA 가 update/status 의 `unsupported` 를 몰라 '최신 버전입니다'로 보여 준다(서버 응답·적용 거부 사유에는 있다) — 맥 단계 전에. 시작점: `pwa/index.html` checkUpdateNow + tests/pwa. S
+- [x] (0.32.4) (후속, 작음) 런처·러너가 표식의 `at=` 를 `[0-9]{1,12}` 로 받아 앞자리 0(`at=09`)이면 `$(( ))` 8진수 오류로 셸이 끝난다 — 우리 스크립트는 늘 `date +%s` 를 쓰니 손상·손편집 때만. `[1-9]` 로. 시작점: `session_manager/start-connector.template.sh`·`session_manager/update_runner.sh`. S
+- [x] (0.32.4 — install.sh·get.sh 가 준 값일 때만) (후속, 작음) 재설치 때 `--port` 헛 경고 — 사용자가 `--port` 를 주지 않아도 install.sh 가 기본값(5100)을 write-config 에 넘겨(get.sh 도 늘 넘긴다), 설정 파일의 포트가 다르면 '--port 는 새로 만들 때만 씁니다' 경고가 뜬다. 준 값일 때만 넘기면 된다. 시작점: `install.sh` step_config, `session_manager/hostctl.py` write-config. S
+- [x] (0.32.6 — 준 주소만 넘김, 유지한 설정 파일 주소로 자격증명 발급) (후속, 작음, 2026-10-26 발견) 같은 꼴의 재설치 헛 경고가 `--cp-url`·`--relay-url`·`--app-url` 에도 — install.sh 가 기본값을 늘 넘겨 설정 파일 값이 기본과 다르면 재설치마다 경고. 준 값일 때만 넘기기. S
+- [x] (0.32.4 — status 의 swap=updating|pending) (후속, 작음) `-RecoverOnly` 가 떠 있는 Host 때문에 보류(종료코드 3)하는 동안 교체 잔재를 status 가 알리지 않는다(그 Host 가 내려가면 다음 재기동·업데이트가 되돌림) — 런처 status 에 `swap=` 줄 검토. S
 - [ ] (후속) `foreground` 는 launcher.lock 을 잡지 않는다(exec 하면 trap 이 안 돈다) — 동시에 도는 start 와의 경합은 Host 의 두 번째 방어선(같은 포트에 ClewPath 면 종료)에 맡겼다. 3b launchd KeepAlive 와 묶을 때 다시 본다
 - [ ] (한계, 기록만) `curl | sh` 스트림이 마지막 줄 `main` 바로 뒤에서 끊기면 인자 없는 기본 설치가 된다 — 모든 `curl | sh` 설치기의 한계(명세 3.1 구현 메모)
 
@@ -79,18 +112,20 @@
   ② `test_mac_start_leaves_launchd_alone[linux]` 가 진짜 맥에서 맥 길로 감 → 가짜 uname Linux
   ③ **이슈 B: 맥 데이터 폴더의 `clewpath.toml` 이 10:40–12:44 사이 사라짐 — 원인 미확정.** 리눅스 진짜 홈 표식 + 전체 시험 1,446건 무사, 제품 코드에 그 파일만 지우는 곳 없음. 시험마다 진짜 데이터 폴더 핵심 파일 3개(`clewpath.toml`·`cp_credentials.json`·`devices.json`)가 그대로인지 보는 conftest 가드 → 맥 3회차 T2 에서 조사
   → **3회차부터 맥 측이 직접 고치고 시험한다(사장님 제안 2026-10-22, 규칙 `docs/mac-dev-loop.md`)** — `mac/<주제>` 브랜치, Windows 측이 Windows·리눅스·e2e 로 확인 뒤 main 에 합친다
+- [x] **맥 실기 4회차(2026-10-23, `docs/mac-results/3b4-20261023.md`, main 87048e7 에 합침)** — 맥 전체 1,627 통과 · **이슈 B 재발 없음**(웹 터미널 안 전체 시험, clewpath.toml 그대로) · **문제 C**: 웹 터미널 안 전체 시험이 7시간 멈춤 — `test_home_is_rejected` 가 진짜 홈을 훑다 ~/Library 의 다른 앱 데이터에 닿아 macOS 개인정보 확인 창(책임 프로세스 = Host python3.11, 화면 꺼짐)의 답을 기다림 → 시험은 가짜 홈으로(맥 측 d2037b6), 제품 `servicereg.check_folder` 는 이미 승인할 수 없는 폴더면 훑지 않게(ee4b28b, 다음 출시) · 웹 터미널 1회째 실패 2건은 맥 측 스크립트의 `nohup … &`(SIGINT·SIGHUP 무시가 물려감) — 제품은 런처가 이미 되돌림 · 런처 표식 `launcher: ok (posix v2)`
 - [ ] (관찰, 맥 2회차) 브로커와 웹 터미널의 claude 는 로그아웃에도 살아남는다(AbandonProcessGroup — Host 만 launchd 작업이라 끝나고, 새 Host 가 로그인 뒤 그 브로커를 다시 잡는다). 터미널이 이어지는 쪽이라 지금은 그대로, 로그인 세션 밖에서 claude 가 도는 게 문제 되면 다시 본다 · 재설치 직후 status 가 남은 `ptyd.json` 의 옛 브로커(`broker_alive=0`)를 보여 준다(맞는 값이지만 헷갈림)
 - [x] **(가) 로그인 항목 이름 'ClewPath'(사장님 결정 2026-10-22: 이름만 지금, 앱은 나중):** launchd 가 데이터 폴더의 `ClewPath` 스크립트(0700, 표식 `clewpath-launchd v1`)를 부른다. 옛 등록(/bin/sh -c)도 uninstall 이 알아본다. 명세 10장. 맥 2회차에서 이름 확인
-- [ ] **(나) 서명된 ClewPath.app — 맥 정식 출시 전 별도 기획(사장님 결정)**: 권한 창 이름을 ClewPath 로, 업데이트 뒤에도 권한 유지. 아래 기록 참고
+- [ ] **(나) 서명된 ClewPath.app — 맥 정식 출시 전 별도 기획(사장님 결정)**: 권한 창 이름을 ClewPath 로, 업데이트 뒤에도 권한 유지. 아래 기록 참고 · (맥 4회차) 웹 터미널 claude 가 처음 '다른 앱의 데이터'에 닿으면 맥 화면에 python3.11 이름으로 창이 뜨고, 폰으로만 쓰는 동안엔 답할 길이 없어 같은 권한이 필요한 일이 Host 아래 어디서든 멈춘다 — 바탕화면·문서·사진·iCloud·OneDrive·Google Drive 에 이어 「다른 앱의 데이터」(사장님이 2026-10-23 22:10 허용)
 - [ ] (기록) **맥 이름·권한 창** — 로그인 항목·백그라운드 알림에 **"sh"**(plist 의 프로그램이 /bin/sh), 웹 터미널의 claude 가 데스크탑·문서·사진·iCloud 등에 처음 닿을 때 **"python3.11"** 권한 창이 항목마다 떴다(launchd → Host(python) 가 책임 프로세스. uv 파이썬은 adhoc 서명이라 파이썬이 바뀌면 다시 뜰 수 있다). 사장님: "설치 시에 허락돼 버리면 좋겠다" — macOS 는 프로그램이 스스로 권한을 줄 수 없다. 안: (가) 등록 프로그램을 `ClewPath` 라는 작은 스크립트로(로그인 항목 이름만 바뀜) (나) 서명된 `ClewPath.app` 이 Host 를 자식으로 띄워 책임 프로세스가 되게(권한 창 이름이 ClewPath, 업데이트 뒤에도 권한 유지 — Developer ID 서명·공증 필요) (다) 설치 끝에 '전체 디스크 접근' 설정 화면을 열어 안내. 1회차 세션이 홈 폴더라 claude 가 홈 아래를 훑어 창이 많았다
 - [ ] (launchd 후속) `osdep._posix.ensure_launcher` 가 plist 도 점검·재등록하게(지금은 런처만 다시 렌더) · `launchd.log` 회전 없음 · 업데이트 러너(CLEWPATH_UPDATER=1)가 다시 띄운 Host 는 아직 launchd 밖 · 제거 뒤 `sfltool dumpbtm` 에 옛 "sh" 항목이 남는다(맥이 정리. `sfltool` 은 관리자 암호 창을 띄워 2회차부터 쓰지 않는다 — 남았는지 미확인)
-- [ ] **노트북 이전(서비스 모니터 계획 v0.4.2) 선행 수정 2건 — 사장님 결정 '나중에'(2026-10-22, 이전 시점이 정해지면 다시 결정):**
-  ① Host '원격 API 전용' 두 번째 포트(예: 127.0.0.1:5110) — 루프백 신뢰 없이 /api/v1 + 서비스 토큰(cps_)만. 왜: ssh 터널로 들어온 요청은 Host 에 127.0.0.1 로 보여 `_is_local` 이 인증 없이 사장님 권한(owner API·웹 터미널까지)으로 통과시킨다. nklaw 를 노트북으로 옮기는 P3 의 선행 조건. 시작점: `session_manager/server.py` `_is_local`·`AuthASGIMiddleware`, `server.main`(두 번째 리스너). M
-  ② 007 CP `/internal/*` 공유 토큰(릴레이가 X-Internal-Token) — 왜: `/internal/rooms/{room}/agent-down·up` 이 무인증이라 CP 에 직접 닿는 쪽은 room 키만 알면 폰에 가짜 '연결 끊김' 웹푸시를 보낼 수 있다(지금은 이 PC 프로세스·컨테이너만 닿음, 노트북 5200 LAN 게시 때 노트북 자신이 더해짐). P4-2 선행 권장. 시작점: 007 `control_plane/api.py:326-354`, `relay/relay.py:154·237·327`. S
+- [x] **노트북 이전(서비스 모니터 계획 v0.4.2) 선행 수정 2건 — 사장님 결정 '나중에'(2026-10-22) → ① 은 2026-10-24 '안 만들고 감수':**
+  서비스 모니터 0-12 절차서는 터널을 쓰지 않고 `ssh kisworker "curl.exe … http://127.0.0.1:5100/…"` 로 노트북 안에서 부른다(본문·토큰은 ssh stdin). 이 PC 에 열리는 포트 없음.
+  ① (만들지 않음 — 터널로 노트북 Host 에 붙는 일이 생기면 다시 꺼낸다) Host '원격 API 전용' 두 번째 포트(예: 127.0.0.1:5110) — 루프백 신뢰 없이 /api/v1 + 서비스 토큰(cps_)만. 왜: ssh 터널로 들어온 요청은 Host 에 127.0.0.1 로 보여 `_is_local` 이 인증 없이 사장님 권한(owner API·웹 터미널까지)으로 통과시킨다. nklaw 를 노트북으로 옮기는 P3 의 선행 조건. 시작점: `session_manager/server.py` `_is_local`·`AuthASGIMiddleware`, `server.main`(두 번째 리스너). M
+  ② ✅ 2026-10-23 pclink T11 로 반영됨(007 c023816, 내부 토큰 파일 2개·서비스 모니터 배포) — 007 CP `/internal/*` 공유 토큰(릴레이가 X-Internal-Token) — 왜: `/internal/rooms/{room}/agent-down·up` 이 무인증이라 CP 에 직접 닿는 쪽은 room 키만 알면 폰에 가짜 '연결 끊김' 웹푸시를 보낼 수 있다(지금은 이 PC 프로세스·컨테이너만 닿음, 노트북 5200 LAN 게시 때 노트북 자신이 더해짐). P4-2 선행 권장. 시작점: 007 `control_plane/api.py:326-354`, `relay/relay.py:154·237·327`. S
 - [ ] 시험이 남긴 '/model' 세션 — **사장님이 ClewPath 화면에서 직접 지우기로(2026-10-22)**: 이 PC `E:\` 폴더 4개(10-21), 맥 `-Volumes-Works-Projects-clewpath` 3개
 - [ ] 키체인(`osdep.protect`/`unprotect` — 지금은 None 이라 데이터 폴더 0700 안 파일) · Terminal.app 재개(`open_resume_terminal`) · Gatekeeper 격리 속성 확인
 - [ ] 맥에서 전체 pytest + 3a e2e 시나리오(명세 6.3) 반복 + 실제 claude 기동·재접속·업데이트 왕복 → 통과하면 릴리스 `platforms` 에 mac
-- [ ] CP `/get.sh` 공개(서비스 모니터 의뢰, 명세 7절): `ops/get.sh` 를 007 `control_plane/get.sh` 로 옮기고 `/get.sh` 라우트·007 `.gitattributes`·007 테스트·nginx `location = /get.sh` · 랜딩·README OS 별 한 줄(리눅스는 '시험용'으로 표시하거나 빼기) — 이때 tests/test_docs_multi_os.py 의 '공개 주소 없음' 시험도 함께 바꾼다
+- [ ] (2026-10-26 준비 끝 — 006·007 가지 `w0327/getsh`(origin), 절차·의뢰문 초안 006 `docs/deploy/get-sh-publish.md`(그 가지). **맥 5회차 통과 → mac 넣은 릴리스 뒤 공개**) CP `/get.sh` 공개(서비스 모니터 의뢰, 명세 7절): `ops/get.sh` 를 007 `control_plane/get.sh` 로 옮기고 `/get.sh` 라우트·007 `.gitattributes`·007 테스트·nginx `location = /get.sh` · 랜딩·README OS 별 한 줄(리눅스는 '시험용'으로 표시하거나 빼기) — 이때 tests/test_docs_multi_os.py 의 '공개 주소 없음' 시험도 함께 바꾼다
 - [ ] 맥 확인 거리: claude 설치 경로·pty 출력 차이, 터미널 앱 전체 디스크 접근 권한 필요 여부, Gatekeeper(curl 설치 시 격리 속성)
 - [ ] 맥 확인 거리(3a 가 리눅스로만 흉내 낸 것) — 2회차 검토(2026-10-21)가 정적으로 판정했다. 실기에서는 확인만:
   `[[:cntrl:]]`·`set -u` 와 빈 `"$@"`(bash 3.2 에서 괜찮음) · BSD unzip 은 Info-ZIP 6.00 이라 `-Z1`·`-Z` 같음(get.sh 는 이제 `unzip -Z` 출력의 ZipInfo 로 확인) ·
@@ -103,22 +138,27 @@
 - [ ] systemd `--user` 자동 시작(`systemd-run --scope` 포함)·정식 지원 여부 결정 · R8 시스템 파이썬 업그레이드가 `.venv` 를 깨뜨릴 수 있음(정식 지원 때 관리 런타임 고정 검토) · R11 curl 없는 배포판(slim)에선 상태 훅이 조용히 실패 · musl(Alpine)·FreeBSD 는 범위 밖
 
 ### 별건(양 OS, 명세 8.2·1.2)
-- [ ] Q15·R10 러너에 넘기는 env 에서 Host 가 채운 `SM_*` 빼기 — 지금은 업데이트 직후 Host 가 옛 env 를 물려받아 clewpath.toml 변경이 가려진다(Windows 와 같은 기존 성질)
-- [ ] Q16·R13 작업 폴더(zip·stage·backup) 정리 — 최근 2개만 보관(파이썬 공통)
+- [x] (0.32.3 — appconfig.filled_env 를 러너 env 에서 뺌) Q15·R10 러너에 넘기는 env 에서 Host 가 채운 `SM_*` 빼기 — 지금은 업데이트 직후 Host 가 옛 env 를 물려받아 clewpath.toml 변경이 가려진다(Windows 와 같은 기존 성질)
+- [x] (0.32.3 — prune_work_dir, 스테이징 직후·적용 중엔 안 함·롤백 원본 보존) Q16·R13 작업 폴더(zip·stage·backup) 정리 — 최근 2개만 보관(파이썬 공통)
 - [ ] Q5 `CLAUDE_CODE_*` 정리 범위 축소 검토 — `CLAUDE_CODE_USE_BEDROCK` 같은 사용자 설정 변수까지 빠진다(브로커 `ptyd.clean_env` 와 런처가 같은 규칙)
-- [ ] `apply.lock` O_EXCL 원자화(지금은 '있고 5분 안이면 거부' 뒤 쓰기라 아주 짧은 경합 창이 있다)
+- [x] (0.32.3) `apply.lock` O_EXCL 원자화(지금은 '있고 5분 안이면 거부' 뒤 쓰기라 아주 짧은 경합 창이 있다)
 - [ ] R6 CP 가 최신 한 건만 줘서 `platforms` 로 뺀 OS 는 그동안 설치·업데이트를 못 받는다 — 릴리스 규칙(모든 릴리스에 지원 OS 유지, release.ps1 이 win 을 강제), 장기적으로 CP `?platform=`(007)
 
 ## 별건: Windows 기존 결함 — 명세 docs/designs/posix-install.md 8.1 R15 (2026-10-20 조사, 3a 범위 밖)
 맥·리눅스 설치를 만들며 Windows 스크립트를 다시 읽다 찾았다. 3a 는 Windows 동작을 바꾸지 않았으므로(예외: `update_runner.ps1` 의 `$Payload` 한 줄)
 따로 고친다. install.ps1·update_runner.ps1 은 PS5.1 문법·BOM 을 지키고(test_ps51_compat) 건마다 회귀 시험을 붙인다.
-- [ ] ① **PS5.1 러너가 쓴 `last_apply.json` 의 BOM 때문에 롤백 반복 차단이 꺼질 수 있다**(추정) — 왜: pwsh 가 없는 PC 는 러너가 powershell.exe(5.1)로 돌고, 5.1 의 `Set-Content -Encoding UTF8` 은 BOM 을 붙인다. `updater.recently_failed` 와 update/status 가 `encoding="utf-8"` 로 읽다 실패하면 '방금 실패한 버전'을 몰라, 재기동 자동 적용이 같은 버전을 또 받아 실패 → 롤백을 되풀이하고 화면의 지난 적용 결과도 빈다. 무엇: 읽는 쪽 두 곳을 `utf-8-sig` 로(쓰는 쪽은 5.1 이라 BOM 이 정상). 시작점: `session_manager/update_runner.ps1:237`, `session_manager/updater.py:392`, `session_manager/server.py:741`. S
-- [ ] ② **Copy-Payload 가 복사 오류를 삼키고, 백업 실패 종료는 잠금·결과를 남기지 않는다** — 왜: `Copy-Item … -ErrorAction SilentlyContinue` 라 실패해도 예외가 없어 백업·교체 실패를 잡는 `try/catch` 가 사실상 돌지 않는다(반쪽 백업 위에 교체하면 롤백도 반쪽). 백업 실패 분기의 `exit 1` 은 `apply.lock`(5분 만료까지 다음 적용 거부)과 `last_apply.json`(결과·재시도 차단)을 건너뛴다. 무엇: 복사 오류를 모아 실패로 올리고, 실패·중단 길도 결과 기록·잠금 해제를 거치게(맥·리눅스 러너는 rename·저널로 같은 경우를 처리한다). 시작점: `session_manager/update_runner.ps1:48-57`, `session_manager/update_runner.ps1:166-174`. M
-- [ ] ③ **런처가 host.log 를 덮어써 사고 직전 로그가 사라진다**(실측) — 왜: `Start-Process -RedirectStandardOutput/-RedirectStandardError` 는 파일을 새로 쓴다. 죽은 Host 를 런처가 다시 띄우면 직전 로그가 지워져, 자기 회복의 사고 기록(liveness 의 마지막 로그 10줄)과 원인 조사가 빈손이 된다. 무엇: 띄우기 전에 옛 로그를 한 세대 밀어 두거나 이어 쓰기(맥·리눅스 런처는 이어 쓰기 + 5MB 회전 + `=== launcher start` 구분줄). 시작점: `session_manager/start-connector.template.ps1:51-53`, `install.ps1:526`(템플릿 없는 옛 zip 의 v1 런처). S
-- [ ] ④ **원라인 재설치가 터미널 관리 프로세스(브로커)까지 강제 종료한다** — 왜: get.ps1 은 설치 폴더 아래 python 을 모두 `Stop-Process -Force` 해 `session_manager.ptyd` 와 그 안의 열린 터미널(claude)도 끝낸다(업데이트 러너·롤백은 브로커를 뺀다). README 5절 '지금 끄기'·install.ps1 완료 안내의 중지 명령도 같은 식이다. 무엇: 명령줄에 `session_manager.ptyd` 가 있으면 빼기(러너와 같은 규칙). 007 은 운영 CP 가 bind-mount 로 바로 서빙하므로 고치면 즉시 운영에 나간다 — 시험 먼저. 시작점: `007/control_plane/get.ps1:88-90`, `install.ps1:709`, `README.md`(5절). S
-- [ ] ⑤ **install.ps1 이 `CLAUDE_CONFIG_DIR` 을 빠뜨려 데이터 폴더가 Host 와 어긋난다**(명세 Q20) — 왜: 설정·자격증명을 `SESSION_MANAGER_CLAUDE_HOME` 아니면 `~\.claude\session_manager` 에 쓰는데, Host(`config.py`)는 `SESSION_MANAGER_CLAUDE_HOME > CLAUDE_CONFIG_DIR > ~/.claude` 순이다. `CLAUDE_CONFIG_DIR` 로 클로드 폴더를 옮겨 쓰는 PC 에선 설치가 만든 설정·자격증명을 Host 가 못 찾는다(같은 파일의 [3/6] 클로드 폴더 확인은 `CLAUDE_CONFIG_DIR` 을 본다). 무엇: 같은 순서로(맥·리눅스는 hostctl 이 Host 와 같은 코드로 계산한다). 시작점: `install.ps1:425-427`, `session_manager/config.py`. S
-- [ ] ⑥ **`launcher-ensured-<버전>` 표식이 버전마다 쌓인다**(이 PC 90여 개) — 왜: 런처 보장을 버전당 한 번만 하려고 데이터 폴더에 표식을 남기는데 옛 것을 지우지 않는다(코드는 OS 공통이라 맥·리눅스 설치본에도 쌓인다). 무엇: 새 표식을 쓸 때 다른 버전의 표식을 지우기. 시작점: `session_manager/liveness.py:170-177`. S
-- [ ] ⑦ **런처 템플릿(ps1)·ensure_task.ps1 에 BOM 이 없고 PS5.1 검사 대상도 아니다** — 왜: pwsh 가 없는 PC 에선 둘 다 powershell.exe(5.1)로 읽히고, 5.1 은 BOM 없는 파일을 ANSI 로 읽는다. 템플릿을 인코딩 지정 없는 `Get-Content -Raw` 로 읽어 렌더하므로 설치본 런처의 한글(로그 문구)이 깨진다(추정 — 동작 영향은 작다). `tests/test_ps51_compat.py` 의 `USER_SIDE_PS1` 은 install.ps1·update_runner.ps1 뿐이라 PS7 전용 문법이 들어가도 못 잡는다. 무엇: 두 파일에 BOM + 렌더 읽기에 `-Encoding UTF8` + `USER_SIDE_PS1` 에 추가(5.1 파서·문법 검사). 시작점: `session_manager/start-connector.template.ps1`, `session_manager/ensure_task.ps1:25`, `install.ps1:503`, `tests/test_ps51_compat.py:21`. S
+- [x] **(고침 main 6f9fb62·c4f9098, 다음 출시) 자기 회복 보장(ensure_task)이 실패해도 「했음」 표식을 남겨 버전마다 다시 시도하지 않는다**(2026-10-22, 노트북 KIS-Worker 실사례 — 서비스 모니터·인프라 담당이 읽기로 확인): 표식 `launcher-ensured-0.10.5~0.31.1` 16개가 모두 0바이트, 런처는 아직 v1(첫 줄 「# 자동 생성됨 (install.ps1)」), 예약 작업은 로그온 트리거뿐(5분 반복 없음 → Host 가 죽으면 다음 로그온까지 안 뜸), pwsh 없음(powershell.exe 5.1). 원인(인프라 담당 진단): 노트북 로캘 en-US·ANSI 코드페이지 **cp1252** → 5.1 이 BOM 없는 ensure_task.ps1 을 cp1252 로 읽어 30·37행 문자열의 「—」(E2 80 94)의 0x94 가 ” 로 읽혀 ParserError, 한 줄도 실행 안 됨(이 PC 는 cp949 라 재현 안 됐다 — 「5.1 구문 문제 아님」 판단은 cp949 에서만 맞았음). 결함 ①: `osdep/_win.py:121-129` 가 stderr 를 버리고 stdout 만 돌려주며, `liveness.ensure_launcher` 가 빈 출력에도 표식을 쓴다. 무엇: 빈 출력·실패(launcher 재생성 실패·task update failed·파싱 실패)면 표식을 쓰지 않고 stderr 와 함께 host.log 에 남기기(다음 기동에 재시도), 상태 화면에 「자동 시작 점검 실패」 표시. S
+- [x] **(고침 main 6f9fb62·c4f9098, 다음 출시 — conhost --headless 동작 포함, 이미 5분 확인이 도는 기본 모양 PC 도) 영어 등 비한국어 로캘 Windows 에서 PowerShell 5.1 로 설치하면 깨진 런처가 만들어진다** — `install.ps1:504` `(Get-Content $tplPath -Raw)` 가 인코딩 지정 없이 BOM 없는 `start-connector.template.ps1` 을 ANSI(cp1252)로 읽고 :533 이 그대로 써서, 템플릿 34·49·50행(「—」「→」·한글 로그 문구)에서 구문 오류 6개 → 로그온·5분 실행 때 Host 가 안 뜬다(인프라 담당이 노트북 임시 폴더로 재현). `ensure_task.ps1:25` 도 같은 읽기. cp949(한국어) PC 는 구문은 통과하고 한글만 깨진다. 무엇: `ensure_task.ps1`·`start-connector.template.ps1` 에 UTF-8 BOM, `install.ps1:504`·`ensure_task.ps1:25` 에 `-Encoding UTF8`, ensure_task 출력 두 줄은 ASCII, `tests/test_ps51_compat.py` `USER_SIDE_PS1` 에 두 파일 추가 + 비ASCII 코드 줄이 있는 .ps1 은 BOM 필수 시험. 업데이트는 런처를 다시 쓰지 않으므로(ensure_task 는 v2 표식만 봄, update_runner 는 런처 무접촉) 기존 설치본은 install 재실행 때만 영향. 노트북은 인프라 담당이 수동 조치(UTF-8 로 읽어 ensure_task 실행) 예정 — 수정판 전까지 노트북 install.ps1 재실행 금지. M
+- [x] (2026-10-23 고침 01b3987, 0.32.2 출시 — 맥 4회차 T3 가 실기 확인) (맥·리눅스, 2026-10-23 발견) 런처 보장(`osdep/_posix.ensure_launcher` → `liveness.ensure_launcher`)이 「regenerate failed」 같은 실패 결과도 버전 표식에 써서 같은 버전에서 다시 시도하지 않는다 — Windows 는 6f9fb62 에서 종료 코드 판정으로 고쳤다. 같은 원칙(실패면 예외 → 표식 안 씀 → host.log)으로 맞춘다. S
+- [ ] (사장님 결정 2026-10-22: **그대로 두기**) ClewPath 웹 터미널로 Host 내부 env(`CLEWPATH_CONFIG`·`SM_PORT`·`SM_HOST`·`SM_APP_URL`)가 샌다 — 맥 이슈 B(시험이 진짜 clewpath.toml 을 지움)의 원인. 시험 쪽만 막았다(a17e500: conftest 가 CLEWPATH_CONFIG 를 지우고, 그 시험은 임시 폴더). 제품에서 막으려면 브로커 거르기(`ptyd.py:24-30`) 또는 Host 가 브로커를 띄울 때 env 정리 — 브로커 코드를 바꾸면 업데이트 때 브로커 교체 1회. 다른 도구가 같은 착각을 하면 다시 꺼낸다
+- [x] ① (2026-10-23 고침, 0.32.2 출시 — 읽는 두 곳 utf-8-sig) **PS5.1 러너가 쓴 `last_apply.json` 의 BOM 때문에 롤백 반복 차단이 꺼질 수 있다** — 왜: pwsh 가 없는 PC 는 러너가 powershell.exe(5.1)로 돌고, 5.1 의 `Set-Content -Encoding UTF8` 은 BOM 을 붙인다. `updater.recently_failed` 와 update/status 가 `encoding="utf-8"` 로 읽다 실패하면 '방금 실패한 버전'을 몰라, 재기동 자동 적용이 같은 버전을 또 받아 실패 → 롤백을 되풀이하고 화면의 지난 적용 결과도 빈다. 무엇: 읽는 쪽 두 곳을 `utf-8-sig` 로(쓰는 쪽은 5.1 이라 BOM 이 정상). 시작점: `session_manager/update_runner.ps1:237`, `session_manager/updater.py:392`, `session_manager/server.py:741`. S
+- [x] (0.32.3 — 다음 업데이트부터 적용, 적용 땐 설치돼 있는 러너가 돈다) ② **Copy-Payload 가 복사 오류를 삼키고, 백업 실패 종료는 잠금·결과를 남기지 않는다** — 왜: `Copy-Item … -ErrorAction SilentlyContinue` 라 실패해도 예외가 없어 백업·교체 실패를 잡는 `try/catch` 가 사실상 돌지 않는다(반쪽 백업 위에 교체하면 롤백도 반쪽). 백업 실패 분기의 `exit 1` 은 `apply.lock`(5분 만료까지 다음 적용 거부)과 `last_apply.json`(결과·재시도 차단)을 건너뛴다. 무엇: 복사 오류를 모아 실패로 올리고, 실패·중단 길도 결과 기록·잠금 해제를 거치게(맥·리눅스 러너는 rename·저널로 같은 경우를 처리한다). 시작점: `session_manager/update_runner.ps1:48-57`, `session_manager/update_runner.ps1:166-174`. M
+- [x] (0.32.3 — 런처 v3, 기존 설치본은 ensure_task 가 v3 아님을 보고 한 번 다시 만듦) ③ **런처가 host.log 를 덮어써 사고 직전 로그가 사라진다**(실측) — 왜: `Start-Process -RedirectStandardOutput/-RedirectStandardError` 는 파일을 새로 쓴다. 죽은 Host 를 런처가 다시 띄우면 직전 로그가 지워져, 자기 회복의 사고 기록(liveness 의 마지막 로그 10줄)과 원인 조사가 빈손이 된다. 무엇: 띄우기 전에 옛 로그를 한 세대 밀어 두거나 이어 쓰기(맥·리눅스 런처는 이어 쓰기 + 5MB 회전 + `=== launcher start` 구분줄). 시작점: `session_manager/start-connector.template.ps1:51-53`, `install.ps1:526`(템플릿 없는 옛 zip 의 v1 런처). S
+- [x] (2026-10-26 007 968375c 로 get.ps1 도 반영 — 사장님 확인, 운영 CP 가 바로 서빙) (0.32.3 에 006 쪽만 — install.ps1 안내·README 5절. 007 `get.ps1` 고침은 패치만 준비: scratchpad `get-ps1-ptyd.patch`, 운영 CP 가 바로 서빙하므로 사장님 확인 뒤) ④ **원라인 재설치가 터미널 관리 프로세스(브로커)까지 강제 종료한다** — 왜: get.ps1 은 설치 폴더 아래 python 을 모두 `Stop-Process -Force` 해 `session_manager.ptyd` 와 그 안의 열린 터미널(claude)도 끝낸다(업데이트 러너·롤백은 브로커를 뺀다). README 5절 '지금 끄기'·install.ps1 완료 안내의 중지 명령도 같은 식이다. 무엇: 명령줄에 `session_manager.ptyd` 가 있으면 빼기(러너와 같은 규칙). 007 은 운영 CP 가 bind-mount 로 바로 서빙하므로 고치면 즉시 운영에 나간다 — 시험 먼저. 시작점: `007/control_plane/get.ps1:88-90`, `install.ps1:709`, `README.md`(5절). S
+  - 패치 반영 전 확인할 것(작업자 지적): 재설치 중에도 브로커를 살려 두면 브로커가 쥔 .venv 파일 때문에 install.ps1 의 의존성 설치가 막힐 수 있다 — 업데이트 러너는 같은 규칙으로 돌고 있으나 재설치가 .venv 를 다시 만드는지 먼저 본다
+- [x] (0.32.3, 새 설치·재설치부터) ⑤ **install.ps1 이 `CLAUDE_CONFIG_DIR` 을 빠뜨려 데이터 폴더가 Host 와 어긋난다**(명세 Q20) — 왜: 설정·자격증명을 `SESSION_MANAGER_CLAUDE_HOME` 아니면 `~\.claude\session_manager` 에 쓰는데, Host(`config.py`)는 `SESSION_MANAGER_CLAUDE_HOME > CLAUDE_CONFIG_DIR > ~/.claude` 순이다. `CLAUDE_CONFIG_DIR` 로 클로드 폴더를 옮겨 쓰는 PC 에선 설치가 만든 설정·자격증명을 Host 가 못 찾는다(같은 파일의 [3/6] 클로드 폴더 확인은 `CLAUDE_CONFIG_DIR` 을 본다). 무엇: 같은 순서로(맥·리눅스는 hostctl 이 Host 와 같은 코드로 계산한다). 시작점: `install.ps1:425-427`, `session_manager/config.py`. S
+- [x] (0.32.3) ⑥ **`launcher-ensured-<버전>` 표식이 버전마다 쌓인다**(이 PC 90여 개) — 왜: 런처 보장을 버전당 한 번만 하려고 데이터 폴더에 표식을 남기는데 옛 것을 지우지 않는다(코드는 OS 공통이라 맥·리눅스 설치본에도 쌓인다). 무엇: 새 표식을 쓸 때 다른 버전의 표식을 지우기. 시작점: `session_manager/liveness.py:170-177`. S
+- [x] (6f9fb62·c4f9098 에서 이미 고침 — 위 142·143행) ⑦ **런처 템플릿(ps1)·ensure_task.ps1 에 BOM 이 없고 PS5.1 검사 대상도 아니다** — 왜: pwsh 가 없는 PC 에선 둘 다 powershell.exe(5.1)로 읽히고, 5.1 은 BOM 없는 파일을 ANSI 로 읽는다. 템플릿을 인코딩 지정 없는 `Get-Content -Raw` 로 읽어 렌더하므로 설치본 런처의 한글(로그 문구)이 깨진다(추정 — 동작 영향은 작다). `tests/test_ps51_compat.py` 의 `USER_SIDE_PS1` 은 install.ps1·update_runner.ps1 뿐이라 PS7 전용 문법이 들어가도 못 잡는다. 무엇: 두 파일에 BOM + 렌더 읽기에 `-Encoding UTF8` + `USER_SIDE_PS1` 에 추가(5.1 파서·문법 검사). 시작점: `session_manager/start-connector.template.ps1`, `session_manager/ensure_task.ps1:25`, `install.ps1:503`, `tests/test_ps51_compat.py:21`. S
 
 ## 진행중: 화면 재배치 — docs/designs/ux-reorg.md
 - [x] 1단계(0.18.0): 머리줄(⚙만·PC 칩) · 보기 전환에 🧑‍💼 비서 · 검색 옆 ⟳ · 세션 상세(주 동작 위·요약·알림 띠·더 보기·위험 구역) · 목록 줄 ✎ 제거 · 기기 등록 한 줄 띠 · 설정(자주→고급 접힘)
@@ -138,8 +178,10 @@
 - [ ] (검토) 모니터 만료 때 claude 가 bash 만 끝내고 `tail -F | grep` 손자 프로세스는 남김(삼흥 6쌍, 부모 없음·claude.exe 밖) — 정리 기능은 불가침 원칙(ClewPath 가 띄우지 않은 프로세스) 검토 뒤
 - [x] 0.19.4 세션 상세 머리에 태그(#칩 × 빼기 · ＋ 태그: 입력/기존 태그 골라 저장), 목록 위 태그 필터는 유지
 - [x] 0.20.0 정기 작업(docs/designs/housekeeping.md): 쉬는 세션 정리(4시간·세션 잠금 재확인·📌 항상 켜 두기) · 모델 목록 갱신(CP+실사용 합본) · 설정 🧹 화면
-- [ ] (간헐) 전체 테스트에서 test_update_safety::test_apply_concurrency_lock 가 다른 테스트의 배경 스레드 Popen 과 겹쳐 가끔 실패 — 단독·재실행 통과. 원인(posix-install 3·8단계 관찰): 시험이 `updater.subprocess.Popen`(= 표준 subprocess 모듈 그 자체)을 바꿔 끼우는 동안 앞 시험 앱의 orphan-sweep 스레드가 subprocess 를 불러 호출 수가 하나 늘어난다(assert 3 == 2). 고치는 길: updater 안에 Popen 참조를 따로 두거나, 앱 스레드를 멈춘 뒤 패치. 2026-10-22 같은 원인으로 test_updater::test_apply_refuses_while_an_install_holds_the_marker[other-program-False]·[dead-False] 가 Windows 전체 실행에서 한 번씩(`len(calls) == 1`) — 단독 8회 통과
+- [x] (0.32.3 원인 제거 — updater._popen 참조만 시험이 바꿔 끼움) (간헐) 전체 테스트에서 test_update_safety::test_apply_concurrency_lock 가 다른 테스트의 배경 스레드 Popen 과 겹쳐 가끔 실패 — 단독·재실행 통과. 원인(posix-install 3·8단계 관찰): 시험이 `updater.subprocess.Popen`(= 표준 subprocess 모듈 그 자체)을 바꿔 끼우는 동안 앞 시험 앱의 orphan-sweep 스레드가 subprocess 를 불러 호출 수가 하나 늘어난다(assert 3 == 2). 고치는 길: updater 안에 Popen 참조를 따로 두거나, 앱 스레드를 멈춘 뒤 패치. 2026-10-22 같은 원인으로 test_updater::test_apply_refuses_while_an_install_holds_the_marker[other-program-False]·[dead-False] 가 Windows 전체 실행에서 한 번씩(`len(calls) == 1`) — 단독 8회 통과
 - [ ] (간헐, 2026-10-13) 전체 테스트가 바쁠 때 test_ptyd::test_webterm_start_restart_adopt_stop 의 adopt 가 0 (브로커 attach 시간 초과 추정), PWA node 테스트도 가끔 — 단독 25회 통과. 릴리스 스크립트가 첫 시도에 자주 멈춤 → 재시도 1회 또는 원인 제거 필요
+- [x] (0.32.4 원인 확인·고침 — pid_alive 가 거둬지는 중(STATUS_DEAD)·NoSuchProcess 를 살아 있음으로 봄 + spawn_pty 가 exec 전 HUP 등 신호를 기본으로 되돌림(nohup 아래 맥 실패). 실패율 8.3%→0/900) (간헐, 2026-10-24) 리눅스 컨테이너 전체 시험을 Windows 전체 시험과 동시에 돌릴 때 test_osdep_posix::test_pty_child_dies_with_its_owner 가 한 번 실패(주인 kill 뒤 5초 안에 pty 자식이 안 끝남) — 그 파일만 3회 다시 돌려 모두 통과. 오늘 변경 전 코드(5bd6242)에서도 같은 묶음 2회 중 1회 실패 — 원래 있던 간헐(부하 없을 때도). 원인 미확정(SIGHUP 전달·좀비 거둠·psutil 판정), 대기 시간·판정 방식 검토
+- [x] (0.32.4 — ptyclient._popen·Popen/run 바꿔 끼우기 7개 시험 정리) (간헐 원인 같은 꼴, 2026-10-24) 시험이 표준 `subprocess.Popen` 을 통째로 바꿔 끼우면 앞 시험 앱의 배경 스레드 호출이 섞인다 — updater(`_popen`)·test_webapi_ephemeral_isolated(claude 만 잡기, 0.32.3 출시 시험에서 한 번 깨짐)는 고쳤다. 다른 시험의 `monkeypatch.setattr(subprocess, "Popen", …)` 도 같은 방식으로(grep 으로 찾기)
 - [x] (2026-10-22 해결 — 앱을 내리면 정기 작업 줄도 끝낸다(server lifespan `_hk.stop()`), 격리 모드면 화면 읽기 안 함. 같은 줄이 맥·이 PC 에서 진짜 claude 를 띄운 사고의 원인이었다) (간헐, 2026-10-21) 전체 테스트가 5분을 넘으면 test_session_model::test_api_models_list_builtin_fallback 가 'merged' 로 실패 — `create_app()` 이 띄운 정기 작업 스레드(프로세스당 1개, `FIRST_DELAY_S`=300)가
   5분 뒤 모델 목록 합본을 그때의 가짜 홈 `data_dir` 에 쓴다(627초 실행에서 재현, 299초 실행은 통과, 단독 통과). 고치는 길: 시험에선 `housekeeping.start` 를 막거나 conftest 에서 스레드를 멈춤.
   같은 바쁜 실행에서 test_scanner_incremental::test_incremental_is_fast_on_big_file(시간 재기)도 한 번 실패 — 단독 3회 통과
@@ -264,8 +306,8 @@
 - [ ] **E-6 데모 둘러보기**(PC 0대 빈 상태) — 스토어 제출 사이클(M4)에서, 화면 확정 뒤. 완전 목 데이터(`demoT`), Host/CP 호출 0(불가침). M→S
 - [ ] **X-1 6자리 코드 페어링**(PC 가 코드 표시, 폰은 입력, CP 60초 코드↔room 중개) — 카메라·링크·앱 무관. CP 임시 보관 = 무저장 예외 확장이라 C 와 함께. M→S
 - [ ] **C) CP 를 페어링 정본으로**(목록·이름·상태를 CP 에, 양쪽이 같은 API 렌더, 팀 공유 PC) — 외부 사용자 생긴 뒤. 로컬 전용 보안 설계 재검토 필요. L→M
-- [ ] **폰 해제 결과 문구를 실제 서버 폐기 결과로**(2026-09-30 document-release) — 왜: 0.10.x 때 페어링한 PC 는 폰에 pv=1 로 저장돼, PC 를 0.11 로 올린 뒤 연결 없이 해제하면 '이 폰에서만 제거 — PC 에서도 삭제하세요' 가 뜬다(실제로는 CP 폐기·PC 📵 반영됨). 무엇: `unpairPc` 의 sub/토스트·sm_pair_reason 을 `serverUnpairable`(저장된 pv) 대신 플러시 결과(done 에 room 포함)로 결정, 확인 시트 문구는 '서버 폐기 시도' 로 중립화. 시작점: `pwa/index.html` unpairPc·serverUnpairable. S
-- [ ] **`policy.usage_summary` 회전 파일 이어 읽기**(eng E-D20) — 왜: T12 로 `api_audit.jsonl` 이 8MB 에서 `.1` 로 회전하면 회전 직후 '최근 n건' 목록이 짧아진다(오늘 한도는 별도 usage 파일이라 무영향). 무엇: `.1` 이 있으면 이어 읽어 recent_n 을 채운다(10줄). 시작점: `session_manager/policy.py:167`. 의존: T12. S
+- [x] (0.32.3) **폰 해제 결과 문구를 실제 서버 폐기 결과로**(2026-09-30 document-release) — 왜: 0.10.x 때 페어링한 PC 는 폰에 pv=1 로 저장돼, PC 를 0.11 로 올린 뒤 연결 없이 해제하면 '이 폰에서만 제거 — PC 에서도 삭제하세요' 가 뜬다(실제로는 CP 폐기·PC 📵 반영됨). 무엇: `unpairPc` 의 sub/토스트·sm_pair_reason 을 `serverUnpairable`(저장된 pv) 대신 플러시 결과(done 에 room 포함)로 결정, 확인 시트 문구는 '서버 폐기 시도' 로 중립화. 시작점: `pwa/index.html` unpairPc·serverUnpairable. S
+- [x] (0.32.3, .1 을 64KB 씩 거꾸로) **`policy.usage_summary` 회전 파일 이어 읽기**(eng E-D20) — 왜: T12 로 `api_audit.jsonl` 이 8MB 에서 `.1` 로 회전하면 회전 직후 '최근 n건' 목록이 짧아진다(오늘 한도는 별도 usage 파일이라 무영향). 무엇: `.1` 이 있으면 이어 읽어 recent_n 을 채운다(10줄). 시작점: `session_manager/policy.py:167`. 의존: T12. S
 - [ ] **DESIGN.md 생성(`/design-consultation`)**(design DR-11) — 왜: 디자인 시스템 정본이 없어 리뷰마다 `index.html:16-27` 토큰을 사실상 기준으로 삼는다. 무엇: :root 토큰·타이포·컴포넌트(.btn/.devrow/.schip/openModal/confirmSheet) 어휘를 DESIGN.md 로. 다음 사이클. S
 - [ ] **접근성 규칙 전 화면 적용 + confirm() 나머지 9곳 confirmSheet 이전**(design DR-13/DR-7) — 왜: 이번엔 페어링 화면 3개만 44px·focus-visible·dialog·inert·aria-live 를 적용. 무엇: 세션 목록·터미널 탭·관제·설정에 같은 규칙, `grep confirm(` 9곳을 confirmSheet 로. 의존: DT2/DT4. M
 - [x] **iOS Safari(홈 화면 미설치) ITP 7일 저장소 삭제 안내** — **Completed:** 2026-09-30 (0.10.0 DT7 `maybeShowIosHint`·설정 1줄)(eng E-D21 → design DR-12 로 자리·문구 확정: 페어링 직후 .firstrun 1회 + 설정 1줄, '앱처럼 열어보세요') — 왜: 웹 탭은 localStorage 뿐이라 7일 미사용이면 폐기 큐·`sm_pcs` 가 통째 사라져 유령 cpub(E-5 90일)·'페어링이 저절로 사라짐' 이 된다. 무엇: 페어링 완료 화면/설정에 `navigator.standalone` 아니면 '홈 화면에 추가하면 알림과 페어링이 보존됩니다' 한 줄(푸시 안내와 같은 자리) + docs 에 제약 기록. 문구·위치는 /plan-design-review 에서. 의존: 없음(T5 B-2 화면 작업 때 후보). S
