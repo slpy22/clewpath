@@ -365,28 +365,168 @@ def test_sender_not_local():
         sender.caller_session("10.0.0.5", 5555, 5100)
 
 
-def test_owner_pid_of_real_socket():
-    """실제 프로세스가 연 루프백 연결의 주인 pid 를 찾는다(Windows·리눅스 — 맥은 출시 뒤)."""
+import contextlib
+import os
+from types import SimpleNamespace as NS
+
+
+@contextlib.contextmanager
+def _child_conn(hold_in_grandchild=False):
+    """루프백 서버 + 자식 프로세스가 연결. (서버 포트, 클라이언트 포트, 자식 pid). hold_in_grandchild 면 손주도 그 소켓을 물려받는다(POSIX)."""
     srv = socket.socket()
     srv.bind(("127.0.0.1", 0))
     srv.listen(1)
     port = srv.getsockname()[1]
-    code = ("import socket,sys,time;s=socket.create_connection(('127.0.0.1',%d));"
-            "print(s.getsockname()[1],flush=True);time.sleep(5)" % port)
+    code = ("import socket,subprocess,sys,time;s=socket.create_connection(('127.0.0.1',%d));"
+            "g=subprocess.Popen([sys.executable,'-c','import time;time.sleep(5)'],pass_fds=(s.fileno(),)) if %r else None;"
+            "print(s.getsockname()[1],flush=True);time.sleep(5)" % (port, hold_in_grandchild))
     p = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
+    conn = None
     try:
         conn, _ = srv.accept()
         cport = int(p.stdout.readline())
-        try:
-            got = sender._owner_pid(cport, port)
-        except sender.BadSender:
-            pytest.skip("이 OS 에서는 연결 목록을 읽을 수 없음")
-        assert got == p.pid
-        conn.close()
+        yield port, cport, p.pid
     finally:
+        if conn:
+            conn.close()
+        import psutil
+        try:
+            for c in psutil.Process(p.pid).children(recursive=True):
+                c.kill()
+        except psutil.Error:
+            pass
         p.kill()
         p.wait()
         srv.close()
+
+
+def _deny_system_wide(monkeypatch, exc=None):
+    import psutil
+
+    def deny(kind="inet"):
+        raise (exc or psutil.AccessDenied())
+    monkeypatch.setattr(psutil, "net_connections", deny)
+
+
+def test_owner_pid_of_real_socket():
+    """실제 프로세스가 연 루프백 연결의 주인 pid 를 찾는다 — 모든 OS(맥은 같은 사용자 프로세스별 조회로, D15)."""
+    with _child_conn() as (port, cport, pid):
+        assert sender._owner_pid(cport, port) == pid
+
+
+@pytest.mark.parametrize("exc", ["AccessDenied", "NotImplementedError"])
+def test_owner_pid_falls_back_to_same_user_scan(monkeypatch, exc):
+    """시스템 전체 목록이 막히면(맥) 같은 사용자 프로세스마다 연결을 봐서 진짜 자식 pid 를 찾는다."""
+    import psutil
+    _deny_system_wide(monkeypatch, psutil.AccessDenied() if exc == "AccessDenied" else NotImplementedError())
+    monkeypatch.setattr(sender, "OWNER_SCAN_TIMEOUT", 10.0)      # 느린 시험 기계에서도(상한 자체는 아래 시험)
+    used = []
+    real = sender._owner_pid_same_user
+    monkeypatch.setattr(sender, "_owner_pid_same_user", lambda c, s: used.append(1) or real(c, s))
+    with _child_conn() as (port, cport, pid):
+        assert sender._owner_pid(cport, port) == pid
+    assert used == [1]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="pass_fds 로 소켓 물려주기는 POSIX")
+def test_owner_pid_fallback_rejects_inherited_socket(monkeypatch):
+    """한 연결을 두 프로세스가 가지면(fork 로 물려받음) 누가 보냈는지 모르니 거부."""
+    _deny_system_wide(monkeypatch)
+    monkeypatch.setattr(sender, "OWNER_SCAN_TIMEOUT", 10.0)
+    with _child_conn(hold_in_grandchild=True) as (port, cport, pid):
+        with pytest.raises(sender.BadSender) as ei:
+            sender._owner_pid(cport, port)
+    assert ei.value.reason == "ambiguous_socket_owner"
+
+
+# 가짜 프로세스 목록 — 같은 사용자 판정·중복·시간 상한
+
+ME = ("uid", 1000)
+CPORT, SPORT = 50001, 5100
+
+
+def _conn(lport=CPORT, rport=SPORT, ip="127.0.0.1"):
+    return NS(laddr=NS(ip=ip, port=lport), raddr=NS(ip="127.0.0.1", port=rport), pid=None)
+
+
+class _Proc:
+    def __init__(self, pid, real=1000, eff=None, conns=(), delay=0.0, deny=False):
+        self.pid, self.info = pid, {"uids": NS(real=real, effective=real if eff is None else eff)}
+        self._conns, self.delay, self.deny, self.read = list(conns), delay, deny, 0
+
+    def net_connections(self, kind="inet"):
+        import psutil
+        self.read += 1
+        if self.delay:
+            time.sleep(self.delay)
+        if self.deny:
+            raise psutil.AccessDenied(self.pid)
+        return self._conns
+
+
+def _fake_procs(monkeypatch, procs):
+    import psutil
+    _deny_system_wide(monkeypatch)
+    monkeypatch.setattr(sender, "_my_identity", lambda: ME)
+    monkeypatch.setattr(psutil, "process_iter", lambda attrs=None: iter(procs))
+
+
+def test_owner_pid_fallback_never_reads_other_users(monkeypatch):
+    """다른 사용자(·setuid 로 남이 된) 프로세스의 연결은 읽지도 않는다 — 그 연결의 주인이어도 못 찾음 = 거부."""
+    other = _Proc(10, real=501, conns=[_conn()])
+    setuid = _Proc(11, real=1000, eff=0, conns=[_conn()])
+    blocked = _Proc(12, deny=True)                               # 같은 사용자라도 막힌 것(맥 login)은 건너뜀
+    mine = _Proc(13, conns=[_conn(lport=CPORT + 1)])            # 다른 연결
+    _fake_procs(monkeypatch, [other, setuid, blocked, mine])
+    assert sender._owner_pid(CPORT, SPORT) is None
+    assert other.read == 0 and setuid.read == 0 and blocked.read == 1 and mine.read == 1
+    with pytest.raises(sender.BadSender) as ei:
+        sender.caller_session("127.0.0.1", CPORT, SPORT)
+    assert ei.value.reason == "no_socket_owner"
+
+
+def test_owner_pid_fallback_match_rules(monkeypatch):
+    """루프백·클라이언트 포트·서버 포트가 모두 맞는 쪽만. 서버 쪽 소켓(포트 뒤집힘)·바깥 주소는 아니다."""
+    procs = [_Proc(20, conns=[_conn(lport=SPORT, rport=CPORT)]),       # Host 의 받는 쪽
+             _Proc(21, conns=[_conn(ip="10.0.0.5")]),
+             _Proc(22, conns=[_conn(), _conn()])]                       # 한 프로세스의 같은 연결 두 줄 = 하나
+    _fake_procs(monkeypatch, procs)
+    assert sender._owner_pid(CPORT, SPORT) == 22
+
+
+def test_owner_pid_fallback_rejects_two_owners(monkeypatch):
+    _fake_procs(monkeypatch, [_Proc(30, conns=[_conn()]), _Proc(31), _Proc(32, conns=[_conn()])])
+    with pytest.raises(sender.BadSender) as ei:
+        sender._owner_pid(CPORT, SPORT)
+    assert ei.value.reason == "ambiguous_socket_owner"
+
+
+def test_owner_pid_fallback_time_limit(monkeypatch):
+    """다 훑는 데 상한을 넘으면 찾았어도 거부(fail-closed)."""
+    monkeypatch.setattr(sender, "OWNER_SCAN_TIMEOUT", 0.05)
+    procs = [_Proc(40 + i, delay=0.02) for i in range(10)] + [_Proc(99, conns=[_conn()])]
+    _fake_procs(monkeypatch, procs)
+    with pytest.raises(sender.BadSender) as ei:
+        sender._owner_pid(CPORT, SPORT)
+    assert ei.value.reason == "socket_owner_timeout"
+    assert procs[-1].read == 0
+
+
+def test_owner_pid_system_wide_requires_same_user(monkeypatch):
+    """시스템 전체 목록에서 찾은 주인도 같은 사용자여야 한다(진짜 자식 프로세스로 사용자만 바꿔 본다)."""
+    import psutil
+    with _child_conn() as (port, cport, pid):
+        rows = [NS(pid=pid, laddr=NS(ip="127.0.0.1", port=cport), raddr=NS(ip="127.0.0.1", port=port))]
+        monkeypatch.setattr(psutil, "net_connections", lambda kind="inet": rows)
+        assert sender._owner_pid(cport, port) == pid
+        monkeypatch.setattr(sender, "_my_identity", lambda: ("uid", -7) if hasattr(os, "getuid") else ("user", "남"))
+        with pytest.raises(sender.BadSender) as ei:
+            sender._owner_pid(cport, port)
+        assert ei.value.reason == "other_user"
+        rows.append(NS(pid=pid + 100000, laddr=rows[0].laddr, raddr=rows[0].raddr))
+        with pytest.raises(sender.BadSender) as ei:
+            sender._owner_pid(cport, port)
+        assert ei.value.reason == "ambiguous_socket_owner"
 
 
 # ---------------------------------------------------------------- HTTP 관문(로컬 전용·폰 경유 E2EE+2FA)
