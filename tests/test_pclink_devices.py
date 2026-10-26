@@ -74,7 +74,7 @@ def test_isolated_ask_does_not_pass_claude_env(monkeypatch, tmp_path):
         pid = 1
         returncode = 0
 
-        def communicate(self, timeout=None):
+        def communicate(self, input=None, timeout=None):  # noqa: A002
             return (b'{"type":"result","result":"ok","total_cost_usd":0}\n', b"")
 
         def poll(self):
