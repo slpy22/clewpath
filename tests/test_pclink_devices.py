@@ -66,7 +66,9 @@ def test_revoked_pc_device_push_uses_pc_wording(fake_claude_home, monkeypatch):
 def test_isolated_ask_does_not_pass_claude_env(monkeypatch, tmp_path):
     """Host 가 claude 안에서 떠도 복제본에 CLAUDE_CODE_* 를 넘기지 않는다(넘기면 자식이 기록 저장 등 설정을 물려받는다)."""
     from session_manager import webapi
+    import subprocess
     seen = {}
+    real_popen = subprocess.Popen
 
     class P:
         pid = 1
@@ -79,6 +81,9 @@ def test_isolated_ask_does_not_pass_claude_env(monkeypatch, tmp_path):
             return 0
 
     def fake_popen(argv, **kw):
+        # 묻기의 claude 실행만 잡는다 — 앞 시험 앱의 배경 스레드(orphan-sweep 등)가 부르는 다른 명령은 진짜 Popen 으로
+        if not (isinstance(argv, (list, tuple)) and "--fork-session" in argv):
+            return real_popen(argv, **kw)
         seen.update(kw)
         return P()
     monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", "cli")

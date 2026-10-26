@@ -178,7 +178,11 @@ def test_execute_stops_background_agent_first(fake_claude_home, quiet, monkeypat
     class R:
         returncode = 0
 
-    def run(args, **k):
+    real_run = revert.subprocess.run
+
+    def run(args, *a, **k):
+        if not (isinstance(args, list) and args[:2] == ["claude", "stop"]):
+            return real_run(args, *a, **k)      # claude stop 만 잡는다(앞 시험 앱의 배경 스레드 호출이 calls 에 섞이지 않게)
         calls.append(args)
         live.clear()
         return R()

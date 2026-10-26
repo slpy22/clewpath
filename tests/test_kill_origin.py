@@ -143,6 +143,9 @@ def test_kill_refuses_reused_pid(fake_claude_home, monkeypatch):
     from session_manager import webterm
     monkeypatch.setattr(webterm, "has_terminal", lambda sid: False)
     ran = []
-    monkeypatch.setattr(subprocess, "run", lambda args, **k: ran.append(args))
+    real_run = subprocess.run
+    # 종료 명령(Windows kill_tree = taskkill)만 기록한다 — 앞 시험 앱의 배경 스레드가 부르는 다른 명령(프로세스 목록 등)은 진짜 run 으로
+    monkeypatch.setattr(subprocess, "run", lambda args, *a, **k: ran.append(args)
+                        if isinstance(args, list) and args and "taskkill" in str(args[0]).lower() else real_run(args, *a, **k))
     r = lifecycle.kill_session("s1")
     assert r["killed"] == [] and r["errors"] == [{"pid": 10, "reason": "pid_reused"}] and ran == []

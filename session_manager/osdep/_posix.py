@@ -47,15 +47,44 @@ def _pty_cls():
     return _PTY_CLS
 
 
+# pty 자식에게 기본 처리로 되돌려 줄 신호. 무시(SIG_IGN)는 fork·exec 로 물려간다 —
+#  HUP: 주인(Host·브로커)이 nohup 아래 떴으면 무시가 pty 안의 claude 까지 가, 주인이 죽어 master 가 닫혀도 SIGHUP 으로
+#       끝나지 않는다(맥 4회차: nohup 아래 test_pty_child_dies_with_its_owner 가 늘 깨짐). 런처는 이미 되돌리지만
+#       다른 길(사람이 직접 띄운 Host 등)로 떠도 지키도록 여기서 한 번 더.
+#  INT·QUIT: 비대화형 셸의 '&' 가 둔 무시 — 터미널의 Ctrl+C·Ctrl+\ 가 듣게.
+#  PIPE·XFSZ: 파이썬이 시작할 때 무시로 두는 것(subprocess 의 restore_signals 와 같은 목록) — ptyprocess 는 되돌리지 않는다.
+_RESET_SIGNALS = tuple(getattr(signal, n) for n in ("SIGHUP", "SIGINT", "SIGQUIT", "SIGPIPE", "SIGXFSZ") if hasattr(signal, n))
+
+
+def _child_signal_defaults() -> None:
+    """pty 자식(fork 뒤 exec 전)에서: 위 신호를 기본 처리로, 막힌 신호(mask)는 모두 풀기. 실패해도 spawn 은 계속한다."""
+    for s in _RESET_SIGNALS:
+        try:
+            signal.signal(s, signal.SIG_DFL)
+        except (OSError, ValueError):
+            pass
+    try:
+        signal.pthread_sigmask(signal.SIG_SETMASK, ())
+    except (OSError, ValueError, AttributeError):
+        pass
+
+
 def spawn_pty(argv: list[str], cwd: str, rows: int = 24, cols: int = 80, env: dict | None = None):
-    """자식은 새 세션의 리더(pty 가 제어 터미널). 주인이 죽어 master 가 닫히면 커널이 SIGHUP 을 보낸다."""
-    return _pty_cls().spawn(list(argv), cwd=cwd, env=env, dimensions=(rows, cols))
+    """자식은 새 세션의 리더(pty 가 제어 터미널). 주인이 죽어 master 가 닫히면 커널이 SIGHUP 을 보낸다
+    — 자식의 SIGHUP 이 기본 처리여야 끝나므로 exec 전에 되돌린다(_child_signal_defaults)."""
+    return _pty_cls().spawn(list(argv), cwd=cwd, env=env, dimensions=(rows, cols), preexec_fn=_child_signal_defaults)
 
 
 def guard_child(pid) -> bool:
     """주인과 함께 끝나게. pty 자식은 이미 그렇다(master 닫힘 → SIGHUP). 파이프 자식(웹 재개 -p)은 stdin EOF 로 끝나고,
     남은 것은 기동 청소(ADOPTER_PIDS)가 줍는다. 맥엔 Job·PDEATHSIG 같은 커널 장치가 없다."""
     return bool(pid)
+
+
+def _ps_status(pid: int) -> str:
+    """psutil 상태 글자(시험이 바꿔 끼우는 자리 — 전역 psutil.Process 를 바꾸면 다른 스레드까지 가짜로 간다)."""
+    import psutil
+    return psutil.Process(pid).status()
 
 
 def pid_alive(pid: int) -> bool:
@@ -67,10 +96,18 @@ def pid_alive(pid: int) -> bool:
         return True                     # 있지만 남의 프로세스
     except (OSError, OverflowError):    # 없음 · pid 범위 밖(다른 OS 가 남긴 표식)
         return False
-    try:                                # 끝났지만 아직 거둬지지 않은 좀비는 죽은 것
+    # 끝났지만 아직 거둬지지 않은 좀비(Z)·거둬지는 중(리눅스 X = STATUS_DEAD)·그 사이 다 거둬짐(NoSuchProcess)은 죽은 것.
+    # 예전엔 좀비만 죽음으로 봐서, 부모(init)가 거두는 찰나에 한 번 '살아 있음'으로 튀었다 — 좀비를 보고 '죽음' 이라 한 바로
+    # 다음 확인이 X 나 NoSuchProcess 를 만나 True(리눅스 test_pty_child_dies_with_its_owner 간헐 실패, 2026-10-26 실측).
+    try:
         import psutil
-        return psutil.Process(int(pid)).status() != psutil.STATUS_ZOMBIE
-    except Exception:  # noqa: BLE001
+    except ImportError:
+        return True
+    try:
+        return _ps_status(int(pid)) not in (psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD)
+    except psutil.NoSuchProcess:        # ZombieProcess 도 여기
+        return False
+    except Exception:  # noqa: BLE001   # AccessDenied 등 — 있기는 하다
         return True
 
 

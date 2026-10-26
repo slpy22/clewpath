@@ -284,6 +284,10 @@ def test_broken_v2_launcher_is_regenerated(tmp_path):
 
 # ---------------------------------------------------------------- Host 경로 전체(liveness → _win → ensure_task.ps1)
 
+def _is_ensure(args) -> bool:
+    return any(str(a).endswith("ensure_task.ps1") for a in args)
+
+
 def _host_path(monkeypatch, box: Box, engine: str = "powershell"):
     """liveness.ensure_launcher 를 가짜 설치 루트로, 셸은 engine 으로 고정, 작업 이름은 없는 이름으로 바꿔 끼운다."""
     monkeypatch.setattr(liveness, "_install_root", lambda: box.root)
@@ -291,8 +295,11 @@ def _host_path(monkeypatch, box: Box, engine: str = "powershell"):
     fake = _fake_task()
     # _win 안의 이름만 바꾼다(전역 shutil·subprocess 는 그대로 — 같은 시험의 5.1 구문 검사가 써야 한다)
     monkeypatch.setattr(_win, "shutil", SimpleNamespace(which=lambda n: shutil.which(engine) if n == engine else None))
+    # ensure_task.ps1 실행에만 작업 이름을 붙인다 — 같은 프로세스의 배경 스레드(앞 시험 앱의 orphan-sweep → _win.list_processes)도
+    # _win.subprocess.run 을 부르므로 다른 명령은 손대지 않고 그대로 보낸다
     monkeypatch.setattr(_win, "subprocess", SimpleNamespace(
-        run=lambda args, **kw: subprocess.run(list(args) + ["-TaskName", fake], **kw)))
+        run=lambda args, **kw: subprocess.run(list(args) + (["-TaskName", fake] if _is_ensure(args) else []), **kw),
+        **{k: getattr(subprocess, k) for k in ("PIPE", "DEVNULL", "STDOUT", "Popen", "CompletedProcess", "TimeoutExpired")}))
     config.data_dir().mkdir(parents=True, exist_ok=True)
     return config.data_dir() / "launcher-ensured-9.9.9"
 
@@ -446,10 +453,13 @@ def _fake_run(monkeypatch, rc: int, out: bytes, err: bytes = b""):
     seen = {}
 
     def run(args, **kw):
+        if not _is_ensure(args):
+            return subprocess.run(args, **kw)   # 배경 스레드의 다른 명령(_win.list_processes 등)은 진짜로 — seen 에 섞이지 않게
         seen["args"] = list(args)
         return subprocess.CompletedProcess(args, rc, stdout=out, stderr=err)
     monkeypatch.setattr(_win, "shutil", SimpleNamespace(which=lambda n: r"C:\ps\powershell.exe" if n == "powershell" else None))
-    monkeypatch.setattr(_win, "subprocess", SimpleNamespace(run=run))
+    monkeypatch.setattr(_win, "subprocess", SimpleNamespace(
+        run=run, **{k: getattr(subprocess, k) for k in ("PIPE", "DEVNULL", "STDOUT", "Popen", "CompletedProcess", "TimeoutExpired")}))
     return seen
 
 

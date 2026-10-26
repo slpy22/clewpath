@@ -253,7 +253,11 @@ def test_missing_cwd_returns_error_without_spawn(env):
 
 
 def test_spawn_failure_still_cleans_default_fork(env, monkeypatch):
+    real_popen = subprocess.Popen
+
     def boom(argv, **kw):
+        if not (isinstance(argv, (list, tuple)) and argv and argv[0] == EXE):
+            return real_popen(argv, **kw)       # claude 실행만 실패시킨다(env 픽스처와 같은 규칙)
         raise FileNotFoundError("claude 없음")
     monkeypatch.setattr(subprocess, "Popen", boom)
     with pytest.raises(FileNotFoundError):
