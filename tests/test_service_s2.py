@@ -183,6 +183,15 @@ def test_service_token_restricted_even_from_loopback(env, monkeypatch):
     _local(monkeypatch)
     r = client.post(f"/api/v1/sessions/{OTHER}/ask", json={"prompt": "q"}, headers=_h(tok))
     assert r.status_code == 403 and not asked
+    # HTTP 도 같다(2026-10-26 노트북 실측: 루프백 무인증 통과가 범위 검사보다 앞이라 남의 프로필·목록이 200 이었다).
+    # 서비스 토큰을 붙였으면 루프백이어도 서비스로 본다 — 토큰 없는 루프백(사장님 로컬)은 그대로 소유자.
+    assert client.get(f"/api/v1/sessions/{OTHER}/profile", headers=_h(tok)).status_code == 403
+    assert client.get("/api/v1/sessions", headers=_h(tok)).status_code == 403
+    assert client.get(f"/api/v1/sessions?token={tok}").status_code == 403
+    assert client.get(f"/api/v1/sessions/{BASE}/profile", headers=_h(tok)).status_code == 200
+    assert client.get("/api/v1/service/me", headers=_h(tok)).status_code == 200
+    assert client.get("/api/v1/sessions").status_code == 200
+    assert client.get("/api/v1/sessions", headers=_h("cps_bogus_unknown")).status_code == 401
 
 
 def test_legacy_token_unchanged_and_services_work_without_it(env, monkeypatch):
