@@ -455,8 +455,9 @@ def test_r15_check_still_catches_drift():
         _check_r15(spec, todos.replace(lines[-1], lines[-1] + "\n- [ ] ⑧ 새 결함 — 시작점: `install.ps1`"))
     with pytest.raises(AssertionError):                               # 순서 뒤바뀜
         _check_r15(spec, todos.replace(lines[0], "@@").replace(lines[1], lines[0]).replace("@@", lines[1]))
-    with pytest.raises(AssertionError):                               # 남은 항목의 시작점 파일이 없다
-        _check_r15(spec, todos.replace("session_manager/liveness.py", "session_manager/nowhere.py"))
+    with pytest.raises(AssertionError):                               # 남은 항목의 시작점 파일이 없다(다 고쳐 체크돼 있어도 하나를 되살려 본다)
+        back = lines[-1].replace("- [x]", "- [ ]", 1) + " 시작점: `session_manager/nowhere.py`"
+        _check_r15(spec, todos.replace(lines[-1], back))
 
 
 @pytest.mark.parametrize("doc", [README, TODOS, MULTI_OS], ids=lambda p: p.name)
