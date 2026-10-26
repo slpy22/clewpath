@@ -821,7 +821,8 @@ def test_swap_with_live_runner_waits_for_the_runner(inst):
     r = inst.run("start")
     assert r.returncode == 0 and inst.host_pids() == [], inst.diag(r)
     assert "skip: 러너가 교체 중" in inst.llog()
-    assert _kv(inst.run("status").stdout.decode())["state"] == "updating"
+    got = _kv(inst.run("status").stdout.decode())
+    assert got["state"] == "updating" and got["swap"] == "updating", got
     inst.started(inst.run("start", env=inst.env(CLEWPATH_UPDATER=1)))  # 러너 자신의 재기동은 통과
     assert (inst.root / ".clewpath-swap.777").exists(), "잔재 정리는 러너 몫"
 

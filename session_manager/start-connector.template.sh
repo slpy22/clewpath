@@ -11,6 +11,7 @@
 #                                        --hold 면 maintenance.flag 도 만든다(다시 켜기: resume)
 #   sh start-connector.sh resume         maintenance.flag 를 지우고 start
 #   sh start-connector.sh status         state= pid= port= url= broker_pid= broker_alive= watch_pid= maintenance=
+#                                        [venv=] [swap=updating|pending — 교체 잔재가 있을 때만]
 #                                        (종료코드 0 정상 / 1 아님 / 3 유지보수)
 #   sh start-connector.sh watch [초]     상주 감시 — 자동 시작이 없는 곳(리눅스)의 임시용(기본 60초, 최소 10초). 하나만 돈다
 #   sh start-connector.sh paths          root= data_dir= conf_file= default_port= python=
@@ -791,6 +792,14 @@ cmd_status() {
   printf 'state=%s\npid=%s\nport=%s\nurl=http://127.0.0.1:%s/\nbroker_pid=%s\nbroker_alive=%s\nwatch_pid=%s\nmaintenance=%s\n' \
     "$T_STATE" "$T_PID" "$P_PORT" "$P_PORT" "$T_BP" "$T_BA" "$T_WP" "$T_MAINT"
   [ "$T_VENV" = ok ] || printf 'venv=%s\n' "$T_VENV"
+  # 교체 잔재(.clewpath-swap.*)가 있으면 swap= 줄 — updating(러너가 교체 중) / pending(중단된 업데이트: 이 설치본의 Host 가 그
+  # 파일로 떠 있어 -RecoverOnly 가 보류(종료코드 3)했거나 아직 아무도 안 되돌림 — Host 가 내려가면 다음 기동·업데이트가 이전
+  # 버전으로 되돌린다). 없으면 줄이 없다
+  if swap_left; then
+    if runner_live; then T_SW=updating; else T_SW=pending; fi
+    printf 'swap=%s\n' "$T_SW"
+    [ "$T_SW" = pending ] && note "중단된 업데이트의 교체 잔재($ROOT/.clewpath-swap.*)가 남아 있습니다 — Host 가 내려가면 다음 기동·업데이트가 이전 버전으로 되돌립니다"
+  fi
   exit "$T_RC"
 }
 

@@ -720,7 +720,7 @@ cmd_start() {
 - 교체 잔재가 있고 러너가 살아 있으면 `CLEWPATH_UPDATER=1`(러너 자신의 재기동)만 통과하고 나머지는 보류(0)한다. 러너 사본의 `-RecoverOnly` 종료코드: 0이면 복구(잔재가 남으면 실패로 봄), 3이면 다른 러너가 도는 중이거나 이 설치본의 Host 가 떠 있어(3단계) 보류, 그 밖은 막힘(1).
 - probe는 pid가 좀비이거나, 내 uid가 아니거나, 명령줄이 이 설치본의 Host(설치 경로 + 모듈)가 아니면 죽은 것으로 본다(맥 재부팅 뒤 남의 프로세스가 같은 pid를 받는 경우). (검토 반영: 처음엔 runtime.json 의 `started_at`보다 5초 넘게 뒤에 생긴 프로세스도 죽은 것으로 봤다 — 리눅스 psutil 의 create_time 은 지금의 부팅 시각으로 계산해 시계가 앞으로 뛰면(WSL2·VM 재개·NTP) 같이 밀려, 잠깐 응답 없는 산 Host 를 시체로 보고 두 번째 Host 를 띄웠다. 시각 대신 설치 경로로 가린다)
 - `watch`의 틱은 `( cmd_start )` 대신 `/bin/sh "$SELF" start` 새 프로세스로 돈다. 잠금 pid가 진짜 pid가 되고, 다시 렌더된 런처를 쓴다. Host가 살아 있으면(ok·busy) start를 부르지 않는다.
-- 출력: `stop`은 `not running` / `stopped (pid N)` / `stopped (pid N, forced)`. `status`는 위 키에 `maintenance=0|1`을 더하고, venv가 없거나 판정이 안 되면 `venv=missing|broken`을 붙인다. 사람용 안내는 터미널일 때만 표준오류로 낸다(실패는 늘 표준오류).
+- 출력: `stop`은 `not running` / `stopped (pid N)` / `stopped (pid N, forced)`. `status`는 위 키에 `maintenance=0|1`을 더하고, venv가 없거나 판정이 안 되면 `venv=missing|broken`을 붙인다. 교체 잔재(`.clewpath-swap.*`)가 있으면 `swap=updating`(러너가 교체 중)·`swap=pending`(중단된 업데이트 — `-RecoverOnly` 가 떠 있는 Host 때문에 보류(3)했거나 아직 안 되돌림, Host 가 내려가면 다음 기동이 되돌린다)을 붙인다(0.32.4). 사람용 안내는 터미널일 때만 표준오류로 낸다(실패는 늘 표준오류).
 - 렌더러: `osdep._posix.write_launcher(root, data_dir=, conf_file=, port=)` → `created|updated|unchanged`(원자 교체, 0755). `hostctl render-launcher`(4단계)와 `ensure_launcher`가 함께 쓴다. `DEFAULT_PORT=` 줄은 그 줄만 있어야 `ensure_launcher`가 기존 포트를 다시 읽는다(시험으로 고정).
 - 시험: `tests/test_launcher_sh.py`(L①~L⑪, 판정 세 갈래 psutil·/proc·ps). 리눅스 컨테이너에서 템플릿에 버그를 하나씩 넣어 시험이 잡는지 확인했다(24종 모두 잡힘).
 
@@ -1550,7 +1550,9 @@ pytest 연결: `tests/test_posix_e2e.py`(`@pytest.mark.posix_e2e`, docker가 없
 - 마지막 확인은 멈추기 전에 적어 둔 Host·브로커 pid 도 본다. `--purge-uv` 는 uv 가 늘 두는 `.gitignore` 를 허용하고, 남긴 python 폴더를 남은 것으로 센다. bin/uv 는 설치 기록의 `uv=` 가 그 자리일 때만 지운다(`--system-uv`·남이 둔 uv 는 남긴다).
 
 ### 9.7 이번에 고치지 않은 것 (TODOS 「멀티 OS」)
-셸 쪽 update.inprogress 원자적 잡기, `CLEWPATH_CONFIG` 의 브로커·claude 자식 유출(ptyd 해시), foreign 판정을 ClewPath 일 때로 좁히기, 런처 stop 대기의 벽시계 마감, held 커밋 뒤 첫 기동 실패 안내.
+`CLEWPATH_CONFIG` 의 브로커·claude 자식 유출(ptyd 해시).
+
+0.32.4 에 고친 것: 셸 쪽 update.inprogress 원자적 잡기(같은 mkdir 잠금 `.update.inprogress.lock` — 9.5), foreign 판정을 ClewPath 일 때로 좁히기(진단에 claude_home 이 없으면 `other` — 런처는 띄우고 Host 의 port_fallback 에 맡긴다), 런처 stop 대기의 벽시계 마감(반초 수), held 커밋 뒤 첫 기동 실패 안내(러너가 `updates/held-commit` 을 남기고 런처 start 가 실패 때 '자동 롤백 없음'·백업 위치를 알린다, 뜨면 지운다), 표식 `at=` 앞자리 0, 재설치 `--port` 헛 경고, `-RecoverOnly` 보류 중 status 의 `swap=`.
 
 ## 10. 맥 자동 시작 launchd (3b 첫 작업, 2026-10-21)
 

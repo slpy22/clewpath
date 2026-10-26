@@ -1258,6 +1258,9 @@ def test_recover_only_waits_while_a_host_runs_on_the_leftover(upd):
     assert r.returncode == 3, upd.diag()
     assert upd.tree() == snap and sd.exists() and upd.hosts() == [old]
     assert f"이 설치본의 Host 가 떠 있어(pid {old})" in upd.text(upd.work / "recover.log")
+    st = subprocess.run(["/bin/sh", str(upd.launcher), "status"], env=upd.env(), capture_output=True, timeout=60)
+    got = _kv(st.stdout.decode())                                 # 보류하는 동안 status 가 잔재를 알린다(swap=)
+    assert st.returncode == 0 and got["state"] == "running" and got.get("swap") == "pending", got
 
     def start():
         return subprocess.run(["/bin/sh", str(upd.launcher), "start"], env=upd.env(), capture_output=True, timeout=60,
@@ -1270,6 +1273,8 @@ def test_recover_only_waits_while_a_host_runs_on_the_leftover(upd):
     r = start()
     assert r.returncode == 0, upd.diag(r.stderr.decode("utf-8", "replace"))
     assert upd.tree() == before and not sd.exists() and upd.running_tag() == "old"
+    st = subprocess.run(["/bin/sh", str(upd.launcher), "status"], env=upd.env(), capture_output=True, timeout=60)
+    assert "swap" not in _kv(st.stdout.decode()), "되돌린 뒤엔 swap= 줄이 없다"
 
 
 def test_uv_is_found_from_the_record_then_clewpath_home_then_path(upd):
