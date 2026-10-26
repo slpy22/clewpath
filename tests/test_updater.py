@@ -441,8 +441,9 @@ def test_prune_work_dir_does_nothing_while_applying(fake_claude_home, monkeypatc
     assert {p.name for p in wd.iterdir()} == before
 
 
-def test_check_and_stage_prunes_after_staging(fake_claude_home, monkeypatch):
-    """새 버전을 펼친 직후 정리한다. 정리가 실패해도 스테이징 결과는 그대로 돌려준다."""
+def test_check_and_stage_does_not_prune_inside_the_apply_request(fake_claude_home, monkeypatch):
+    """정리는 적용 요청 밖에서 — check_and_stage 안에서 돌던 첫 정리(이 PC 130개 버전분)가 1분 남짓 걸려 release.ps1 의 적용 요청이
+    30초에 끊겼다(0.32.4 출시, Host 는 혼자 적용 완료). 이제 Host 가 뜬 뒤 배경에서 정리한다(prune_in_background)."""
     wd = updater.work_dir()
     monkeypatch.setattr(updater, "check", lambda: {"available": True, "manifest": "tok"})
     monkeypatch.setattr(updater, "verify_manifest", lambda t: {"ver": "0.32.3"})
@@ -451,12 +452,45 @@ def test_check_and_stage_prunes_after_staging(fake_claude_home, monkeypatch):
     calls = []
     monkeypatch.setattr(updater, "prune_work_dir", lambda: calls.append(1) or [])
     st = updater.check_and_stage()
-    assert calls == [1] and st["staged_version"] == "0.32.3"
+    assert calls == [] and st["staged_version"] == "0.32.3"
 
-    def boom():
-        raise OSError("정리 실패")
-    monkeypatch.setattr(updater, "prune_work_dir", boom)
-    assert updater.check_and_stage()["staged"].endswith("stage-0.32.3")
+
+def test_prune_in_background_runs_later_and_swallows_errors(monkeypatch):
+    import threading
+    done = threading.Event()
+    calls = []
+
+    def fake():
+        calls.append(1)
+        done.set()
+        raise OSError("정리 실패")                      # 배경 정리의 실패는 Host 를 건드리지 않는다
+    monkeypatch.setattr(updater, "prune_work_dir", fake)
+    t = updater.prune_in_background(delay_s=0)
+    assert t.daemon and done.wait(5) and calls == [1]
+    t.join(5)
+    assert not t.is_alive()
+
+
+def test_host_startup_schedules_background_prune():
+    import inspect
+    from session_manager import server
+    src = inspect.getsource(server._lifespan)
+    assert "prune_in_background(" in src and "_prune.stop.set()" in src
+
+
+def test_background_prune_skips_when_stopped_or_data_dir_changed(fake_claude_home, monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(updater, "prune_work_dir", lambda: calls.append(1) or [])
+    t = updater.prune_in_background(delay_s=30)
+    t.stop.set()                                         # 앱을 내렸다 — 기다리던 정리는 돌지 않는다
+    t.join(5)
+    assert not t.is_alive() and calls == []
+    real = updater.work_dir()
+    monkeypatch.setattr(updater, "work_dir", lambda: real)
+    t = updater.prune_in_background(delay_s=0.2)
+    monkeypatch.setattr(updater, "work_dir", lambda: tmp_path / "other")   # 시험이 끝나 진짜 홈으로 돌아간 것과 같은 꼴
+    t.join(5)
+    assert calls == []
 
 
 def test_runner_env_drops_values_the_host_filled_from_config(fake_claude_home, monkeypatch):

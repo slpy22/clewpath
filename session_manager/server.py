@@ -392,6 +392,8 @@ async def _lifespan(app: FastAPI):
         _liveness.on_startup_async(_updater_mod.BOUND_PORT)
     except Exception as e:  # noqa: BLE001
         print(f"[liveness] 시작 실패: {e}", flush=True)
+    # 업데이트 작업 폴더 정리(zip·stage·backup, 종류별 2개) — 적용 요청 밖에서, 기동 뒤 배경으로(0.32.4 출시 때 적용 요청이 끊김)
+    _prune = _updater_mod.prune_in_background()
 
     upd_task = None
     if appconfig.get_bool("update", "auto_check", True):
@@ -438,6 +440,7 @@ async def _lifespan(app: FastAPI):
         _devsync.stop()
         _teamwatch.stop()
         _hk.stop()                           # 앱을 내렸는데 +5분 정기 작업이 남아 돌지 않게(시험의 TestClient 도 여기로 온다)
+        _prune.stop.set()                    # 기다리던 작업 폴더 정리도(같은 이유)
         await _pclink.stop_background()
         for t in (task, upd_task):
             if t is not None:

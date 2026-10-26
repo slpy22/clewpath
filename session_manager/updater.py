@@ -584,8 +584,33 @@ def prune_work_dir(keep: int = KEEP_PER_KIND) -> list[str]:
     return removed
 
 
+def prune_in_background(delay_s: float = 90.0):
+    """Host 가 뜬 뒤 배경에서 작업 폴더를 정리한다(데몬 스레드, 실패는 로그만). 적용 요청 안(check_and_stage)에서 하던 첫 정리가
+    쌓인 버전이 많으면 1분 넘게 걸려 release.ps1 의 적용 요청이 끊겼다(0.32.4 출시). 업데이트는 늘 Host 재기동으로 끝나므로
+    기동마다 한 번이면 충분하다. 적용이 도는 중이면 prune_work_dir 이 스스로 아무것도 하지 않는다.
+    잡은 때의 작업 폴더가 아니면 하지 않는다 — 시험 앱이 잡아 둔 정리가 나중에 진짜 데이터 폴더에서 돌지 않게(맥 1회차의 정기 작업
+    사고와 같은 꼴). 앱을 내리면(.stop.set(), lifespan) 기다리던 정리는 돌지 않는다."""
+    import threading
+    stop = threading.Event()
+    wd = work_dir()
+
+    def run():
+        if stop.wait(delay_s):               # 기동 직후(헬스체크·자기 회복)와 겹치지 않게 기다린다. 그새 앱이 내려가면 끝
+            return
+        try:
+            if work_dir() != wd:
+                return
+            prune_work_dir()
+        except Exception as e:  # noqa: BLE001 — 정리는 덤이다
+            print(f"[update] 작업 폴더 정리 건너뜀: {type(e).__name__}", flush=True)
+    t = threading.Thread(target=run, name="update-prune", daemon=True)
+    t.stop = stop
+    t.start()
+    return t
+
+
 def check_and_stage() -> dict[str, Any]:
-    """확인 -> (있으면) 다운로드 -> 검증 -> 스테이징. 적용 직전까지. 펼친 뒤 작업 폴더를 정리한다(실패해도 스테이징은 그대로)."""
+    """확인 -> (있으면) 다운로드 -> 검증 -> 스테이징. 적용 직전까지. 작업 폴더 정리는 여기서 하지 않는다(prune_in_background)."""
     st = check()
     if not st.get("available") or not st.get("manifest"):
         return st
@@ -593,9 +618,4 @@ def check_and_stage() -> dict[str, Any]:
     m = verify_manifest(token)          # 다시 검증 — 저장/전달 중 바뀌었을 수 있다
     zip_path = download(m, token)
     staged = stage(zip_path, m)
-    st = write_state(staged=str(staged), staged_version=m["ver"])
-    try:
-        prune_work_dir()
-    except Exception as e:  # noqa: BLE001 — 정리는 덤이다. 업데이트를 막지 않는다
-        print(f"[update] 작업 폴더 정리 건너뜀: {type(e).__name__}", flush=True)
-    return st
+    return write_state(staged=str(staged), staged_version=m["ver"])
