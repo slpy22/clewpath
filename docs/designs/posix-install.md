@@ -377,7 +377,7 @@ curl -fsSL …/get.sh | CLEWPATH_CLIENT_TOKEN=… sh                 # 토큰은
    - 토큰은 env로 export한다.
    - 다음을 실행한다. 인자는 `set -- …`로 쌓는다.
      ```
-     exec /bin/sh "$tmp/stage/install.sh" --from-stage "$tmp/stage" --dir "$DIR" --cp-url "$CP" --port "$PORT" [전달 인자…] </dev/null
+     exec /bin/sh "$tmp/stage/install.sh" --from-stage "$tmp/stage" --dir "$DIR" --cp-url "$CP" [--port "$PORT" — 준 값일 때만] [전달 인자…] </dev/null
      ```
    - 표준 입력은 이미 다 읽힌 파이프다. 뒤따르는 스크립트는 대화형 입력을 받지 않는다.
 
@@ -523,7 +523,7 @@ curl -fsSL …/get.sh | CLEWPATH_CLIENT_TOKEN=… sh                 # 토큰은
 
 **I8. [5/6] 설정·권한·런처·기록·자격증명**
 1. `hostctl secure-data-dir`: `DATA_DIR`을 0700으로 만들고, 그 아래 파일·폴더에서 group·other 권한을 뺀다(심볼릭 링크는 건너뜀).
-2. `hostctl write-config --port --cp-url --relay-url --app-url [--claude-config-dir "$CLAUDE_CONFIG_DIR"]`. 토큰은 env로만 넘긴다. 파일이 이미 있으면 손대지 않는다(`config=kept`). 새로 만들 때는 0600, BOM 없음, tomllib 검증을 통과한 뒤 원자적으로 쓴다.
+2. `hostctl write-config [--port — 사용자가 준 값일 때만, 0.32.4] --cp-url --relay-url --app-url [--claude-config-dir "$CLAUDE_CONFIG_DIR"]`. 토큰은 env로만 넘긴다. 파일이 이미 있으면 손대지 않는다(`config=kept`). 새로 만들 때는 0600, BOM 없음, tomllib 검증을 통과한 뒤 원자적으로 쓴다.
 3. `hostctl render-launcher --root "$ROOT" --data-dir --conf-file --port`로 `start-connector.sh`를 만든다(0755, 원자적). 템플릿이 없으면 `[FAIL]`이다. POSIX에는 v1 폴백이 필요 없다.
 4. `.clewpath-install`을 기록한다(printf로 임시 파일에 쓰고 mv).
 5. 자격증명(install.ps1:535-570에 대응):
@@ -593,7 +593,7 @@ curl -fsSL …/get.sh | CLEWPATH_CLIENT_TOKEN=… sh                 # 토큰은
 - `--from-stage`: stage는 이 install.sh가 있는 폴더여야 한다. 최상위 이름 검사는 아무것도 바꾸기 전에 한다(점으로 시작·`start-connector.sh`·제어문자·역슬래시·심볼릭 링크). `--dir`이 비어 있지 않은데 ClewPath 설치본(`.clewpath-install`, 또는 session_manager와 이름이 clewpath-host인 pyproject)이 아니면 거부한다(남의 폴더의 같은 이름 항목을 지우지 않게). `--dry-run`과 함께 쓰면 거부(2). 옮긴 뒤 교체 잔재(`.clewpath-swap.*`)는 버린다 — 받은 파일이 교체 대상을 모두 새로 덮었으므로, 남은 저널을 되돌리면 방금 놓은 파일이 옛 것으로 돌아간다(시험으로 고정). 지우지 못하면 그 자리에서 멈춘다.
 - 교체 잔재가 있는 채로 `sh install.sh`(stage 없이)를 다시 치면 — 런처가 "install.sh 로 복구하세요"라고 안내하는 길 — 표식을 잡기 전에 Host를 멈추고 러너(데이터 폴더 사본 → 설치 루트 → 잔재 안의 것 순)를 임시 사본으로 `-RecoverOnly` 한다. 자기 표식(서막이 잡고 exec 로 이어 온 같은 pid)이 있으면 먼저 내려놓는다 — 러너가 '설치 중'으로 보고 비켜서면(3) 아무도 되돌리지 못한다. 3이면 60초까지 다른 복구가 끝나기를 기다리고, 끝내 남으면 get.sh 재설치를 안내하고 1.
 - 표식은 데이터 폴더가 없고 클로드 `projects`도 없으면 잡지 않는다(그 설치는 [3/6]에서 멈춘다 — 클로드 폴더를 우리가 만들지 않게). 표식의 `at`은 앞자리 0을 받지 않는다(`$(( ))`가 8진수로 읽어 셸이 끝난다).
-- 기존 설정 파일이 있으면 그 파일의 포트(없거나 읽을 수 없으면 Host 기본값 5100)를 런처 렌더·기동 확인·안내에 쓴다. `--port`가 다르면 경고만 한다.
+- 기존 설정 파일이 있으면 그 파일의 포트(없거나 읽을 수 없으면 Host 기본값 5100)를 런처 렌더·기동 확인·안내에 쓴다. `--port`가 다르면 경고만 한다(0.32.4: 사용자가 `--port`를 줬을 때만 넘기고 그때만 견준다 — 기본값을 늘 넘겨 재설치마다 헛 경고가 떴다).
 - 이미 떠 있는 Host는 `running`뿐 아니라 응답 없는 Host(`starting`)도 멈춘다 — status 의 `pid=`(살아 있는 Host 만)로 판단한다. 우리 표식이 있으면 status 는 응답 없는 Host 를 `updating`으로 보이기 때문이다. maintenance.flag 가 있으면 멈추지도 띄우지도 않는다.
 - DryRun 의 컨트롤플레인 도달 확인은 루프백만 프록시를 건너뛴다(`--noproxy 127.0.0.1,localhost,::1`) — 원격 CP 는 사내 프록시가 필요할 수 있다.
 - 인자는 `--opt 값`과 `--opt=값`을 다 받는다. 모르는 위치 인자는 값을 화면에 찍지 않는다(토큰을 잘못 붙였을 수 있다).
@@ -716,11 +716,11 @@ cmd_start() {
 
 **구현 메모 (2단계, 2026-10-20 — 뒤 단계가 맞출 약속)**
 - `start`는 띄운 뒤 runtime.json에 새 pid가 적히거나(`up`) 끝날 때까지 최대 15초 잠금을 쥔다. 그 사이 온 다른 `start`가 "runtime.json 없음"을 죽음으로 읽고 겹쳐 띄우지 않게 하려는 것이다. 기동 직후 끝나면 `fail: 기동 직후 종료`를 남기고 종료코드 1.
-- 잠금(`launcher.lock`·`watch.lock.d`·`updates/runner.lock.d`)과 `update.inprogress`의 pid는 명령줄까지 본다. 잠금은 런처 파일 이름, 러너 잠금과 `by=runner` 표식은 `update_runner`, `by=install` 표식은 `install.sh`가 명령줄에 있어야 산 것이다(pid 재사용 방지). `by=`가 없으면 pid만 본다. pid 없는 표식은 1분, pid 없는 잠금은 2분까지 "쓰는 중"으로 본다. 러너·install.sh는 표식을 임시 파일에 쓰고 mv 한다.
+- 잠금(`launcher.lock`·`watch.lock.d`·`updates/runner.lock.d`)과 `update.inprogress`의 pid는 명령줄까지 본다. 잠금은 런처 파일 이름, 러너 잠금과 `by=runner` 표식은 `update_runner`, `by=install` 표식은 `install.sh`가 명령줄에 있어야 산 것이다(pid 재사용 방지). `by=`가 없으면 pid만 본다. pid 없는 표식은 1분, pid 없는 잠금은 2분까지 "쓰는 중"으로 본다. 러너·install.sh는 표식을 임시 파일에 쓰고 mv 한다. (0.32.4) 표식의 '확인 → 쓰기'는 둘 다 같은 빈 폴더 잠금 `DATA/.update.inprogress.lock`(mkdir) 안에서 한다 — 쥐는 동안은 수 ms, 남이 쥐고 있으면 반초씩 약 10초 기다리고 못 잡으면 러너는 종료코드 3·설치는 멈춤, 1분 넘게 남은 잠금은 치우는 권리(`.reclaim`)를 쥔 하나만 rmdir. 런처의 시체 표식 치우기도 이 잠금을 잡고 내용이 그대로일 때만 지운다(못 잡으면 지우지 않는다). 표식의 `at=` 은 셋 다 앞자리 0 을 받지 않는다(8진수).
 - 교체 잔재가 있고 러너가 살아 있으면 `CLEWPATH_UPDATER=1`(러너 자신의 재기동)만 통과하고 나머지는 보류(0)한다. 러너 사본의 `-RecoverOnly` 종료코드: 0이면 복구(잔재가 남으면 실패로 봄), 3이면 다른 러너가 도는 중이거나 이 설치본의 Host 가 떠 있어(3단계) 보류, 그 밖은 막힘(1).
 - probe는 pid가 좀비이거나, 내 uid가 아니거나, 명령줄이 이 설치본의 Host(설치 경로 + 모듈)가 아니면 죽은 것으로 본다(맥 재부팅 뒤 남의 프로세스가 같은 pid를 받는 경우). (검토 반영: 처음엔 runtime.json 의 `started_at`보다 5초 넘게 뒤에 생긴 프로세스도 죽은 것으로 봤다 — 리눅스 psutil 의 create_time 은 지금의 부팅 시각으로 계산해 시계가 앞으로 뛰면(WSL2·VM 재개·NTP) 같이 밀려, 잠깐 응답 없는 산 Host 를 시체로 보고 두 번째 Host 를 띄웠다. 시각 대신 설치 경로로 가린다)
 - `watch`의 틱은 `( cmd_start )` 대신 `/bin/sh "$SELF" start` 새 프로세스로 돈다. 잠금 pid가 진짜 pid가 되고, 다시 렌더된 런처를 쓴다. Host가 살아 있으면(ok·busy) start를 부르지 않는다.
-- 출력: `stop`은 `not running` / `stopped (pid N)` / `stopped (pid N, forced)`. `status`는 위 키에 `maintenance=0|1`을 더하고, venv가 없거나 판정이 안 되면 `venv=missing|broken`을 붙인다. 사람용 안내는 터미널일 때만 표준오류로 낸다(실패는 늘 표준오류).
+- 출력: `stop`은 `not running` / `stopped (pid N)` / `stopped (pid N, forced)`. `status`는 위 키에 `maintenance=0|1`을 더하고, venv가 없거나 판정이 안 되면 `venv=missing|broken`을 붙인다. 교체 잔재(`.clewpath-swap.*`)가 있으면 `swap=updating`(러너가 교체 중)·`swap=pending`(중단된 업데이트 — `-RecoverOnly` 가 떠 있는 Host 때문에 보류(3)했거나 아직 안 되돌림, Host 가 내려가면 다음 기동이 되돌린다)을 붙인다(0.32.4). 사람용 안내는 터미널일 때만 표준오류로 낸다(실패는 늘 표준오류).
 - 렌더러: `osdep._posix.write_launcher(root, data_dir=, conf_file=, port=)` → `created|updated|unchanged`(원자 교체, 0755). `hostctl render-launcher`(4단계)와 `ensure_launcher`가 함께 쓴다. `DEFAULT_PORT=` 줄은 그 줄만 있어야 `ensure_launcher`가 기존 포트를 다시 읽는다(시험으로 고정).
 - 시험: `tests/test_launcher_sh.py`(L①~L⑪, 판정 세 갈래 psutil·/proc·ps). 리눅스 컨테이너에서 템플릿에 버그를 하나씩 넣어 시험이 잡는지 확인했다(24종 모두 잡힘).
 
@@ -1550,7 +1550,9 @@ pytest 연결: `tests/test_posix_e2e.py`(`@pytest.mark.posix_e2e`, docker가 없
 - 마지막 확인은 멈추기 전에 적어 둔 Host·브로커 pid 도 본다. `--purge-uv` 는 uv 가 늘 두는 `.gitignore` 를 허용하고, 남긴 python 폴더를 남은 것으로 센다. bin/uv 는 설치 기록의 `uv=` 가 그 자리일 때만 지운다(`--system-uv`·남이 둔 uv 는 남긴다).
 
 ### 9.7 이번에 고치지 않은 것 (TODOS 「멀티 OS」)
-셸 쪽 update.inprogress 원자적 잡기, `CLEWPATH_CONFIG` 의 브로커·claude 자식 유출(ptyd 해시), foreign 판정을 ClewPath 일 때로 좁히기, 런처 stop 대기의 벽시계 마감, held 커밋 뒤 첫 기동 실패 안내.
+`CLEWPATH_CONFIG` 의 브로커·claude 자식 유출(ptyd 해시).
+
+0.32.4 에 고친 것: 셸 쪽 update.inprogress 원자적 잡기(같은 mkdir 잠금 `.update.inprogress.lock` — 9.5), foreign 판정을 ClewPath 일 때로 좁히기(진단에 claude_home 이 없으면 `other` — 런처는 띄우고 Host 의 port_fallback 에 맡긴다), 런처 stop 대기의 벽시계 마감(반초 수), held 커밋 뒤 첫 기동 실패 안내(러너가 `updates/held-commit` 을 남기고 런처 start 가 실패 때 '자동 롤백 없음'·백업 위치를 알린다, 뜨면 지운다), 표식 `at=` 앞자리 0, 재설치 `--port` 헛 경고, `-RecoverOnly` 보류 중 status 의 `swap=`.
 
 ## 10. 맥 자동 시작 launchd (3b 첫 작업, 2026-10-21)
 

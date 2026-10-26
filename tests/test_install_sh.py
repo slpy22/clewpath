@@ -420,9 +420,10 @@ class Box:
         """zip 을 손으로 푼 모양(get.sh 없이) — 설치 루트에 PAYLOAD 만."""
         shutil.copytree(self.payload, self.root)
 
-    def args(self, *extra, port: int | None = None, cp: str = "http://127.0.0.1:9/cp", provision=False) -> list[str]:
+    def args(self, *extra, port: int | bool | None = None, cp: str = "http://127.0.0.1:9/cp", provision=False) -> list[str]:
+        """port=False 면 --port 를 빼고 부른다(사용자가 포트를 주지 않은 재설치)."""
         a = ["--cp-url", cp, "--allow-http", "--relay-url", "ws://127.0.0.1:9/relay/ws",
-             "--app-url", "http://127.0.0.1:9/app", "--port", str(port or self.port)]
+             "--app-url", "http://127.0.0.1:9/app"] + ([] if port is False else ["--port", str(port or self.port)])
         return a + ([] if provision else ["--no-provision"]) + list(extra)
 
     def popen(self, argv, **kw) -> subprocess.Popen:
@@ -752,6 +753,34 @@ def test_rerun_is_idempotent_and_restarts_the_host(box):
     assert f"http://127.0.0.1:{box.port}/" in out
 
 
+def test_rerun_without_port_does_not_warn_about_it(box, payload):
+    """재설치 때 --port 를 주지 않아도 install.sh(와 get.sh)가 기본값 5100 을 write-config 에 넘겨, 설정 파일의 포트가 다르면
+    '--port 5100 는 설정 파일을 새로 만들 때만 씁니다' 헛 경고가 떴다 — 사용자가 준 값일 때만 넘긴다. 직접 실행·get.sh 한 줄 둘 다."""
+    box.fresh()                                                 # 설정 파일은 box.port(5100 아님)
+    r = box.install(port=False)
+    out = r.stdout.decode("utf-8")
+    assert r.returncode == 0 and "기존 설정 파일 유지" in out, box.diag(r)
+    assert "설정 파일의 포트(" not in out + r.stderr.decode("utf-8"), out   # (cp_url 이 다르다는 경고는 맞는 경고)
+    assert f"http://127.0.0.1:{box.port}/" in out
+    cp = _FakeCP()
+    try:
+        zb = _release_zip(payload)
+        url = f"{cp.url}/updates/download/{VERSION}"
+        cp.routes = {"/cp/get.sh": ((ROOT / "ops" / "get.sh").read_bytes(), "text/plain; charset=utf-8"),
+                     "/cp/updates/manifest": (_manifest(VERSION, url, zb).encode(), "application/jwt"),
+                     f"/cp/updates/download/{VERSION}": (zb, "application/zip")}
+        r = subprocess.run(["/bin/sh", "-c", 'u=$1; shift; curl -fsS "$u" | sh -s -- "$@"', "sh", f"{cp.url}/get.sh",
+                            *box.args(cp=cp.url, port=False)], env=box.env(), capture_output=True, timeout=240,
+                           cwd=str(box.home), stdin=subprocess.DEVNULL)
+    finally:
+        cp.close()
+    out = r.stdout.decode("utf-8")
+    assert r.returncode == 0 and "=== 설치 완료 ===" in out, box.diag(r)
+    assert "설정 파일의 포트(" not in out + r.stderr.decode("utf-8"), out   # (cp_url 이 다르다는 경고는 맞는 경고)
+    r = box.install(port=box.port + 1)                          # 준 값이 다르면 그대로 알린다
+    assert r.returncode == 0 and f"--port {box.port + 1} 는 설정 파일을 새로 만들 때만" in r.stdout.decode("utf-8"), box.diag(r)
+
+
 def test_upgrade_from_stage_replaces_payload_keeps_extras_and_clears_leftovers(box):
     box.fresh()
     pid1 = box.host_pid()
@@ -938,6 +967,26 @@ def test_refuses_while_an_update_runs(box):
     (lock / "pid").write_text(f"{runner.pid}\n", encoding="utf-8")
     r = box.install()
     assert r.returncode == 1 and "러너" in r.stdout.decode("utf-8") and box.host_pids() == [pid]
+
+
+def test_marker_is_checked_and_written_under_the_shared_lock(box):
+    """표식 잡기가 '확인 → 쓰기'라 러너와 같은 수 ms 안에 둘 다 '비었음'을 보고 둘 다 썼다. 러너와 같은 mkdir 잠금
+    (.update.inprogress.lock)으로 묶는다 — 남이 쥐고 있으면 기다렸다가 끝내 못 잡으면 멈춘다(아무것도 바꾸지 않는다).
+    1분 넘게 남은 잠금은 쥔 채 죽은 것이라 치우고 잡는다."""
+    box.fresh()
+    pid = box.host_pid()
+    readme = box.text(box.root / "README.md")
+    lock = box.data / ".update.inprogress.lock"
+    lock.mkdir()
+    r = box.install()
+    assert r.returncode == 1 and "표식을 다른 프로그램이 잡는 중" in r.stdout.decode("utf-8"), box.diag(r)
+    assert box.host_pids() == [pid] and box.text(box.root / "README.md") == readme
+    assert lock.is_dir() and not (box.data / "update.inprogress").exists()
+    past = time.time() - 120
+    os.utime(lock, (past, past))
+    r = box.install()
+    assert r.returncode == 0, box.diag(r)
+    assert not lock.exists() and not (box.data / "update.inprogress").exists()
 
 
 @pytest.mark.parametrize("argv,rc,said", [

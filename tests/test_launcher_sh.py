@@ -99,7 +99,15 @@ class H(BaseHTTPRequestHandler):
 
 
 time.sleep(float(FAKE.get("delay", 0)))         # 진짜 Host 처럼 import·준비에 시간이 걸리는 경우
-srv = ThreadingHTTPServer(("127.0.0.1", PORT), H)
+for cand in range(PORT, PORT + 11):              # 진짜 Host 의 port_fallback(기본 10) 흉내 — 남이 쓰면 옆 포트
+    try:
+        srv = ThreadingHTTPServer(("127.0.0.1", cand), H)
+        break
+    except OSError:
+        continue
+else:
+    sys.exit(1)
+PORT = cand
 (DATA / "runtime.json").write_text(json.dumps({
     "host": "127.0.0.1", "port": PORT, "url": f"http://127.0.0.1:{PORT}/", "pid": os.getpid(),
     "started_at": int(time.time())}, indent=2), encoding="utf-8")
@@ -518,6 +526,36 @@ def test_stale_update_marker_is_removed(inst, why):
     assert not marker.exists() and "stale update marker 제거" in inst.llog()
 
 
+def test_stale_marker_is_not_removed_while_someone_takes_it(inst):
+    """시체 표식 치우기도 '확인 → 지우기'라, 그 사이 설치·러너가 시체를 보고 새로 쓴 표식을 런처가 지웠다. 표식 잠금
+    (.update.inprogress.lock — 설치·러너가 확인·쓰기를 묶는 것)을 잡고 다시 본 뒤에만 지운다. 잡지 못하면 지우지 않는다."""
+    marker = inst.marker(DEAD_PID)
+    lock = inst.data / ".update.inprogress.lock"
+    lock.mkdir()                                                  # 누군가 표식을 잡는 중
+    inst.started(inst.run("start"))
+    assert marker.exists() and "stale update marker 제거" not in inst.llog(), inst.diag()
+    assert lock.is_dir(), "남의 잠금은 그대로"
+    inst.kill_host()
+    lock.rmdir()
+    inst.started(inst.run("start"))
+    assert not marker.exists() and "stale update marker 제거" in inst.llog()
+    assert not lock.exists(), "잡은 잠금은 놓는다"
+
+
+@with_shells
+def test_marker_time_with_a_leading_zero_is_not_octal(inst, shell):
+    """표식의 at= 앞자리가 0 이면(손상·손편집 — `at=09`) $(( )) 가 8진수로 읽다 셸째 끝났다(start·status 가 rc 2).
+    그런 at 은 없는 것으로 본다 — 1분 넘게 묵은 표식이면 시체로 치운다."""
+    marker = inst.data / "update.inprogress"
+    marker.write_text(f"pid={inst.holder('update_runner.sh').pid}\nat=09\nby=runner\n", encoding="utf-8")
+    past = time.time() - 120
+    os.utime(marker, (past, past))
+    st = inst.run("status", shell=shell)
+    assert st.returncode == 1 and _kv(st.stdout.decode())["state"] == "stopped", inst.diag(st)
+    inst.started(inst.run("start", shell=shell))
+    assert not marker.exists() and "stale update marker 제거" in inst.llog()
+
+
 # ---------------------------------------------------------------- L⑦ 좀비·pid 재사용
 
 def test_zombie_pid_counts_as_dead(inst):
@@ -783,7 +821,8 @@ def test_swap_with_live_runner_waits_for_the_runner(inst):
     r = inst.run("start")
     assert r.returncode == 0 and inst.host_pids() == [], inst.diag(r)
     assert "skip: 러너가 교체 중" in inst.llog()
-    assert _kv(inst.run("status").stdout.decode())["state"] == "updating"
+    got = _kv(inst.run("status").stdout.decode())
+    assert got["state"] == "updating" and got["swap"] == "updating", got
     inst.started(inst.run("start", env=inst.env(CLEWPATH_UPDATER=1)))  # 러너 자신의 재기동은 통과
     assert (inst.root / ".clewpath-swap.777").exists(), "잔재 정리는 러너 몫"
 
@@ -906,7 +945,7 @@ def test_foreground_refusals_end_with_zero(inst):
     """foreground 가 띄우지 않을 때는 늘 0 — 0 이 아닌 종료는 launchd KeepAlive 에게 'Host 가 죽었다, 곧 다시'라서 곧 풀리지 않는
     사유(남의 서버·venv 없음·잔재 복구 막힘·다른 런처)로 30초마다 쉼 없이 돈다. 사유는 launcher.log(와 표준오류)에 남고 다시
     보는 것은 5분 주기(StartInterval)다. 사유가 풀리면 띄운다."""
-    srv = _foreign_server(inst.port)                                        # 남의 서버가 포트를 차지
+    srv = _foreign_server(inst.port, clewpath=True)                         # 다른 ClewPath 가 포트를 차지
     try:
         r = inst.run("foreground", timeout=30)
         assert r.returncode == 0 and "다른 프로그램" in r.stderr.decode(), inst.diag(r)
@@ -973,11 +1012,15 @@ def _slow_port() -> socket.socket:
     return s
 
 
-def _foreign_server(port: int) -> ThreadingHTTPServer:
-    """남의 서버 — /api/health 에 {"status":"ok"} 로 답하지만 이 설치본의 Host 가 아니다."""
+def _foreign_server(port: int, clewpath: bool = False) -> ThreadingHTTPServer:
+    """남의 서버 — /api/health 에 {"status":"ok"} 로 답하지만 이 설치본의 Host 가 아니다. clewpath 면 다른 ClewPath(다른
+    설치본·개발 서버·다른 사용자) — 진단(/api/owner/diagnostics)에 claude_home 을 싣는다(Host 의 _clewpath_already_there 기준)."""
     class H(BaseHTTPRequestHandler):
         def do_GET(self):
-            raw = json.dumps({"status": "ok"}).encode()
+            body = {"status": "ok"}
+            if clewpath and self.path == "/api/owner/diagnostics":
+                body = {"claude_home": "/elsewhere/.claude", "version": "0.0.0"}
+            raw = json.dumps(body).encode()
             self.send_response(200)
             self.send_header("Content-Length", str(len(raw)))
             self.end_headers()
@@ -1073,10 +1116,11 @@ def test_start_rechecks_markers_inside_the_lock(inst, marker):
 @pytest.mark.parametrize("runtime", ["none", "dead-pid"])
 def test_foreign_server_on_the_port_is_reported(inst, runtime):
     """[L3] health 가 {"status":"ok"} 이면 그 포트에 누가 있든 '떠 있음'으로 봐서, 남의 서버가 포트를 차지하면 start 는 조용히
-    아무것도 안 하고 watch 도 영영 되살리지 않았다 — 이 설치본의 Host 가 아니면 실패(rc≠0)와 안내."""
+    아무것도 안 하고 watch 도 영영 되살리지 않았다 — 그 서버가 다른 ClewPath(진단에 claude_home)면 실패(rc≠0)와 안내
+    (Host 도 같은 포트의 ClewPath 앞에서는 옆 포트로 가지 않고 끝난다)."""
     if runtime == "dead-pid":
         (inst.data / "runtime.json").write_text(json.dumps({"port": inst.port, "pid": DEAD_PID}), encoding="utf-8")
-    srv = _foreign_server(inst.port)
+    srv = _foreign_server(inst.port, clewpath=True)
     try:
         r = inst.run("start")
         assert r.returncode == 1 and "다른 프로그램" in r.stderr.decode(), inst.diag(r)
@@ -1089,6 +1133,71 @@ def test_foreign_server_on_the_port_is_reported(inst, runtime):
         srv.shutdown()
         srv.server_close()
     inst.started(inst.run("start"))                                       # 포트가 비면 띄운다
+
+
+@pytest.mark.parametrize("runtime", ["none", "dead-pid"])
+def test_non_clewpath_server_on_the_port_is_left_to_the_host_fallback(inst, runtime):
+    """[2회차 후속] ClewPath 가 아닌 프로그램이 포트를 차지하고 health 에 우연히 {"status":"ok"} 로 답해도 거부했다 — Host 는
+    그럴 때 옆 포트를 찾아 뜬다(port_fallback). 진단에 claude_home 이 없으면 런처는 띄우고 Host 의 port_fallback 에 맡긴다.
+    뜬 뒤의 판정은 runtime.json 의 (옆) 포트를 본다."""
+    if runtime == "dead-pid":
+        (inst.data / "runtime.json").write_text(json.dumps({"port": inst.port, "pid": DEAD_PID}), encoding="utf-8")
+    srv = _foreign_server(inst.port)
+    try:
+        r = inst.run("start")
+        assert r.returncode == 0, inst.diag(r)
+        pids = inst.host_pids()
+        assert len(pids) == 1 and inst.runtime().get("pid") == pids[0], inst.diag(r)
+        moved = inst.runtime()["port"]
+        assert moved != inst.port, "Host 가 옆 포트로 떴다"
+        assert f"포트 {inst.port} 는 다른 프로그램(ClewPath 아님)" in inst.llog()
+        st = inst.run("status")
+        got = _kv(st.stdout.decode())
+        assert st.returncode == 0 and got["state"] == "running" and got["port"] == str(moved), got
+        r = inst.run("start")                                             # 멱등 — 옆 포트의 Host 를 알아본다
+        assert r.returncode == 0 and inst.host_pids() == pids, inst.diag(r)
+        r = inst.run("stop")
+        assert r.stdout.decode().strip() == f"stopped (pid {pids[0]})", inst.diag(r)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+# 시계가 9시간 앞서 있다가(CLOCK_AHEAD 파일이 있는 동안) NTP 가 제자리로 되돌린 흉내 — date +%s 만 바꾼다(러너 시험과 같다)
+FAKE_DATE = """#!/bin/sh
+if [ "$1" = "+%s" ] && [ -e "$CLOCK_AHEAD" ]; then
+  echo $(( $(/bin/date +%s) + 32400 ))
+else
+  exec /bin/date "$@"
+fi
+"""
+
+
+def test_stop_wait_does_not_follow_the_clock_back(inst, tmp_path):
+    """stop 의 대기 마감(SIGTERM 뒤 15초·SIGKILL 뒤 3초·진행 중인 start 25초)을 벽시계로 재면 NTP 가 시계를 뒤로 돌린 만큼
+    (여기선 9시간) 더 기다렸다 — 러너처럼 쉰 반초 수로 센다."""
+    fakebin = tmp_path / "fakebin"
+    fakebin.mkdir()
+    (fakebin / "date").write_text(FAKE_DATE, encoding="utf-8")
+    os.chmod(fakebin / "date", 0o755)
+    ahead = tmp_path / "clock-ahead"
+    ahead.write_text("", encoding="utf-8")
+    inst.conf_write(ignore_term=True)
+    pid = inst.started(inst.run("start"))
+    p = subprocess.Popen(["/bin/sh", str(inst.launcher), "stop"], env=inst.env(PATH=f"{fakebin}:{os.environ['PATH']}",
+                         CLOCK_AHEAD=ahead), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         cwd=str(inst.home))
+    inst.procs.append(p)
+    assert _wait(lambda: "stop: SIGTERM" in inst.llog(), 30), inst.diag()
+    time.sleep(0.5)                                                       # 마감을 앞선 시계로 잰 뒤
+    ahead.unlink()                                                        # 시계 보정(-9시간)
+    try:
+        out, _ = p.communicate(timeout=45)
+    except subprocess.TimeoutExpired:
+        p.kill()
+        pytest.fail("시계가 뒤로 간 만큼(9시간) 더 기다린다\n" + inst.diag())
+    assert out.decode().strip() == f"stopped (pid {pid}, forced)", inst.diag()
+    assert _gone(pid)
 
 
 def test_rotated_host_log_keeps_the_incident_tail(inst, monkeypatch):

@@ -874,6 +874,25 @@ def test_live_install_marker_also_exits_3(upd):
     assert "업데이트·설치가 진행 중입니다" in upd.logtext()
 
 
+def test_marker_is_checked_and_written_under_the_shared_lock(upd):
+    """표식 잡기가 '확인 → 쓰기'라 install.sh 와 러너가 같은 수 ms 안에 둘 다 '비었음'을 보고 둘 다 썼다(나중 것이 이김 —
+    둘 다 자기가 쥔 줄 안다). 확인·쓰기를 install.sh 와 같은 mkdir 잠금(.update.inprogress.lock)으로 묶는다: 남이 쥐고
+    있으면 기다렸다가(쥐는 동안은 수 ms) 끝내 못 잡으면 종료코드 3. 1분 넘게 남은 잠금은 쥔 채 죽은 것이라 치운다."""
+    lock = upd.data / ".update.inprogress.lock"
+    lock.mkdir()
+    rc = upd.run(upd.argv(wait_pid=DEAD_PID))
+    assert rc == 3, upd.diag()
+    assert lock.is_dir() and not (upd.data / "update.inprogress").exists() and upd.uv_calls() == []
+    assert not upd.backup.exists() and not (upd.work / "runner.lock.d").exists()
+    assert "표식을 다른 프로그램이 잡는 중" in upd.logtext()
+    past = time.time() - 120                                      # 쥔 채 죽은 잠금
+    os.utime(lock, (past, past))
+    rc = upd.run(upd.argv(wait_pid=DEAD_PID))
+    assert rc == 0, upd.diag()
+    assert upd.running_tag() == "new"
+    upd.clean_after()
+
+
 def test_dead_runner_lock_and_marker_are_taken_over(upd):
     lock = upd.work / "runner.lock.d"
     lock.mkdir()
@@ -883,6 +902,20 @@ def test_dead_runner_lock_and_marker_are_taken_over(upd):
     rc = upd.run(upd.argv(wait_pid=DEAD_PID))                    # (옛 Host 없이 — 죽은 러너가 내려 둔 상태)
     assert rc == 0, upd.diag()
     assert "버려진 러너 잠금을 치웁니다" in upd.logtext() and upd.running_tag() == "new"
+    upd.clean_after()
+
+
+@with_shells
+def test_marker_time_with_a_leading_zero_is_not_octal(upd, shell):
+    """표식의 at= 앞자리가 0 이면(손상·손편집 — `at=09`) marker_live 의 $(( )) 가 8진수로 읽다 러너째 끝났다(잠금을 쥔 채).
+    그런 at 은 없는 것으로 본다 — 1분 넘게 묵은 표식은 시체라 넘겨받는다."""
+    marker = upd.data / "update.inprogress"
+    marker.write_text(f"pid={upd.holder('install.sh').pid}\nat=09\nby=install\n", encoding="utf-8")
+    past = time.time() - 120
+    os.utime(marker, (past, past))
+    rc = upd.run(upd.argv(wait_pid=DEAD_PID), shell=shell)
+    assert rc == 0, upd.diag()
+    assert upd.running_tag() == "new"
     upd.clean_after()
 
 
@@ -1225,6 +1258,9 @@ def test_recover_only_waits_while_a_host_runs_on_the_leftover(upd):
     assert r.returncode == 3, upd.diag()
     assert upd.tree() == snap and sd.exists() and upd.hosts() == [old]
     assert f"이 설치본의 Host 가 떠 있어(pid {old})" in upd.text(upd.work / "recover.log")
+    st = subprocess.run(["/bin/sh", str(upd.launcher), "status"], env=upd.env(), capture_output=True, timeout=60)
+    got = _kv(st.stdout.decode())                                 # 보류하는 동안 status 가 잔재를 알린다(swap=)
+    assert st.returncode == 0 and got["state"] == "running" and got.get("swap") == "pending", got
 
     def start():
         return subprocess.run(["/bin/sh", str(upd.launcher), "start"], env=upd.env(), capture_output=True, timeout=60,
@@ -1237,6 +1273,8 @@ def test_recover_only_waits_while_a_host_runs_on_the_leftover(upd):
     r = start()
     assert r.returncode == 0, upd.diag(r.stderr.decode("utf-8", "replace"))
     assert upd.tree() == before and not sd.exists() and upd.running_tag() == "old"
+    st = subprocess.run(["/bin/sh", str(upd.launcher), "status"], env=upd.env(), capture_output=True, timeout=60)
+    assert "swap" not in _kv(st.stdout.decode()), "되돌린 뒤엔 swap= 줄이 없다"
 
 
 def test_uv_is_found_from_the_record_then_clewpath_home_then_path(upd):
@@ -1354,6 +1392,35 @@ def test_hold_during_the_update_keeps_the_new_version(upd, when, as_data_dir):
     r = subprocess.run(["/bin/sh", str(upd.launcher), "resume"], env=upd.env(), capture_output=True, timeout=60,
                        cwd=str(upd.home))
     assert r.returncode == 0 and upd.running_tag() == "new", upd.diag(r.stderr.decode("utf-8", "replace"))
+
+
+def test_held_commit_then_failing_first_start_says_there_is_no_rollback(upd):
+    """보류(held) 커밋은 헬스를 거치지 않아 새 버전이 resume 때 못 뜨면 자동 롤백이 없다 — 말없이 '기동 직후 끝남'만 보였다.
+    러너가 held 커밋 표지(updates/held-commit: 버전·옛 버전·백업)를 남기고, 런처는 그 뒤 첫 기동이 실패하면 롤백이 없다는 것과
+    백업 위치를 알린다. 뜨면 표지를 지운다(그 뒤엔 다시 알리지 않는다)."""
+    upd.uv_conf(sleep_sync=3)
+    old = upd.start_old()
+    p = upd.spawn(upd.argv(wait_pid=old), stop_host=old)
+    assert _wait(lambda: (upd.ctl / "syncing").exists(), 30), upd.diag()
+    r = subprocess.run(["/bin/sh", str(upd.launcher), "stop", "--hold"], env=upd.env(), capture_output=True, timeout=60,
+                       cwd=str(upd.home))
+    assert r.returncode == 0 and p.wait(timeout=120) == 0, upd.diag()
+    assert upd.last()["held"] is True
+    held = _kv((upd.work / "held-commit").read_text(encoding="utf-8"))
+    assert held["version"] == NEW and held["from"] == OLD and held["backup"] == str(upd.backup)
+    upd.set_fake(upd.root, exit_now=True)                        # 새 버전이 뜨자마자 끝난다
+    r = subprocess.run(["/bin/sh", str(upd.launcher), "resume"], env=upd.env(), capture_output=True, timeout=60,
+                       cwd=str(upd.home))
+    err = r.stderr.decode("utf-8", "replace")
+    assert r.returncode == 1 and upd.hosts() == [], upd.diag(err)
+    assert "자동 롤백이 없습니다" in err and str(upd.backup) in err and NEW in err, err
+    assert "held 커밋 뒤 첫 기동 실패" in upd.text(upd.data / "launcher.log")
+    assert (upd.work / "held-commit").exists(), "뜰 때까지 남긴다"
+    upd.set_fake(upd.root, exit_now=False)
+    r = subprocess.run(["/bin/sh", str(upd.launcher), "start"], env=upd.env(), capture_output=True, timeout=60,
+                       cwd=str(upd.home))
+    assert r.returncode == 0 and upd.running_tag() == "new", upd.diag(r.stderr.decode("utf-8", "replace"))
+    assert not (upd.work / "held-commit").exists() and "자동 롤백" not in r.stderr.decode("utf-8", "replace")
 
 
 # ---------------------------------------------------------------- S24·S31 도는 동안: 표식·잠금·하트비트, 감독자는 기다린다

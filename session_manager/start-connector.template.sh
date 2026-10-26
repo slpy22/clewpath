@@ -11,6 +11,7 @@
 #                                        --hold 면 maintenance.flag 도 만든다(다시 켜기: resume)
 #   sh start-connector.sh resume         maintenance.flag 를 지우고 start
 #   sh start-connector.sh status         state= pid= port= url= broker_pid= broker_alive= watch_pid= maintenance=
+#                                        [venv=] [swap=updating|pending — 교체 잔재가 있을 때만]
 #                                        (종료코드 0 정상 / 1 아님 / 3 유지보수)
 #   sh start-connector.sh watch [초]     상주 감시 — 자동 시작이 없는 곳(리눅스)의 임시용(기본 60초, 최소 10초). 하나만 돈다
 #   sh start-connector.sh paths          root= data_dir= conf_file= default_port= python=
@@ -41,17 +42,22 @@ NL='
 OS=linux                                   # [mac] 은 start 를 launchd 에 맡길 때만 쓴다(launchd_ours·launchd_start)
 [ "$(uname -s 2>/dev/null)" = Darwin ] && OS=mac
 
-# 상태 판정 — 출력 "<ok|busy|foreign|dead|none> <pid> <port>". pid 는 runtime.json 의 것, 그 pid 가 이 설치본의 Host 로
+# 상태 판정 — 출력 "<ok|busy|foreign|other|dead|none> <pid> <port>". pid 는 runtime.json 의 것, 그 pid 가 이 설치본의 Host 로
 # 살아 있지 않으면 런처가 띄운 pid(launcher.spawn — runtime.json 을 아직 안 쓴 느린 기동, 겹쳐 뜬 진 쪽이 덮어쓴 runtime.json).
 # 이 설치본의 Host: 있고·좀비 아니고·내 uid·명령줄 인자 하나는 ROOT/.venv/bin/…, 다른 하나는 Host 모듈. 그 Host 가 runtime.json
 # 의 port 로 health(프록시 무시)에 답하면 ok, 아니면 busy(기동 중·응답 불능). health 는 답하는데 그 Host 가 없으면 foreign
-# (남의 서버가 포트를 차지). pid 재사용은 명령줄로 거른다 — 기동 시각(started_at)과 견주지 않는다: 리눅스 psutil 의
+# (다른 ClewPath 가 포트를 차지) 또는 other(ClewPath 가 아닌 프로그램 — 아래). pid 재사용은 명령줄로 거른다 — 기동 시각(started_at)과 견주지 않는다: 리눅스 psutil 의
 # create_time 은 지금의 부팅 시각으로 계산해 시계가 앞으로 뛰면(WSL2·VM 재개·NTP) 같이 밀려, 산 Host 를 시체로 본다.
 # psutil 이 없으면 /proc 를, /proc 도 없으면(맥) ps 를 읽는다 — 셸의 pid_alive·is_our_host 와 같은 규칙(ps 는 인자를 공백으로
 # 잇는다). ps 를 못 부를 때만 보수적으로 busy(맥 실기 3b: ps 없이 '산 pid = busy'로 보아 재사용된 pid 앞에서 영영 안 띄웠다).
 # 이 파이썬 본문은 python -c 인자라 ASCII 만 쓴다(작은따옴표도 없다 — 셸 문자열 안).
+#
+# foreign 은 그 서버가 ClewPath(다른 설치본·개발 서버·다른 사용자)일 때만 — 진단(/api/owner/diagnostics, 루프백은 인증 없음)에
+# claude_home 이 있으면(Host 의 _clewpath_already_there 와 같은 기준) 또는 진단이 응답하지 않으면(보수적). HTTP 로 답했는데
+# claude_home 이 없으면 ClewPath 가 아니다 — other: 런처는 띄우고 Host 가 옆 포트를 찾는다(port_fallback). Host 도 같은 포트의
+# ClewPath 앞에서는 옆 포트로 가지 않고 끝나므로(중복 기동 방지) 두 판정이 같다.
 PROBE_PY='
-import json, os, sys, urllib.request
+import json, os, sys, urllib.error, urllib.request
 data, port, root = sys.argv[1], int(sys.argv[2]), sys.argv[3]
 pid = spid = 0
 try:
@@ -137,11 +143,24 @@ def state_of(pid):
         return "dead"
 
 
+def clewpath_there():
+    try:
+        with opener.open("http://127.0.0.1:%d/api/owner/diagnostics" % port, timeout=3) as r:
+            body = json.loads(r.read(1 << 20))
+    except urllib.error.HTTPError:
+        return False
+    except ValueError:
+        return False
+    except Exception:
+        return True
+    return isinstance(body, dict) and "claude_home" in body
+
+
 state = state_of(pid)
 if state != "busy" and spid and spid != pid and state_of(spid) == "busy":
     state, pid = "busy", spid
 if healthy:
-    state = "ok" if state == "busy" else "foreign"
+    state = "ok" if state == "busy" else "foreign" if clewpath_there() else "other"
 print(state, pid, port)
 '
 
@@ -417,10 +436,11 @@ start_unlock() { lock_release "$DATA_DIR/launcher.lock"; }
 watch_unlock() { lock_release "$DATA_DIR/watch.lock.d"; }
 
 update_live() {   # 0 = 업데이트·설치 진행 중(update.inprogress 의 pid 가 그 프로그램으로 살아 있고 30분 안). $1=clean 이면 시체를 지운다
-  _uf="$DATA_DIR/update.inprogress"
+  _uf="$DATA_DIR/update.inprogress"   # (at 은 앞자리 0 금지 — $(( )) 가 8진수로 읽다 셸째 끝난다. install.sh·uninstall.sh 와 같은 규칙)
   [ -f "$_uf" ] || return 1
+  _uc=$(cat "$_uf" 2>/dev/null)
   _up=$(sed -n 's/^pid=\([0-9]\{1,10\}\)[[:space:]]*$/\1/p' "$_uf" 2>/dev/null | head -n 1)
-  _ua=$(sed -n 's/^at=\([0-9]\{1,12\}\)[[:space:]]*$/\1/p' "$_uf" 2>/dev/null | head -n 1)
+  _ua=$(sed -n 's/^at=\([1-9][0-9]\{0,11\}\)[[:space:]]*$/\1/p' "$_uf" 2>/dev/null | head -n 1)
   _ub=$(sed -n 's/^by=\([a-z]*\)[[:space:]]*$/\1/p' "$_uf" 2>/dev/null | head -n 1)
   if [ -z "$_up" ] || [ -z "$_ua" ]; then
     [ -z "$(find "$_uf" -mmin +1 2>/dev/null)" ] && return 0      # 막 쓰는 중일 수 있다 — 1분은 기다린다
@@ -431,9 +451,14 @@ update_live() {   # 0 = 업데이트·설치 진행 중(update.inprogress 의 pi
       *) return 0 ;;
     esac
   fi
-  if [ "${1:-}" = clean ]; then
-    rm -f "$_uf"
-    llog "stale update marker 제거(pid ${_up:-?}, by=${_ub:-?})"
+  # 시체 치우기는 표식 잠금(설치·러너가 '확인 → 쓰기'를 묶는 .update.inprogress.lock) 안에서 내용이 그대로일 때만 — 그 사이
+  # 설치·러너가 이 시체를 보고 새로 쓴 표식을 지우지 않게. 잠금을 남이 쥐고 있으면(누군가 쓰는 중) 지우지 않는다
+  if [ "${1:-}" = clean ] && mkdir "$DATA_DIR/.update.inprogress.lock" 2>/dev/null; then
+    if [ "$(cat "$_uf" 2>/dev/null)" = "$_uc" ]; then
+      rm -f "$_uf"
+      llog "stale update marker 제거(pid ${_up:-?}, by=${_ub:-?})"
+    fi
+    rmdir "$DATA_DIR/.update.inprogress.lock" 2>/dev/null
   fi
   return 1
 }
@@ -482,7 +507,7 @@ probe_now() {   # P_STATE P_PID P_PORT 를 채운다. 판정 못 하면(venv 파
   P_PID=0
   P_PORT=$DEFAULT_PORT
   _po=$("$PY" -I -c "$PROBE_PY" "$DATA_DIR" "$DEFAULT_PORT" "$ROOT" 2>/dev/null) || return 1
-  case "$_po" in "ok "*|"busy "*|"foreign "*|"dead "*|"none "*) ;; *) return 1 ;; esac
+  case "$_po" in "ok "*|"busy "*|"foreign "*|"other "*|"dead "*|"none "*) ;; *) return 1 ;; esac
   P_STATE=${_po%% *}
   _po=${_po#* }
   P_PID=${_po%% *}
@@ -499,10 +524,19 @@ probe_or_die() {   # [$1=끝낼 종료코드(기본 2 — foreground 는 0)]
   exit "${1:-2}"
 }
 
-port_taken() {   # P_STATE=foreign — 띄우지 않고 실패로(조용히 '떠 있음'으로 보면 watch 도 영영 안 되살린다). [$1=종료코드(기본 1)]
-  llog "fail: 포트 $P_PORT 를 다른 프로그램이 쓰고 있음(health 는 답하지만 이 설치본의 Host 가 아님)"
-  say "포트 $P_PORT 를 다른 프로그램이 쓰고 있어 띄우지 않습니다 — 그 프로그램을 끄거나 $CONF_FILE 의 [server] port 를 바꾸세요"
+port_taken() {   # P_STATE=foreign(다른 ClewPath) — 띄우지 않고 실패로(조용히 '떠 있음'으로 보면 watch 도 영영 안 되살린다). Host 도
+  # 같은 포트의 ClewPath 앞에서는 옆 포트로 가지 않고 끝난다(중복 기동 방지). [$1=종료코드(기본 1)]
+  llog "fail: 포트 $P_PORT 를 다른 프로그램이 쓰고 있음(health 는 답하지만 이 설치본의 Host 가 아님 — 다른 ClewPath)"
+  say "포트 $P_PORT 를 다른 프로그램(다른 ClewPath)이 쓰고 있어 띄우지 않습니다 — 그 프로그램을 끄거나 $CONF_FILE 의 [server] port 를 바꾸세요"
   exit "${1:-1}"
+}
+
+spawn_why() {   # 기동 사유 → S_WHY (start·foreground 같은 문구). P_STATE=other 면 Host 가 옆 포트를 찾는다는 것도
+  if [ "$P_PID" = 0 ]; then S_WHY="runtime.json 없음"; else S_WHY="이전 pid $P_PID 없음(health 없음)"; fi
+  if [ "$P_STATE" = other ]; then
+    S_WHY="$S_WHY, 포트 $P_PORT 는 다른 프로그램(ClewPath 아님)이 씀 — Host 가 옆 포트를 찾는다(port_fallback)"
+  fi
+  return 0
 }
 
 datadir_same() {   # 0 = 이 env 로 뜬 Host 도 DATA_DIR 을 쓴다. 판정을 못 하면(파이썬 실패) 막지 않는다
@@ -513,10 +547,16 @@ datadir_same() {   # 0 = 이 env 로 뜬 Host 도 DATA_DIR 을 쓴다. 판정을
   return 1
 }
 
+# 대기 마감은 벽시계(date +%s)가 아니라 쉰 반초 수(NAP_T)로 센다 — 마감 시각으로 재면 NTP 가 시계를 뒤로 돌린 만큼(수 시간) 더
+# 기다린다(러너의 nap 과 같다). 소수 sleep 이 없으면 1초(= 2)
+nap() {
+  if sleep 0.5 2>/dev/null; then NAP_T=$((NAP_T + 1)); else sleep 1; NAP_T=$((NAP_T + 2)); fi
+}
+
 start_wait() {   # 진행 중인 start(launcher.lock)가 끝나기를 기다린다(상한 25초 — 기동 대기 15초 + 판정) — 그 start 가 띄우는 Host 까지 보려고
-  _we=$(( $(date +%s) + 25 ))
-  while lock_live "$DATA_DIR/launcher.lock" "${0##*/}" && [ "$(date +%s)" -lt "$_we" ]; do
-    sleep 0.5 2>/dev/null || sleep 1
+  NAP_T=0
+  while lock_live "$DATA_DIR/launcher.lock" "${0##*/}" && [ "$NAP_T" -lt 50 ]; do
+    nap
   done
 }
 
@@ -534,6 +574,27 @@ launch_logs() {   # 띄우기 직전(start·foreground 같은 규칙) — 로그
   rotate "$DATA_DIR/host.err.log"
   rotate "$DATA_DIR/launcher.log"
   { printf '=== launcher start %s ===\n' "$(date '+%Y-%m-%d %H:%M:%S')" >>"$DATA_DIR/host.log"; } 2>/dev/null
+}
+
+# 러너가 업데이트 중 stop --hold 를 보면 헬스 없이 커밋하고(held) 표지 updates/held-commit(version= from= backup= at=)를 남긴다.
+# 그 새 버전은 자동 롤백이 없으니 그 뒤 첫 기동이 실패하면 그렇다고 알리고 백업 위치를 보여 준다. 뜨면(ok·up) 표지를 지운다
+held_ok() {
+  [ -f "$DATA_DIR/updates/held-commit" ] || return 0
+  rm -f "$DATA_DIR/updates/held-commit" 2>/dev/null && llog "held 커밋 뒤 기동 확인 — 표지 제거(updates/held-commit)"
+  return 0
+}
+
+held_fail() {
+  _hf="$DATA_DIR/updates/held-commit"
+  [ -f "$_hf" ] || return 0
+  _hv=$(sed -n 's/^version=\([0-9A-Za-z.+-]\{1,64\}\)[[:space:]]*$/\1/p' "$_hf" 2>/dev/null | head -n 1)
+  _ho=$(sed -n 's/^from=\([0-9A-Za-z.+?-]\{1,64\}\)[[:space:]]*$/\1/p' "$_hf" 2>/dev/null | head -n 1)
+  _hb=$(sed -n 's/^backup=\(\/.*\)$/\1/p' "$_hf" 2>/dev/null | head -n 1)
+  llog "held 커밋 뒤 첫 기동 실패(버전 ${_hv:-?}) — 자동 롤백 없음, 백업 ${_hb:-?}"
+  say "이 버전(${_hv:-?})은 업데이트 중 멈춤(stop --hold) 때문에 헬스체크 없이 커밋돼 자동 롤백이 없습니다"
+  say "  이전 버전(${_ho:-?})의 백업: ${_hb:-$DATA_DIR/updates/backup-*}"
+  say "  의존성을 다시 맞춰 보려면: sh \"$ROOT/install.sh\" --reinstall  (기동 로그: $DATA_DIR/host.err.log)"
+  return 0
 }
 
 launchd_ours() {   # 0 = [mac] 이 설치본의 launchd 작업이 올라 있다 — 등록 파일이 이 런처를 부르고(같은 이름의 다른 설치본 작업은
@@ -564,11 +625,12 @@ launchd_start() {
     _kn=$((_kn + 1))
     probe_now || continue
     case "$P_STATE" in
-      ok|busy) llog "start: $_kw → launchd 에 맡김(kickstart) pid $P_PID"
+      ok|busy) [ "$P_STATE" = ok ] && held_ok
+               llog "start: $_kw → launchd 에 맡김(kickstart) pid $P_PID"
                note "기동했습니다(launchd 작업) — pid $P_PID (로그: $DATA_DIR/host.log)"
                return 0 ;;
       foreign) port_taken ;;
-    esac
+    esac                                                  # other — launchd 의 foreground 가 띄워 옆 포트로 뜨기를 기다린다
   done
   llog "start: launchd 에 맡겼지만 약 20초 안에 뜨지 않음(kickstart) → 직접 기동"
   return 1
@@ -590,7 +652,7 @@ cmd_start() {
   case $? in 0) ;; 10) exit 0 ;; *) exit 1 ;; esac
   probe_or_die
   case "$P_STATE" in
-    ok) note "이미 실행 중입니다 — pid $P_PID, http://127.0.0.1:$P_PORT/"; exit 0 ;;
+    ok) held_ok; note "이미 실행 중입니다 — pid $P_PID, http://127.0.0.1:$P_PORT/"; exit 0 ;;
     busy) llog "skip: pid $P_PID 살아 있음(health 없음 — 기동 중이거나 응답 불능)"
           note "pid $P_PID 가 살아 있지만 응답이 없습니다(기동 중이거나 응답 불능) — 겹쳐 띄우지 않습니다"
           exit 0 ;;
@@ -621,11 +683,12 @@ cmd_start() {
   fi
   datadir_same || exit 1
   launch_logs
-  if [ "$P_PID" = 0 ]; then S_WHY="runtime.json 없음"; else S_WHY="이전 pid $P_PID 없음(health 없음)"; fi
+  spawn_why
   llog "start: $S_WHY → 기동"
   if ! S_OUT=$("$PY" -I -c "$SPAWN_PY" "$ROOT" "$DATA_DIR" "$CONF_FILE" spawn 2>>"$DATA_DIR/launcher.log"); then
     llog "fail: spawn 실패"
     say "Host 를 띄우지 못했습니다 — $DATA_DIR/launcher.log 를 보세요"
+    held_fail
     exit 1
   fi
   S_PID=${S_OUT%% *}
@@ -633,9 +696,12 @@ cmd_start() {
   case "$S_PID" in ''|*[!0-9]*) llog "fail: spawn 결과를 읽지 못함($S_OUT)"; exit 1 ;; esac
   case "$S_ST" in
     up) llog "spawned pid $S_PID"
+        held_ok
         note "기동했습니다 — pid $S_PID (로그: $DATA_DIR/host.log)" ;;
     exited:*) llog "fail: 기동 직후 종료(pid $S_PID, rc=${S_ST#exited:})"
               say "Host 가 기동 직후 끝났습니다(rc=${S_ST#exited:}) — $DATA_DIR/host.err.log 를 보세요"
+              held_fail
+              [ "$P_STATE" = other ] && say "  (포트 $P_PORT 를 다른 프로그램이 쓰고 있습니다 — 옆 포트도 다 찼거나 $CONF_FILE 의 [server] port_fallback 이 0 일 수 있습니다)"
               exit 1 ;;
     *) llog "spawned pid $S_PID (runtime.json 아직 없음 — 기동 중)"
        note "기동 중입니다 — pid $S_PID (로그: $DATA_DIR/host.log)" ;;
@@ -665,9 +731,9 @@ cmd_stop() {
   fi
   kill -TERM "$K_PID" 2>/dev/null
   llog "stop: SIGTERM pid $K_PID"
-  K_END=$(( $(date +%s) + 15 ))                           # Host 의 _shutdown_soon 과 같은 15초
-  while is_our_host "$K_PID" && [ "$(date +%s)" -lt "$K_END" ]; do
-    sleep 0.5 2>/dev/null || sleep 1
+  NAP_T=0                                                 # Host 의 _shutdown_soon 과 같은 15초(반초 수)
+  while is_our_host "$K_PID" && [ "$NAP_T" -lt 30 ]; do
+    nap
   done
   if ! is_our_host "$K_PID"; then
     printf 'stopped (pid %s)\n' "$K_PID"
@@ -676,9 +742,9 @@ cmd_stop() {
   kill -KILL "$K_PID" 2>/dev/null
   llog "stop: forced — pid $K_PID 가 15초 안에 끝나지 않아 SIGKILL"
   [ -x "$PY" ] && "$PY" -I -c "$MARK_PY" "$ROOT" "$DATA_DIR" "$K_PID" >/dev/null 2>&1
-  K_END=$(( $(date +%s) + 3 ))
-  while is_our_host "$K_PID" && [ "$(date +%s)" -lt "$K_END" ]; do
-    sleep 0.5 2>/dev/null || sleep 1
+  NAP_T=0
+  while is_our_host "$K_PID" && [ "$NAP_T" -lt 6 ]; do
+    nap
   done
   printf 'stopped (pid %s, forced)\n' "$K_PID"
   exit 0
@@ -726,6 +792,14 @@ cmd_status() {
   printf 'state=%s\npid=%s\nport=%s\nurl=http://127.0.0.1:%s/\nbroker_pid=%s\nbroker_alive=%s\nwatch_pid=%s\nmaintenance=%s\n' \
     "$T_STATE" "$T_PID" "$P_PORT" "$P_PORT" "$T_BP" "$T_BA" "$T_WP" "$T_MAINT"
   [ "$T_VENV" = ok ] || printf 'venv=%s\n' "$T_VENV"
+  # 교체 잔재(.clewpath-swap.*)가 있으면 swap= 줄 — updating(러너가 교체 중) / pending(중단된 업데이트: 이 설치본의 Host 가 그
+  # 파일로 떠 있어 -RecoverOnly 가 보류(종료코드 3)했거나 아직 아무도 안 되돌림 — Host 가 내려가면 다음 기동·업데이트가 이전
+  # 버전으로 되돌린다). 없으면 줄이 없다
+  if swap_left; then
+    if runner_live; then T_SW=updating; else T_SW=pending; fi
+    printf 'swap=%s\n' "$T_SW"
+    [ "$T_SW" = pending ] && note "중단된 업데이트의 교체 잔재($ROOT/.clewpath-swap.*)가 남아 있습니다 — Host 가 내려가면 다음 기동·업데이트가 이전 버전으로 되돌립니다"
+  fi
   exit "$T_RC"
 }
 
@@ -829,7 +903,7 @@ cmd_foreground() {
   fi
   datadir_same || exit 0
   launch_logs
-  if [ "$P_PID" = 0 ]; then S_WHY="runtime.json 없음"; else S_WHY="이전 pid $P_PID 없음(health 없음)"; fi
+  spawn_why
   llog "foreground: $S_WHY → 기동(exec, pid $$)"
   exec "$PY" -I -c "$SPAWN_PY" "$ROOT" "$DATA_DIR" "$CONF_FILE" exec "$SELF"
 }

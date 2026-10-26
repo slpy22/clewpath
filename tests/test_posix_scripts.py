@@ -606,6 +606,12 @@ def test_runner_spares_the_broker():
     assert re.search(r'^PAYLOAD="[^"]+"', t, re.M), "PAYLOAD 목록(test_updater.test_payload_lists_agree 가 대조)"
 
 
+def test_marker_lock_is_shared():
+    """update.inprogress 의 '확인 → 쓰기'(설치·러너)와 시체 치우기(런처)는 같은 mkdir 잠금으로 묶는다 — 이름이 갈리면 묶이지 않는다."""
+    for name in ("install.sh", "update_runner.sh", "start-connector.template.sh"):
+        assert re.search(r'mkdir "\$(?:1|DATA|DATA_DIR)/\.update\.inprogress\.lock"', _text(name)), name
+
+
 def test_uv_pins_match_windows_installer():
     t = _text("install.sh")
     ps = (ROOT / "install.ps1").read_text(encoding="utf-8-sig")
