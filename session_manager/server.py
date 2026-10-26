@@ -178,14 +178,17 @@ class AuthASGIMiddleware:
         if scope.get("type") != "http":
             return await self.app(scope, receive, send)  # websocket 등은 통과
 
-        # 로컬(루프백) 요청은 인증 생략
-        if _is_local(scope):
-            return await self.app(scope, receive, send)
-
         path = scope.get("path", "")
         headers = {k.decode("latin1").lower(): v.decode("latin1")
                    for k, v in scope.get("headers", [])}
         query = parse_qs(scope.get("query_string", b"").decode("latin1"))
+        tok = (query.get("token", [None])[0]
+               or auth.bearer(headers.get("authorization"))) if path.startswith("/api/v1/") else None
+
+        # 로컬(루프백) 요청은 인증 생략 — 단 서비스 토큰을 붙였으면 루프백이어도 서비스로 본다(아래 범위 검사). 예전엔 이 생략이 먼저라
+        # 노트북 컨테이너가 host.docker.internal 로 부른 서비스 토큰 요청이 남의 프로필·세션 목록까지 200 이었다(2026-10-26 실측).
+        if _is_local(scope) and not services.looks_like(tok):
+            return await self.app(scope, receive, send)
 
         async def deny_json(status):
             await JSONResponse({"error": "unauthorized"}, status_code=status)(
@@ -193,8 +196,6 @@ class AuthASGIMiddleware:
 
         # 외부 API v1: API 토큰 전용
         if path.startswith("/api/v1/"):
-            tok = (query.get("token", [None])[0]
-                   or auth.bearer(headers.get("authorization")))
             # 서비스 토큰(S2): 자기 원본의 ask·프로필 읽기·자기 정보만. WS(resume)는 핸들러가 검사.
             if services.looks_like(tok):
                 svc = services.lookup(tok)

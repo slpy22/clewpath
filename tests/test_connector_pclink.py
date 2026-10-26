@@ -463,6 +463,38 @@ async def test_e2ee_require_still_lets_plaintext_pclink_through(gated, monkeypat
     assert [p["error"] for p in plain] == ["e2ee_required"]
 
 
+@pytest.mark.asyncio
+async def test_sealed_device_plaintext_is_refused_even_without_require(gated, monkeypatch):
+    """E2EE 를 켠 방에서 require 가 꺼져 있어도(기본), 봉투로 말한 기기(cid)의 평문 요청은 받지 않는다 — 릴레이가 그 기기 cid 로
+    평문 요청을 넣어 실행시키던 빈틈(바로가기 검토 4회차 inject 재현). 그 기기 cid 는 인증·E2EE 표시까지 갖고 있어 폰 관리의
+    '켜는' 동작의 E2EE 확인도 통과했다. 봉투로 말한 적 없는 기기(옛 앱·키 없는 기기)는 지금처럼 평문 그대로."""
+    from session_manager import appconfig
+    key = os.urandom(32)
+    gated.e2ee_key = key
+    plain = []
+
+    async def _plain(obj):
+        plain.append(obj)
+    monkeypatch.setattr(gated, "_plain_send", _plain)
+    monkeypatch.setattr(appconfig, "get_bool", lambda sec, k, default=False: default)   # require 꺼짐(기본)
+    gated.authed["cidE"] = {"id": "d1", "name": "폰"}
+    gated.authed["cidOld"] = {"id": "d2", "name": "옛 폰"}
+    sealed = e2ee.wrap_frame(key, {"v": 1, "type": "req", "id": "c1", "method": "ping", "cid": "cidE"})
+    await gated._on_frame(json.dumps(sealed))
+    assert "cidE" in gated.enc_cids
+    pongs = len(gated.sent)
+    for rid, method in (("c2", "ping"), ("c3", "list_sessions")):
+        await gated._on_frame(_req("cidE", rid, method))                # 릴레이가 넣은 평문
+    await gated._on_frame(json.dumps({"v": 1, "type": "stream_in", "id": "t1", "cid": "cidE", "data": "rm -rf /\r"}))
+    await gated._on_frame(json.dumps({"v": 1, "type": "stream_close", "id": "t1", "cid": "cidE"}))
+    assert len(gated.sent) == pongs, "봉투로 말한 기기 cid 의 평문 요청이 실행됐다"
+    assert [(p["error"], p.get("cid")) for p in plain] == [("e2ee_required", "cidE")] * 4
+    await gated._on_frame(_req("cidOld", "o1", "ping"))                  # 봉투를 쓴 적 없는 기기 — 그대로
+    assert gated.sent[-1] == {"v": 1, "type": "pong", "id": "o1", "cid": "cidOld"} and len(plain) == 4
+    await gated._on_frame(_req("cidE", "k1", "pclink", {"env": ENV}))    # pclink 은 안쪽 짝 키 봉투로 스스로 인증 — 예외 그대로
+    assert gated.handled == [("pclink", "cidE")]
+
+
 def test_asker_api_is_local_only_for_every_verb():
     for verb in ("GET", "POST"):
         for path in ("/api/v1/pclink/ask", "/api/v1/pclink/poll", "/api/v1/pclink/peers",
