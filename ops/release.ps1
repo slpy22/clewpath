@@ -218,7 +218,9 @@ if ($Apply) {
     $st = Invoke-RestMethod -Uri "$HostUrl/api/owner/update/status?refresh=1" -TimeoutSec 30
     if ($st.latest -ne $Version) { Fail "Host 가 보는 최신 버전이 $($st.latest) 입니다(기대 $Version) — CP 게시를 확인하세요" }
     Log "Host: current=$($st.current) latest=$($st.latest) → apply"
-    $ap = Invoke-RestMethod -Uri "$HostUrl/api/owner/update/apply" -Method Post -TimeoutSec 30
+    # 300초: apply 는 받기·스테이징·작업 폴더 정리(prune_work_dir)까지 한 요청 안에서 한다 — 처음 정리는 쌓인 버전이 많으면 오래 걸려
+    #   30초로는 0.32.4 출시 때 요청만 끊기고 Host 는 혼자 적용을 마쳤다(2026-10-26).
+    $ap = Invoke-RestMethod -Uri "$HostUrl/api/owner/update/apply" -Method Post -TimeoutSec 300
     if (-not $ap.applied) { Fail "apply 거부: $($ap | ConvertTo-Json -Compress)" }
     $deadline = (Get-Date).AddSeconds(150); $up = $false; $sawDown = $false
     while ((Get-Date) -lt $deadline) {
