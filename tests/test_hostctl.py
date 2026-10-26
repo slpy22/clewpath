@@ -108,7 +108,7 @@ def test_relative_config_dir_in_the_toml_is_refused_by_paths_only(home, capsys):
     conf.write_text('[server]\nport = 5100\n\n[claude]\nconfig_dir = "rel/claude"\n', encoding="utf-8")
     rc, kv, err = run(capsys, "paths")
     assert rc == 1 and kv == {} and "절대 경로" in err
-    assert run(capsys, "write-config", "--port", "5100")[:2] == (0, {"config": "kept", "path": str(conf), "port": "5100"})
+    assert run(capsys, "write-config", "--port", "5100")[:2] == (0, {"config": "kept", "path": str(conf), "port": "5100", "cp_url": "", "relay_url": "", "app_url": ""})
 
 
 # ---------------------------------------------------------------- write-config — 없을 때만, 0600, 토큰은 env 로만
@@ -123,7 +123,7 @@ def test_write_config_creates_once_and_never_overwrites(home, capsys, monkeypatc
     rc, kv, err = run(capsys, "write-config", "--port", "5123", "--cp-url", "https://cp.example/cp//",
                       "--relay-url", "wss://r.example/ws", "--app-url", "https://a.example/app",
                       "--claude-config-dir", AWKWARD_DIR)
-    assert rc == 0 and kv == {"config": "created", "path": str(conf), "port": "5123"}
+    assert rc == 0 and {k: kv[k] for k in ("config", "path", "port", "cp_url")} == {"config": "created", "path": str(conf), "port": "5123", "cp_url": "https://cp.example/cp"}
     raw = conf.read_bytes()
     assert not raw.startswith(b"\xef\xbb\xbf") and b"\r" not in raw
     d = tomllib.loads(raw.decode("utf-8"))
@@ -138,7 +138,7 @@ def test_write_config_creates_once_and_never_overwrites(home, capsys, monkeypatc
     # 다시 — 다른 값·다른 토큰이어도 파일은 그대로(사용자가 고친 값을 지킨다), 실제 포트(설정 파일의 것)를 알려 준다
     monkeypatch.setenv("CLEWPATH_CLIENT_TOKEN", "other")
     rc, kv, err = run(capsys, "write-config", "--port", "5100", "--cp-url", "https://x.example/cp")
-    assert rc == 0 and kv == {"config": "kept", "path": str(conf), "port": "5123"}
+    assert rc == 0 and {k: kv[k] for k in ("config", "path", "port", "cp_url")} == {"config": "kept", "path": str(conf), "port": "5123", "cp_url": "https://cp.example/cp"}
     assert conf.read_bytes() == raw and "5123" in err and "[WARN]" in err
     assert not list(conf.parent.glob(".clewpath.toml.*.tmp")), "임시 파일이 남지 않는다"
 
@@ -177,9 +177,26 @@ def test_write_config_port_is_optional_and_warns_only_when_given(home, capsys):
     assert tomllib.loads(conf.read_text(encoding="utf-8"))["server"]["port"] == 5100
     conf.write_text(conf.read_text(encoding="utf-8").replace("port = 5100", "port = 6123"), encoding="utf-8")
     rc, kv, err = run(capsys, "write-config", "--cp-url", "https://cp.example/cp")
-    assert rc == 0 and kv == {"config": "kept", "path": str(conf), "port": "6123"} and "[WARN]" not in err, err
+    assert rc == 0 and {k: kv[k] for k in ("config", "path", "port", "cp_url")} == {"config": "kept", "path": str(conf), "port": "6123", "cp_url": "https://cp.example/cp"} and "[WARN]" not in err, err
     rc, kv, err = run(capsys, "write-config", "--port", "5100", "--cp-url", "https://cp.example/cp")
     assert rc == 0 and kv["port"] == "6123" and "--port 5100 는 설정 파일을 새로 만들 때만" in err, err
+
+
+def test_write_config_urls_are_optional_and_warn_only_when_given(home, capsys):
+    """--port 와 같은 헛 경고가 주소에도 — install.sh 가 기본 주소를 늘 넘겨, 설정 파일의 주소가 기본과 다르면 재설치마다
+    '--cp-url … 는 설정 파일을 새로 만들 때만' 이 떴다(2026-10-26). 주소는 선택: 없으면 새로 만들 때 기본값, 유지할 때는 경고 없음.
+    유지할 때 설정 파일의 cp_url 을 돌려줘 install.sh 가 자격증명 발급·헬스 확인에 그 주소를 쓰게 한다."""
+    rc, kv, err = run(capsys, "write-config")
+    conf = Path(kv["path"])
+    cloud = tomllib.loads(conf.read_text(encoding="utf-8"))["cloud"]
+    assert rc == 0 and kv["config"] == "created" and cloud["cp_url"] == "https://clewpath.pyongso.com/cp"
+    assert kv["cp_url"] == "https://clewpath.pyongso.com/cp"
+    conf.write_text(conf.read_text(encoding="utf-8").replace("https://clewpath.pyongso.com/cp", "https://my.example/cp"),
+                    encoding="utf-8")
+    rc, kv, err = run(capsys, "write-config")
+    assert rc == 0 and kv["config"] == "kept" and kv["cp_url"] == "https://my.example/cp" and "[WARN]" not in err, err
+    rc, kv, err = run(capsys, "write-config", "--cp-url", "https://other.example/cp")
+    assert rc == 0 and kv["cp_url"] == "https://my.example/cp" and "--cp-url https://other.example/cp 는" in err, err
 
 
 def test_write_config_kept_warns_when_given_values_differ(home, capsys, monkeypatch):

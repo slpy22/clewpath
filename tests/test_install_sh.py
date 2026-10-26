@@ -420,10 +420,11 @@ class Box:
         """zip 을 손으로 푼 모양(get.sh 없이) — 설치 루트에 PAYLOAD 만."""
         shutil.copytree(self.payload, self.root)
 
-    def args(self, *extra, port: int | bool | None = None, cp: str = "http://127.0.0.1:9/cp", provision=False) -> list[str]:
-        """port=False 면 --port 를 빼고 부른다(사용자가 포트를 주지 않은 재설치)."""
-        a = ["--cp-url", cp, "--allow-http", "--relay-url", "ws://127.0.0.1:9/relay/ws",
-             "--app-url", "http://127.0.0.1:9/app"] + ([] if port is False else ["--port", str(port or self.port)])
+    def args(self, *extra, port: int | bool | None = None, cp: str = "http://127.0.0.1:9/cp", provision=False,
+             urls: bool = True) -> list[str]:
+        """port=False 면 --port 를, urls=False 면 --relay-url·--app-url 을 빼고 부른다(사용자가 주지 않은 재설치)."""
+        a = ["--cp-url", cp, "--allow-http"] + (["--relay-url", "ws://127.0.0.1:9/relay/ws",
+             "--app-url", "http://127.0.0.1:9/app"] if urls else []) + ([] if port is False else ["--port", str(port or self.port)])
         return a + ([] if provision else ["--no-provision"]) + list(extra)
 
     def popen(self, argv, **kw) -> subprocess.Popen:
@@ -779,6 +780,19 @@ def test_rerun_without_port_does_not_warn_about_it(box, payload):
     assert "설정 파일의 포트(" not in out + r.stderr.decode("utf-8"), out   # (cp_url 이 다르다는 경고는 맞는 경고)
     r = box.install(port=box.port + 1)                          # 준 값이 다르면 그대로 알린다
     assert r.returncode == 0 and f"--port {box.port + 1} 는 설정 파일을 새로 만들 때만" in r.stdout.decode("utf-8"), box.diag(r)
+
+
+def test_rerun_without_urls_does_not_warn_and_uses_config_addresses(box):
+    """--port 와 같은 헛 경고가 주소에도(2026-10-26) — install.sh 가 기본 주소를 늘 넘겨, 설정 파일의 relay_url·app_url 이 기본과
+    다르면 재설치마다 '… 는 설정 파일을 새로 만들 때만' 이 떴다. 준 값일 때만 넘긴다. 유지한 설정 파일의 주소를 끝 안내에도 쓴다."""
+    box.fresh()                                                 # 설정 파일의 relay·app 은 127.0.0.1:9(기본 아님)
+    r = box.install(port=False, urls=False)
+    out = r.stdout.decode("utf-8") + r.stderr.decode("utf-8")
+    assert r.returncode == 0 and "기존 설정 파일 유지" in out, box.diag(r)
+    assert "relay_url(" not in out and "app_url(" not in out, out
+    assert "(설정 파일이 있으면 그 값)" in out, out                      # 머리말의 기본 주소가 실제 값처럼 보이지 않게
+    r = box.install(port=False, urls=True)                      # 같은 값을 주면 경고 없음
+    assert r.returncode == 0 and "relay_url(" not in r.stdout.decode("utf-8"), box.diag(r)
 
 
 def test_upgrade_from_stage_replaces_payload_keeps_extras_and_clears_leftovers(box):

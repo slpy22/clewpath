@@ -632,8 +632,11 @@ prelude() {   # --from-stage: 옮긴 뒤 설치 루트의 install.sh 로 이어 
   done
   if [ -n "$GET_TMP" ]; then rm -rf "$GET_TMP"; GET_TMP=''; fi    # 다 옮겼다 — 빈 stage 와 임시 폴더를 치운다
   ok "설치 폴더에 옮김: $DIR"
-  set -- --cp-url "$CP_URL" --relay-url "$RELAY_URL" --app-url "$APP_URL" --python "$PYVER" --uv-version "$UV_VERSION"
-  [ "$PORT_GIVEN" = 1 ] && set -- "$@" --port "$PORT"   # 준 값일 때만(재설치 헛 경고 — step_config)
+  set -- --python "$PYVER" --uv-version "$UV_VERSION"
+  [ "$PORT_GIVEN" = 1 ] && set -- "$@" --port "$PORT"   # 준 값일 때만(재설치 헛 경고 — step_config). 주소도 같다
+  [ "$CP_GIVEN" = 1 ] && set -- "$@" --cp-url "$CP_URL"
+  [ "$RELAY_GIVEN" = 1 ] && set -- "$@" --relay-url "$RELAY_URL"
+  [ "$APP_GIVEN" = 1 ] && set -- "$@" --app-url "$APP_URL"
   [ "$SYSTEM_UV" = 1 ] && set -- "$@" --system-uv
   [ "$REINSTALL" = 1 ] && set -- "$@" --reinstall
   [ "$NO_AUTOSTART" = 1 ] && set -- "$@" --no-autostart
@@ -1072,14 +1075,21 @@ step_config() {
   fi
   hostctl "$I_TMP/secure.out" secure-data-dir --data-dir "$DATA_DIR" \
     || warn "데이터 폴더 권한을 좁히지 못했습니다(비밀이 든 폴더 — 직접 chmod 700 하세요): $DATA_DIR"
-  set -- write-config --conf-file "$CONF_FILE" --cp-url "$CP_URL" --relay-url "$RELAY_URL" --app-url "$APP_URL"
-  # --port 는 사용자가 준 값일 때만 — 기본값(5100)을 넘기면 재설치 때 설정 파일의 포트와 달라 '--port 는 새로 만들 때만' 헛 경고가
-  # 뜬다. 안 주면 새로 만들 때 hostctl 이 Host 기본값을 쓴다
+  set -- write-config --conf-file "$CONF_FILE"
+  # --port·주소는 사용자가 준 값일 때만 — 기본값을 넘기면 재설치 때 설정 파일의 값과 달라 '… 는 새로 만들 때만' 헛 경고가
+  # 뜬다. 안 주면 새로 만들 때 hostctl 이 기본값을 쓴다
   [ "$PORT_GIVEN" = 1 ] && set -- "$@" --port "$PORT"
+  [ "$CP_GIVEN" = 1 ] && set -- "$@" --cp-url "$CP_URL"
+  [ "$RELAY_GIVEN" = 1 ] && set -- "$@" --relay-url "$RELAY_URL"
+  [ "$APP_GIVEN" = 1 ] && set -- "$@" --app-url "$APP_URL"
   [ -n "${CLAUDE_CONFIG_DIR:-}" ] && set -- "$@" --claude-config-dir "$CLAUDE_CONFIG_DIR"
   hostctl_tokens "$I_TMP/config.out" "$@" || die "설정 파일을 만들지 못했습니다: $CONF_FILE"
   EFF_PORT=$(kv port "$I_TMP/config.out")
   case "$EFF_PORT" in ''|*[!0-9]*) EFF_PORT=$PORT ;; esac
+  # Host 가 쓸 주소(유지한 설정 파일의 값) — 자격증명 발급·끝 안내가 기본 주소로 엉뚱한 CP 에 가지 않게. 못 읽었으면 그대로
+  _v=$(kv cp_url "$I_TMP/config.out"); [ -n "$_v" ] && CP_URL=$_v
+  _v=$(kv relay_url "$I_TMP/config.out"); [ -n "$_v" ] && RELAY_URL=$_v
+  _v=$(kv app_url "$I_TMP/config.out"); [ -n "$_v" ] && APP_URL=$_v
   hostctl "$I_TMP/launcher.out" render-launcher --root "$ROOT" --data-dir "$DATA_DIR" --conf-file "$CONF_FILE" \
     --port "$EFF_PORT" || die "런처(start-connector.sh)를 만들지 못했습니다"
   write_record
@@ -1240,9 +1250,9 @@ parse_args() {
       *) usage_die "모르는 인자(값은 보이지 않게 생략)" ;;   # 토큰을 잘못 붙였을 수 있다 — 화면에 찍지 않는다
     esac
     case "$PA_K" in
-      --cp-url) CP_URL=$PA_V ;;
-      --relay-url) RELAY_URL=$PA_V ;;
-      --app-url) APP_URL=$PA_V ;;
+      --cp-url) CP_URL=$PA_V; CP_GIVEN=1 ;;
+      --relay-url) RELAY_URL=$PA_V; RELAY_GIVEN=1 ;;
+      --app-url) APP_URL=$PA_V; APP_GIVEN=1 ;;
       --port) PORT=$PA_V; PORT_GIVEN=1 ;;
       --python) PYVER=$PA_V ;;
       --uv-version) UV_VERSION=$PA_V ;;
@@ -1308,6 +1318,9 @@ main() {
   APP_URL="https://clewpath.pyongso.com/relay/app"
   PORT=5100
   PORT_GIVEN=0
+  CP_GIVEN=0
+  RELAY_GIVEN=0
+  APP_GIVEN=0
   PYVER=3.11
   UV_VERSION=$UV_DEFAULT
   SYSTEM_UV=0
@@ -1389,8 +1402,9 @@ main() {
   say ""
   say "=== ClewPath Host 설치 ==="
   say "  대상 폴더 : $ROOT"
-  say "  컨트롤플레인: $CP_URL"
-  say "  릴레이      : $RELAY_URL"
+  # 주지 않은 주소는 기본값이지만, 설정 파일이 이미 있으면 그 값을 쓴다(step_config — 재설치는 설정 파일을 덮지 않는다)
+  if [ "$CP_GIVEN" = 1 ]; then say "  컨트롤플레인: $CP_URL"; else say "  컨트롤플레인: $CP_URL (설정 파일이 있으면 그 값)"; fi
+  if [ "$RELAY_GIVEN" = 1 ]; then say "  릴레이      : $RELAY_URL"; else say "  릴레이      : $RELAY_URL (설정 파일이 있으면 그 값)"; fi
   [ "$OS" = linux ] && warn "리눅스는 시험용입니다(공식 지원 아님)"
   [ "$HTTP_USED" = 1 ] && warn "--allow-http — 암호화되지 않은 주소를 씁니다(시험 전용)"
   [ "$ALLOW_ROOT" = 1 ] && [ "$(id -u)" = 0 ] && warn "--allow-root — root 로 설치합니다(시험 전용)"

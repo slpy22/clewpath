@@ -268,6 +268,26 @@ def _warn_kept_differences(conf: Path, a, client: str | None, agent: str | None)
                  f"(바꾸려면 설정 파일의 [cloud] {key} 를 고친 뒤 재시작)")
 
 
+_DEFAULT_URLS = {"cp_url": "https://clewpath.pyongso.com/cp", "relay_url": "wss://clewpath.pyongso.com/relay/ws",
+                 "app_url": "https://clewpath.pyongso.com/relay/app"}
+
+
+def _toml_urls(conf: Path) -> dict:
+    """유지한 설정 파일의 [cloud] 주소 셋 — install.sh 가 자격증명 발급·헬스 확인·끝 안내에 쓴다(기본 주소로 엉뚱한 CP 에 가지 않게).
+    못 읽거나 없는 값은 빈 값(install.sh 는 자기 값을 그대로 쓴다)."""
+    import tomllib
+    try:
+        cloud = tomllib.loads(conf.read_text(encoding="utf-8-sig")).get("cloud", {})
+    except Exception:  # noqa: BLE001
+        cloud = {}
+    cloud = cloud if isinstance(cloud, dict) else {}
+    out = {}
+    for k in _DEFAULT_URLS:
+        v = cloud.get(k)
+        out[k] = v.rstrip("/") if isinstance(v, str) and not _CTRL.search(v) else ""
+    return out
+
+
 def cmd_write_config(a) -> int:
     from session_manager import appconfig
     conf = Path(a.conf_file) if a.conf_file else _conf_path()
@@ -280,8 +300,12 @@ def cmd_write_config(a) -> int:
             warn(f"설정 파일의 포트({port})를 씁니다 — --port {a.port} 는 설정 파일을 새로 만들 때만 씁니다"
                  f"(바꾸려면 [server] port 를 고친 뒤 재시작)")
         _warn_kept_differences(conf, a, client, agent)
-        _out(config="kept", path=conf, port=port)
+        _out(config="kept", path=conf, port=port, **_toml_urls(conf))
         return 0
+    # 주소도 선택(--port 와 같다) — 안 주면 새로 만들 때 기본값. install.sh·get.sh 는 사용자가 준 주소만 넘긴다(재설치 헛 경고)
+    a.cp_url = _DEFAULT_URLS["cp_url"] if a.cp_url is None else a.cp_url
+    a.relay_url = _DEFAULT_URLS["relay_url"] if a.relay_url is None else a.relay_url
+    a.app_url = _DEFAULT_URLS["app_url"] if a.app_url is None else a.app_url
     for name, v in (("--cp-url", a.cp_url), ("--relay-url", a.relay_url), ("--app-url", a.app_url),
                     ("--claude-config-dir", a.claude_config_dir or ""), ("CLEWPATH_CLIENT_TOKEN", client or ""),
                     ("CLEWPATH_AGENT_TOKEN", agent or "")):
@@ -301,7 +325,7 @@ def cmd_write_config(a) -> int:
     if not client and not a.cp_url:      # 컨트롤플레인이 있으면 QR 은 기기 전용 자격증명을 싣는다(공유 토큰 불필요 — 맥 실기 3b)
         warn("폰 접속 토큰(CLEWPATH_CLIENT_TOKEN)이 없습니다 — 컨트롤플레인 없이 폰 페어링 QR 을 쓰려면 설정 파일의 "
              "client_token 을 채우세요.")
-    _out(config="created", path=conf, port=new_port)
+    _out(config="created", path=conf, port=new_port, cp_url=a.cp_url.rstrip("/"), relay_url=a.relay_url, app_url=a.app_url)
     return 0
 
 
@@ -637,9 +661,9 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--data-dir")
     s = sub.add_parser("write-config", help="clewpath.toml(없을 때만). 토큰은 env CLEWPATH_CLIENT_TOKEN·CLEWPATH_AGENT_TOKEN")
     s.add_argument("--port", type=_port, default=None, help="새로 만들 때만(없으면 Host 기본값). 유지할 때는 준 값이 다르면 경고")
-    s.add_argument("--cp-url", default="https://clewpath.pyongso.com/cp")
-    s.add_argument("--relay-url", default="wss://clewpath.pyongso.com/relay/ws")
-    s.add_argument("--app-url", default="https://clewpath.pyongso.com/relay/app")
+    s.add_argument("--cp-url", default=None, help="새로 만들 때만(없으면 기본 주소). 유지할 때는 준 값이 다르면 경고")
+    s.add_argument("--relay-url", default=None)
+    s.add_argument("--app-url", default=None)
     s.add_argument("--claude-config-dir", default="")
     s.add_argument("--conf-file")
     s = sub.add_parser("render-launcher", help="start-connector.sh 렌더")

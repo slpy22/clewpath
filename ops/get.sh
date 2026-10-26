@@ -431,7 +431,7 @@ parse_args() {
       *) usage_die "모르는 인자(값은 보이지 않게 생략)" ;;   # 토큰을 잘못 붙였을 수 있다 — 화면에 찍지 않는다
     esac
     case "$PA_K" in
-      --cp-url) CP_URL=$PA_V ;;
+      --cp-url) CP_URL=$PA_V; CP_GIVEN=1 ;;
       --dir) DIR=$PA_V; DIR_GIVEN=1 ;;
       --port) PORT=$PA_V; PORT_GIVEN=1 ;;
       --relay-url) RELAY_URL=$PA_V ;;
@@ -475,6 +475,7 @@ main() {
   DIR_GIVEN=0
   PORT=5100
   PORT_GIVEN=0
+  CP_GIVEN=0
   RELAY_URL=''
   APP_URL=''
   NO_AUTOSTART=0
@@ -589,7 +590,9 @@ main() {
   ok "압축 해제"
 
   # G8. 넘기기 — stage 는 install.sh 가 옮기고 지운다(실패해도 그쪽이 치운다). 토큰은 env 로만
-  set -- --from-stage "$G_TMP/stage" --dir "$DIR" --cp-url "$CP_URL"
+  set -- --from-stage "$G_TMP/stage" --dir "$DIR"
+  # --cp-url 도 준 값일 때만(--port 와 같다) — 기본 주소를 넘기면 재설치 때 설정 파일의 주소와 달라 install.sh 가 헛 경고를 낸다
+  if [ "$CP_GIVEN" = 1 ]; then set -- "$@" --cp-url "$CP_URL"; fi
   # --port 는 준 값일 때만 — 기본값을 넘기면 재설치 때 설정 파일의 포트와 달라 install.sh 가 헛 경고를 낸다
   if [ "$PORT_GIVEN" = 1 ]; then set -- "$@" --port "$PORT"; fi
   if [ -n "$RELAY_URL" ]; then set -- "$@" --relay-url "$RELAY_URL"; fi
