@@ -5530,7 +5530,11 @@ function otpErrMsg(err){ return err==='2fa_invalid'?'2차 인증 실패(코드 �
   :err==='2fa_required'?'2차 인증 미설정 — PC에서 🔒 보안에서 먼저 설정하세요':(err||''); }
 
 // ---- 보안(2차 인증) 켜기/끄기/설정 ----
-async function showSecurity(){
+// opts.after: 다른 화면(PC 짝·승인 시트)에서 막혀 들어왔으면 설정이 끝난 뒤 그 화면으로 돌아가는 단추(opts.backLabel)
+async function showSecurity(opts){
+  opts=opts||{};
+  const backBtn=()=>{ if(!opts.after) return null; const b=el('button','btn',opts.backLabel||'↩ 돌아가기'); b.style.marginTop='8px';
+    b.onclick=()=>{ closeModal(); opts.after(); }; return b; };
   let st; try{ st=await T.api('GET','/api/owner/2fa/status'); }catch(e){ st={required:false,has_secret:false}; }
   const body=el('div');
   const line=(t)=>body.appendChild(el('div','cwd',t));
@@ -5561,13 +5565,15 @@ async function showSecurity(){
         im.src=r.qr_svg; im.alt='2FA QR'; qb.appendChild(im); body.appendChild(qb); }
       body.appendChild(field('비밀키 (수동 입력용)', inputEl(r.secret)));
       body.appendChild(field('otpauth URI', inputEl(r.otpauth)));
+      const bb=backBtn(); if(bb) body.appendChild(bb);
     }catch(e){ toast('설정 실패: '+e.message); }
   };
   const toggle=async(on)=>{
-    try{ await T.api('POST','/api/owner/2fa/toggle',{body:{on}}); toast(on?'2FA 켜짐':'2FA 꺼짐'); showSecurity(); }
+    try{ await T.api('POST','/api/owner/2fa/toggle',{body:{on}}); toast(on?'2FA 켜짐':'2FA 꺼짐'); showSecurity(opts); }
     catch(e){ if(e.status===409){ doProvision(); } else toast('실패: '+e.message); }
   };
   const foot=[];
+  if(st.required){ const bb=backBtn(); if(bb) body.appendChild(bb); }
   if(st.required){
     const off=el('button','btn ghost','2FA 끄기'); off.onclick=()=>{
       if(confirm('2차 인증을 끄면 외부에서 코드 없이 실제 세션 조작이 가능해집니다. 계속?')) toggle(false); };
@@ -5666,8 +5672,13 @@ function renderPclink(body, st, tfa){
   body.appendChild(el('div','cwd','짝지은 PC 의 세션이 이 PC 에서 「📡 원격 묻기 받기」를 켠 세션에 물을 수 있습니다(조회 전용 — 답만 돌려주고 '
     +'이 PC 에서는 아무것도 실행하지 않습니다). 받기는 세션 상세 칸에서 세션마다 켭니다.'));
   if(!st.room_ready) body.appendChild(el('div','dnote warn','⚠ 원격 연결(릴레이)이 꺼져 있어 짝짓기를 할 수 없습니다'));
-  if(tfa&&tfa.has_secret===false) body.appendChild(el('div','dnote warn','⚠ 2차 인증이 꺼져 있어 짝짓기·첫 연락을 승인할 수 없습니다 — '
-    +'PC 화면의 설정 → 2차 인증에서 먼저 켜세요'));
+  if(tfa&&!tfa.required){   // 승인(사람 증명)은 PC 화면에선 코드로, pclink 는 폰에서도 코드(D11) — 막히는 이 자리에서 바로 설정(로컬 전용)
+    const w=el('div','dnote warn','⚠ 2차 인증이 꺼져 있어 짝짓기·첫 연락을 승인할 수 없습니다'
+      +(MODE==='local'?'':' — PC 화면의 설정 → 🔒 보안에서 먼저 켜세요'));
+    body.appendChild(w);
+    if(MODE==='local'){ const fx=el('button','btn',tfa.has_secret?'🔒 지금 2차 인증 켜기':'🔒 지금 2차 인증 설정');
+      fx.onclick=()=>{ closeModal(); showSecurity({after:showPclink, backLabel:'↩ PC 짝으로 돌아가기'}); }; body.appendChild(fx); }
+  }
   if(MODE==='relay') body.appendChild(el('div','diag','폰에서 켜는 동작(초대·붙여넣기·받기 켜기·다시 받기)과 승인은 2차 인증 코드가 필요합니다'));
   // 끄기 스위치
   { const sw=el('div','devrow'+(st.paused?' off':'')); const si=el('div');
@@ -6648,6 +6659,17 @@ function showApprovalSheet(a, opts){
     body.appendChild(el('div','cwd', MODE==='local'?'PC 에서는 2차 인증 코드로 승인합니다(또는 폰 알림에서 탭).'
       :'PC 짝·원격 묻기 승인은 폰에서도 2차 인증 코드가 필요합니다(방금 코드를 넣었으면 비워 둬도 됩니다).'));
     otp=el('input','inp'); otp.placeholder='2차 인증 6자리'; otp.inputMode='numeric'; body.appendChild(otp);
+    if(MODE==='local'){   // 2차 인증이 꺼져 있으면 이 PC 화면에선 승인할 길이 없다(사람 증명 = 코드) — 막힌 이유와 바로 설정
+      const slot=el('div'); body.insertBefore(slot, otp);
+      T.api('GET','/api/owner/2fa/status').then(st=>{
+        if(!st||st.required) return;
+        slot.appendChild(el('div','dnote warn','⚠ 2차 인증이 꺼져 있어 이 PC 화면에서는 승인할 수 없습니다'
+          +(pcl?' — PC 짝 승인은 폰에서도 2차 인증이 필요합니다':' — 폰 알림에서 탭하거나 2차 인증을 설정하세요')));
+        const fx=el('button','btn',st.has_secret?'🔒 지금 2차 인증 켜기':'🔒 지금 2차 인증 설정');
+        fx.onclick=()=>{ closeModal(); showSecurity({after:()=>showApprovalSheet(a,opts), backLabel:'↩ 승인으로 돌아가기'}); };
+        slot.appendChild(fx);
+      }).catch(()=>{});
+    }
   }
   const err=el('div','cwd'); body.appendChild(err);
   let busy=false;
