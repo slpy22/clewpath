@@ -1,7 +1,7 @@
 """문서 계약 — 맥·리눅스 설치(docs/designs/posix-install.md 1.1-5, 9단계). 모든 OS 에서 돈다(파일만 읽는다).
 
-- README 의 맥·리눅스 절: 시험용 표시, 한 줄 설치가 공개 전이라는 말(공개 주소는 적지 않는다 — CP /get.sh 를 열 때 이 시험과
-  함께 바꾼다), 'Windows 전용 릴리스'·'자동 시작 없음' 같은 말이 릴리스 도구·설치 스크립트의 지금 동작과 맞는지.
+- README 의 맥·리눅스 절: 시험용 표시, 한 줄 설치 주소(CP /get.sh 공개 — docs/deploy/get-sh-publish.md)가 get.sh 머리말의
+  명령과 같은지, 'Windows 전용 릴리스'·'자동 시작 없음' 같은 말이 릴리스 도구·설치 스크립트의 지금 동작과 맞는지.
   그 절이 보여 주는 명령·옵션·환경변수·경로는 스크립트에 실제로 있어야 하고, 사용자가 쓸 하위 명령·제거 옵션은 빠짐없이 적는다.
 - README 의 업데이트 교체 목록 = updater.PAYLOAD, 폴더 구조에 맥·리눅스 스크립트.
 - multi-os.md 단계 표: 3a(공통 설치·업데이트)는 완료·브랜치·명세를 밝히고 말한 파일이 있다, 3b(맥 실기)는 대기.
@@ -194,19 +194,29 @@ def _posix() -> str:
     return _section(_read(README), r"^맥·리눅스")
 
 
-def test_readme_posix_section_is_marked_test_only_and_unpublished():
+ONE_LINER = "curl -fsSL https://clewpath.pyongso.com/get.sh | sh"
+
+
+def test_readme_posix_section_is_marked_test_only_and_shows_the_one_liner():
     sec = _posix()
     head = sec.splitlines()[0]
     assert "시험용" in head, f"맥·리눅스 절 제목에 '시험용' 표시가 없습니다: {head}"
-    assert re.search(r"한 줄 설치[^\n]*아직[^\n]*공개", sec), "한 줄 설치가 아직 공개되지 않았다는 말이 없습니다"
+    assert ONE_LINER in "\n".join(_code(sec)), "맥·리눅스 절에 한 줄 설치 명령이 없습니다"
+    assert not re.search(r"한 줄 설치[^\n]*(아직|공개 전)", sec), "한 줄 설치가 아직 공개 전이라는 말이 남아 있습니다"
     assert "1. 준비물" in _read(README) and "맥·리눅스" in _section(_read(README), r"^1\. 준비물"), \
         "Windows 준비물에서 맥·리눅스 절을 가리켜야 합니다"
 
 
-def test_readme_does_not_publish_the_get_sh_url():
-    """CP 의 /get.sh 는 아직 없다(맥 단계에서 연다, 명세 7절). 공개 주소를 적으면 사용자가 그대로 붙여 넣는다."""
+def test_readme_publishes_the_get_sh_url():
+    """CP 의 /get.sh 공개(명세 7절, docs/deploy/get-sh-publish.md). 사용자가 그대로 붙여 넣는 줄이라 get.sh 머리말의 명령과
+    글자까지 같아야 하고, 안내하는 주소는 nginx 가 여는 /get.sh 하나다(/cp/get.sh 는 catch-all 로 열려 있어도 안내하지 않는다)."""
     text = _read(README)
-    assert "pyongso.com/get.sh" not in text and "/cp/get.sh" not in text
+    assert ONE_LINER in _read(SCRIPTS["get.sh"]).splitlines()[3], "get.sh 머리말의 한 줄 설치 명령과 다릅니다"
+    assert ONE_LINER in "\n".join(_code(_section(text, r"^2\. 설치"))), "설치 절에 맥·리눅스 한 줄이 없습니다"
+    assert ONE_LINER in _section(text, r"^1\. 준비물"), "준비물의 맥·리눅스 안내에 한 줄 설치가 없습니다"
+    urls = set(re.findall(r"[^\s`(]*pyongso\.com/[^\s`)]*get\.sh[^\s`)]*", text))
+    assert urls == {"https://clewpath.pyongso.com/get.sh"}, f"한 줄 설치 주소가 하나가 아닙니다: {sorted(urls)}"
+    assert "/cp/get.sh" not in text
     assert "irm https://clewpath.pyongso.com/get | iex" in text            # Windows 한 줄 설치는 그대로
 
 
@@ -245,6 +255,9 @@ def test_readme_posix_commands_exist_in_scripts():
         ok = _options(script)
         for args in _invocations(code, script):
             bad += [f"{script} {a}" for a in args if a.startswith("-") and a.split("=", 1)[0] not in ok]
+    piped = _invocations([re.sub(r"get\.sh \| sh -s --", "get.sh", s) for s in code if "get.sh | sh -s --" in s], "get.sh")
+    assert all(piped), "`curl … get.sh | sh -s -- 옵션` 을 읽지 못했습니다"
+    bad += [f"get.sh {a}" for args in piped for a in args if a.startswith("-") and a.split("=", 1)[0] not in _options("get.sh")]
     for args in _invocations(code, "start-connector.sh"):
         if not args:
             continue

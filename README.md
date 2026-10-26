@@ -45,8 +45,8 @@
 파이썬도, PowerShell 7 도, 내려받을 파일도 **없어도 된다** — 설치 명령 한 줄이
 전부 알아서 챙긴다.
 
-> **맥·리눅스**는 아직 시험 중이다 — 한 줄 설치가 공개되지 않았고, 게시되는 릴리스도 Windows 전용이다.
-> 시험하는 방법은 아래 상세 레퍼런스의 「맥·리눅스 (시험용)」 절.
+> **맥·리눅스**는 터미널에서 `curl -fsSL https://clewpath.pyongso.com/get.sh | sh` 한 줄로 설치한다(리눅스는 시험용).
+> 게시되는 릴리스가 그 OS 를 담기 전에는 설치를 거부한다. 자세히는 아래 상세 레퍼런스의 「맥·리눅스 (시험용)」 절.
 
 ## 2. 설치 (5분)
 
@@ -65,6 +65,15 @@ irm https://clewpath.pyongso.com/get | iex
 ```powershell
 & ([scriptblock]::Create((irm https://clewpath.pyongso.com/get))) -Port 5123
 ```
+
+**맥·리눅스**(리눅스는 시험용)는 터미널에서:
+
+```sh
+curl -fsSL https://clewpath.pyongso.com/get.sh | sh
+```
+
+옵션은 `curl -fsSL https://clewpath.pyongso.com/get.sh | sh -s -- --port 5123` 처럼 준다. 설치 위치·켜기·끄기·제거는
+상세 레퍼런스의 「맥·리눅스 (시험용)」 절.
 
 <details>
 <summary>zip 으로 설치 (오프라인·수동 방식)</summary>
@@ -226,19 +235,19 @@ Remove-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name 
 
 # 상세 레퍼런스
 
-## 맥·리눅스 (시험용 — 한 줄 설치는 아직 공개 전)
+## 맥·리눅스 (시험용)
 
 > **아직 일반 사용자용이 아니다.** 맥·리눅스 설치·업데이트·제거 스크립트는 만들었지만 검증은 리눅스 시험 컨테이너에서만 했고,
 > 맥 실기 시험은 진행 중이다(맥 측 지시서 `docs/mac-host-tasks.md`). 진행 상황은 `docs/designs/multi-os.md`, 설계는 `docs/designs/posix-install.md`.
 >
-> - **한 줄 설치(`curl … | sh`)는 아직 공개되지 않았다.** 부트스트랩 스크립트 `ops/get.sh` 는 저장소에만 있고,
->   컨트롤플레인의 `/get.sh` 주소는 맥 단계에서 연다.
+> - **한 줄 설치**는 `curl -fsSL https://clewpath.pyongso.com/get.sh | sh` 다. 컨트롤플레인이 주는 부트스트랩 `get.sh` 는
+>   저장소의 `ops/get.sh` 와 바이트까지 같다(`tests/test_get_sh_copy.py` 가 대조).
 > - **게시되는 릴리스는 Windows 전용**이다(매니페스트 `platforms=["win"]`). 맥·리눅스 설치본은 그 릴리스를 받지 않는다 —
 >   `get.sh` 는 설치를 거부하고, 설치본은 그 버전으로 업데이트하지 않는다.
 
 | | Windows | 맥·리눅스 (시험용) |
 |---|---|---|
-| 설치 | `get.ps1` → `install.ps1` | (공개 전) `get.sh` → `install.sh` |
+| 설치 | `get.ps1` → `install.ps1` | `get.sh` → `install.sh` |
 | 설치 위치 | `%LOCALAPPDATA%\ClewPath\app` | 맥 `~/Library/Application Support/ClewPath/app`<br>리눅스 `${XDG_DATA_HOME:-~/.local/share}/clewpath/app`<br>`CLEWPATH_HOME` 으로 바꾼다. uv 는 그 아래 `bin/`, uv 가 받은 파이썬은 `python/` |
 | 파이썬 | 서명된 시스템 파이썬, 없으면 uv 런타임 | 리눅스: 시스템 파이썬 3.11 이상, 없으면 uv 런타임 · 맥: uv 런타임만 |
 | 데이터 폴더 | `~/.claude/session_manager` | 같다. 폴더는 0700(설치할 때 안의 파일도 다른 사용자 권한을 뺀다), 설정 파일 0600 |
@@ -247,6 +256,14 @@ Remove-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name 
 | 업데이트 적용 | `update_runner.ps1` | `update_runner.sh` — 같은 순서(교체 → 의존성 → 재기동 → 헬스체크 → 실패하면 롤백) |
 | 제거 | 위 8절(손으로) | `uninstall.sh` |
 | 아직 안 되는 것 | — | 리눅스 자동 시작, 키체인(비밀은 파일 권한으로 지킨다), PC 에서 '새 터미널 창으로 재개'(명령어만 알려 준다) |
+
+**한 줄 설치** — 일반 사용자로(root·sudo 로는 설치하지 않는다):
+
+```sh
+curl -fsSL https://clewpath.pyongso.com/get.sh | sh                          # 설치·다시 설치
+curl -fsSL https://clewpath.pyongso.com/get.sh | sh -s -- --port 5123        # 옵션(도움말은 --help)
+curl -fsSL https://clewpath.pyongso.com/get.sh | CLEWPATH_CLIENT_TOKEN=… sh  # 토큰은 환경변수로(인자는 ps 에 보인다)
+```
 
 **시험해 보기**
 
