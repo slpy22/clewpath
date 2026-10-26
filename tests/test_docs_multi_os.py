@@ -410,7 +410,7 @@ def test_todos_multi_os_progress():
 def test_todos_progress_check_survives_checking_items_off(sub, item):
     todos = _read(TODOS)
     part = _section(_section(todos, r"멀티 OS"), rf"^{sub} ")
-    line = next(ln for ln in part.splitlines() if re.match(rf"- \[ \] .*{item}", ln))
+    line = next(ln for ln in part.splitlines() if re.match(rf"- \[[ x]\] .*{item}", ln))   # 이미 체크된 줄이면 그대로
     _check_todos_progress(todos.replace(line, line.replace("- [ ]", "- [x]", 1), 1))
 
 
