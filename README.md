@@ -306,7 +306,7 @@ sh uninstall.sh --purge        # 둘 다
 └─ ops/               ★운영자 전용 — 배포 zip 에 절대 안 들어감
    ├─ start-public.ps1     운영자 PC 의 006 기동 (라이브 비밀 포함)
    ├─ package-for-user.ps1 배포 zip 생성 (비밀·키 스캔 게이트)
-   ├─ get.sh               맥·리눅스 원라인 설치 부트스트랩 (CP 공개 전 보관 — 공개 때 007 로)
+   ├─ get.sh               맥·리눅스 원라인 설치 부트스트랩 (정본 — 007 control_plane/get.sh 는 바이트 사본, tests/test_get_sh_copy.py 가 대조)
    ├─ tools/sign_release.py  릴리스 서명·게시
    ├─ release-keys/        ★릴리스 서명 개인키 (유출=전 사용자 장악)
    ├─ dist/                패키징 산출물 (zip·manifest)
