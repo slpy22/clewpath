@@ -135,7 +135,7 @@
   2회차 수리가 새로 기대는 것: `/bin/pwd -P` 가 디스크의 대소문자를 준다(`phys_pwd`) · `sysctl -n kern.bootsessionuuid` 가 있다(잠금의 부팅 식별자) ·
   `$( )` 안 case 패턴을 `(` 로 연 모양과 주석 없는 `$( )` 가 bash 3.2 에서 파싱된다 · get.sh `dir_guard` 가 bash 3.2 sh 모드에서 같은 답
 
-### 리눅스 정식 지원 — 결정 전(지금은 시험용, 설치 때 경고)
+### 리눅스 정식 지원 — 결정 전. **2026-10-26 사장님: 아직 막아 둠** — 릴리스 기본 platforms=win,mac(리눅스 빠짐 → get.sh 거부), 홈페이지·README 는 '준비 중'. 열 때는 `-Platforms win,mac,linux` + 랜딩 리눅스 탭·README·시험(007 test_get_sh_route, 006 test_docs_multi_os) 되돌리기
 - [ ] systemd `--user` 자동 시작(`systemd-run --scope` 포함)·정식 지원 여부 결정 · R8 시스템 파이썬 업그레이드가 `.venv` 를 깨뜨릴 수 있음(정식 지원 때 관리 런타임 고정 검토) · R11 curl 없는 배포판(slim)에선 상태 훅이 조용히 실패 · musl(Alpine)·FreeBSD 는 범위 밖
 
 ### 별건(양 OS, 명세 8.2·1.2)

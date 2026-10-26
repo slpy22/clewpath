@@ -61,10 +61,10 @@ def test_parses_and_refuses_bad_version():
 
 # ---- 받는 OS(-Platforms) · zip 내용 게이트 (posix-install.md 4.5·4.6) ----
 
-def test_platforms_default_to_windows_and_reach_the_manifest():
-    """기본은 win(이번 출시는 맥·리눅스를 시험장에서만). 서명에 넘기고, verify 가 찍는 platforms= 줄과 대조하고, 로그에 남긴다."""
+def test_platforms_default_to_windows_and_mac_and_reach_the_manifest():
+    """기본은 win,mac(맥 0.33.0 정식, 리눅스는 준비 중). 서명에 넘기고, verify 가 찍는 platforms= 줄과 대조하고, 로그에 남긴다."""
     s = _src()
-    assert re.search(r'\[string\[\]\]\$Platforms = @\("win"\)', s)
+    assert re.search(r'\[string\[\]\]\$Platforms = @\("win", "mac"\)', s)
     sign = s[s.index('sign_release.py") sign'):]
     assert "--platforms $plats" in sign[:sign.index("2>&1")], "서명에 받는 OS 를 넘긴다"
     assert '"(?m)^platforms=$([regex]::Escape($plats))\\s*$"' in s, "verify 출력의 platforms= 와 대조"

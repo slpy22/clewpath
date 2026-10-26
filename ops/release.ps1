@@ -4,7 +4,7 @@
 #    pwsh -File ops/release.ps1 -Version 0.9.4 -Notes "무엇이 바뀌었나"            # 패키지+서명+검증까지
 #    pwsh -File ops/release.ps1 -Version 0.9.4 -Notes "..." -Publish              # + CP 게시
 #    pwsh -File ops/release.ps1 -Version 0.9.4 -Notes "..." -Publish -Apply       # + 이 PC 적용·헬스·조용한 재기동 확인
-#    -Platforms win,mac                                                           # 받는 OS(기본 win). mac·linux 는 같은 HEAD 의
+#    -Platforms win,mac                                                           # 받는 OS(기본 win,mac). mac·linux 는 같은 HEAD 의
 #                                                                                 #   POSIX e2e 기록(ops/logs/posix-e2e-<ver>.json)이 있어야
 #
 #  왜: 손으로 7단계(package → rename → sign → verify → publish → apply → poll)를 11번 반복하며
@@ -26,7 +26,7 @@ param(
     [string]$DownloadBase = "https://clewpath.pyongso.com/cp/updates/download",
     [string]$EnvFile = "E:/018_whisper/util/.env",
     [string]$Python = "python",
-    [string[]]$Platforms = @("win")
+    [string[]]$Platforms = @("win", "mac")
 )
 $ErrorActionPreference = "Stop"
 $env:PYTHONIOENCODING = "utf-8"

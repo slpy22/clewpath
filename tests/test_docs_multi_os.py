@@ -1,6 +1,6 @@
 """문서 계약 — 맥·리눅스 설치(docs/designs/posix-install.md 1.1-5, 9단계). 모든 OS 에서 돈다(파일만 읽는다).
 
-- README 의 맥·리눅스 절: 시험용 표시, 한 줄 설치 주소(CP /get.sh 공개 — docs/deploy/get-sh-publish.md)가 get.sh 머리말의
+- README 의 맥·리눅스 절: 리눅스 '준비 중' 표시, 한 줄 설치 주소(CP /get.sh 공개 — docs/deploy/get-sh-publish.md)가 get.sh 머리말의
   명령과 같은지, 'Windows 전용 릴리스'·'자동 시작 없음' 같은 말이 릴리스 도구·설치 스크립트의 지금 동작과 맞는지.
   그 절이 보여 주는 명령·옵션·환경변수·경로는 스크립트에 실제로 있어야 하고, 사용자가 쓸 하위 명령·제거 옵션은 빠짐없이 적는다.
 - README 의 업데이트 교체 목록 = updater.PAYLOAD, 폴더 구조에 맥·리눅스 스크립트.
@@ -200,7 +200,7 @@ ONE_LINER = "curl -fsSL https://clewpath.pyongso.com/get.sh | sh"
 def test_readme_posix_section_is_marked_test_only_and_shows_the_one_liner():
     sec = _posix()
     head = sec.splitlines()[0]
-    assert "시험용" in head, f"맥·리눅스 절 제목에 '시험용' 표시가 없습니다: {head}"
+    assert "리눅스는 준비 중" in head, f"맥·리눅스 절 제목에 리눅스 '준비 중' 표시가 없습니다: {head}"   # 맥은 0.33.0 부터 정식
     assert ONE_LINER in "\n".join(_code(sec)), "맥·리눅스 절에 한 줄 설치 명령이 없습니다"
     assert not re.search(r"한 줄 설치[^\n]*(아직|공개 전)", sec), "한 줄 설치가 아직 공개 전이라는 말이 남아 있습니다"
     assert "1. 준비물" in _read(README) and "맥·리눅스" in _section(_read(README), r"^1\. 준비물"), \
@@ -220,12 +220,12 @@ def test_readme_publishes_the_get_sh_url():
     assert "irm https://clewpath.pyongso.com/get | iex" in text            # Windows 한 줄 설치는 그대로
 
 
-def test_readme_windows_only_release_matches_release_tools():
-    """'게시되는 릴리스는 Windows 전용' 이라는 말 = 서명·릴리스 도구의 기본 받는 OS."""
+def test_readme_release_platforms_match_release_tools():
+    """'게시되는 릴리스는 Windows·맥용' 이라는 말 = 서명·릴리스 도구의 기본 받는 OS(리눅스는 준비 중이라 빠짐, 2026-10-26)."""
     sec = _posix()
-    assert 'platforms=["win"]' in sec
-    assert _assign(ROOT / "ops" / "tools" / "sign_release.py", "DEFAULT_PLATFORMS") == "win"
-    assert re.search(r'\[string\[\]\]\$Platforms = @\("win"\)', _read(ROOT / "ops" / "release.ps1"))
+    assert 'platforms=["win","mac"]' in sec
+    assert _assign(ROOT / "ops" / "tools" / "sign_release.py", "DEFAULT_PLATFORMS") == "win,mac"
+    assert re.search(r'\[string\[\]\]\$Platforms = @\("win", "mac"\)', _read(ROOT / "ops" / "release.ps1"))
 
 
 def test_readme_autostart_claim_matches_installer():

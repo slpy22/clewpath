@@ -73,12 +73,12 @@ def _claims(tmp_path: Path) -> dict:
     return pyjwt.decode((tmp_path / "m.jwt").read_text(encoding="utf-8"), options={"verify_signature": False})
 
 
-def test_sign_defaults_to_windows_only(tmp_path, key):
-    """이번 출시(posix-install)는 win 만 — 맥·리눅스는 시험장에서만(결정 Q4)."""
+def test_sign_defaults_to_windows_and_mac(tmp_path, key):
+    """기본은 win,mac — 맥은 0.33.0 부터 정식, 리눅스는 준비 중이라 빠진다(2026-10-26)."""
     r = _sign(tmp_path, key[0])
     assert r.returncode == 0, r.stdout + r.stderr
-    assert _claims(tmp_path)["platforms"] == ["win"]
-    assert "platforms=win" in r.stdout and "ver=1.2.3" in r.stdout      # release.ps1 이 'ver=' 줄을 로그에 남긴다
+    assert _claims(tmp_path)["platforms"] == ["win", "mac"]
+    assert "platforms=win,mac" in r.stdout and "ver=1.2.3" in r.stdout      # release.ps1 이 'ver=' 줄을 로그에 남긴다
 
 
 @pytest.mark.parametrize("arg,want", [
@@ -114,7 +114,7 @@ def test_parse_platforms_is_the_osdep_vocabulary():
     from session_manager import osdep
     sr = _module()
     assert set(sr.PLATFORMS) == {"win", "mac", "linux"} and osdep.NAME in sr.PLATFORMS
-    assert sr.DEFAULT_PLATFORMS == "win"
+    assert sr.DEFAULT_PLATFORMS == "win,mac"
     with pytest.raises(argparse.ArgumentTypeError):
         sr.parse_platforms("windows")
 
@@ -152,13 +152,13 @@ def test_verify_reports_platforms(tmp_path, key, monkeypatch, capsys, plats, rc,
 
 
 def test_signed_manifest_is_accepted_by_this_os_rules(tmp_path, key, monkeypatch):
-    """sign 이 쓴 클레임을 updater 가 같은 뜻으로 읽는다 — 기본(win)은 맥·리눅스 Host 가 받지 않는다."""
+    """sign 이 쓴 클레임을 updater 가 같은 뜻으로 읽는다 — 기본(win,mac)은 리눅스 Host 가 받지 않는다."""
     from session_manager import osdep
     pem, kid, b64 = key
     monkeypatch.setattr(updater, "RELEASE_KEYS", {kid: b64})
     assert _sign(tmp_path, pem).returncode == 0
     m = updater.verify_manifest((tmp_path / "m.jwt").read_text(encoding="utf-8"))
-    for name, ok in (("win", True), ("mac", False), ("linux", False)):
+    for name, ok in (("win", True), ("mac", True), ("linux", False)):
         monkeypatch.setattr(osdep, "NAME", name)
         assert updater.supports_this_os(m) is ok, name
     assert _sign(tmp_path, pem, "--platforms", "win,linux").returncode == 0

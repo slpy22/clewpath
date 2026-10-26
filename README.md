@@ -39,14 +39,15 @@
 
 | 필요한 것 | 확인 방법 |
 |---|---|
-| Windows 10/11 PC | — (기본 내장 PowerShell 5.1 로 충분) |
+| Windows 10/11 PC 또는 macOS(Apple Silicon·Intel) | — (Windows 는 기본 PowerShell 5.1, 맥은 기본 터미널로 충분) |
 | 클로드 코드를 이 PC에서 써본 적 | `~/.claude/projects/` 폴더가 있으면 됨 (설치 때 자동 확인) |
 
 파이썬도, PowerShell 7 도, 내려받을 파일도 **없어도 된다** — 설치 명령 한 줄이
 전부 알아서 챙긴다.
 
-> **맥·리눅스**는 터미널에서 `curl -fsSL https://clewpath.pyongso.com/get.sh | sh` 한 줄로 설치한다(리눅스는 시험용).
-> 게시되는 릴리스가 그 OS 를 담기 전에는 설치를 거부한다. 자세히는 아래 상세 레퍼런스의 「맥·리눅스 (시험용)」 절.
+> **맥**은 터미널에서 `curl -fsSL https://clewpath.pyongso.com/get.sh | sh` 한 줄로 설치한다(0.33.0 부터 정식).
+> **리눅스는 준비 중**이다 — 설치 스크립트는 있지만 지금 출시가 리눅스를 담지 않아 같은 줄을 쳐도 설치를 거부한다.
+> 자세히는 아래 상세 레퍼런스의 「맥·리눅스」 절.
 
 ## 2. 설치 (5분)
 
@@ -66,14 +67,18 @@ irm https://clewpath.pyongso.com/get | iex
 & ([scriptblock]::Create((irm https://clewpath.pyongso.com/get))) -Port 5123
 ```
 
-**맥·리눅스**(리눅스는 시험용)는 터미널에서:
+**맥**은 터미널에서(일반 사용자로 — `sudo` 를 붙이지 않는다. 리눅스는 준비 중이라 지금은 설치를 거부한다):
 
 ```sh
 curl -fsSL https://clewpath.pyongso.com/get.sh | sh
 ```
 
 옵션은 `curl -fsSL https://clewpath.pyongso.com/get.sh | sh -s -- --port 5123` 처럼 준다. 설치 위치·켜기·끄기·제거는
-상세 레퍼런스의 「맥·리눅스 (시험용)」 절.
+상세 레퍼런스의 「맥·리눅스」 절.
+
+> **맥은 처음 한 번 맥 앞에서** — Claude 세션이 바탕화면·문서·iCloud 같은 폴더에 처음 닿으면 macOS 가
+> 'python3.11 이(가) … 접근하려고 합니다' 허용 창을 띄운다. 폰으로만 쓰는 동안엔 답할 수 없어 그 작업이 멈추므로,
+> 설치 직후 맥에서 한 번 써 보며 허용해 둔다.
 
 <details>
 <summary>zip 으로 설치 (오프라인·수동 방식)</summary>
@@ -169,6 +174,8 @@ PC 에서만 되는 항목(2차 인증·외부 접속 기기·휴지통·워커/
 
 ## 5. 서비스 관리
 
+Windows 는 아래 표. 맥은 설치 폴더의 `start-connector.sh`(상세 레퍼런스 「맥·리눅스」 절의 서비스 관리 표).
+
 | 하고 싶은 것 | 방법 |
 |---|---|
 | 지금 켜기 | `Start-ScheduledTask ClewPathHost` |
@@ -200,6 +207,7 @@ PC 에서만 되는 항목(2차 인증·외부 접속 기기·휴지통·워커/
   (방금 실패한 버전은 재기동 때 다시 시도하지 않는다). 설정·기기·자격증명은 그대로 유지.
 
 > PowerShell 에서 설치 명령을 다시 쳐도 업데이트가 된다: `irm https://clewpath.pyongso.com/get | iex`
+> (맥은 터미널에서 `curl -fsSL https://clewpath.pyongso.com/get.sh | sh` 를 다시 친다 — 설정 유지)
 
 ## 7. 문제가 생기면
 
@@ -213,6 +221,8 @@ PC 에서만 되는 항목(2차 인증·외부 접속 기기·휴지통·워커/
 | 설치 중 "자동시작 등록 실패: Access is denied" | 0.3.1 이하의 버그(관리자 권한 없이 설치한 경우). 설치 한 줄을 그대로 다시 치면 고쳐진 버전이 설치되며 자동시작까지 등록된다 |
 
 ## 8. 제거
+
+Windows 는 아래. 맥은 설치 폴더의 `uninstall.sh`(상세 레퍼런스 「맥·리눅스」 절의 제거).
 
 ```powershell
 # 자동시작 해제 (설치 환경에 따라 둘 중 하나만 실제로 존재 — 둘 다 실행해도 무해)
@@ -235,24 +245,27 @@ Remove-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" -Name 
 
 # 상세 레퍼런스
 
-## 맥·리눅스 (시험용)
+## 맥·리눅스 (리눅스는 준비 중)
 
-> **아직 일반 사용자용이 아니다.** 맥·리눅스 설치·업데이트·제거 스크립트는 만들었지만 검증은 리눅스 시험 컨테이너에서만 했고,
-> 맥 실기 시험은 진행 중이다(맥 측 지시서 `docs/mac-host-tasks.md`). 진행 상황은 `docs/designs/multi-os.md`, 설계는 `docs/designs/posix-install.md`.
+> **맥은 0.33.0(2026-10-26)부터 정식 지원**한다 — 맥 실기 시험 5회(설치·launchd 자동 시작·웹 터미널·Host 재기동 뒤 터미널 유지·
+> PC 사이 원격 묻기, 결과 `docs/mac-results/`). **리눅스는 준비 중**이다 — 같은 스크립트로 리눅스 시험 컨테이너에서
+> 설치·업데이트·롤백·제거를 돌지만, 정식 지원 여부(자동 시작 systemd 포함)를 정하기 전이라 출시에 넣지 않는다(사장님 2026-10-26).
+> 진행 상황은 `docs/designs/multi-os.md`, 설계는 `docs/designs/posix-install.md`.
 >
 > - **한 줄 설치**는 `curl -fsSL https://clewpath.pyongso.com/get.sh | sh` 다. 컨트롤플레인이 주는 부트스트랩 `get.sh` 는
 >   저장소의 `ops/get.sh` 와 바이트까지 같다(`tests/test_get_sh_copy.py` 가 대조).
-> - **게시되는 릴리스는 Windows 전용**이다(매니페스트 `platforms=["win"]`). 맥·리눅스 설치본은 그 릴리스를 받지 않는다 —
->   `get.sh` 는 설치를 거부하고, 설치본은 그 버전으로 업데이트하지 않는다.
+> - **게시되는 릴리스는 Windows·맥용**이다(매니페스트 `platforms=["win","mac"]`, `release.ps1`·`sign_release.py` 의 기본값).
+>   리눅스 설치본·`get.sh` 는 그 릴리스를 받지 않는다 — 리눅스에서 한 줄 설치를 치면 '이 릴리스는 … 설치를 지원하지 않습니다' 로 멈춘다.
+>   맥을 빼고 출시하면 그동안 맥이 업데이트를 못 받는다(컨트롤플레인은 최신 한 건만 준다).
 
-| | Windows | 맥·리눅스 (시험용) |
+| | Windows | 맥 · 리눅스(준비 중) |
 |---|---|---|
 | 설치 | `get.ps1` → `install.ps1` | `get.sh` → `install.sh` |
 | 설치 위치 | `%LOCALAPPDATA%\ClewPath\app` | 맥 `~/Library/Application Support/ClewPath/app`<br>리눅스 `${XDG_DATA_HOME:-~/.local/share}/clewpath/app`<br>`CLEWPATH_HOME` 으로 바꾼다. uv 는 그 아래 `bin/`, uv 가 받은 파이썬은 `python/` |
 | 파이썬 | 서명된 시스템 파이썬, 없으면 uv 런타임 | 리눅스: 시스템 파이썬 3.11 이상, 없으면 uv 런타임 · 맥: uv 런타임만 |
 | 데이터 폴더 | `~/.claude/session_manager` | 같다. 폴더는 0700(설치할 때 안의 파일도 다른 사용자 권한을 뺀다), 설정 파일 0600 |
 | 켜기·끄기 | 예약 작업 | 설치 폴더의 `start-connector.sh` (아래 표) |
-| 자동 시작 | 로그온 + 5분마다 확인(예약 작업) | 맥: launchd(`~/Library/LaunchAgents/com.clewpath.host.plist`) — 로그인할 때 켜고, 비정상 종료면 다시 켜고, 5분마다 확인(맥 실기 확인 중) · 리눅스: 자동 시작은 **아직 없다**(systemd 는 정식 지원 여부와 함께 결정 전). 그동안 직접 켜거나 임시 감시(`watch`) |
+| 자동 시작 | 로그온 + 5분마다 확인(예약 작업) | 맥: launchd(`~/Library/LaunchAgents/com.clewpath.host.plist`) — 로그인할 때 켜고, 비정상 종료면 다시 켜고, 5분마다 확인 · 리눅스: 자동 시작은 **아직 없다**(systemd 는 정식 지원 여부와 함께 결정 전). 그동안 직접 켜거나 임시 감시(`watch`) |
 | 업데이트 적용 | `update_runner.ps1` | `update_runner.sh` — 같은 순서(교체 → 의존성 → 재기동 → 헬스체크 → 실패하면 롤백) |
 | 제거 | 위 8절(손으로) | `uninstall.sh` |
 | 아직 안 되는 것 | — | 리눅스 자동 시작, 키체인(비밀은 파일 권한으로 지킨다), PC 에서 '새 터미널 창으로 재개'(명령어만 알려 준다) |
@@ -316,7 +329,7 @@ sh uninstall.sh --purge        # 둘 다
 ├─ session_manager/   제품 코드 — Host (로컬 웹 + 커넥터 + 업데이터)     [사용자 배포]
 ├─ pwa/               제품 코드 — 폰·웹 앱 (단일 html)                   [사용자 배포]
 ├─ install.ps1        사용자 설치 스크립트                                [사용자 배포]
-├─ install.sh · uninstall.sh   맥·리눅스 설치·제거 (시험용)              [사용자 배포]
+├─ install.sh · uninstall.sh   맥·리눅스 설치·제거 (리눅스는 준비 중)     [사용자 배포]
 ├─ pyproject.toml · uv.lock · README.md · LICENSE                        [사용자 배포]
 ├─ tests/             테스트 (배포 안 됨, Host 전용)
 ├─ docs/              Host 설계·API·MCP 문서 (배포 안 됨)

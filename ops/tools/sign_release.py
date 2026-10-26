@@ -25,7 +25,7 @@ package-for-user.ps1 은 스테이지에서 키 파일을 발견하면 패키징
     python ops/tools/sign_release.py keygen
 
     # 2) 릴리스마다 — zip 을 서명해 매니페스트 생성 (--key 생략 시 기본 위치)
-    #    --platforms: 받는 OS(기본 win). 맥 단계가 끝나면 win,mac — 클레임에 없는 OS 는 설치·업데이트를 받지 않는다
+    #    --platforms: 받는 OS(기본 win,mac — 리눅스는 준비 중). 클레임에 없는 OS 는 설치·업데이트를 받지 않는다
     python ops/tools/sign_release.py sign \
         --version 0.4.0 \
         --artifact dist\\clewpath-host-20260804.zip \
@@ -64,8 +64,9 @@ DEFAULT_TTL_DAYS = 120
 # 받는 OS(매니페스트 platforms 클레임, posix-install.md 4.6) — 값은 session_manager.osdep.NAME. 이 순서로 적어
 # 매니페스트 모양을 늘 같게 한다. 클레임이 없는 옛 매니페스트(0.28 까지)는 win 전용으로 읽힌다(updater·get.sh 같은 규칙).
 PLATFORMS = ("win", "mac", "linux")
-# 맥·리눅스는 아직 시험장에서만 — 맥 단계가 끝나면 win,mac. CP 는 최신 한 건만 주므로 빠진 OS 는 그동안 아무것도 못 받는다
-DEFAULT_PLATFORMS = "win"
+# 맥은 0.33.0(2026-10-26)부터 정식 — 기본 win,mac. 리눅스는 준비 중이라 빼 둔다(사장님 2026-10-26).
+# CP 는 최신 한 건만 주므로 빠진 OS 는 그동안 아무것도 못 받는다
+DEFAULT_PLATFORMS = "win,mac"
 
 
 def parse_platforms(text: str) -> list[str]:
