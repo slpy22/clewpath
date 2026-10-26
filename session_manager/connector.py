@@ -835,7 +835,7 @@ class Connector:
                     and frame.get("type") in ("req", "stream_in", "stream_close")):
                 if sealed_cid and frame["cid"] not in self.plain_refused_logged:   # 기기마다 한 줄(릴레이가 쏟아부어도 로그 폭주 없음)
                     self.plain_refused_logged.add(frame["cid"])
-                    _log(f"[e2ee] 봉투로 말하던 기기의 평문 {frame.get('type')} 거부(cid {str(frame['cid'])[:8]}) — 릴레이 주입 의심")
+                    _log(f"[e2ee] 봉투로 말하던 기기의 평문 {frame.get('type')} 거부(cid {str(frame['cid'])[:8]}) - 릴레이 주입 의심")
                 await self._plain_send({"v": 1, "type": "res", "id": frame.get("id"),
                                         "ok": False, "error": "e2ee_required",
                                         **({"cid": frame["cid"]} if frame.get("cid") is not None else {})})
