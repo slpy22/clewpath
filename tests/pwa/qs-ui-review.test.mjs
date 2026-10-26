@@ -35,6 +35,8 @@ function seed(sb, pc, mem) {
 
 // 머리 줄 단추 칸(#qs)·제목 단추(#qs-title)는 부트 전에 고정한다(제목 누름은 부트 때 건다). 나머지는 qs-ui 와 같다(하네스 주의 §8).
 // room: 릴레이 PC 방 이름(그 PC 키에 기억을 심고 PC 둘을 저장해 둔다 — switchToPc 로 바꿔 본다). __teams 는 배열·'fail'·함수(받기를 늦출 때)
+// 머리 줄·시트 맨 앞의 🏠 홈(2026-10-26)은 기억이 없는 칸이라 네 칸 시험에서는 뺀다(홈 시험은 qs-ui.test.mjs T95)
+const four = (nav) => new Proxy(nav, { get: (t, k) => (k === "children" ? t.children.filter((b) => b.dataset.k !== "home") : t[k]) });
 async function boot({ width = 1400, local = false, room = null, mem = null, more = null, ready = true, pre = "", setup = null, navigator = null } = {}) {
   const pc = local ? "local" : (room || "relay");
   const ctx = await load({ ...(local ? { location: LOCAL } : {}), ...(navigator ? { navigator } : {}), setup: (sb) => {
@@ -75,7 +77,7 @@ async function boot({ width = 1400, local = false, room = null, mem = null, more
   ctx.ensurePriv = async () => ({});
   ctx.confirm = () => true;
   if (ready) { await ev(ctx, "loadList()"); await tick(QS); ev(ctx, "__toasts.length = 0; __calls.length = 0; __lists = 0;"); }   // 목록 끝의 다시 그리기까지
-  return { ctx, pd, app, nav: ctx.document.getElementById("qs"), title: ctx.document.getElementById("qs-title") };
+  return { ctx, pd, app, nav: four(ctx.document.getElementById("qs")), title: ctx.document.getElementById("qs-title") };
 }
 
 const at = (ctx) => ev(ctx, `(() => { const k = PANE_NOW.kind, p = paneDetail().classList;
@@ -95,7 +97,7 @@ async function each(paths, fn) {
 // PC 머리 줄 단추 하나 — [클래스, 툴팁]
 const btn = (nav, i) => [String(nav.children[i].className), nav.children[i].title];
 // 시트 한 줄 — [칸, 이름(라벨), 보조 글, 꼬리표, 흐림]
-const rows = (ctx) => ev(ctx, "POP.box.children[1].children").map((b) => [b.dataset.k, b.children[1].children[0].textContent,
+const rows = (ctx) => ev(ctx, "POP.box.children[1].children").filter((b) => b.dataset.k !== "home").map((b) => [b.dataset.k, b.children[1].children[0].textContent,
   (b.children[1].children[1] || {}).textContent || "", (b.children[2] || {}).textContent || "", b.classList.contains("dim")]);
 // 빈 상세 칸 '최근 화면' — [칸:이름]
 const recent = (pd) => { const box = pd.children[0], r = box && box.children.find((c) => String(c.className) === "qs-recent");
@@ -246,7 +248,7 @@ test("T98 🎬·💬 를 눌러 그 기억을 지우면(팀 삭제·세션이 �
 // 덮개(z 60)가 알림(z 20)을 가린다. 관제 알림이 연결 직후·PC 전환 직후 첫 목록보다 먼저 덮개를 열면(드묾) 그 ▾ 에서 다른 화면을 골라도
 // '목록을 받는 중입니다'가 덮개 밑에 떠 무반응처럼 보였다(§5-3 '토스트는 덮개를 닫은 뒤').
 test("T99 첫 목록 전 폰 관제 덮개 ▾ 에서 다른 화면을 고르면 덮개(와 관제 연결)를 닫고 '목록을 받는 중입니다'를 알린다 — 살아 있는 덮개에서 🎬 는 그대로(알림 없음), 끊긴 덮개면 닫고 알린다", async () => {
-  const ROW = { "🖥": 0, "📄": 1, "💬": 2, "🎬": 3 };
+  const ROW = { "🖥": 1, "📄": 2, "💬": 3, "🎬": 4 };   // [0] = 🏠 홈
   const got = await each(["🖥", "📄", "💬", "🎬", "🎬 끊긴 덮개"], async (p) => {
     const { ctx } = await boot({ width: 390, ready: false, pre: "T.list = () => new Promise(() => {});" });
     ev(ctx, "globalThis.__log = []; toast = (m) => __log.push(m + ' / 덮개=' + (MON_OV ? '열림' : '닫힘'));");

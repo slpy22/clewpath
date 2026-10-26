@@ -30,6 +30,8 @@ function seed(sb, pc, mem) {
 
 // qs-ui-review.test.mjs 의 boot 와 같다 — 머리 줄 단추 칸(#qs)·제목 단추(#qs-title)는 부트 전에 고정(제목 누름은 부트 때 건다).
 // list: 첫 목록(T.list)을 바꿀 때 — 'offline' 이면 PC 꺼짐(agent_offline)으로 실패, 'fail' 이면 다른 연결 오류
+// 머리 줄·시트 맨 앞의 🏠 홈(2026-10-26)은 기억이 없는 칸이라 네 칸 시험에서는 뺀다(홈 시험은 qs-ui.test.mjs T95)
+const four = (nav) => new Proxy(nav, { get: (t, k) => (k === "children" ? t.children.filter((b) => b.dataset.k !== "home") : t[k]) });
 async function boot({ width = 1400, local = false, mem = null, ready = true, pre = "", setup = null } = {}) {
   const pc = local ? "local" : "relay";
   const ctx = await load({ ...(local ? { location: LOCAL } : {}), setup: (sb) => {
@@ -68,7 +70,7 @@ async function boot({ width = 1400, local = false, mem = null, ready = true, pre
   ctx.ensurePriv = async () => ({});
   ctx.confirm = () => true;
   if (ready) { await ev(ctx, "loadList()"); await tick(QS); ev(ctx, "__toasts.length = 0; __calls.length = 0; __lists = 0;"); }
-  return { ctx, pd, app, nav: ctx.document.getElementById("qs"), title: ctx.document.getElementById("qs-title") };
+  return { ctx, pd, app, nav: four(ctx.document.getElementById("qs")), title: ctx.document.getElementById("qs-title") };
 }
 
 const at = (ctx) => ev(ctx, `(() => { const k = PANE_NOW.kind, p = paneDetail().classList;
@@ -116,7 +118,7 @@ test("T105 PC 머리 줄 제목은 상세 칸 화면 이름을 따른다 — 목
 
 // ---------------------------------------------------------------- 2. 첫 목록 실패(PC 꺼짐)와 '받는 중' 구분
 // 폰 시트 한 줄 — [칸, 보조 글, 꼬리표, 흐림]
-const rows = (ctx) => ev(ctx, "POP.box.children[1].children").map((b) => [b.dataset.k,
+const rows = (ctx) => ev(ctx, "POP.box.children[1].children").filter((b) => b.dataset.k !== "home").map((b) => [b.dataset.k,
   (b.children[1].children[1] || {}).textContent || "", (b.children[2] || {}).textContent || "", b.classList.contains("dim")]);
 test("T106 첫 목록을 받지 못했으면(PC 꺼짐·연결 실패) 바로가기 단추·시트·누름이 '받는 중'이 아니라 그 까닭을 알린다 — 다시 받는 동안은 '받는 중', PC 가 돌아와 목록을 받으면 기억대로", async () => {
   const OFF = "T.list = async () => { __lists++; throw new Error('agent_offline'); };";
@@ -225,7 +227,7 @@ test("T109 🖥 단추의 볼 일 점 — 열린 탭 중 권한·입력 대기 �
   // 폰: 제목 ▾ 시트의 🖥 줄
   const ph = await boot({ width: 390, mem: { tabs: [A, B] }, pre: `SESSIONS[1].runtime = { phase: 'waiting', waiting_at: ${now} };` });
   ph.title.onclick();
-  const row = ev(ph.ctx, "POP.box.children[1].children")[0];
+  const row = ev(ph.ctx, "POP.box.children[1].children").find((b) => b.dataset.k === "terminal");   // [0] = 🏠 홈
   assert.deepEqual([row.dataset.k, row.classList.contains("attn")], ["terminal", true]);
   // 점은 CSS 로 — PC 단추(머리 줄 880px 이상)·폰 시트 줄 아이콘, 🔔 배지와 같은 주황
   const css = readFileSync(INDEX, "utf-8");

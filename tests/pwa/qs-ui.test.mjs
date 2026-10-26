@@ -32,6 +32,8 @@ function seed(sb, pc, mem) {
 }
 
 // 머리 줄 단추 칸(#qs)·제목 단추(#qs-title)는 부트 전에 고정한다(제목 누름은 부트 때 건다). 나머지는 qs-go 와 같다(하네스 주의 §8)
+// 머리 줄·시트 맨 앞의 🏠 홈(2026-10-26)은 기억이 없는 칸이라 네 칸 시험에서는 뺀다(홈 시험은 qs-ui.test.mjs T95)
+const four = (nav) => new Proxy(nav, { get: (t, k) => (k === "children" ? t.children.filter((b) => b.dataset.k !== "home") : t[k]) });
 async function boot({ width = 1400, local = false, mem = null, ready = true, pre = "", setup = null } = {}) {
   const pc = local ? "local" : "relay";
   const ctx = await load({ ...(local ? { location: LOCAL } : {}), setup: (sb) => {
@@ -65,7 +67,7 @@ async function boot({ width = 1400, local = false, mem = null, ready = true, pre
   ctx.ensurePriv = async () => ({});
   ctx.confirm = () => true;
   if (ready) { await ev(ctx, "loadList()"); await tick(QS); ev(ctx, "__toasts.length = 0; __calls.length = 0; __lists = 0;"); }   // 목록 끝의 다시 그리기까지
-  return { ctx, pd, app, nav: ctx.document.getElementById("qs"), title: ctx.document.getElementById("qs-title") };
+  return { ctx, pd, app, nav: four(ctx.document.getElementById("qs")), title: ctx.document.getElementById("qs-title") };
 }
 
 const at = (ctx) => ev(ctx, `(() => { const k = PANE_NOW.kind, p = paneDetail().classList;
@@ -87,7 +89,7 @@ async function each(paths, fn) {
 const btns = (nav) => nav.children.map((b) => [b.dataset.k, String(b.className), b.children[0].textContent, b.children[1].textContent]);
 const tips = (nav) => nav.children.map((b) => b.title);
 // 시트 한 줄 — [칸, 이름(라벨), 보조 글, 꼬리표, 흐림]
-const rows = (ctx) => ev(ctx, "POP.box.children[1].children").map((b) => [b.dataset.k, b.children[1].children[0].textContent,
+const rows = (ctx) => ev(ctx, "POP.box.children[1].children").filter((b) => b.dataset.k !== "home").map((b) => [b.dataset.k, b.children[1].children[0].textContent,
   (b.children[1].children[1] || {}).textContent || "", (b.children[2] || {}).textContent || "", b.classList.contains("dim")]);
 
 // ---------------------------------------------------------------- CSS·HTML 가드
@@ -173,13 +175,13 @@ test("T89 폰 제목 ▾ → 아래 시트 4줄(터미널·파일·뷰어·팀 �
     got.sheet = { open: ev(ctx, "!!POP"), up: ev(ctx, "POP.box.classList.contains('qs-sheet') && POP.bg.classList.contains('qs-sheet')"), head: ev(ctx, "POP.box.children[0].textContent"),
                   tab: title.tabIndex };                                       // 폰에서는 제목이 단추 — 탭 키로도 닿는다
     got.list = rows(ctx);
-    ev(ctx, "POP.box.children[1].children[0].onclick()"); await tick(RENDER);   // 터미널 줄을 누름 → 시트 닫고 그 화면
+    ev(ctx, "POP.box.children[1].children[1].onclick()"); await tick(RENDER);   // 터미널 줄을 누름 → 시트 닫고 그 화면
     got.picked = { closed: ev(ctx, "POP === null"), at: at(ctx), view: app.getAttribute("data-view") };
     title.onclick(); got.now = rows(ctx)[0]; ev(ctx, "closePop()");
     backBtn(pd).onclick();                                                       // '‹ 목록' — 상세 칸을 숨기기만
     title.onclick(); got.back = rows(ctx)[0];
     const terms = ev(ctx, "__tc.length");
-    ev(ctx, "POP.box.children[1].children[0].onclick()"); await tick(RENDER);
+    ev(ctx, "POP.box.children[1].children[1].onclick()"); await tick(RENDER);
     got.returned = { view: app.getAttribute("data-view"), at: at(ctx), newTerm: ev(ctx, "__tc.length") - terms };
   }
   { const { ctx, title } = await boot({ width: 390, mem: { files: null, viewer: null } });
@@ -213,7 +215,7 @@ test("T90 폰 관제 덮개 머리에도 ▾ — 같은 시트가 덮개(z 60)�
     qb.onclick();
     got.sheet = { up: ev(ctx, "POP.box.classList.contains('qs-sheet') && POP.bg.classList.contains('qs-sheet')"), list: rows(ctx).map((r) => [r[0], r[3]]) };
     const mon = ev(ctx, "__mon.filter((h) => h.gid).at(-1)");
-    ev(ctx, "POP.box.children[1].children[0].onclick()"); await tick(RENDER);
+    ev(ctx, "POP.box.children[1].children[1].onclick()"); await tick(RENDER);
     got.after = { overlay: ev(ctx, "MON_OV"), monClosed: mon.closed, at: at(ctx) };
   }
   { const { ctx, pd } = await boot({ width: 1400, mem: {} });
@@ -359,5 +361,48 @@ test("T94 뷰어 막대에 세션 이름(‹ 목록 다음) · 단추 강조는 
     name: ["‹ 목록", "vtitle", "B", "B · E:/q"],
     enter: { soon: 0, later: 1, on: ["", "", "on", ""] },
     list: 1, tick: 1,
+  });
+});
+
+// ---------------------------------------------------------------- 🏠 홈(2026-10-26 사장님) — 머리 줄·시트 맨 앞, 아무것도 고르지 않은 처음 화면
+test("T95 🏠 홈: PC 머리 줄 맨 앞 단추(빈 상세 칸이면 파랑) · 누르면 어떤 화면에서든 빈 상세 칸(최근 화면)·선택 해제·목록 칸 · 폰 시트 맨 앞 줄 · Alt+0 · 첫 목록 전에도 된다", async () => {
+  const realNav = (ctx) => ctx.document.getElementById("qs");
+  const got = {};
+  { const { ctx } = await boot({ mem: {} });
+    ev(ctx, "renderQuick()");
+    const n = realNav(ctx), h = n.children[0];
+    got.first = [h.dataset.k, h.children[0].textContent, h.children[1].textContent, h.title, n.children.length];
+    got.emptyOn = String(h.className);
+    await press(ctx, "terminal"); ev(ctx, "renderQuick()"); got.termOff = String(realNav(ctx).children[0].className);
+    ev(ctx, "SELECTED_ID = SESSIONS[0].session_id");
+    h.onclick(); await tick(QS);
+    got.afterTerm = [at(ctx), ev(ctx, "SELECTED_ID"), ev(ctx, "paneDetail().classList.contains('term-mode')"),
+      ev(ctx, "paneDetail().children[0] && paneDetail().children[0].className"), String(realNav(ctx).children[0].className)];
+    got.tabsKept = ev(ctx, "TABS.list.length") > 0;                              // 터미널 탭은 그대로(화면만 떠남)
+    await press(ctx, "files"); h.onclick(); await tick(QS); got.afterFiles = [at(ctx), ev(ctx, "paneDetail().classList.contains('fb-mode')")];
+    await press(ctx, "viewer");
+    ctx.onQuickKey({ altKey: true, ctrlKey: false, shiftKey: false, metaKey: false, isComposing: false, repeat: false, code: "Digit0", key: "0",
+                     target: stubEl("body"), preventDefault() {}, stopPropagation() {} }); await tick(QS);
+    got.alt0 = at(ctx);
+  }
+  { const { ctx, app, title } = await boot({ width: 390, mem: {} });
+    await press(ctx, "terminal"); app.setAttribute("data-view", "detail");
+    title.onclick(); await tick();
+    const r = ev(ctx, "POP.box.children[1].children");
+    got.sheet = [r[0].dataset.k, r[0].children[1].children[0].textContent, r.length];
+    r[0].onclick(); await tick(QS);
+    got.phone = [at(ctx), app.getAttribute("data-view")];
+  }
+  { const { ctx } = await boot({ ready: false, mem: {} });
+    ev(ctx, "renderQuick()"); realNav(ctx).children[0].onclick(); await tick(QS);
+    got.beforeList = [at(ctx), ev(ctx, "__toasts.length")];
+  }
+  assert.deepEqual(got, {
+    first: ["home", "🏠", "홈", "홈 — 아무것도 고르지 않은 처음 화면 · Alt+0", 5],
+    emptyOn: "on", termOff: "",
+    afterTerm: ["empty", null, false, "detail-empty", "on"], tabsKept: true,
+    afterFiles: ["empty", false], alt0: "empty",
+    sheet: ["home", "홈", 5], phone: ["empty", "list"],
+    beforeList: ["empty", 0],
   });
 });

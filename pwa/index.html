@@ -6989,7 +6989,17 @@ function quickFocus(kind){
 // 바로가기 누름(§4) — 그 화면의 마지막 상태로. 첫 목록 전(새로고침·PC 전환 직후)엔 기억을 지금 목록으로 확인할 수 없어 받지 않는다 —
 // 누름 순번도 올리지 않아 기다리던 알림 진입을 끊지 않는다. 그 뒤로는 바로 끝나는 누름도 마지막 누름이다(navTicket): 목록·팀 목록을
 // 받거나 2차 인증을 기다리던 앞 누름은 늦게 끝나도 화면을 바꾸지 않는다(§4 공통 '연달아 누르면 마지막 누름만')
+// 🏠 홈(2026-10-26 사장님) — 아무것도 고르지 않은 처음 화면: 빈 상세 칸(최근 화면)·선택 해제·폰은 목록 칸. 기억이 필요 없어 첫 목록 전에도 된다.
+// 터미널·파일·관제는 상세 칸에서 떠날 뿐(paneEnter 정리) 탭·PTY·열어 둔 파일은 그대로 — 다시 그 단추로 돌아간다
+const QUICK_HOME_TIP='홈 — 아무것도 고르지 않은 처음 화면 · Alt+0';
+function quickGoHome(){
+  if(MON_OV) MON_OV.close();
+  SELECTED_ID=null; highlightSelected();
+  if(PANE_NOW.kind!=='empty') detailPlaceholder();
+  showListPane(); renderQuickSoon();
+}
 async function quickGo(kind){
+  if(kind==='home') return quickGoHome();
   if(!QUICK_META[kind]) return;
   if(!LIST_READY){
     // 폰 관제 덮개(z 60)가 알림(z 20)을 가린다 — 다른 화면을 골랐으면(끊긴 덮개의 🎬 도) 덮개를 닫고 알린다(§5-3, 검토). 관제 알림이 첫 목록보다
@@ -7109,10 +7119,13 @@ function quickTip(o){
 function renderQuick(){
   const nav=$('#qs'), list=quickTargets();
   if(nav){
-    if(nav.children.length!==list.length){ nav.innerHTML='';
+    if(nav.children.length!==list.length+1){ nav.innerHTML='';
+      { const h=el('button'); h.type='button'; h.dataset.k='home'; h.appendChild(el('span','qi','🏠')); h.appendChild(el('span','ql','홈'));
+        h.onclick=()=>quickGoHome(); h.title=QUICK_HOME_TIP; h.setAttribute('aria-label','홈'); nav.appendChild(h); }
       for(const o of list){ const b=el('button'); b.type='button'; b.dataset.k=o.kind;
         b.appendChild(el('span','qi')); b.appendChild(el('span','ql')); b.onclick=()=>quickGo(o.kind); nav.appendChild(b); } }
-    list.forEach((o,i)=>{ const b=nav.children[i];
+    { const h=nav.children[0], on=PANE_NOW.kind==='empty'&&!MON_OV; h.className=on?'on':''; h.setAttribute('aria-current',on?'true':'false'); }
+    list.forEach((o,i)=>{ const b=nav.children[i+1];
       b.className=[o.cur&&'on', o.dim&&!o.cur&&'dim', o.wait&&'wait', o.taken&&'taken', o.attn&&o.attn.length&&'attn'].filter(Boolean).join(' ');
       b.children[0].textContent=o.icon; b.children[1].textContent=o.kind==='monitor'?'관제':o.label;   // 결정 1: 💬 뷰어 ↔ ℹ 상세
       b.title=quickTip(o); b.setAttribute('aria-label',o.label); b.setAttribute('aria-current',o.cur?'true':'false'); });
@@ -7168,6 +7181,9 @@ function quickRecentFill(b, o){
 // 기억 없음은 흐리게 '고르기…', 다른 기기가 보는 터미널은 '👀 가져오기'(누르면 인계 확인창). 덮개(z 60) 위에서도 보이게 위 층으로(qs-sheet)
 function showQuickSheet(anchor){
   const box=el('div');
+  { const here=PANE_NOW.kind==='empty'&&!MON_OV&&$('#app').getAttribute('data-view')!=='detail';
+    const h=popItem('🏠','홈','아무것도 고르지 않은 처음 화면', ()=>quickGoHome(), 'qs-it'); h.dataset.k='home';
+    if(here) h.appendChild(el('span','qtag now','지금')); box.appendChild(h); }
   for(const o of quickTargets()){
     const [tag,tc]=o.taken?['👀 가져오기','warn']:o.cur?['지금','now']:o.back?['바로 돌아가기','now']:o.wait?['준비 중','']
       :o.fail?[listErrText()[1],'']:!o.has?['고르기…','']:['',''];
@@ -7185,11 +7201,11 @@ function showQuickSheet(anchor){
 // 단축키 Alt+1~4(결정 8, §3-7) — 창 전체 감시(capture 라 터미널·편집기보다 먼저 받는다). 받지 않는 경우: 진짜 입력칸(검색·이름·한글 입력창)에
 // 커서가 있을 때, 설정·확인창·⋯ 팝이 열려 있을 때, Ctrl·Shift(·⌘)가 섞였을 때. 터미널(xterm 숨은 입력)·파일 편집기(Monaco) 안에서는 받는다.
 // 숫자는 윗줄만 — Alt+숫자 패드는 Windows 문자 입력(Alt 코드)이다
-const QUICK_KEY_CODES={Digit1:'terminal', Digit2:'files', Digit3:'viewer', Digit4:'monitor'};
+const QUICK_KEY_CODES={Digit0:'home', Digit1:'terminal', Digit2:'files', Digit3:'viewer', Digit4:'monitor'};
 function quickKeyKind(e){
   if(!e||!e.altKey||e.ctrlKey||e.shiftKey||e.metaKey||e.isComposing||e.keyCode===229) return null;
   if(e.code) return QUICK_KEY_CODES[e.code]||null;
-  return QUICK_KINDS[['1','2','3','4'].indexOf(String(e.key))]||null;   // code 를 주지 않는 옛 브라우저
+  return String(e.key)==='0'?'home':QUICK_KINDS[['1','2','3','4'].indexOf(String(e.key))]||null;   // code 를 주지 않는 옛 브라우저
 }
 // 맥(아이패드 포함)의 Option 은 글자를 만드는 수식키다 — Option+1~4 = US ¡™£¢, UK 배열은 Option+3 이 '#'(그 배열에서 # 를 치는 길).
 // 숫자 아닌 글자(죽은 키 포함)가 나오면 글을 받는 곳(터미널·편집기 찾기 칸)에서는 바로가기가 아니라 입력이다(검토). 읽기 전용 편집기
