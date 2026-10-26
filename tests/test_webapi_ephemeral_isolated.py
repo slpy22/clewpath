@@ -51,6 +51,7 @@ class FakeProc:
 
     def communicate(self, input=None, timeout=None):  # noqa: A002
         self.comm_timeouts.append(timeout)
+        self.input = input
         sc = self.st["script"]
         if sc.get("hang") and not self.killed:
             raise subprocess.TimeoutExpired(self.args, timeout)
@@ -263,3 +264,26 @@ def test_spawn_failure_still_cleans_default_fork(env, monkeypatch):
     with pytest.raises(FileNotFoundError):
         webapi.ephemeral_ask(SID, "질문", timeout=30)
     assert len(env["deleted"]) == 1                   # 고치기 전과 같이 예외는 올리고 fork 정리는 시도
+
+
+@pytest.mark.parametrize("isolated", [False, True])
+def test_long_prompt_goes_through_stdin_not_command_line(env, isolated):
+    """긴 프롬프트는 명령줄이 아니라 stdin 으로 — Windows 명령줄 한도(32,767자)를 넘으면 claude 를 띄우기도 전에 WinError 206 으로
+    500 이 났다(2026-10-26 노트북 nklaw diff_report 묻기, 서비스 모니터 보고). 짧은 프롬프트의 argv 는 그대로(위 시험들)."""
+    long = "가" * 40000
+    r = webapi.ephemeral_ask(SID, long, timeout=30, guardrails={}, isolated=isolated)
+    p = env["procs"][0]
+    assert long not in p.args and len(subprocess.list2cmdline(p.args)) < 8000
+    assert p.args[:3] == [EXE, "-p", "--resume"]
+    assert p.kw.get("stdin") == subprocess.PIPE and p.input == long.encode("utf-8")
+    assert r["answer"] == "청포도" and r["is_error"] is False
+    short = webapi.ephemeral_ask(SID, "질문", timeout=30, guardrails={}, isolated=isolated)
+    q = env["procs"][1]
+    assert q.args[1:3] == ["-p", "질문"] and q.kw.get("stdin") == subprocess.DEVNULL and q.input is None and short["answer"]
+
+
+def test_long_dash_prompt_through_stdin_keeps_its_text(env):
+    long = "--tools=Bash " + "나" * 40000
+    webapi.ephemeral_ask(SID, long, timeout=30, isolated=True)
+    p = env["procs"][0]
+    assert "--tools=Bash" not in p.args and p.input.decode("utf-8").strip().startswith("--tools=Bash")

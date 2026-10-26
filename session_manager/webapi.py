@@ -444,6 +444,9 @@ def _fork_jsonl_exists(fork_id: str) -> bool:
         return False
 
 
+ARGV_PROMPT_MAX = 24000      # 명령줄이 이보다 길면 프롬프트를 stdin 으로(Windows CreateProcess 한도 32,767자에 여유)
+
+
 def ephemeral_ask(session_id: str, prompt: str, skip_permissions: bool = True,
                   timeout: int = 300, guardrails: dict | None = None, *,
                   isolated: bool = False) -> dict:
@@ -480,6 +483,12 @@ def ephemeral_ask(session_id: str, prompt: str, skip_permissions: bool = True,
                                 skip_permissions=False)
     else:
         argv += _guardrail_args(g, skip_permissions)
+    # 긴 프롬프트는 stdin 으로 — 명령줄 한도(Windows 32,767자)를 넘으면 claude 를 띄우기도 전에 WinError 206 으로 끝났다
+    # (2026-10-26 노트북 nklaw 리포트 묻기 500). claude -p 는 위치 인자가 없으면 stdin 을 프롬프트로 읽는다. 짧으면 지금 argv 그대로.
+    stdin_prompt = None
+    if len(subprocess.list2cmdline(argv)) > ARGV_PROMPT_MAX:
+        stdin_prompt = (prompt.lstrip() if isolated else prompt).encode("utf-8")
+        del argv[2]
 
     answer: list[str] = []
     tool_uses: list[str] = []
@@ -490,13 +499,14 @@ def ephemeral_ask(session_id: str, prompt: str, skip_permissions: bool = True,
     t0 = time.monotonic()
     try:
         from session_manager import ptyd
-        proc = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.DEVNULL, env=ptyd.clean_env(),   # CLAUDE_CODE_* 를 넘기지 않는다
+        proc = subprocess.Popen(argv, cwd=cwd, env=ptyd.clean_env(),   # CLAUDE_CODE_* 를 넘기지 않는다
+                                stdin=subprocess.PIPE if stdin_prompt is not None else subprocess.DEVNULL,
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                 creationflags=osdep.NO_WINDOW)
         # 고아 방지: Windows 는 Job Object 편입 — Host 가 어떻게 죽든 이 claude 도 함께 끝난다.
         osdep.guard_child(proc.pid)
         try:
-            out, _err = proc.communicate(timeout=timeout)
+            out, _err = proc.communicate(input=stdin_prompt, timeout=timeout)
         except subprocess.TimeoutExpired:
             is_error = True
             result_text = f"시간초과({timeout}s)"
