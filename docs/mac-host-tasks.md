@@ -3,10 +3,44 @@
 > 이 문서는 Windows 측(주 개발)이 맥 측 Claude 에게 전달하는 작업 지시서다. 앱 빌드 지시서 `docs/mac-build-tasks.md` 와 같은 방식이다.
 > **3회차부터는 맥 측이 직접 고치고 시험한다.** 규칙은 `docs/mac-dev-loop.md` — 브랜치 `mac/<주제>`, main 에 올리지 않음,
 > 올리기 전 맥 전체 시험 실패 0, 공통 코드를 바꿨으면 보고서에 적는다. (1·2회차는 「고치지 말고 보고만」이었다.)
-> **지금 할 일은 바로 아래 「4회차」뿐이다.** 3회차·2회차 R0~R6·1회차 M0~M6 은 참고·다시 할 때의 절차다.
+> **지금 할 일은 바로 아래 「5회차」뿐이다.** 4회차·3회차·2회차 R0~R6·1회차 M0~M6 은 참고·다시 할 때의 절차다.
 > 아래 「지킬 것」은 그대로다.
 
-## 4회차(3b-4) — 지금 할 일 (2026-10-23~)
+## 5회차(3b-5) — 지금 할 일 (2026-10-26~) — 맥 정식 출시 전 마지막 실기
+
+`docs/mac-dev-loop.md` 를 먼저 읽는다. 결과는 브랜치 `mac/3b5`, 보고서 `docs/mac-results/3b5-<날짜>.md`. 4회차 결과를 받아 Windows 측이 한 것:
+
+| 4회차 | Windows 측이 한 것 |
+|---|---|
+| 문제 C — 웹 터미널 안 시험이 개인정보 확인 창을 기다리며 7시간 멈춤 | 맥 측 시험 고침을 합침(87048e7) + 제품 `servicereg.check_folder` 가 이미 승인할 수 없는 폴더(홈 등)는 훑지 않게(ee4b28b) |
+| 관찰 1 — `nohup … &` 아래 pty 동반 종료·INT 시험 실패 | 제품 결함으로 봄: `osdep._posix.spawn_pty` 가 exec 전에 HUP·INT·QUIT·PIPE·XFSZ 를 기본으로 되돌리고 신호 mask 를 푼다. `pid_alive` 가 거둬지는 중(STATUS_DEAD)·사라짐을 죽음으로(리눅스 간헐 8.3% → 0/900) |
+| T4 — pclink 맥 경로 조사 | **구현함**: 시스템 전체 `net_connections` 가 막히면 같은 사용자 프로세스별 조회(4회차 길 A, 1초 상한, 다른 사용자 프로세스는 읽지 않음, 주인이 둘이면 거부). `test_owner_pid_of_real_socket` 의 맥 skip 을 없앴다 |
+| (그 밖) | 0.32.3~0.32.6: 셸 결함 6건(at= 8진수·update.inprogress mkdir 잠금·foreign 판정·held 커밋 안내·--port/주소 헛 경고·status swap=), 업데이트 작업 폴더 정리, E2EE 평문 주입 막기 등 |
+
+### T1 확인 (터미널 앱에서)
+1. `git checkout main && git pull && git log --oneline -1`
+2. 맥 전체 시험(`docs/mac-dev-loop.md` 4-3) — 실패 0. **`test_owner_pid_of_real_socket` 이 이제 skip 없이 통과해야 한다.**
+
+### T2 새 코드 설치 (R3 과 같은 방법 — 제거 → 새로 설치, 터미널 앱에서)
+위 R3 의 zip 만들기·제거·설치 명령 그대로. 설치 뒤 `launcher-ensured-<버전>` 표식이 **그 버전 하나만** 남는지(옛 표식은 지워짐), 내용이 `launcher: ok (posix v2)` 또는 `regenerated` 인지 기록.
+
+### T3 pclink 맥 실기 (원격 묻기 보내기 — 맥이 묻는 쪽)
+Windows 측(이 PC I9)과 짝짓기는 사장님이 화면에서 한다(맥 PC 짝 화면 → 초대 만들기/붙여넣기, 승인은 2차 인증 코드). 그다음:
+1. Host 설치본 파이썬으로 `tests/test_pclink_routes.py -k "owner or sender"` — `test_owner_pid_of_real_socket` 통과, `test_owner_pid_fallback_rejects_inherited_socket` 이 `ambiguous_socket_owner` 로 통과.
+2. 실제 웹 터미널 claude 세션에서 짝 PC 세션에 원격 묻기를 보낸다(clewpath-workers 스킬 「다른 PC 세션에 묻기」 절). `bad_sender` 없이 보낸 세션이 확인되는지, Host 로그에 `net_connections:AccessDenied` 가 더는 없는지.
+3. 같은 사용자 프로세스별 조회 시간을 잰다(평소, 프로세스가 많을 때) — 1초 상한보다 넉넉히 짧은지.
+4. 이 조회 때문에 맥 개인정보 확인 창이 뜨지 않는지(`/usr/bin/log show` 의 tccd 기록).
+5. 같은 사용자 프로세스인데 AccessDenied 로 건너뛰는 것이 `login` 말고 더 있는지 기록(연결 주인이 건너뛰어지면 lsof 길을 넣을지 Windows 측이 다시 판단).
+
+### T4 3a e2e 시나리오 맥에서 (명세 `docs/designs/posix-install.md` 6.3 — 가짜 CP·시험 키)
+리눅스 컨테이너에서 도는 `-m posix_e2e` 를 맥 터미널 앱에서 돌릴 수 있는 만큼 돌린다(설치·런처 ①~⑪·수동 적용·롤백·재기동 자동 적용·제거·다시 설치). 맥에서 못 도는 단계(도커 전용 등)는 이유와 함께 목록으로.
+
+### T5 실제 claude 왕복 (사장님과 함께)
+폰·PC 브라우저에서: 웹 터미널 claude 기동 → 화면 닫고 다시 붙기 → Host 재기동(`start-connector.sh stop` → `start`) 뒤 터미널 이어짐 → 개인정보 확인 창이 뜨면 그 이름·항목을 그대로 적기(서명 앱 기획 자료).
+
+**통과하면** Windows 측이 맥을 `platforms` 에 넣은 릴리스를 내고 CP `/get.sh` 를 연다(준비됨: 006 `docs/deploy/get-sh-publish.md`).
+
+## 4회차(3b-4) — 끝남(2026-10-23, 결과 `docs/mac-results/3b4-20261023.md`)
 
 `docs/mac-dev-loop.md` 를 먼저 읽는다. 3회차 결과(`docs/mac-results/3b3-*.md`, 통과 6·실패 0)를 받아 Windows 측이 한 것:
 
