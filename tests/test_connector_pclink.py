@@ -269,9 +269,10 @@ async def test_phone_e2ee_answer_stays_sealed_while_pclink_runs(monkeypatch):
         pc = [f for f in relay.wire if f.get("cid") == "cidPC"]
         assert len(phone) == 2 and all(f.get("e") == "a1" and set(f) == {"v", "e", "cid", "p"} for f in phone)
         assert "폰-비밀" not in json.dumps(relay.wire, ensure_ascii=False), "폰 답이 평문으로 샜다"
-        inner = [e2ee.unwrap_frame(key, f) for f in phone]
-        assert inner[0]["id"] == "c3" and inner[0]["data"]["json"] == {"secret": "폰-비밀-x"}
-        assert inner[1]["type"] == "pong" and inner[1]["id"] == "c4"
+        # api(c3)는 따로 돌아 ping(c4)의 pong 이 먼저 나갈 수 있다 — 순서 말고 id 로 본다
+        inner = {f["id"]: f for f in (e2ee.unwrap_frame(key, f) for f in phone)}
+        assert inner["c3"]["type"] == "res" and inner["c3"]["data"]["json"] == {"secret": "폰-비밀-x"}
+        assert inner["c4"]["type"] == "pong"
         # A 는 방 E2EE 키가 없다 — A 앞 답은 봉투(짝 키로 봉인한 pclink 봉투)를 실은 바깥 평문 프레임 그대로
         assert _brief(pc) == [("res", "k7", "cidPC", "accepted"), ("res", "k7", "cidPC", "answer")]
         assert "cidPC" not in c.enc_cids
@@ -296,6 +297,12 @@ PC_DENIED = [
     ("nope", {}),
 ]
 
+
+
+async def _drain(c):
+    """따로 도는 요청(api·목록 등 — connector._SPAWN_METHODS)이 끝날 때까지. _on_frame 은 그것들을 기다리지 않는다."""
+    while c._req_tasks:
+        await asyncio.gather(*list(c._req_tasks))
 
 @pytest.fixture
 def gated(monkeypatch):
@@ -332,6 +339,7 @@ async def test_pc_device_gets_only_pclink_and_ping(gated, capsys):
     c.authed["cidPC"] = {"id": "pc0123456789abcd", "name": "A-PC", "kind": "pc", "tver": 0}
     for i, (m, p) in enumerate(PC_DENIED):
         await c._on_frame(_req("cidPC", f"r{i}", m, p))
+        await _drain(c)
         assert c.sent[-1] == {"v": 1, "type": "res", "id": f"r{i}", "cid": "cidPC", "ok": False,
                               "error": "pc_not_allowed"}, m
     assert len(c.sent) == len(PC_DENIED) and c.streams == {} and c.handled == []
@@ -359,6 +367,7 @@ async def test_pc_kind_from_devices_verify_is_gated_after_auth(gated, monkeypatc
     await c._on_frame(_req("cidPC", "a1", "auth", {"token": "pc-tok"}))
     assert c.sent[-1]["ok"] is True and c.authed["cidPC"]["kind"] == "pc"
     await c._on_frame(_req("cidPC", "a2", "list_sessions"))
+    await _drain(c)
     assert c.sent[-1]["error"] == "pc_not_allowed"
     await c._on_frame(_req("cidPC", "a3", "pclink", {"env": ENV}))
     assert c.handled == [("pclink", "cidPC")]
@@ -374,6 +383,7 @@ async def test_unauthenticated_pclink_reaches_handle_others_still_auth_required(
     c.sent.clear()
     for i, (m, p) in enumerate(PC_DENIED + [("pclink.other", {})]):
         await c._on_frame(_req("cidX", f"r{i}", m, p))
+        await _drain(c)
         assert c.sent[-1]["error"] == "auth_required", m
     assert c.handled == [("pclink", "cidX"), ("pclink.pair", "cidX")]
     # 인증된 폰은 그대로(PC 관문은 kind=pc 만)
@@ -385,6 +395,7 @@ async def test_unauthenticated_pclink_reaches_handle_others_still_auth_required(
         return _Resp({"ok": 1})
     c.http.get = _get
     await c._on_frame(_req("cidPhone", "c1", "api", {"verb": "GET", "path": "/api/sessions"}))
+    await _drain(c)
     assert c.sent[-1]["ok"] is True and hits == ["http://127.0.0.1:5100/api/sessions"]
 
 
