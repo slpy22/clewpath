@@ -338,6 +338,7 @@ sh uninstall.sh --purge        # 둘 다
    ├─ package-for-user.ps1 배포 zip 생성 (비밀·키 스캔 게이트)
    ├─ get.sh               맥·리눅스 원라인 설치 부트스트랩 (정본 — 007 control_plane/get.sh 는 바이트 사본, tests/test_get_sh_copy.py 가 대조)
    ├─ tools/sign_release.py  릴리스 서명·게시
+   ├─ tools/pwa_drift.py     운영 릴레이 PWA 와 pwa/ 비교(이미지 재빌드 판단)
    ├─ release-keys/        ★릴리스 서명 개인키 (유출=전 사용자 장악)
    ├─ dist/                패키징 산출물 (zip·manifest)
    └─ logs/                운영자 006 로그 (server.log)
@@ -345,13 +346,17 @@ sh uninstall.sh --purge        # 둘 다
 ../007_clewpath_server/            ← PRIVATE 저장소 (서버 인프라)
 ├─ control_plane/  relay/          Cloud CP + blind 릴레이
 ├─ tests/  docs/  ops/deploy/      서버 테스트·설계문서·사업기획서·배포 스크립트
-└─ pwa/ → 006/pwa 정션             릴레이가 서빙하는 PWA(단일 소스는 006)
+├─ pwa/ → 006/pwa 정션             이 PC 옛 릴레이(되돌리기용)·로컬 시험이 보는 경로
+└─ ops/docker/                     CP·릴레이 이미지 빌드(릴레이 이미지에 006 pwa/ 를 넣는다)
 ```
 
 경계 규칙: **Host 제품 폴더는 위치를 바꾸지 않는다** — 배포 zip 화이트리스트,
 업데이터 PAYLOAD, `uv sync` 가 이 경로를 그대로 참조한다. 서버(control_plane·relay)는
 별도 private 저장소 `clewpath-server`(`../007_clewpath_server`)로 분리됐고, 운영 도커는
-그쪽을 bind-mount 한다. `pwa` 만 006 이 단일 소스(릴레이가 정션으로 참조).
+그쪽 코드로 운영한다. 2026-10-27 부터 노트북 컨테이너에서 돌고, 코드·PWA 는 **이미지 안에** 들어간다(007 `ops/docker/build.ps1`,
+태그 = 커밋 해시). `pwa` 는 006 이 단일 소스지만 고쳐도 폰에 바로 보이지 않는다 — 릴레이 이미지를 다시 만들어
+「서비스 모니터」가 노트북에 반영해야 한다. `ops/release.ps1 -Publish` 가 끝에서 공개 PWA 와 비교해
+(`ops/tools/pwa_drift.py`) 다르면 이미지를 빌드하고 의뢰문(`ops/logs/image-request-<ver>.md`)을 남긴다.
 운영 자산은 전부 `ops/` 아래로 — 새 운영 스크립트·비밀·산출물은 여기에 추가한다.
 
 ## 설정 파일 (자세히)

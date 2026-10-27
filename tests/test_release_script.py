@@ -38,6 +38,21 @@ def test_step_order_and_gates():
     assert "게시된 sha256 이 로컬 zip 과 다릅니다" in s            # 업로드 무결성
 
 
+def test_laptop_cp_tunnel_and_pwa_image_step():
+    # 2026-10-27(P4-2): CP 는 노트북 — 게시 전에(테스트 7분 전에) CP 응답·터널을 확인하고, 끝에 PWA 이미지 판단
+    s = _src()
+    order = ["Test-CpUp $CpUrl", "pytest -q", "sign_release.py\") publish", "incidents $incBefore 유지",
+             "Close-Tunnel\n", "pwa_drift.py", "$buildPs1 = Join-Path", "image-request-$Version.md", "=== release $Version 끝"]
+    pos = [s.index(k) for k in order]
+    assert pos == sorted(pos), "터널·PWA 이미지 단계 순서가 바뀌었습니다"
+    assert 'function Fail($m) { Log "FAIL: $m"; Close-Tunnel; exit 1 }' in s     # 실패해도 터널을 남기지 않는다
+    assert "ExitOnForwardFailure=yes" in s and "BatchMode=yes" in s
+    step5 = s[s.index("# ── 5) 운영 PWA 이미지"):s.index("=== release $Version 끝")]
+    assert not re.search(r'\bFail "', step5)                      # 게시 뒤라 이미지 단계는 경고만
+    assert "docker -H" not in step5.replace("| docker -H ssh://kisworker load  2)", "")  # 노트북 반영은 의뢰문 안에만
+    assert "-SkipImages" in s
+
+
 def test_token_never_printed():
     s = _src()
     # 토큰은 python 인자(--admin-token $tok)로만 쓰이고, Log/Write-Host 줄에는 등장하지 않는다

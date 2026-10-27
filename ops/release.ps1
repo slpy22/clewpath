@@ -1,11 +1,16 @@
 # =====================================================================
-#  ClewPath Host 릴리스 한 방: 사전점검 → 패키징 → 서명 → 검증 → (게시) → (이 PC 적용·헬스 확인)
+#  ClewPath Host 릴리스 한 방: 사전점검 → 패키징 → 서명 → 검증 → (게시) → (이 PC 적용·헬스 확인) → (PWA 이미지)
 #
 #    pwsh -File ops/release.ps1 -Version 0.9.4 -Notes "무엇이 바뀌었나"            # 패키지+서명+검증까지
 #    pwsh -File ops/release.ps1 -Version 0.9.4 -Notes "..." -Publish              # + CP 게시
 #    pwsh -File ops/release.ps1 -Version 0.9.4 -Notes "..." -Publish -Apply       # + 이 PC 적용·헬스·조용한 재기동 확인
 #    -Platforms win,mac                                                           # 받는 OS(기본 win,mac). mac·linux 는 같은 HEAD 의
 #                                                                                 #   POSIX e2e 기록(ops/logs/posix-e2e-<ver>.json)이 있어야
+#    -SkipImages                                                                  # 끝의 PWA 이미지 빌드를 건너뜀(비교·경고만)
+#
+#  2026-10-27(P4-2)부터 CP·릴레이는 노트북 컨테이너다. -Publish 는 CP(127.0.0.1:5200)가 안 보이면 ssh -L 터널을 스스로
+#  열고 닫는다. 끝에서 공개 PWA 와 pwa/ 를 비교해 다르면 007 ops/docker/build.ps1 로 이미지를 만들고
+#  ops/logs/image-request-<ver>.md(서비스 모니터 의뢰문)를 남긴다 — 노트북 반영은 서비스 모니터가 한다.
 #
 #  왜: 손으로 7단계(package → rename → sign → verify → publish → apply → poll)를 11번 반복하며
 #  실수 표면이 컸다(retro 2026-09-27). 순서·이름 규칙·토큰 취급을 한 곳에 고정한다.
@@ -26,7 +31,11 @@ param(
     [string]$DownloadBase = "https://clewpath.pyongso.com/cp/updates/download",
     [string]$EnvFile = "E:/018_whisper/util/.env",
     [string]$Python = "python",
-    [string[]]$Platforms = @("win", "mac")
+    [string[]]$Platforms = @("win", "mac"),
+    [string]$TunnelHost = "kisworker",
+    [string]$PwaBase = "https://clewpath.pyongso.com/relay",
+    [string]$ServerRepo = "",
+    [switch]$SkipImages
 )
 $ErrorActionPreference = "Stop"
 $env:PYTHONIOENCODING = "utf-8"
@@ -36,7 +45,10 @@ if (-not $OutDir) { $OutDir = Join-Path $PSScriptRoot "dist" }
 New-Item -ItemType Directory -Force -Path $OutDir, (Join-Path $PSScriptRoot "logs") | Out-Null
 $LogFile = Join-Path $PSScriptRoot "logs\release-$Version.log"
 function Log($m) { $line = "[{0}] {1}" -f (Get-Date -Format "HH:mm:ss"), $m; Write-Host $line; Add-Content -Path $LogFile -Value $line -Encoding UTF8 }
-function Fail($m) { Log "FAIL: $m"; exit 1 }
+$script:Tunnel = $null
+function Close-Tunnel { if ($script:Tunnel -and -not $script:Tunnel.HasExited) { Stop-Process -Id $script:Tunnel.Id -Force -ErrorAction SilentlyContinue; Log "CP 터널 닫음" }; $script:Tunnel = $null }
+function Fail($m) { Log "FAIL: $m"; Close-Tunnel; exit 1 }
+function Test-CpUp([string]$Url) { try { return (Invoke-WebRequest -Uri "$Url/healthz" -TimeoutSec 3 -UseBasicParsing).StatusCode -eq 200 } catch { return $false } }
 
 # 받는 OS(매니페스트 platforms 클레임, docs/designs/posix-install.md 4.6) — 값은 osdep.NAME, 정해진 순서로 "win,mac" 꼴.
 # win 은 늘 들어간다: CP 는 최신 한 건만 주므로 win 이 빠진 릴리스가 최신인 동안 Windows 사용자 전체가 업데이트를
@@ -130,6 +142,21 @@ if ($plats -ne "win") {
         Fail "맥·리눅스($plats)가 받는 릴리스는 같은 HEAD($head)에서 통과한 POSIX e2e 기록이 필요합니다: $e2eRec"
     }
     Log "POSIX e2e 기록 확인: $e2eRec (head $head)"
+}
+# CP 는 2026-10-27 부터 노트북(kisworker) 컨테이너다(P4-2). 게시 주소 127.0.0.1:5200 은 ssh -L 터널로만 닿는다 —
+# 응답이 없으면 여기서 터널을 열고(끝나면 닫는다), 그래도 안 되면 테스트(7분) 전에 멈춘다.
+# (이 PC 로 되돌린 동안에는 이 PC CP 가 5200 에 있어 터널 없이 바로 통과한다)
+if ($Publish) {
+    if (-not (Test-CpUp $CpUrl)) {
+        if ($CpUrl -ne "http://127.0.0.1:5200" -or -not $TunnelHost) { Fail "CP 가 응답하지 않습니다: $CpUrl/healthz" }
+        Log "CP 터널 열기: ssh -L 5200:127.0.0.1:5200 $TunnelHost"
+        $script:Tunnel = Start-Process ssh -ArgumentList @("-N", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes",
+            "-o", "ServerAliveInterval=30", "-L", "5200:127.0.0.1:5200", $TunnelHost) -WindowStyle Hidden -PassThru
+        $deadline = (Get-Date).AddSeconds(20)
+        while ((Get-Date) -lt $deadline -and -not (Test-CpUp $CpUrl) -and -not $script:Tunnel.HasExited) { Start-Sleep -Milliseconds 500 }
+        if (-not (Test-CpUp $CpUrl)) { Fail "터널을 열었지만 CP 가 응답하지 않습니다($TunnelHost 노트북 켜짐·ssh 키 확인)" }
+    }
+    Log "CP 응답 확인: $CpUrl"
 }
 # 의존성 잠금 검사(0.10.6): pyproject 에 새 의존성을 넣고 uv.lock 을 안 갱신하면 설치본은 `uv sync --frozen` 이라
 # 그 의존성이 영원히 설치되지 않는다(0.10.5 psutil 실사고). lock 이 어긋나면 릴리스를 막는다.
@@ -239,7 +266,55 @@ if ($Apply) {
     else { Log "재기동 조용함(incidents $incBefore 유지)" }
     Log "적용 완료: Host $Version 가동 중"
 }
+Close-Tunnel
+
+# ── 5) 운영 PWA 이미지 ──────────────────────────────────────
+# 2026-10-27(P4-2)부터 폰 화면(PWA)은 노트북 릴레이 이미지 안에 있다 — 고쳐도 이미지를 다시 만들어 배포하기 전엔 안 보인다.
+# 공개 주소의 PWA 를 이 커밋의 pwa/ 와 비교해(읽기만) 다르면 이미지를 빌드하고 서비스 모니터 의뢰문을 남긴다.
+# 배포(노트북 load·재생성)는 서비스 모니터 몫이라 여기서 하지 않는다. Host 게시는 이미 끝났으므로 여기서는 Fail 하지 않는다.
+$ImageRequest = $null
+if ($Publish) {
+    $dj = & $Python (Join-Path $PSScriptRoot "tools\pwa_drift.py") --base $PwaBase --pwa (Join-Path $Root "pwa") 2>&1 | Select-Object -Last 1
+    $d = $null; try { $d = "$dj" | ConvertFrom-Json } catch { $d = $null }
+    if (-not $d -or $d.error) {
+        Log "⚠ 운영 PWA 비교 못 함($dj) — 확인 뒤 필요하면 007 ops/docker/build.ps1 로 빌드해 서비스 모니터에 의뢰"
+    } elseif (-not $d.differ.Count) {
+        Log "운영 PWA = 이 커밋 pwa/($($d.checked)개 같음) — 이미지 재빌드 불필요"
+    } else {
+        Log "운영 PWA 와 다른 파일 $($d.differ.Count)개: $($d.differ -join ', ')"
+        if ($SkipImages) {
+            Log "⚠ -SkipImages — 이미지 빌드 안 함. 폰에는 옛 화면이 보입니다(007 ops/docker/build.ps1 → 서비스 모니터 의뢰)"
+        } else {
+            if (-not $ServerRepo) { $ServerRepo = Join-Path (Split-Path -Parent $Root) "007_clewpath_server" }
+            $buildPs1 = Join-Path $ServerRepo "ops\docker\build.ps1"
+            Log "이미지 빌드: $buildPs1"
+            $bout = & pwsh -NoProfile -File $buildPs1 -PwaRepo $Root 2>&1 | ForEach-Object { "$_" }
+            $imgs = @($bout | Where-Object { $_ -match '^(clewpath-(cp|relay):\S+)\s+(sha256:[0-9a-f]+)' } | ForEach-Object { $_.Trim() })
+            $relay = $imgs | Where-Object { $_ -like "clewpath-relay:*" } | Select-Object -First 1
+            if ($LASTEXITCODE -ne 0 -or -not $relay) {
+                Log ("⚠ 이미지 빌드 실패 — 폰에는 옛 화면이 보입니다:`n  " + (($bout | Select-Object -Last 8) -join "`n  "))
+            } else {
+                foreach ($i in $imgs) { Log "  $i" }
+                $relayTag = ($relay -split '\s+')[0] -replace '^clewpath-relay:', ''
+                $sha006 = (git rev-parse --short=7 HEAD).Trim()
+                $ImageRequest = Join-Path $PSScriptRoot "logs\image-request-$Version.md"
+                @(
+                    "[의뢰] 노트북 ClewPath relay 이미지 교체 — PWA 를 006 $sha006(Host $Version)로",
+                    "- 발신: clewpath(006) · 프로젝트: $Root",
+                    "- 선행 완료: Host $Version 게시(CP), 이 PC 에서 이미지 빌드(build.ps1, 두 작업 트리 깨끗). 운영 PWA 와 다른 파일 $($d.differ.Count)개: $($d.differ -join ', ')",
+                    "- 이미지: " + ($imgs -join " · "),
+                    "- 실행: 1) docker save clewpath-relay:$relayTag | docker -H ssh://kisworker load  2) 노트북 D:/ops/clewpath/.env 의 RELAY_TAG=$relayTag  3) 노트북 compose 로 session-relay 만 --no-build --pull never --no-deps 재생성",
+                    "- 원칙: CP 는 그대로(CP 코드 변경이면 따로 의뢰) · 옛 태그(롤백 기준 a400dde 등) 지우지 않음 · Created·healthy 회신",
+                    "- 확인 항목: 006 에서 python ops/tools/pwa_drift.py → differ 0 · 공개 /relay/app 200 · 커넥터 재접속(relay 재생성 뒤 30초 안팎)",
+                    "- 회신: SendMessage 답장"
+                ) | Set-Content -Path $ImageRequest -Encoding UTF8
+                Log "서비스 모니터 의뢰문: $ImageRequest (/deploy-request 로 보내세요)"
+            }
+        }
+    }
+}
 
 Log "=== release $Version 끝 ==="
 Write-Host ""
-Write-Host "다음: git tag v$Version (선택) · TODOS/문서 갱신 · 병합·push"
+if ($ImageRequest) { Write-Host "다음: 서비스 모니터에 PWA 이미지 의뢰($ImageRequest) · git tag v$Version (선택) · TODOS/문서 갱신 · 병합·push" }
+else { Write-Host "다음: git tag v$Version (선택) · TODOS/문서 갱신 · 병합·push" }
