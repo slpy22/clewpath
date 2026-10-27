@@ -13,7 +13,7 @@
 ## 2. 브랜치
 
 - 일감마다 최신 main 에서 `mac/<주제>` 브랜치를 만든다(예: `mac/conf-vanish`). 한 브랜치에 한 주제.
-- **main·macos 에 올리지 않는다. 합치지 않는다. force-push 하지 않는다.**
+- **main 에 올리지 않는다. 합치지 않는다. force-push 하지 않는다.** (옛 `macos` 브랜치는 2026-10-27 부터 쓰지 않는다 — 없앨 예정)
 - 올리기 전에 main 이 앞서 갔으면 자기 브랜치만 `git rebase origin/main` 으로 따라간다.
 - 커밋은 작게, 메시지는 한국어로 기존 커밋과 같은 꼴(`fix(맥): …`, `test: …`, `docs: …`). Claude Code 가 붙이는 Co-Authored-By 줄은 그대로 둔다.
 
