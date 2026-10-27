@@ -722,3 +722,77 @@ async def test_request_from_an_unauthenticated_device_is_refused_when_received(f
     await c._on_frame(_req("cidZ", "c1", "api", {"verb": "GET", "path": "/api/x"}))
     assert c.ws.wire == [{"v": 1, "type": "res", "id": "c1", "cid": "cidZ", "ok": False, "error": "auth_required"}]
     assert not c._req_tasks and hits == []
+
+
+# ---- 독립 검토(2026-10-27): 받는 길이 예외로 끊기지 않는다 · E2EE 표시는 받을 때 · 줄 상한 ----
+
+@pytest.mark.asyncio
+async def test_malformed_request_frame_never_breaks_the_receive_loop(conn, monkeypatch):
+    """방 참가자 누구나 method 에 목록을 넣거나 params 를 목록으로 보낼 수 있다 — 그 예외가 _on_frame 밖으로 나가면 run() 이 릴레이에
+    다시 붙으며 모든 기기의 인증·파이프를 지웠다. 그 글만 버리거나 오류로 답한다."""
+    h = _Host()
+    h.install(monkeypatch, conn)
+    conn.authed["cidB"] = {"id": "devB", "name": "B", "tver": 0}
+    for raw in (json.dumps({"v": 1, "type": "req", "id": "m1", "cid": "cidA", "method": [], "params": {}}),
+                json.dumps({"v": 1, "type": "req", "id": "m2", "cid": "cidA", "method": {"x": 1}, "params": {}}),
+                json.dumps({"v": 1, "type": "req", "id": "m3", "cid": "cidA", "method": "api", "params": [1]}),
+                json.dumps({"v": 1, "type": "req", "id": [1], "cid": "cidA", "method": "api", "params": {"verb": "GET", "path": "/api/x"}}),
+                json.dumps({"v": 1, "type": "stream_close", "id": {"a": 1}, "cid": "cidA"})):
+        await conn._on_frame(raw)        # 예외가 나오면 이 시험이 실패한다
+    h.gate("x").set()                    # id 가 목록인 api 도 실행은 된다(답의 id 는 그대로 목록)
+    await _drain(conn)
+    assert conn.authed.get("cidB"), "다른 기기의 인증은 그대로"
+    errs = {f["id"]: f.get("error") for f in conn.sent if f.get("type") == "res" and isinstance(f.get("id"), str)}
+    assert errs.get("m1", "").startswith("unknown_method") and errs.get("m2", "").startswith("unknown_method")
+    assert errs.get("m3") and "AttributeError" in errs["m3"], errs
+
+
+@pytest.mark.asyncio
+async def test_e2ee_header_follows_how_the_request_was_received(fake_claude_home, monkeypatch):
+    """사람 증명과 함께 붙는 E2EE 표시(pclink 켜기 D11 의 근거)는 받을 때 정한다 — 평문으로 받아 줄 선 요청이 그 사이 그 cid 가
+    봉투 기기 목록에 들어가도 표시를 달지 않고, 봉투로 받은 요청은 위조 client_offline 뒤에 실행돼도 표시를 잃지 않는다."""
+    from session_manager import devices
+    c, key, gate, hits, dev = await _e2ee_phone(monkeypatch)
+    # 평문 기기 X(봉투를 쓴 적 없음)
+    dx = devices.add_device("plain")
+    await c._on_frame(json.dumps({"v": 1, "type": "req", "id": "a1", "cid": "cidX", "method": "auth", "params": {"token": dx["token"], "pv": 2}}))
+    assert "cidX" in c.authed and "cidX" not in c.enc_cids
+    await c._on_frame(_env(key, "cidA", {"v": 1, "type": "req", "id": "s1", "method": "api", "params": {"verb": "GET", "path": "/api/sessions/S1/messages"}}))
+    await c._on_frame(json.dumps({"v": 1, "type": "req", "id": "x1", "cid": "cidX", "method": "api",
+                                  "params": {"verb": "GET", "path": "/api/sessions/S2/messages"}}))
+    await _ticks()
+    c.enc_cids.add("cidX")                 # 릴레이가 다른 기기의 봉투 겉 cid 를 X 로 바꿔 넣은 결과
+    c.enc_cids.discard("cidA")             # 위조 client_offline 이 A 를 봉투 목록에서 뺀 결과(답은 버려진다)
+    gate.set()
+    await _drain(c)
+    got = {u.rsplit("/", 2)[-2]: hd for verb, u, hd in hits if verb == "GET"}
+    from session_manager.connector import E2EE_HEADER
+    assert got["S1"].get(E2EE_HEADER) == "1", "봉투로 받은 요청은 표시를 잃지 않는다"
+    assert E2EE_HEADER not in got["S2"], "평문으로 받은 요청은 나중에 봉투 목록에 들어가도 표시 없음"
+
+
+@pytest.mark.asyncio
+async def test_backlog_over_the_cap_is_answered_busy_without_blocking(conn, monkeypatch):
+    """하나씩 처리하던 때는 소켓이 역압을 걸었다 — 따로 돌리면서 줄 선 요청 수에 상한을 둔다. 넘으면 받는 길을 막지 않고 busy."""
+    from session_manager import connector
+    monkeypatch.setattr(connector, "_LANE_BACKLOG", 3)
+    monkeypatch.setattr(connector, "_REQ_BACKLOG", 5)
+    h = _Host()
+    h.install(monkeypatch, conn)
+    for i in range(4):
+        await conn._on_frame(_api("cidA", f"a{i}", "GET", f"a{i}"))
+    busy = [f["id"] for f in conn.sent if f.get("error") == "busy"]
+    assert busy == ["a3"], "기기 하나 상한(3)"
+    for i in range(3):
+        await conn._on_frame(_api("cidB", f"b{i}", "GET", f"b{i}"))
+    assert [f["cid"] for f in conn.sent if f.get("error") == "busy"] == ["cidA", "cidB"], "전체 상한(5)"
+    await conn._on_frame(json.dumps({"v": 1, "type": "ping", "id": "p", "cid": "cidC"}))
+    assert conn.sent[-1]["type"] == "pong", "줄이 넘쳐도 받는 길은 그대로"
+    for k in list(h.gates) + [f"a{i}" for i in range(3)] + [f"b{i}" for i in range(2)]:
+        h.gate(k).set()
+    await _drain(conn)
+    assert conn._lanes == {} and not conn._req_tasks
+    await conn._on_frame(_api("cidA", "a9", "GET", "a9"))
+    h.gate("a9").set()
+    await _drain(conn)
+    assert conn.sent[-1]["id"] == "a9" and conn.sent[-1]["ok"] is True, "줄이 빠지면 다시 받는다"

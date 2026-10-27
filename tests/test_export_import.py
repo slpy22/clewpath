@@ -84,3 +84,36 @@ def test_export_import_with_workdir(fake_claude_home, tmp_path, monkeypatch):
     assert r2["workdir_files_restored"] == 1
     assert (dest / "main.py").exists()
     assert not (dest / "node_modules").exists()
+
+
+def test_export_route_uses_its_own_temp_file_and_removes_it(fake_claude_home, tmp_path, monkeypatch):
+    """같은 세션 내보내기 둘이 겹치면 같은 임시 zip 에 함께 써 깨지거나 남의 zip 이 나갔다(독립 검토 2026-10-27) — 요청마다 다른
+    파일, 보낸 뒤 지운다."""
+    import io
+    import tempfile
+    import zipfile
+
+    from fastapi.testclient import TestClient
+
+    from session_manager import server as S
+    for k in ("SM_RELAY_URL", "SM_RELAY_ROOM", "SM_RELAY_AGENT_TOKEN", "SM_CP_URL"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("SM_HOST", "127.0.0.1")
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    _make_session(fake_claude_home)
+    seen = []
+    real = exporter.create_export
+
+    def spy(sid, out, include_workdir=False):
+        seen.append(out)
+        return real(sid, out, include_workdir=include_workdir)
+    monkeypatch.setattr(exporter, "create_export", spy)
+    monkeypatch.setattr(S, "_client_host", lambda r: "127.0.0.1")
+    with TestClient(S.create_app()) as c:
+        for _ in range(2):
+            r = c.get("/api/sessions/exp11111/export")
+            assert r.status_code == 200
+            with zipfile.ZipFile(io.BytesIO(r.content)) as z:
+                assert any(n.endswith(".jsonl") for n in z.namelist())
+    assert len(seen) == 2 and seen[0] != seen[1], "요청마다 다른 임시 파일"
+    assert not any(Path(p).exists() for p in seen), "보낸 뒤 지운다"

@@ -180,13 +180,18 @@ _SPAWN_METHODS = frozenset({"list_sessions", "get_stats", "ask", "api", "export"
 # 같은 기기의 읽기(GET)끼리는 함께 돈다(2026-10-27) — 폰 화면은 목록·상세·통계를 한꺼번에 묻는데 하나씩이면 느린 것 하나가 나머지를 묶었다.
 # Host 는 PC 로컬 화면의 동시 GET 을 원래 받는다. 쓰기는 그 기기의 앞 요청이 다 끝난 뒤, 쓰기 뒤의 읽기는 그 쓰기가 끝난 뒤.
 _REQ_CONCURRENCY = 4
-_WRITE_METHODS = frozenset({"import", "grant", "ask", "bye_device"})
+# 줄 서 있을 수 있는 요청 수 — 넘으면 받지 않고 바로 busy 로 답한다(받는 길은 막지 않는다). 하나씩 처리하던 때는 소켓이 역압을 걸었지만
+# 따로 돌리면 큰 요청을 쏟아붓는 기기의 태스크·프레임이 끝없이 쌓인다(독립 검토 2026-10-27).
+_LANE_BACKLOG = 64        # 기기 하나
+_REQ_BACKLOG = 256        # 전체
+# 내보내기는 GET 이지만 Host 가 세션마다 같은 임시 파일에 zip 을 쓴다 — 같은 기기에서 둘이 겹치지 않게 쓰기처럼 줄 세운다
+_WRITE_METHODS = frozenset({"import", "grant", "ask", "bye_device", "export"})
 
 
 def _is_write(method, params) -> bool:
-    """Host 상태를 바꿀 수 있는 요청인가 — GET 이 아닌 api, 가져오기·2FA 유예 발급·ask·bye_device."""
+    """Host 상태를 바꿀 수 있는 요청인가 — GET 이 아닌 api, 가져오기·내보내기·2FA 유예 발급·ask·bye_device."""
     if method == "api":
-        return str((params or {}).get("verb") or "GET").upper() != "GET"
+        return str((params if isinstance(params, dict) else {}).get("verb") or "GET").upper() != "GET"
     return method in _WRITE_METHODS
 
 
@@ -202,12 +207,13 @@ class _Presence:
 
 
 class _Lane:
-    """기기(cid) 하나의 따로 도는 요청 순서(_spawn_req): 아직 안 끝난 읽기들과 마지막 쓰기."""
-    __slots__ = ("reads", "write")
+    """기기(cid) 하나의 따로 도는 요청 순서(_spawn_req): 아직 안 끝난 읽기들과 마지막 쓰기, 줄 선 요청 수(n)."""
+    __slots__ = ("reads", "write", "n")
 
     def __init__(self) -> None:
         self.reads: set = set()
         self.write = None
+        self.n = 0
 
 
 class _Req:
@@ -691,7 +697,11 @@ class Connector:
         dev = self._req_dev(cid) if cid is not None else None
         if dev and dev.get("id"):            # 인증된 기기의 요청에만 사람 증명(A-2) — 받을 때 인증한 기기로(그 사이 떠났어도)
             via.update({PROOF_HEADER: RELAY_PROOF, DEVICE_HEADER: str(dev["id"])})
-            if cid in self.enc_cids:
+            # 봉투로 받았나는 받을 때 정한 것(_Req.sealed)으로 — 실행할 때의 enc_cids 로 보면, 평문으로 받아 줄 선 요청이 그 사이 릴레이가
+            # 다른 기기의 봉투 겉 cid 를 바꿔 넣은 뒤 E2EE 표시를 달고 나갔다(pclink 켜기의 D11 우회, 독립 검토 2026-10-27). 거꾸로 위조된
+            # client_offline 뒤에 실행되는 봉투 요청이 표시를 잃지도 않는다.
+            rq = _REQ.get()
+            if (rq.sealed if rq is not None and rq.cid == cid else cid in self.enc_cids):
                 via[E2EE_HEADER] = "1"
         if verb == "GET":
             r = await self.http.get(url, params=query, headers=via)
@@ -940,6 +950,17 @@ class Connector:
 
     # ---- 프레임 라우팅 ----
     async def _on_frame(self, raw: str) -> None:
+        """받은 글 하나. 처리 중 예외는 이 글만 버린다 — 밖으로 나가면 run() 이 릴레이에 다시 붙으며(_on_connected) 모든 기기의 인증·
+        파이프를 지웠다. 방 참가자 누구나(초대 문자열·짝 PC 포함) method 에 목록 같은 값을 넣어 그렇게 할 수 있었다(독립 검토 2026-10-27).
+        릴레이 소켓이 닫혀 보내기가 실패한 것도 여기서 버린다 — 끊김은 run() 의 수신이 안다."""
+        try:
+            await self._route(raw)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            _log(f"[connector] 받은 글 처리 실패(그 글만 버림): {type(e).__name__}: {e}")
+
+    async def _route(self, raw: str) -> None:
         try:
             frame = json.loads(raw)
         except Exception:  # noqa: BLE001
@@ -999,8 +1020,11 @@ class Connector:
             rq = _Req(cid, sealed or (cid is not None and cid in self.enc_cids), self._presence(cid))
             tok = _REQ.set(rq)
             try:
-                if frame.get("method") in _SPAWN_METHODS:
-                    if await self._admit(frame, rq):    # 기기 인증은 받을 때(위 _admit)
+                m = frame.get("method")
+                if isinstance(m, str) and m in _SPAWN_METHODS:
+                    if self._backlog_full(cid):
+                        await self._res(frame.get("id"), False, error="busy")   # 줄이 넘치면 받지 않는다(위 _LANE_BACKLOG)
+                    elif await self._admit(frame, rq):  # 기기 인증은 받을 때(위 _admit)
                         self._spawn_req(frame, rq)      # 받는 길을 막지 않는다(위 _SPAWN_METHODS)
                 else:
                     await self._handle_req(frame)
@@ -1040,6 +1064,10 @@ class Connector:
                              **({"cid": frame["cid"]} if frame.get("cid") is not None else {})})
         # 그 외(hello 등)는 무시
 
+    def _backlog_full(self, cid) -> bool:
+        lane = self._lanes.get(cid)
+        return len(self._req_tasks) >= _REQ_BACKLOG or (lane is not None and lane.n >= _LANE_BACKLOG)
+
     def _spawn_req(self, frame: dict, rq: _Req | None = None) -> None:
         """따로 돌린다 — 그 기기(cid)의 순서는 지킨다(위 _REQ_CONCURRENCY): 읽기는 앞서 받은 쓰기가 끝난 뒤에(앞 읽기와는 함께),
         쓰기는 앞서 받은 읽기·쓰기가 모두 끝난 뒤에 시작한다. 그래서 쓰기 앞뒤의 읽기는 받은 순서대로 그 쓰기 전·후의 상태를 본다."""
@@ -1050,6 +1078,7 @@ class Connector:
         write = _is_write(frame.get("method"), frame.get("params"))
         prev = [t for t in ((*lane.reads, lane.write) if write else (lane.write,)) if t is not None and not t.done()]
         task = asyncio.create_task(self._run_req(frame, rq, prev, write))
+        lane.n += 1
         if write:
             lane.write, lane.reads = task, set()     # 뒤 요청은 이 쓰기를 기다린다(이 쓰기가 앞 읽기를 기다린다)
         else:
@@ -1061,10 +1090,11 @@ class Connector:
             ln = self._lanes.get(cid)
             if ln is None:
                 return
+            ln.n -= 1
             ln.reads.discard(t)
             if ln.write is t:
                 ln.write = None
-            if ln.write is None and not ln.reads:
+            if ln.n <= 0:
                 del self._lanes[cid]
         task.add_done_callback(_done)
 

@@ -1076,12 +1076,24 @@ def create_app() -> FastAPI:
     # ---- export / import ----
     @app.get("/api/sessions/{session_id}/export")
     def export_session(session_id: str, include_workdir: bool = False):
-        tmp = Path(tempfile.gettempdir()) / f"session_export_{session_id}.zip"
+        # 요청마다 다른 임시 파일 — 같은 세션 내보내기 둘이 겹치면 같은 zip 에 함께 써 깨지거나 남의 zip 이 나갔다(독립 검토 2026-10-27).
+        # 보낸 뒤 지운다(전엔 임시 폴더에 남았다)
+        from starlette.background import BackgroundTask
+        fd, name = tempfile.mkstemp(prefix=f"session_export_{session_id[:8]}_", suffix=".zip")
+        os.close(fd)
+        tmp = Path(name)
+
+        def _cleanup():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
         r = exporter.create_export(session_id, str(tmp), include_workdir=include_workdir)
         if "error" in r:
+            _cleanup()
             return JSONResponse(r, status_code=404)
         return FileResponse(tmp, filename=f"session_{session_id[:8]}.zip",
-                            media_type="application/zip")
+                            media_type="application/zip", background=BackgroundTask(_cleanup))
 
     @app.post("/api/import")
     async def import_session(file: UploadFile = File(...),

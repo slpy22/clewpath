@@ -50,6 +50,16 @@ def _serve(pwa: Path):
     return srv, f"http://127.0.0.1:{srv.server_address[1]}/relay"
 
 
+@pytest.fixture(autouse=True)
+def _no_proxy_for_loopback(monkeypatch):
+    """도구는 공개 주소용이라 사용자 프록시를 따른다(urllib 기본). 시험의 로컬 서버(127.0.0.1)는 프록시를 타지 않게 —
+    전체 실행에서 앞 시험이 남긴 프록시 env 로 '연결 거부' 가 났다(단독 실행은 통과)."""
+    for k in ("http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+
+
 @pytest.fixture
 def served(tmp_path):
     live = _make_pwa(tmp_path / "live")
