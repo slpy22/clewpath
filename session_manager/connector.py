@@ -184,12 +184,13 @@ _REQ_CONCURRENCY = 4
 # 따로 돌리면 큰 요청을 쏟아붓는 기기의 태스크·프레임이 끝없이 쌓인다(독립 검토 2026-10-27).
 _LANE_BACKLOG = 64        # 기기 하나
 _REQ_BACKLOG = 256        # 전체
-# 내보내기는 GET 이지만 Host 가 세션마다 같은 임시 파일에 zip 을 쓴다 — 같은 기기에서 둘이 겹치지 않게 쓰기처럼 줄 세운다
-_WRITE_METHODS = frozenset({"import", "grant", "ask", "bye_device", "export"})
+# 내보내기(export)는 읽기 — Host 가 요청마다 다른 임시 파일에 zip 을 쓴다(server export_session). 쓰기로 두면 작업 폴더까지 담는 큰
+# 내보내기가 다른 기기의 쓰기를 붙잡는다(쓰기는 기기가 달라도 한 번에 하나)
+_WRITE_METHODS = frozenset({"import", "grant", "ask", "bye_device"})
 
 
 def _is_write(method, params) -> bool:
-    """Host 상태를 바꿀 수 있는 요청인가 — GET 이 아닌 api, 가져오기·내보내기·2FA 유예 발급·ask·bye_device."""
+    """Host 상태를 바꿀 수 있는 요청인가 — GET 이 아닌 api, 가져오기·2FA 유예 발급·ask·bye_device."""
     if method == "api":
         return str((params if isinstance(params, dict) else {}).get("verb") or "GET").upper() != "GET"
     return method in _WRITE_METHODS
