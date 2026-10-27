@@ -15,6 +15,11 @@
 사본에서 새로 진행된 대화가 있으면(원래 파일에 없는 메시지) 미리보기에 개수·기간·마지막 입력을 보여 준다 — 그것도 휴지통으로 간다.
 사본 쪽이 더 최근에 쓴 세션이면 newer="new" — 확인창이 맨 위에 경고하고 '확인했음' 체크를 받는다
 (맥 6회차 2026-10-26: 사흘 치 작업이 담긴 이름 붙은 사본이 '삭제' 쪽에 있었고, 회색 경고 줄을 못 보고 지웠다).
+
+표시만 지우기(mode="marker_only", 2026-10-27 사장님 지시): 사본이 이미 이 PC 에 없으면(휴지통으로 지웠거나 claude 가 정리했거나
+다른 PC 에서 이어짐) 위 ①② 는 할 게 없고 원래 세션에 '이어받음' 표시만 남아 목록에서 흐리게·재개가 사본 쪽으로 가려 했다
+(기타 d56d9dca 는 손으로 처리). 이때는 ③ 명부 정리와 ④ 표시 한 줄 제거만 한다 — 원본 백업은 사본의 휴지통 버킷이 있으면 거기,
+없으면 휴지통 아래 따로 둔 칸(30일 뒤 함께 정리).
 """
 from __future__ import annotations
 
@@ -44,6 +49,23 @@ def _pair(session_id: str) -> tuple[str, str] | None:
     for s in scanner.scan_all():
         if s.continued_in == session_id:
             return s.session_id, session_id
+    return None
+
+
+def _missing_copy(session_id: str) -> tuple[str, str] | None:
+    """(원래 세션, 이 PC 에 없는 사본) — 원래 세션에 이어받음 표시가 있는데 그 사본 파일이 없을 때(표시만 지우기)."""
+    m = scanner.scan_one(session_id)
+    if m is not None and m.continued_in and scanner.scan_one(m.continued_in) is None:
+        return session_id, m.continued_in
+    return None
+
+
+def _trash_bucket(session_id: str) -> str | None:
+    """그 세션을 담은 휴지통 버킷 이름(가장 최근 것). 없으면 None."""
+    from session_manager import lifecycle
+    for b in lifecycle.list_trash():          # 최근 삭제 순
+        if b.get("session_id") == session_id:
+            return b["bucket"]
     return None
 
 
@@ -118,9 +140,46 @@ def _last_talk(m) -> str | None:
     return (m.last_activity_at or m.ended_at) if m else None
 
 
+def _teams(new: str) -> list[dict]:
+    from session_manager import team
+    try:
+        return team.continuation_bindings(new)
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _team_step(teams: list[dict]) -> str | None:
+    return teams and ("팀 명부: " + ", ".join(f"{t.get('team_name') or t.get('team_id')}/{t.get('alias')}" for t in teams)
+                      + " 를 원래 세션으로 되돌리고 사본의 중복 기록 정리")
+
+
+def _plan_marker_only(old: str, new: str) -> dict:
+    mo = scanner.scan_one(old)
+    if _process(old)["kind"] != "none":
+        return {"ok": False, "error": "old_live", "old": old, "new": new,
+                "message": "원래 세션이 지금 실행 중입니다. 원래 세션을 먼저 종료한 뒤 되돌리세요."}
+    bucket = _trash_bucket(new)
+    teams = _teams(new)
+    return {
+        "ok": True, "mode": "marker_only", "old": old, "new": new,
+        "old_title": _title(mo), "new_title": "",
+        "copy_in_trash": bucket,                 # 사본이 ClewPath 휴지통에 있으면 그 버킷, 아니면 None(claude 정리·다른 PC 등)
+        "kind": "missing", "new_process": {"kind": "none"}, "stop": None,
+        "new_messages": 0, "new_inputs": 0, "last_inputs": [], "new_since": None, "new_until": None,
+        "old_last": _last_talk(mo), "new_last": None, "newer": None, "new_bytes": 0, "teams": teams,
+        "steps": [s for s in (
+            _team_step(teams),
+            f"원래 세션 {old[:8]} 파일에서 '이어짐' 표시 한 줄 제거(원본은 휴지통에 백업)",
+        ) if s],
+    }
+
+
 def plan(session_id: str) -> dict:
     pr = _pair(session_id)
     if not pr:
+        gone = _missing_copy(session_id)
+        if gone:
+            return _plan_marker_only(*gone)
         return {"ok": False, "error": "no_continuation",
                 "message": "되돌릴 이어받기가 없습니다(이어받은 세션이 없거나 이미 지워졌습니다)."}
     old, new = pr
@@ -133,16 +192,12 @@ def plan(session_id: str) -> dict:
         return {"ok": False, "error": "old_live", "old": old, "new": new,
                 "message": "원래 세션이 지금 실행 중입니다. 원래 세션을 먼저 종료한 뒤 되돌리세요."}
     div = _divergence(Path(mo.jsonl_path), Path(mn.jsonl_path))
-    from session_manager import team
-    try:
-        teams = team.continuation_bindings(new)
-    except Exception:  # noqa: BLE001
-        teams = []
+    teams = _teams(new)
     old_last, new_last = _last_talk(mo), _last_talk(mn)
     stop_how = {"none": None, "background": "백그라운드 에이전트 종료(claude stop)",
                 "clewpath": "ClewPath 터미널 종료", "interactive": "열려 있는 claude 프로세스 강제 종료"}[pn["kind"]]
     return {
-        "ok": True, "old": old, "new": new,
+        "ok": True, "mode": "full", "old": old, "new": new,
         "old_title": _title(mo), "new_title": _title(mn),
         "kind": div["kind"],                     # background = ← 로 생긴 사본, continued = 요약 이어가기 등
         "new_process": pn, "stop": stop_how,
@@ -155,8 +210,7 @@ def plan(session_id: str) -> dict:
         "steps": [s for s in (
             stop_how and f"사본 {new[:8]} 의 실행 중지: {stop_how}",
             f"사본 {new[:8]} 를 휴지통으로 이동(30일 안 복구 가능)",
-            teams and "팀 명부: " + ", ".join(f"{t.get('team_name') or t.get('team_id')}/{t.get('alias')}" for t in teams)
-            + " 를 원래 세션으로 되돌리고 사본의 중복 기록 정리",
+            _team_step(teams),
             f"원래 세션 {old[:8]} 파일에서 '이어짐' 표시 한 줄 제거(원본은 휴지통에 백업)",
         ) if s],
     }
@@ -211,10 +265,47 @@ def _strip_marker(path: Path, new_sid: str, backup_to: Path) -> int:
     return dropped
 
 
+def _execute_marker_only(p: dict) -> dict:
+    """사본이 이미 없을 때: 명부 정리 + 원래 파일의 표시 한 줄 제거(백업은 사본의 휴지통 버킷, 없으면 따로 둔 칸)."""
+    from session_manager import lifecycle, policy
+    old, new = p["old"], p["new"]
+    res: dict = {"ok": False, "mode": "marker_only", "old": old, "new": new}
+    if p.get("copy_in_trash"):
+        bucket = lifecycle._trash_root() / p["copy_in_trash"]
+    else:   # manifest 가 없어 휴지통 목록·복구에는 안 나오고, 30일 지나면 다른 버킷처럼 정리된다(_purge_old_trash)
+        bucket = lifecycle._trash_root() / f"revert-marker_{old}_{time.strftime('%Y%m%d-%H%M%S')}"
+    res["trash"] = str(bucket)
+    try:
+        from session_manager import team
+        res["team"] = team.revert_continuation(old, new)
+    except Exception as e:  # noqa: BLE001  명부 정리 실패는 표시 지우기를 막지 않는다
+        res["team_error"] = f"{type(e).__name__}: {e}"
+    mo = scanner.scan_one(old)
+    res["marker_removed"] = _strip_marker(Path(mo.jsonl_path), new, bucket / f"backup_{old}.jsonl") if mo else 0
+    if p.get("copy_in_trash"):
+        try:   # 휴지통의 사본 버킷에 무엇을 했는지 남긴다(일반 되돌리기와 같은 키)
+            mf = bucket / "manifest.json"
+            m = json.loads(mf.read_text(encoding="utf-8"))
+            m["revert"] = {"old": old, "kind": "missing", "mode": "marker_only", "old_backup": f"backup_{old}.jsonl",
+                           "new_messages": 0}
+            mf.write_text(json.dumps(m, ensure_ascii=False, indent=1), encoding="utf-8")
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        policy.audit({"event": "revert_continuation", "mode": "marker_only", "old": old, "new": new,
+                      "copy_in_trash": p.get("copy_in_trash"), "marker_removed": res["marker_removed"]})
+    except Exception:  # noqa: BLE001
+        pass
+    res["ok"] = True
+    return res
+
+
 def execute(session_id: str) -> dict:
     p = plan(session_id)
     if not p.get("ok"):
         return p
+    if p.get("mode") == "marker_only":
+        return _execute_marker_only(p)
     old, new = p["old"], p["new"]
     from session_manager import hooks, lifecycle, policy
     res: dict = {"ok": False, "old": old, "new": new}

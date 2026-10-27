@@ -2133,12 +2133,28 @@ function continuationPair(s){
   const L=SESSIONS||[];
   if(s.continued_in && L.some(x=>x.session_id===s.continued_in)) return {old:s.session_id, neu:s.continued_in};
   const o=L.find(x=>x.continued_in===s.session_id);
-  return o? {old:o.session_id, neu:s.session_id} : null;
+  if(o) return {old:o.session_id, neu:s.session_id};
+  // 사본이 목록에 없다(휴지통으로 지웠거나 claude 가 정리·다른 PC 에서 이어짐) — 원래 쪽에서 '표시만 지우기'(2026-10-27). 실제 방식은 서버 미리보기가 정한다
+  return s.continued_in? {old:s.session_id, neu:s.continued_in, missing:true} : null;
 }
 // 맥 6회차(2026-10-26): 사흘 치 작업이 담긴 이름 붙은 사본을 회색 경고 줄을 못 보고 지웠다 — 잃는 대화가 있으면
 // 맨 위 빨간 상자(건수·기간·어느 쪽이 더 최근인지), 양쪽 마지막 대화 시각, 같은 이름 구별 표시.
 function revertSummaryNode(p){
   const wrap=el('div');
+  if(p.mode==='marker_only'){
+    const box=el('div','sheet-sub'); box.style.whiteSpace='pre-line';
+    const lines=[
+      '원래 세션: '+(p.old_title||'')+' ('+p.old.slice(0,8)+')'+(p.old_last?' · 마지막 대화 '+absTime(p.old_last):'')+' — 그대로 유지',
+      '이어받은 세션: ('+p.new.slice(0,8)+') — '+(p.copy_in_trash
+        ? '이미 휴지통에 있습니다. 그대로 두며, 복구하면 따로 된 세션으로 돌아옵니다.'
+        : '이 PC 에 없습니다(claude 가 정리했거나 다른 PC 에서 이어졌을 수 있습니다).'),
+      '', '진행할 일:'];
+    (p.steps||[]).forEach((x,i)=>lines.push((i+1)+'. '+x));
+    lines.push('', '대화 내용은 어느 쪽도 지우지 않습니다.');
+    box.textContent=lines.join('\n');
+    wrap.appendChild(box);
+    return wrap;
+  }
   if(p.new_messages>0){
     const w=el('div','sheet-warn');
     w.appendChild(el('b',null,'⚠ 지우는 쪽에만 있는 대화 '+p.new_messages+'건이 함께 사라집니다'));
@@ -2173,9 +2189,11 @@ async function revertContinuation(s){
   try{ p=await T.api('GET',`/api/sessions/${s.session_id}/revert-continuation/preview`); }
   catch(e){ toast((e.json&&e.json.message)||'되돌릴 수 없습니다'); return; }
   if(!p||!p.ok){ toast((p&&p.message)||'되돌릴 수 없습니다'); return; }
-  const ok=await confirmSheet({title:'이어하기 되돌리기',
-    main:'이어받은 세션을 지우고 원래 세션을 그대로 쓸까요?', subNode:revertSummaryNode(p),
-    action:'되돌리기', danger:true, busyText:'되돌리는 중…',
+  const mark=p.mode==='marker_only';   // 사본이 이미 없다 — 원래 세션의 표시만 지운다(지우는 대화 없음)
+  const ok=await confirmSheet({title:mark?'이어짐 표시 지우기':'이어하기 되돌리기',
+    main:mark?'이어받은 사본이 이미 없습니다. 원래 세션의 \'이어받음\' 표시만 지울까요?':'이어받은 세션을 지우고 원래 세션을 그대로 쓸까요?',
+    subNode:revertSummaryNode(p),
+    action:mark?'표시 지우기':'되돌리기', danger:!mark, busyText:mark?'지우는 중…':'되돌리는 중…',
     ack: p.new_messages>0 ? '이어받은 세션의 대화 '+p.new_messages+'건이 원래 세션에 합쳐지지 않고 휴지통으로 가는 것을 확인했습니다' : null,
     alt: p.new_messages>0 ? {label:'취소하고 사본 열기', run:()=>{
       const c=(SESSIONS||[]).find(x=>x.session_id===p.new);
@@ -2190,7 +2208,7 @@ async function revertContinuation(s){
       s._reverted=r;
     }});
   if(!ok) return;
-  toast('되돌렸습니다 — 원래 세션 '+p.old.slice(0,8)+' 를 쓰세요');
+  toast((mark?'이어짐 표시를 지웠습니다':'되돌렸습니다')+' — 원래 세션 '+p.old.slice(0,8)+' 를 쓰세요');
   try{ await loadList(); }catch(e){}
   const fresh=(SESSIONS||[]).find(x=>x.session_id===p.old); if(fresh) loadDetail(fresh);
 }
@@ -2933,9 +2951,13 @@ async function loadDetail(s){
     b.appendChild(el('span','dzi',icon)); const tx=el('span','dzt'); tx.appendChild(el('b',null,label)); tx.appendChild(el('small',null,desc));
     b.appendChild(tx); b.onclick=fn; danger.appendChild(b); return b; };
   const remote=MODE==='relay'?' · 2차 인증':'';
-  if(continuationPair(s))
-    dz('↩','이어하기 되돌리기','이어받은 사본을 휴지통으로 보내고 원래 세션을 그대로 씁니다(확인창에서 내용 확인)'+remote,
-       ()=>revertContinuation(s),'실수로 생긴 이어받은 세션을 지우고 원래 세션을 그대로 씁니다');
+  { const cp=continuationPair(s);
+    if(cp&&cp.missing)
+      dz('↩','이어짐 표시 지우기','이어받은 사본이 이 PC 목록에 없습니다 — 원래 세션의 이어받음 표시만 지웁니다(확인창에서 내용 확인)'+remote,
+         ()=>revertContinuation(s),'사본이 이미 없을 때 원래 세션에 남은 이어받음 표시를 지웁니다(대화는 지우지 않음)');
+    else if(cp)
+      dz('↩','이어하기 되돌리기','이어받은 사본을 휴지통으로 보내고 원래 세션을 그대로 씁니다(확인창에서 내용 확인)'+remote,
+         ()=>revertContinuation(s),'실수로 생긴 이어받은 세션을 지우고 원래 세션을 그대로 씁니다'); }
   if(sessionIsLive(s))
     dz('⛔','세션 강제 종료'+(s.peer&&!s.live_terminal?(' — '+peerOriginLabel(s.peer).icon+' '+peerOriginLabel(s.peer).text):''),
        '실행 중인 claude 를 어디서 띄웠든 끝냅니다. 진행 중인 작업은 멈추고 기록은 남습니다'+remote,

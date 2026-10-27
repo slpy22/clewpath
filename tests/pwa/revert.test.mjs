@@ -21,13 +21,39 @@ async function boot(resp) {
   return ctx;
 }
 
-test("continuationPair: 원래 쪽·이어받은 쪽 모두 짝을 찾고, 대상이 목록에 없으면 null", async () => {
+test("continuationPair: 원래 쪽·이어받은 쪽 모두 짝을 찾고, 사본이 목록에 없으면 '표시만 지우기' 짝", async () => {
   const ctx = await load();
   ev(ctx, `SESSIONS = [{session_id:'${A}', continued_in:'${B}'}, {session_id:'${B}'}, {session_id:'c', continued_in:'gone'}]`);
   assert.deepEqual({ ...ev(ctx, `continuationPair({session_id:'${A}', continued_in:'${B}'})`) }, { old: A, neu: B });
   assert.deepEqual({ ...ev(ctx, `continuationPair({session_id:'${B}'})`) }, { old: A, neu: B });
-  assert.equal(ev(ctx, "continuationPair({session_id:'c', continued_in:'gone'})"), null, "지워졌거나 다른 PC 의 이어받기는 버튼 없음");
+  assert.deepEqual({ ...ev(ctx, "continuationPair({session_id:'c', continued_in:'gone'})") }, { old: "c", neu: "gone", missing: true },
+    "지워졌거나 다른 PC 의 이어받기는 표시만 지우기(2026-10-27)");
   assert.equal(ev(ctx, "continuationPair({session_id:'z'})"), null);
+});
+
+test("revertContinuation: 사본이 이미 없으면(marker_only) 표시 지우기 확인창 — 경고·확인 체크 없음, 휴지통 여부 표시", async () => {
+  const MARK = { ok: true, mode: "marker_only", old: A, new: B, old_title: "논문 서비스", new_title: "", copy_in_trash: "bbbbbbbb_20261027",
+    kind: "missing", new_process: { kind: "none" }, stop: null, new_messages: 0, new_inputs: 0, last_inputs: [],
+    steps: ["원래 세션 aaaaaaaa 파일에서 '이어짐' 표시 한 줄 제거(원본은 휴지통에 백업)"] };
+  const ctx = await boot({ [`GET /api/sessions/${A}/revert-continuation/preview`]: MARK,
+                           [`POST /api/sessions/${A}/revert-continuation`]: { ok: true, mode: "marker_only", old: A, new: B } });
+  await ev(ctx, `revertContinuation({session_id:'${A}'})`);
+  const sheet = ev(ctx, "globalThis.__sheet");
+  assert.equal(sheet.title, "이어짐 표시 지우기");
+  assert.equal(sheet.action, "표시 지우기");
+  assert.equal(sheet.danger, false);
+  assert.equal(sheet.ack, null); assert.equal(sheet.alt, null);
+  assert.ok(sheet.subNode.text.includes("이미 휴지통에 있습니다"), sheet.subNode.text);
+  assert.ok(sheet.subNode.text.includes("대화 내용은 어느 쪽도 지우지 않습니다"));
+  assert.ok(!sheet.subNode.text.includes("— 삭제"));
+  assert.deepEqual([...ev(ctx, "globalThis.__api").map((x) => x[0] + " " + x[1])],
+    [`GET /api/sessions/${A}/revert-continuation/preview`, `POST /api/sessions/${A}/revert-continuation`]);
+  assert.match(ev(ctx, "globalThis.__t")[0], /이어짐 표시를 지웠습니다/);
+  // 휴지통에도 없으면 그 사실을 적는다
+  const ctx2 = await boot({ [`GET /api/sessions/${A}/revert-continuation/preview`]: { ...MARK, copy_in_trash: null } });
+  ev(ctx2, "confirmSheet = async (o) => { globalThis.__sheet = o; return false; }");
+  await ev(ctx2, `revertContinuation({session_id:'${A}'})`);
+  assert.ok(ev(ctx2, "globalThis.__sheet").subNode.text.includes("이 PC 에 없습니다"));
 });
 
 test("revertContinuation: 미리보기 → 확인창(할 일·유지/삭제 대상) → 2FA 동봉 POST → 원래 세션 상세로", async () => {

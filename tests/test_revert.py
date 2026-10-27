@@ -230,6 +230,64 @@ def test_execute_rolls_team_back_to_original(fake_claude_home, quiet):
         c.close()
 
 
+# ---- 표시만 지우기(2026-10-27): 사본이 이미 이 PC 에 없을 때 ----
+
+def test_marker_only_when_copy_is_already_in_trash(fake_claude_home, quiet):
+    """사본을 휴지통으로 먼저 지웠더니 원래 세션에 '이어받음' 표시가 남고 되돌리기 버튼이 사라졌다(기타 d56d9dca 수동 처리)."""
+    _bg_pair(fake_claude_home)
+    t = team.create_team("KP", manager_session="s-mgr")
+    m = team.add_member(t["id"], "논문", session_id=A)
+    assert team.current_session(m["agent_id"]) == B
+    d = lifecycle.delete_session(B, dry_run=False)
+    assert d.get("trash") and scanner.scan_one(B) is None
+    pa = Path(scanner.scan_one(A).jsonl_path)
+    before = pa.read_bytes()
+    assert revert.plan(B)["error"] == "no_continuation", "없는 사본 쪽에서는 찾지 않는다"
+    p = revert.plan(A)
+    assert p["ok"] and p["mode"] == "marker_only" and p["old"] == A and p["new"] == B
+    assert p["copy_in_trash"] == Path(d["trash"]).name and p["new_messages"] == 0 and p["stop"] is None
+    assert any("이어짐" in s for s in p["steps"]) and not any("휴지통으로 이동" in s for s in p["steps"])
+    assert any("팀 명부" in s for s in p["steps"])
+    r = revert.execute(A)
+    assert r["ok"] and r["mode"] == "marker_only" and r["marker_removed"] == 1
+    after = pa.read_bytes()
+    assert after == b"".join(ln for ln in before.splitlines(keepends=True) if b"continued-in" not in ln), "그 한 줄만 지운다"
+    assert scanner.scan_one(A).continued_in is None and scanner.latest_session_id(A) == A
+    bucket = Path(d["trash"])
+    assert (bucket / f"backup_{A}.jsonl").read_bytes() == before, "원본은 사본의 휴지통 버킷에 백업"
+    mf = json.loads((bucket / "manifest.json").read_text(encoding="utf-8"))
+    assert mf["session_id"] == B and mf["revert"]["mode"] == "marker_only" and mf["revert"]["old"] == A
+    assert team.current_session(m["agent_id"]) == A, "명부도 원래 세션으로"
+    assert revert.plan(A)["error"] == "no_continuation", "다시 누르면 할 일 없음"
+    assert lifecycle.restore_session(bucket.name).get("restored"), "사본은 여전히 휴지통에서 따로 복구된다"
+    assert scanner.scan_one(B) is not None and scanner.scan_one(A).continued_in is None
+
+
+def test_marker_only_when_copy_is_gone_from_this_pc(fake_claude_home, quiet):
+    """휴지통에도 없는 사본(claude 가 정리했거나 다른 PC 에서 이어짐) — 백업은 휴지통 아래 따로 둔 칸, 휴지통 목록에는 안 나온다."""
+    _bg_pair(fake_claude_home)
+    Path(scanner.scan_one(B).jsonl_path).unlink()
+    p = revert.plan(A)
+    assert p["ok"] and p["mode"] == "marker_only" and p["copy_in_trash"] is None
+    pa = Path(scanner.scan_one(A).jsonl_path)
+    before = pa.read_bytes()
+    r = revert.execute(A)
+    assert r["ok"] and r["marker_removed"] == 1 and b"continued-in" not in pa.read_bytes()
+    bucket = Path(r["trash"])
+    assert bucket.name.startswith(f"revert-marker_{A}_") and (bucket / f"backup_{A}.jsonl").read_bytes() == before
+    assert not any(b["bucket"] == bucket.name for b in lifecycle.list_trash()), "복구할 세션이 아니라 목록에 없다"
+
+
+def test_marker_only_refuses_while_original_runs(fake_claude_home, quiet, monkeypatch):
+    _bg_pair(fake_claude_home)
+    Path(scanner.scan_one(B).jsonl_path).unlink()
+    monkeypatch.setattr(webterm, "has_terminal", lambda sid: sid == A)
+    pa = Path(scanner.scan_one(A).jsonl_path)
+    before = pa.read_bytes()
+    assert revert.plan(A)["error"] == "old_live"
+    assert revert.execute(A)["error"] == "old_live" and pa.read_bytes() == before
+
+
 # ---- API·원격 게이트 ----
 
 def test_routes_and_remote_privilege(fake_claude_home, quiet, monkeypatch):
