@@ -3413,7 +3413,8 @@ function loadXterm(){
 //  · "↓ 최신" 복귀 버튼: 위로 스크롤 중일 때만 표시
 //  · 6px 이동 임계 전에는 개입하지 않는다 — 탭·긴누름(복사)은 xterm/브라우저 기본 동작 유지
 function attachMobileTermUX(host, term, opts){
-  host.style.position='relative';
+  // host(.thost)는 CSS 로 이미 absolute·inset:0 — 복귀 버튼의 기준도 된다. 여기서 position 을 직접 넣으면 그 배치를 덮어써
+  // 칸이 xterm 기본 24줄 높이에 멈추고 PC 화면에서 위쪽 절반만 그려졌다(2026-10-27)
   const cellH=()=>{ const r=host.querySelector('.xterm-rows'); const c=r&&r.firstElementChild;
     const h=c?c.getBoundingClientRect().height:0; return h>4?h:(term.options.fontSize||13)*1.6; };
   const isAlt=()=>term.buffer&&term.buffer.active&&term.buffer.active.type==='alternate';
