@@ -120,6 +120,24 @@ def test_plan_counts_new_conversation_in_copy(fake_claude_home, quiet):
     assert p["last_inputs"][0]["text"].startswith("사본에서")
 
 
+def test_plan_reports_when_each_side_was_last_used(fake_claude_home, quiet):
+    """맥 6회차 사고: 사흘 치 작업이 담긴 사본이 '삭제' 쪽이었다 — 어느 쪽이 더 최근인지·사본 대화 기간을 알려 준다."""
+    _bg_pair(fake_claude_home, [_msg(U3, "user", "사본에서 이어 간 일", {"timestamp": "2026-10-08T02:00:00Z"}),
+                                _msg("11111111-0000-0000-0000-000000000004", "assistant", "했습니다",
+                                     {"timestamp": "2026-10-09T03:00:00Z"})])
+    p = revert.plan(A)
+    assert p["new_since"] == "2026-10-08T02:00:00Z" and p["new_until"] == "2026-10-09T03:00:00Z"
+    assert p["old_last"] == "2026-10-06T01:00:00Z" and p["new_last"] == "2026-10-09T03:00:00Z"
+    assert p["newer"] == "new"
+
+
+def test_plan_plain_copy_is_not_newer(fake_claude_home, quiet):
+    _bg_pair(fake_claude_home)
+    p = revert.plan(B)
+    assert p["new_since"] is None and p["new_until"] is None
+    assert p["newer"] == "old", "새 대화 없는 복사본은 원래 쪽과 같은 시각 — 위험 표시 안 함"
+
+
 def test_plan_refuses_none_chain_and_live_old(fake_claude_home, quiet, monkeypatch):
     write_session(fake_claude_home, "F--p", C, [_msg(U1, "user", "x")])
     assert revert.plan(C)["error"] == "no_continuation"

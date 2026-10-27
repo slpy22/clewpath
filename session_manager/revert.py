@@ -12,7 +12,9 @@
   ④ 원래 세션 파일에서 그 continued-in **한 줄만** 제거 — 원본은 ②의 휴지통 버킷에 백업
      (claude 파일 수정: 불가침 원칙의 승인 예외, CLAUDE.md 2026-10-06 — 사용자 버튼 + 확인창 경유만)
 
-사본에서 새로 진행된 대화가 있으면(원래 파일에 없는 메시지) 미리보기에 개수·마지막 입력을 보여 준다 — 그것도 휴지통으로 간다.
+사본에서 새로 진행된 대화가 있으면(원래 파일에 없는 메시지) 미리보기에 개수·기간·마지막 입력을 보여 준다 — 그것도 휴지통으로 간다.
+사본 쪽이 더 최근에 쓴 세션이면 newer="new" — 확인창이 맨 위에 경고하고 '확인했음' 체크를 받는다
+(맥 6회차 2026-10-26: 사흘 치 작업이 담긴 이름 붙은 사본이 '삭제' 쪽에 있었고, 회색 경고 줄을 못 보고 지웠다).
 """
 from __future__ import annotations
 
@@ -67,6 +69,7 @@ def _divergence(old_path: Path, new_path: Path) -> dict:
     kind = "continued"
     new_msgs = 0
     inputs: list[dict] = []
+    first = last = None
     with open(new_path, "rb") as fh:
         for line in fh:
             if _BG_RE.search(line):
@@ -80,11 +83,16 @@ def _divergence(old_path: Path, new_path: Path) -> dict:
             if o.get("type") not in ("user", "assistant") or o.get("uuid") in base:
                 continue
             new_msgs += 1
+            ts = o.get("timestamp")
+            if isinstance(ts, str) and ts:
+                first = ts if first is None or ts < first else first
+                last = ts if last is None or ts > last else last
             if o.get("type") == "user" and not o.get("isMeta"):
                 t = _text(o).strip()
                 if t and not t.startswith("<"):
                     inputs.append({"ts": o.get("timestamp"), "text": t[:120]})
-    return {"kind": kind, "new_messages": new_msgs, "new_inputs": len(inputs), "last_inputs": inputs[-3:]}
+    return {"kind": kind, "new_messages": new_msgs, "new_inputs": len(inputs), "last_inputs": inputs[-3:],
+            "new_since": first, "new_until": last}
 
 
 def _process(session_id: str) -> dict:
@@ -103,6 +111,11 @@ def _process(session_id: str) -> dict:
 
 def _title(m) -> str:
     return (m.custom_title or m.ai_title or m.slug or m.session_id[:8]) if m else ""
+
+
+def _last_talk(m) -> str | None:
+    """마지막 대화 시각(ISO). 파일 mtime 은 쉬는 동안에도 메타 줄로 바뀌어 못 쓴다(scanner.last_activity_at)."""
+    return (m.last_activity_at or m.ended_at) if m else None
 
 
 def plan(session_id: str) -> dict:
@@ -125,6 +138,7 @@ def plan(session_id: str) -> dict:
         teams = team.continuation_bindings(new)
     except Exception:  # noqa: BLE001
         teams = []
+    old_last, new_last = _last_talk(mo), _last_talk(mn)
     stop_how = {"none": None, "background": "백그라운드 에이전트 종료(claude stop)",
                 "clewpath": "ClewPath 터미널 종료", "interactive": "열려 있는 claude 프로세스 강제 종료"}[pn["kind"]]
     return {
@@ -133,6 +147,10 @@ def plan(session_id: str) -> dict:
         "kind": div["kind"],                     # background = ← 로 생긴 사본, continued = 요약 이어가기 등
         "new_process": pn, "stop": stop_how,
         "new_messages": div["new_messages"], "new_inputs": div["new_inputs"], "last_inputs": div["last_inputs"],
+        "new_since": div["new_since"], "new_until": div["new_until"],
+        "old_last": old_last, "new_last": new_last,
+        # 어느 쪽을 더 최근에 썼나: new = 지우려는 사본 쪽(위험), old = 원래 쪽, None = 모름
+        "newer": ("new" if new_last > old_last else "old") if (old_last and new_last) else None,
         "new_bytes": mn.size_bytes, "teams": teams,
         "steps": [s for s in (
             stop_how and f"사본 {new[:8]} 의 실행 중지: {stop_how}",

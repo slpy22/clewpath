@@ -36,7 +36,7 @@ test("revertContinuation: 미리보기 → 확인창(할 일·유지/삭제 대�
   ev(ctx, `SESSIONS = [{session_id:'${A}'}]`);
   await ev(ctx, `revertContinuation({session_id:'${B}'})`);
   const sheet = ev(ctx, "globalThis.__sheet");
-  const txt = sheet.subNode.textContent;
+  const txt = sheet.subNode.text;
   assert.ok(txt.includes("원래 세션: 논문 서비스 (aaaaaaaa) — 그대로 유지") && txt.includes("(bbbbbbbb) — 삭제"));
   assert.ok(txt.includes("← 를 눌러") && txt.includes("1. 사본 bbbbbbbb 의 실행 중지") && txt.includes("4. 원래 세션"));
   assert.ok(txt.includes("새로 진행된 대화는 없습니다"));
@@ -52,10 +52,68 @@ test("revertContinuation: 사본에만 있는 대화는 경고, 미리보기 거
     [`GET /api/sessions/x/revert-continuation/preview`]: { __err: { ok: false, error: "old_live", message: "원래 세션이 지금 실행 중입니다." } },
     [`POST /api/sessions/${A}/revert-continuation`]: { __err: { ok: false, message: "사본을 휴지통으로 옮기지 못했습니다" } } });
   await ev(ctx, `revertContinuation({session_id:'${A}'})`);
-  const txt = ev(ctx, "globalThis.__sheet").subNode.textContent;
-  assert.ok(txt.includes("대화 4건(입력 2건)도 함께 휴지통") && txt.includes("사본에서 새로 물어본 것"));
+  const txt = ev(ctx, "globalThis.__sheet").subNode.text;
+  assert.ok(txt.includes("지우는 쪽에만 있는 대화 4건") && txt.includes("입력 2번") && txt.includes("사본에서 새로 물어본 것"));
   assert.ok(String(ev(ctx, "globalThis.__err")).includes("휴지통으로 옮기지 못했습니다"), "실패 사유는 시트에");
   ev(ctx, "globalThis.__sheet = null; globalThis.__t = []");
   await ev(ctx, "revertContinuation({session_id:'x'})");
   assert.equal(ev(ctx, "globalThis.__sheet"), null); assert.ok(ev(ctx, "globalThis.__t")[0].includes("실행 중"));
+});
+
+// 맥 6회차(2026-10-26): 사흘 치 작업이 담긴 사본을 회색 경고 줄을 못 보고 지웠다 — 빨간 상자·시각·확인 체크·사본 열기.
+test("revertContinuation: 잃는 대화가 있으면 맨 위 경고(더 최근·기간)·양쪽 시각·같은 이름 표시·확인 체크·사본 열기", async () => {
+  const RISK = { ...PLAN, new_messages: 242, new_inputs: 2, last_inputs: [{ text: "그래서 다 된거야" }],
+    newer: "new", new_since: "2026-10-23T14:49:18Z", new_until: "2026-10-26T02:47:41Z",
+    old_last: "2026-10-23T14:47:04Z", new_last: "2026-10-26T02:47:41Z" };
+  const ctx = await boot({ [`GET /api/sessions/${A}/revert-continuation/preview`]: RISK });
+  ev(ctx, `SESSIONS = [{session_id:'${A}'}, {session_id:'${B}'}]; confirmSheet = async (o) => { globalThis.__sheet = o; return false; }`);
+  await ev(ctx, `revertContinuation({session_id:'${A}'})`);
+  const sheet = ev(ctx, "globalThis.__sheet");
+  const top = sheet.subNode.children[0];
+  assert.equal(top.className, "sheet-warn", "경고는 맨 위 상자");
+  assert.ok(top.text.includes("지우는 쪽에만 있는 대화 242건") && top.text.includes("더 최근에 쓴 세션"));
+  assert.ok(top.text.includes("그 대화 기간:") && top.text.includes("입력 2번") && top.text.includes("그래서 다 된거야"));
+  const txt = sheet.subNode.text;
+  assert.ok(/\(aaaaaaaa\) · 마지막 대화 [0-9-]+ \d\d:\d\d — 그대로 유지/.test(txt), txt);
+  assert.ok(/\(bbbbbbbb\) · 마지막 대화 [0-9-]+ \d\d:\d\d — 삭제/.test(txt));
+  assert.ok(txt.includes("두 세션 이름이 같습니다"));
+  assert.ok(sheet.ack.includes("242건"), "확인 체크를 받아야 버튼이 눌림");
+  assert.equal(sheet.alt.label, "취소하고 사본 열기");
+  sheet.alt.run();
+  assert.equal(ev(ctx, "globalThis.__det"), B, "사본 상세로");
+});
+
+test("revertContinuation: 새 대화 없는 복사본이면 경고 상자·확인 체크·사본 열기 없음", async () => {
+  const ctx = await boot({ [`GET /api/sessions/${A}/revert-continuation/preview`]: { ...PLAN, newer: "old", old_title: "가", new_title: "나" } });
+  ev(ctx, "confirmSheet = async (o) => { globalThis.__sheet = o; return false; }");
+  await ev(ctx, `revertContinuation({session_id:'${A}'})`);
+  const sheet = ev(ctx, "globalThis.__sheet");
+  assert.notEqual(sheet.subNode.children[0].className, "sheet-warn");
+  assert.ok(!sheet.subNode.text.includes("이름이 같습니다"));
+  assert.equal(sheet.ack, null); assert.equal(sheet.alt, null);
+});
+
+test("confirmSheet: ack 는 체크 전 동사 버튼을 막고, alt 는 시트를 닫고 다른 길로", async () => {
+  const ctx = await load();
+  ev(ctx, "globalThis.__closed = 0; closeModal = () => { globalThis.__closed++; }; openModal = (t, b, f) => { globalThis.__b = b; globalThis.__f = f; }");
+  ev(ctx, "globalThis.__ran = 0; globalThis.__p = confirmSheet({ title: 't', main: 'm', action: '되돌리기', ack: '확인했습니다',"
+    + " run: async () => { globalThis.__ran++; } })");
+  const [cancel, go] = ev(ctx, "globalThis.__f");
+  assert.equal(cancel.textContent, "취소");
+  assert.equal(go.disabled, true, "체크 전에는 눌리지 않음");
+  await go.onclick();
+  assert.equal(ev(ctx, "globalThis.__ran"), 0);
+  const lb = ev(ctx, "globalThis.__b").children.find((c) => c.className === "sheet-ack");
+  const box = lb.children[0]; box.checked = true; box.onchange();
+  assert.equal(go.disabled, false);
+  await go.onclick();
+  assert.equal(ev(ctx, "globalThis.__ran"), 1);
+  assert.equal(await ev(ctx, "globalThis.__p"), true);
+
+  ev(ctx, "globalThis.__alt = 0; globalThis.__p = confirmSheet({ title: 't', main: 'm', alt: { label: '다른 길', run: () => { globalThis.__alt++; } } })");
+  const f = ev(ctx, "globalThis.__f");
+  assert.equal(f.map((b) => b.textContent).join("|"), "취소|다른 길|확인");
+  f[1].onclick();
+  assert.equal(ev(ctx, "globalThis.__alt"), 1);
+  assert.equal(await ev(ctx, "globalThis.__p"), false, "다른 길은 실행 아님");
 });

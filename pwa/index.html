@@ -619,6 +619,11 @@
   .diag{font-family:var(--mono);font-size:.74rem;color:var(--muted);margin:-4px 0 10px}
   .sheet-main{font-size:1rem;margin:2px 0 8px}
   .sheet-sub{font-size:.85rem;color:var(--muted);line-height:1.5}
+  .sheet-warn{font-size:.9rem;line-height:1.5;color:var(--ink);margin:0 0 10px;padding:8px 10px;border-radius:8px;
+    border:1px solid var(--crit);background:color-mix(in srgb,var(--crit) 12%,transparent);white-space:pre-line}
+  .sheet-warn b{color:var(--crit)}
+  .sheet-ack{display:flex;gap:8px;align-items:flex-start;margin-top:10px;font-size:.9rem;cursor:pointer}
+  .sheet-ack input{margin-top:3px}
   /* 🖥 PC 짝(원격 묻기, pclink) — 설정 하위 화면 · 상세 칸 「📡 원격 묻기 받기」 */
   .diag.pcl-ev{margin:2px 0;word-break:break-all}
   .field textarea.pcl-inv{word-break:break-all;min-height:96px}
@@ -2130,25 +2135,38 @@ function continuationPair(s){
   const o=L.find(x=>x.continued_in===s.session_id);
   return o? {old:o.session_id, neu:s.session_id} : null;
 }
+// 맥 6회차(2026-10-26): 사흘 치 작업이 담긴 이름 붙은 사본을 회색 경고 줄을 못 보고 지웠다 — 잃는 대화가 있으면
+// 맨 위 빨간 상자(건수·기간·어느 쪽이 더 최근인지), 양쪽 마지막 대화 시각, 같은 이름 구별 표시.
 function revertSummaryNode(p){
+  const wrap=el('div');
+  if(p.new_messages>0){
+    const w=el('div','sheet-warn');
+    w.appendChild(el('b',null,'⚠ 지우는 쪽에만 있는 대화 '+p.new_messages+'건이 함께 사라집니다'));
+    const why=[];
+    if(p.newer==='new') why.push('삭제하려는 쪽이 더 최근에 쓴 세션입니다.');
+    if(p.new_since) why.push('그 대화 기간: '+absTime(p.new_since)+' ~ '+absTime(p.new_until));
+    why.push('입력 '+p.new_inputs+'번과 거기 이어진 Claude 응답·도구 실행입니다. 원래 세션에 합쳐지지 않습니다.');
+    (p.last_inputs||[]).forEach(x=>why.push('· '+String(x.text||'').replace(/\s+/g,' ').slice(0,80)));
+    w.appendChild(el('div',null,why.join('\n')));
+    wrap.appendChild(w);
+  }
   const box=el('div','sheet-sub'); box.style.whiteSpace='pre-line';
   const kind=p.kind==='background'
     ? '빈 입력칸에서 ← 를 눌러 백그라운드로 넘어가며 생긴 사본입니다.'
     : '대화가 이어지며(요약 이어가기 등) 생긴 새 세션입니다.';
+  const when=t=>t?' · 마지막 대화 '+absTime(t):'';
   const lines=[
-    '원래 세션: '+(p.old_title||'')+' ('+p.old.slice(0,8)+') — 그대로 유지',
-    '이어받은 세션: '+(p.new_title||'')+' ('+p.new.slice(0,8)+') — 삭제',
-    kind, '',
-    '진행할 일:'].concat((p.steps||[]).map((x,i)=>(i+1)+'. '+x));
-  if(p.new_messages>0){
-    lines.push('', '⚠ 이어받은 세션에만 있는 대화 '+p.new_messages+'건(입력 '+p.new_inputs+'건)도 함께 휴지통으로 갑니다.');
-    (p.last_inputs||[]).forEach(x=>lines.push('   · '+String(x.text||'').replace(/\s+/g,' ').slice(0,80)));
-  } else {
-    lines.push('', '이어받은 세션에서 새로 진행된 대화는 없습니다(원래 대화의 복사본).');
-  }
-  lines.push('휴지통에서 복구하면 사본만 별도 세션으로 돌아옵니다.');
+    '원래 세션: '+(p.old_title||'')+' ('+p.old.slice(0,8)+')'+when(p.old_last)+' — 그대로 유지',
+    '이어받은 세션: '+(p.new_title||'')+' ('+p.new.slice(0,8)+')'+when(p.new_last)+' — 삭제'];
+  if(p.old_title&&p.old_title===p.new_title) lines.push('(두 세션 이름이 같습니다 — 괄호 안 id 와 시각으로 구별하세요)');
+  lines.push(kind, '', '진행할 일:');
+  (p.steps||[]).forEach((x,i)=>lines.push((i+1)+'. '+x));
+  if(!(p.new_messages>0)) lines.push('', '이어받은 세션에서 새로 진행된 대화는 없습니다(원래 대화의 복사본).');
+  else lines.push('');
+  lines.push('휴지통에서 복구하면 사본만 별도 세션으로 돌아옵니다(30일).');
   box.textContent=lines.join('\n');
-  return box;
+  wrap.appendChild(box);
+  return wrap;
 }
 async function revertContinuation(s){
   let p;
@@ -2158,6 +2176,10 @@ async function revertContinuation(s){
   const ok=await confirmSheet({title:'이어하기 되돌리기',
     main:'이어받은 세션을 지우고 원래 세션을 그대로 쓸까요?', subNode:revertSummaryNode(p),
     action:'되돌리기', danger:true, busyText:'되돌리는 중…',
+    ack: p.new_messages>0 ? '이어받은 세션의 대화 '+p.new_messages+'건이 원래 세션에 합쳐지지 않고 휴지통으로 가는 것을 확인했습니다' : null,
+    alt: p.new_messages>0 ? {label:'취소하고 사본 열기', run:()=>{
+      const c=(SESSIONS||[]).find(x=>x.session_id===p.new);
+      if(c) loadDetail(c); else toast('사본 '+p.new.slice(0,8)+' 를 목록에서 찾지 못했습니다'); }} : null,
     run: async()=>{
       let cred={};
       if(MODE==='relay'){ cred=await ensurePriv(); if(cred===null) throw new Error('2차 인증이 필요합니다'); }
@@ -4137,22 +4159,31 @@ function _showModal(pg){
 }
 // 확인 시트(design DR-7): 브라우저 confirm() 대신. 제목 / 주 문장 / 부 문장(정직한 조건 문구 자리) / [취소][동사 버튼].
 // run 이 throw 하면 시트 안에 오류를 보이고 행은 그대로(재시도 가능). 반환: 실행 성공 여부.
+// ack: 체크해야 동사 버튼이 눌리는 확인 문구(되돌릴 수 없는 손실이 있을 때). alt:{label,run} 취소 옆 다른 길(시트를 닫고 run).
 function confirmSheet(o){
   return new Promise((resolve)=>{
     const body=el('div');
     body.appendChild(el('div','sheet-main',o.main||''));
     if(o.sub) body.appendChild(el('div','sheet-sub',o.sub));
     if(o.subNode) body.appendChild(o.subNode);
+    let ack=null;
+    if(o.ack){ const lb=el('label','sheet-ack'); ack=el('input'); ack.type='checkbox'; ack.checked=false;
+      lb.appendChild(ack); lb.appendChild(el('span',null,o.ack)); body.appendChild(lb); }
     const err=el('div','err'); body.appendChild(err);
     const cancel=el('button','btn ghost','취소'); cancel.onclick=()=>{ closeModal(); resolve(false); };
     const go=el('button','btn'+(o.danger?' danger':''),o.action||'확인');
     go.onclick=async()=>{
-      if(go.disabled) return;
+      if(go.disabled||(ack&&!ack.checked)) return;
       go.disabled=true; const orig=go.textContent; go.textContent=o.busyText||(orig+' 중…'); err.textContent='';
       try{ if(o.run) await o.run(); closeModal(); resolve(true); }
       catch(e){ err.textContent=(e&&e.message)||String(e); go.disabled=false; go.textContent=orig; }
     };
-    openModal(o.title||'확인', body, [cancel, go]);
+    if(ack){ go.disabled=true; ack.onchange=()=>{ go.disabled=!ack.checked; }; }
+    const foot=[cancel];
+    if(o.alt){ const a=el('button','btn ghost',o.alt.label);
+      a.onclick=()=>{ closeModal(); resolve(false); try{ o.alt.run(); }catch(e){} }; foot.push(a); }
+    foot.push(go);
+    openModal(o.title||'확인', body, foot);
   });
 }
 // 페어링 행 1벌(design DR-1/B-9): 이름(+짧은 id) · 상태 칩(≤1) / meta / 버튼들. PC 기기 목록·폰 PC 목록이 같이 쓴다.
