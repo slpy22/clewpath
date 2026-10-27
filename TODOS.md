@@ -68,7 +68,7 @@
 - [ ] 사용 중인 실제 소켓 e2e 하네스(scratchpad qs-e2e)를 저장소 tests/ 로 옮겨 릴리스 전 회귀로 둘지 검토
 
 ## 진행중: 멀티 OS(Windows + macOS, 리눅스는 시험용) — docs/designs/multi-os.md (2026-10-15 사장님 결정)
-- [ ] 원격 `macos` 브랜치 지우기 — 2026-10-27 부터 main 에만 push(사장님 결정, 두 브랜치 내용 같음). 맥 저장소들이 main 인지 맥 7회차(docs/mac-host-tasks.md)로 확인되면 `git push origin --delete macos`
+- [x] 원격 `macos` 브랜치 지우기(2026-10-27 완료, 맥 7회차 확인 뒤) — 2026-10-27 부터 main 에만 push(사장님 결정, 두 브랜치 내용 같음). 맥 저장소들이 main 인지 맥 7회차(docs/mac-host-tasks.md)로 확인되면 `git push origin --delete macos`
 - [x] **맥·리눅스를 platforms 에 넣기 전 필수 — 2회차 적대적 검토(2026-10-21):** 다섯 스크립트·hostctl·1회차 수리 커밋을 검토자 6명(스크립트별 5 + 연동·맥 호환 1)이 일회용 컨테이너에서 재현하며 봤다. 지적 36건(겹침 빼면 약 30건)을 모두 회귀 시험을 먼저 쓰고 고쳤다 — 명세 9장. 큰 것: uninstall 이 설치 폴더를 통째 지워 zip 을 푼 폴더(~/Downloads 등)가 사라지던 것, 홈 가드가 글자 비교뿐이던 것, uninstall 이 맥 bash 3.2 에서 구문 오류로 시작도 못 하던 것(`$( )` 안 case), auto_apply 가 방금 롤백된 버전을 다시 적용해 끝없이 돌던 것(Windows 포함, server.py), 못 지운 교체 저널이 런처를 영구히 막던 것, 느린 첫 기동에 Host 가 둘 뜨던 것, Ctrl+C 가 mv 자식을 죽여 섞인 설치가 남던 것
 - [x] (0.32.4 — .update.inprogress.lock mkdir 잠금) (2회차 후속) 셸 쪽 update.inprogress 원자적 잡기 — install.sh·러너가 '확인 → 쓰기' 라 수 ms 경합 창이 있다(파이썬 apply 는 살아 있는 표식이면 거부하도록 고침). 둘이 같은 mkdir 잠금으로 확인·쓰기를 묶기. 시작점: `install.sh` 표식 잡기, `session_manager/update_runner.sh` mark_take. S
 - [ ] (2회차 후속) `CLEWPATH_CONFIG` 가 브로커·claude 자식으로 샌다 — `ptyd.clean_env` 에 넣으면 되지만 브로커 해시가 바뀌어 Windows 도 브로커 업데이트 대기 1회. 다른 ptyd 변경과 묶어서. S
