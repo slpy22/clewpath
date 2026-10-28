@@ -145,6 +145,12 @@
   .qs-rb .qt{display:flex;flex-direction:column;min-width:0}
   .qs-rb .qn{font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .qs-rb small{color:var(--muted);font-size:.74rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .hd-sec.k-gone,.hd-pc{width:min(760px,100%)}
+  .hd-sec.k-gone .hd-h{color:#d1242f}
+  .hd-more{align-self:flex-start;padding:6px 4px;color:var(--accent);font-size:.82rem}
+  .hd-pc{display:flex;flex-direction:column;gap:4px;padding-top:4px;border-top:1px solid var(--line)}
+  .hd-pl{font-size:.8rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left}
+  .hd-pl.upd{align-self:flex-start;color:var(--accent);font-weight:650;padding:4px 0}
   .de-msg{font-size:.86rem;text-align:center}
 
   /* ---- 목록 ---- */
@@ -7235,6 +7241,28 @@ function homeSessions(){
   done.sort((a,b)=>rt(b,'ready_at')-rt(a,'ready_at'));
   return {att, work, done:done.slice(0,8)};
 }
+// ⏳ 곧 지워질 대화(2차) — claude 가 3일 안에 지울 기록(🔔 할 일 숫자와 같은 기준). 📌 keep 은 '쉬는 세션 정리' 제외일 뿐 claude 삭제를
+// 막지 못한다 — 늘리려면 재개해서 한 번 주고받거나 내보내기라 누르면 그 안내가 있는 상세로 간다(홈은 읽기 전용)
+const HOME_GONE_MAX=3;
+function homeGone(){ return (SESSIONS||[]).filter(s=>{ const d=cleanupLeft(s); return d!=null&&d<=CLEANUP_ALERT&&!s.headless; })
+  .sort((a,b)=>a.cleanup_at-b.cleanup_at); }
+// 🖥 이 PC(2차) — 연결 · Host 버전(새 버전) · 열린 터미널·실행 중인 세션 수 · 외부 서비스 오늘 사용(로컬 화면만, 관리 화면과 같은 범위).
+// 서비스 사용량은 홈에 들어올 때(화면 세대마다) 한 번만 받는다 — 20초 갱신 때는 다시 부르지 않는다
+let HOME_SVC={gen:-1, list:null};
+function homeSvcLoad(){
+  if(MODE!=='local'||!LIST_READY||HOME_SVC.gen===PANE_NOW.gen) return;
+  const g=PANE_NOW.gen; HOME_SVC={gen:g, list:HOME_SVC.list};
+  T.api('GET','/api/owner/services').then(d=>{ HOME_SVC.list=((d&&d.services)||[]).filter(x=>x.status==='active');
+    if(PANE_NOW.gen===g) renderEmptyPane(); }).catch(()=>{});
+}
+function homePcLines(){
+  const L=[], v=VERSTATE||{}, ss=SESSIONS||[];
+  L.push(['conn', MODE==='local'?'연결: 로컬 화면(이 PC 에서 직접)':'연결: 릴레이 · '+(curPcLabel()||'PC')]);
+  if(v.cur) L.push(['ver', 'ClewPath v'+v.cur+(v.latest?' · 새 버전 v'+v.latest+' 있음':'')]);
+  L.push(['run', '열린 터미널 '+ss.filter(x=>x.live_terminal).length+' · 실행 중인 세션 '+ss.filter(x=>sessionIsLive(x)).length]);
+  if(MODE==='local') for(const x of HOME_SVC.list||[]) L.push(['svc', '🔌 '+x.name+' — '+svcUsageText(x)]);
+  return L;
+}
 // 기다린·작업한 시간 — '방금' · 'N분째' · 'N시간째'
 function homeFor(t){ if(!t) return ''; const d=Math.max(0,Date.now()/1000+CLOCK_SKEW-t);
   return d<60?'방금':d<3600?Math.floor(d/60)+'분째':Math.floor(d/3600)+'시간째'; }
@@ -7243,7 +7271,8 @@ function homeRow(k, s){
   const b=el('button','hd-row k-'+k); b.type='button'; b.dataset.k=k+':'+s.session_id;
   b.appendChild(el('span','qi')); const t=el('span','qt'); t.appendChild(el('span','qn')); t.appendChild(el('small')); b.appendChild(t);
   b.appendChild(el('span','tm'));
-  b.onclick=()=>{ const c=(SESSIONS||[]).find(x=>x.session_id===s.session_id)||s; if(k==='done') loadViewer(c); else jumpToSession(c); };
+  b.onclick=()=>{ const c=(SESSIONS||[]).find(x=>x.session_id===s.session_id)||s;
+    if(k==='done') loadViewer(c); else if(k==='gone') loadDetail(c); else jumpToSession(c); };
   homeRowFill(b,k,s); return b;
 }
 function homeRowFill(b, k, s){
@@ -7253,11 +7282,12 @@ function homeRowFill(b, k, s){
     sub=rt.note?String(rt.note).slice(0,60):(perm?'도구 사용 허락 필요':'답을 기다림'); meta=homeFor(perm?rt.permission_at:rt.waiting_at); }
   else if(k==='work'){ const bg=tx==='백그라운드'; icon=s.agent?'🛰':bg?'🐚':'⚙';
     sub=bg?(bgText(s)||'백그라운드 작업'):'작업 중'; meta=bg?'':homeFor(rt.thinking_at); }
+  else if(k==='gone'){ icon='⏳'; sub='claude 보관 기간 끝 — 재개하면 늘어남'; meta=cleanupText(s); }
   else { icon='✅'; sub='완료'; meta=todoAgo(rt.ready_at); }
   b.children[0].textContent=icon; b.children[1].children[0].textContent=sessLabel(s);
   b.children[1].children[1].textContent=[baseName(s.cwd||''), sub].filter(Boolean).join(' · ');
   b.children[2].textContent=meta;
-  b.title=sessLabel(s)+(s.cwd?' · '+s.cwd:'')+(k==='done'?' — 누르면 대화 보기':' — 누르면 터미널로');
+  b.title=sessLabel(s)+(s.cwd?' · '+s.cwd:'')+(k==='done'?' — 누르면 대화 보기':k==='gone'?' — '+cleanupDate(s)+'쯤 지워짐 · 누르면 상세(재개·내보내기)':' — 누르면 터미널로');
 }
 // 빈 상세 칸 = 홈. 위에서부터 🔔 지금 볼 일 · ⚙ 작업 중 · ✅ 방금 끝남(빈 칸은 숨김, 셋 다 비면 한 줄) → '최근 화면'(§3-6: 갈 수 있는 기억만 =
 // 흐림 빼고, 마지막 화면이 맨 앞) → 안내 한 줄. 첫 목록 전엔 세션도 기억도 확인하지 못해 안내만. 목록 칸이 접혀 있으면 '왼쪽에서 …'는
@@ -7274,9 +7304,13 @@ function renderEmptyPane(list){
   const h=LIST_READY?homeSessions():{att:[],work:[],done:[]};
   const secs=[['att','🔔 지금 볼 일',h.att],['work','⚙ 작업 중',h.work],['done','✅ 방금 끝남',h.done]].filter(x=>x[2].length);
   const idle=LIST_READY&&!secs.length;
-  const shape=JSON.stringify([msg, recent.map(o=>o.kind), secs.map(([k,,l])=>[k,l.map(s=>s.session_id)]), idle]);
+  homeSvcLoad();
+  const goneAll=LIST_READY?homeGone():[], gone=goneAll.slice(0,HOME_GONE_MAX), pc=LIST_READY?homePcLines():[];
+  const shape=JSON.stringify([msg, recent.map(o=>o.kind), secs.map(([k,,l])=>[k,l.map(s=>s.session_id)]), idle,
+    gone.map(s=>s.session_id), goneAll.length, pc]);
   if(box._shape===shape){ recent.forEach((o,i)=>quickRecentFill(box._btns[i],o));
-    let i=0; for(const [k,,l] of secs) for(const s of l) homeRowFill(box._rows[i++],k,s); return; }
+    let i=0; for(const [k,,l] of secs) for(const s of l) homeRowFill(box._rows[i++],k,s);
+    for(const s of gone) homeRowFill(box._rows[i++],'gone',s); return; }
   const a=document.activeElement, mine=[...(box._btns||[]),...(box._rows||[])], had=mine.includes(a)?a.dataset.k:'';
   box._shape=shape; box._btns=[]; box._rows=[];
   box.innerHTML='';
@@ -7294,6 +7328,19 @@ function renderEmptyPane(list){
       b.appendChild(el('span','qi')); const t=el('span','qt'); t.appendChild(el('span','qn')); t.appendChild(el('small')); b.appendChild(t);
       quickRecentFill(b,o); b.onclick=()=>quickGo(o.kind); grid.appendChild(b); box._btns.push(b); }
     wrap.appendChild(grid); box.appendChild(wrap); }
+  if(gone.length){ const sec=el('div','hd-sec k-gone'), hh=el('div','hd-h','⏳ 곧 지워질 대화');
+    hh.appendChild(el('span','n',String(goneAll.length))); sec.appendChild(hh);
+    for(const s of gone){ const b=homeRow('gone',s); sec.appendChild(b); box._rows.push(b); }
+    if(goneAll.length>gone.length){ const more=el('button','hd-more','외 '+(goneAll.length-gone.length)+'건 — 🔔 할 일에서 모두 보기');
+      more.type='button'; more.dataset.k='gone-more'; more.onclick=()=>showTodo(); sec.appendChild(more); box._rows.push(more); }
+    box.appendChild(sec); }
+  if(pc.length){ const sec=el('div','hd-pc'); sec.appendChild(el('div','hd-h','🖥 이 PC'));
+    const v=VERSTATE||{};
+    for(const [k,t] of pc){
+      if(k==='ver'&&v.latest){ const b=el('button','hd-pl upd',t); b.type='button'; b.dataset.k='pc-ver'; b.title='업데이트 안내';
+        b.onclick=()=>MODE==='local'?checkUpdateNow(v.cur):showUpdateInfo(v.cur,v.latest); sec.appendChild(b); box._rows.push(b); }
+      else sec.appendChild(el('div','hd-pl k-'+k,t)); }
+    box.appendChild(sec); }
   if(msg) box.appendChild(el('div','de-msg',msg));
   const nb=had&&[...box._btns,...box._rows].find(b=>b.dataset.k===had); if(nb) try{ nb.focus(); }catch(e){}
 }

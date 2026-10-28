@@ -435,3 +435,52 @@ test("T116 🏠 홈: 🔔 지금 볼 일(권한·입력 대기, 오래 기다린
     phone: ["detail", "홈", false, 3], phoneList: "세션",
   });
 });
+
+test("T117 🏠 홈 2차: ⏳ 곧 지워질 대화(claude 가 3일 안에 지울 것, claude -p 기록 빼고, 3건 + '외 N건' → 🔔 할 일) — 누르면 상세(재개·내보내기 안내). 🖥 이 PC: 연결·버전(새 버전이면 단추)·열린 터미널·실행 중 세션, 로컬 화면에서만 외부 서비스 오늘 사용 — 홈에 들어올 때 한 번만 받고 20초 갱신 때는 다시 받지 않는다", async () => {
+  const id = (c) => c.repeat(8) + "-1111-2222-3333-444444444444";
+  const G = [["p", 1.5], ["q", 0.5], ["r", 2.5], ["s", 2.9], ["t", 6], ["u", 1, true]];
+  const pre = `const now = Date.now() / 1000; SESSIONS = [${G.map(([c, d, hl]) =>
+    `{ session_id: '${id(c)}', title: '${c.toUpperCase()}', cwd: 'E:/w/${c}', mtime: 1, cleanup_at: now + ${d} * 86400, headless: ${!!hl} }`).join(",")},
+      { session_id: '${id("v")}', title: 'V', cwd: 'E:/w/v', mtime: 1, live_terminal: true }];
+    { const a = T.api; T.api = async (v, p, o) => { if (p === '/api/owner/services') { __calls.push(p);
+      return { services: [{ id: 'mt', name: 'mt-translator', status: 'active', today: { calls: 12, usd: 0.021 }, limits: { daily_calls: 500, daily_usd: 5 } },
+                          { id: 'old', name: '옛 서비스', status: 'revoked' }] }; } return a(v, p, o); }; }`;
+  const kids = (pd, cls) => pd.children[0].children.find((c) => String(c.className) === cls);
+  const svcCalls = (ctx) => ev(ctx, "__calls.filter((p) => p === '/api/owner/services').length");
+  const got = {};
+  { const { ctx, pd } = await boot({ mem: {}, pre });
+    ev(ctx, "VERSTATE = { cur: '0.33.5', latest: '0.33.6' }; quickGoHome()"); await tick(QS);
+    const g = kids(pd, "hd-sec k-gone");
+    got.gone = [g.children[0].textContent + " " + g.children[0].children[0].textContent,
+      ...g.children.slice(1).map((b) => String(b.className) === "hd-more" ? b.textContent
+        : [b.children[1].children[0].textContent, b.children[1].children[1].textContent, b.children[2].textContent])];
+    const pc = kids(pd, "hd-pc");
+    got.pc = pc.children.slice(1).map((x) => [String(x.className), x.textContent]);
+    got.relaySvc = svcCalls(ctx);
+    g.children[1].onclick(); await tick(QS); got.click = at(ctx);
+  }
+  { const { ctx, pd } = await boot({ local: true, mem: {}, pre });
+    ev(ctx, "quickGoHome()"); await tick(QS);
+    got.localPc = kids(pd, "hd-pc").children.slice(1).map((x) => x.textContent);
+    const c0 = svcCalls(ctx);
+    await ev(ctx, "loadList()"); await tick(QS); await ev(ctx, "loadList()"); await tick(QS);   // 20초 갱신 두 번 — 다시 받지 않는다
+    got.afterRefresh = svcCalls(ctx) - c0;
+    ev(ctx, "loadDetail(SESSIONS[0])"); await tick(QS); ev(ctx, "quickGoHome()"); await tick(QS);   // 다른 화면 갔다가 다시 홈 — 한 번 더
+    got.reenter = svcCalls(ctx) - c0;
+  }
+  const pcGot = got.pc; delete got.pc;
+  assert.deepEqual(got, {
+    gone: ["⏳ 곧 지워질 대화 4",
+      ["Q", "q · claude 보관 기간 끝 — 재개하면 늘어남", "오늘 지워짐"],
+      ["P", "p · claude 보관 기간 끝 — 재개하면 늘어남", "1일 뒤 지워짐"],
+      ["R", "r · claude 보관 기간 끝 — 재개하면 늘어남", "2일 뒤 지워짐"],
+      "외 1건 — 🔔 할 일에서 모두 보기"],
+    relaySvc: 0, click: "detail:q",
+    localPc: ["연결: 로컬 화면(이 PC 에서 직접)", "열린 터미널 1 · 실행 중인 세션 1", "🔌 mt-translator — 오늘 12/500회 · $0.02/5"],
+    afterRefresh: 0, reenter: 1,
+  });
+  // 릴레이 쪽 이 PC 줄: 연결(PC 이름은 기억에 따라 다름)·새 버전 단추·실행 수
+  assert.equal(pcGot.length, 3);
+  assert.ok(pcGot[0][0] === "hd-pl k-conn" && pcGot[0][1].startsWith("연결: 릴레이 · "));
+  assert.deepEqual(pcGot.slice(1), [["hd-pl upd", "ClewPath v0.33.5 · 새 버전 v0.33.6 있음"], ["hd-pl k-run", "열린 터미널 1 · 실행 중인 세션 1"]]);
+});
