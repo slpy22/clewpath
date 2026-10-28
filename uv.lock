@@ -369,7 +369,7 @@ wheels = [
 
 [[package]]
 name = "clewpath-host"
-version = "0.33.4"
+version = "0.33.5"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },
