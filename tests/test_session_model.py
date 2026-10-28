@@ -43,6 +43,32 @@ def test_scanner_last_model_none_when_absent(fake_claude_home):
     assert scanner.scan_one(SID).last_model is None
 
 
+def test_scanner_last_effort_follows_last_real_reply(fake_claude_home):
+    """에포트 = 마지막 실모델 응답 줄의 effort(2026-10-28 목록 표시). <synthetic> 줄의 값은 쓰지 않고,
+    effort 가 없는 응답(옛 버전)은 앞 값을 지우지 않는다. 증분 파싱(뒤에 붙은 줄만)도 같은 값."""
+    a = lambda text, model, ts, eff=None: {**_asst(text, model, ts), **({"effort": eff} if eff else {})}
+    write_session(fake_claude_home, "F--p", SID, [
+        {"type": "user", "cwd": "F:/p", "message": {"role": "user", "content": "hi"}, "timestamp": "t0"},
+        a("a", "claude-opus-5-5", "t1", "medium"),
+        a("b", "claude-opus-5-5", "t2", "xhigh"),
+        a("c", "claude-opus-5-5", "t3"),                      # effort 없음 — xhigh 유지
+        a("sys", "<synthetic>", "t4", "low"),                 # 시스템 줄 — 무시
+    ])
+    m = scanner.scan_one(SID)
+    assert (m.last_model, m.last_effort) == ("claude-opus-5-5", "xhigh")
+    assert m.to_dict()["last_effort"] == "xhigh"
+    import json
+    with open(m.jsonl_path, "a", encoding="utf-8") as f:   # 증분: 뒤에 붙은 응답만 접는다
+        f.write(json.dumps(a("d", "claude-sonnet-5-5", "t5", "low")) + "\n")
+    m2 = scanner.scan_one(SID)
+    assert (m2.last_model, m2.last_effort) == ("claude-sonnet-5-5", "low")
+
+
+def test_scanner_last_effort_none_when_absent(fake_claude_home):
+    write_session(fake_claude_home, "F--p", SID, [_asst("a", "claude-opus-4-8", "t1")])
+    assert scanner.scan_one(SID).last_effort is None
+
+
 # ---- 저장: labels 오버라이드 ----
 
 def test_labels_model_override_set_get_clear(fake_claude_home):

@@ -1902,6 +1902,7 @@ def create_app() -> FastAPI:
                 "keep": bool(rec.get("keep")),      # 항상 켜 두기(쉬는 세션 정리 제외)
                 # 재개 모델: 오버라이드 있으면 그것, 없으면 감지(마지막 실사용).
                 "last_model": s.last_model,
+                "last_effort": s.last_effort,       # 마지막 응답의 effort(표시용, 재개 때 넘기지 않음)
                 "model_override": rec.get("model"),
                 "resume_model": rec.get("model") or s.last_model,
                 # 훅 기반 실시간 상태(없으면 None). 신선도 판정은 화면 쪽 책임.

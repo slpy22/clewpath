@@ -187,3 +187,21 @@ test("renderRows: 옛 줄은 ⏩ 이어받음 칩+dim, 열기/재개는 이어�
   await ctx.doDelete({ session_id: NEW });
   assert.ok(ev(ctx, "globalThis.__toasts").at(-1).includes("실행 중인 세션은 삭제할 수 없습니다"));
 });
+
+// ---------------------------------------------------------------- 🧠 칩: 모델 + 에포트(2026-10-28)
+test("🧠 칩에 마지막 응답의 에포트도 — 'Opus 5.5 · high'(없으면 모델만), 5.5 세대 이름은 'Opus 5.5'·'Sonnet 5.5'·'Haiku 5.5', 툴팁에 에포트", async () => {
+  const ctx = await load();
+  ev(ctx, `SESSIONS = [
+    {session_id:${JSON.stringify(A)}, title:'알파', project_folder:'F--p1', cwd:'F:/p1', ended_at:'2026-10-28T00:00:00Z', resume_model:'claude-opus-5-5', last_effort:'high'},
+    {session_id:${JSON.stringify(B)}, title:'베타', project_folder:'F--p1', cwd:'F:/p1', ended_at:'2026-10-27T00:00:00Z', resume_model:'claude-sonnet-5-5', model_override:true, last_effort:'xhigh'},
+    {session_id:${JSON.stringify(C)}, title:'감마', project_folder:'F--p1', cwd:'F:/p1', ended_at:'2026-10-26T00:00:00Z', resume_model:'claude-opus-5'}
+  ]; ACTIVE_LABEL = ''; COLLAPSED.clear()`);
+  const wrap = stubEl("div"); ctx.__wrap = wrap;
+  ev(ctx, "renderRows(globalThis.__wrap, '')");
+  const byId = Object.fromEntries(rows(wrap).map((row) => [row.dataset.sid, row]));
+  const chip = (id) => byId[id].children[0].children[0].children.find((k) => cls(k).startsWith("schip model"));
+  same([A, B, C].map((id) => chip(id).textContent), ["🧠 Opus 5.5 · high", "🧠 Sonnet 5.5 · xhigh", "🧠 Opus 5"]);
+  assert.ok(chip(B).title.includes("에포트 xhigh(마지막 응답)") && !chip(C).title.includes("에포트"));
+  same(["claude-haiku-5-5", "claude-opus-4-8", "claude-fable-5-1", "claude-opus-5-5-20261001", "gpt-x"].map((m) => ev(ctx, `modelShort(${JSON.stringify(m)})`)),
+       ["Haiku 5.5", "Opus 4.8", "Fable 5.1", "Opus 5.5", "gpt-x"]);
+});

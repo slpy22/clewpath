@@ -2467,15 +2467,20 @@ function modelShort(id){
              'claude-fable-5-1':'Fable 5.1','claude-fable-5':'Fable 5','claude-opus-5-1':'Opus 5.1',
              'claude-haiku-4-5-20251001':'Haiku 4.5'};
   if(map[id]) return map[id];
+  // claude-opus-5-5 → Opus 5.5 (2026-10-28: 5.5 세대가 표에 없어 'opus-5-5' 로 보였다)
+  const m=/^claude-(opus|sonnet|haiku|fable)-(\d+)(?:-(\d{1,2}))?(?:-\d{6,})?$/.exec(id);
+  if(m) return m[1][0].toUpperCase()+m[1].slice(1)+' '+m[2]+(m[3]?'.'+m[3]:'');
   return id.replace(/^claude-/,'').replace(/-\d{6,}$/,'');   // 폴백 축약
 }
+// 모델 + 마지막 응답의 에포트 — 'Opus 5.5 · high'. 에포트는 감지값(재개 때 넘기지 않는다 — claude 설정을 따른다)
+function modelEffort(s, id){ const m=modelShort(id); return m&&s&&s.last_effort?m+' · '+s.last_effort:m; }
 async function showModelPicker(s){
   const opts=await loadModelOpts();
   const cur=s.model_override||null, det=s.last_model||null;
   const body=el('div');
   body.appendChild(el('div','cwd','이 세션을 재개할 때 쓸 모델을 고릅니다. ClewPath 가 재개 시 --model 로 붙입니다(원본 파일 무수정). 설정하면 다음 재개부터 그 모델로 뜨고, 응답이 생기면 ClewPath 밖 재개에도 이어집니다.'));
   const info=el('div','cwd'); info.style.marginTop='6px';
-  info.textContent='감지(마지막 사용): '+(modelShort(det)||'없음')
+  info.textContent='감지(마지막 사용): '+(modelEffort(s,det)||'없음')
     +(cur?('   ·   설정됨: '+modelShort(cur)):'   ·   설정 없음(감지값으로 재개)');
   body.appendChild(info);
   const wrap=el('div'); wrap.style.cssText='display:flex;flex-wrap:wrap;gap:8px;margin-top:12px';
@@ -2529,7 +2534,7 @@ function showResumeChooser(s){
   // 재개 모델 표시 + 변경(세션별 오버라이드)
   const mrow=el('div','cwd'); mrow.style.marginTop='2px';
   mrow.textContent='🧠 재개 모델: '+(modelShort(s.resume_model)||'세션 기본(감지값)')
-    +(s.model_override?' (설정됨)':'');
+    +(s.model_override?' (설정됨)':'')+(s.last_effort?' · 마지막 에포트 '+s.last_effort:'');
   const mbtn=el('button','btn ghost','🧠 모델 변경'); mbtn.style.marginTop='6px';
   mbtn.onclick=()=>{ closeModal(); showModelPicker(s); };
   body.appendChild(mrow); body.appendChild(mbtn);
@@ -2691,8 +2696,8 @@ function renderRows(wrap,q){
       { const t=bgText(s); if(t){ const g=el('span','schip bg',t);
         g.title='백그라운드에서 돌고 있는 쉘·모니터 — 남아 있는 동안은 「완료」로 바뀌지 않습니다'; r1.appendChild(g); } }
       if(s.resume_model){
-        const mc=el('span','schip model'+(s.model_override?' set':''),'🧠 '+modelShort(s.resume_model));
-        mc.title='재개 모델'+(s.model_override?'(설정됨)':'(감지값)')+' — 클릭해 변경';
+        const mc=el('span','schip model'+(s.model_override?' set':''),'🧠 '+modelEffort(s,s.resume_model));
+        mc.title='재개 모델'+(s.model_override?'(설정됨)':'(감지값)')+(s.last_effort?' · 에포트 '+s.last_effort+'(마지막 응답)':'')+' — 클릭해 변경';
         mc.onclick=(e)=>{ e.stopPropagation(); showModelPicker(s); };
         r1.appendChild(mc);
       }

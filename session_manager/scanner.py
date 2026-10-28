@@ -55,6 +55,9 @@ class SessionMeta:
     # 마지막 '대화' 시각(user·assistant·작업 알림 줄). 쉬는 세션 판정용 — 파일 mtime 은 claude 가 쉬는 동안에도
     # 끝에 시각 없는 메타 줄(last-prompt·mode·atis-latch 등)을 다시 써서 갱신되므로 못 쓴다(2026-10-13 실측).
     last_activity_at: str | None = None
+    # 마지막 assistant 응답의 effort(low|medium|high|xhigh|max — claude 가 응답 줄 맨 위에 남긴다, 실측 2026-10-28).
+    # last_model 과 같은 줄에서 읽는다. 옛 버전 기록엔 없어 None
+    last_effort: str | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -69,7 +72,7 @@ class _Fold:
     다음 스캔으로 미룬다(claude 가 쓰는 중인 줄을 반만 읽지 않게).
     """
     __slots__ = ("meta", "started_at", "last_ts", "line_count", "message_count", "custom_title",
-                 "interactive_markers", "ai_title", "agent_name", "last_model", "continued_in", "offset", "sig",
+                 "interactive_markers", "ai_title", "agent_name", "last_model", "last_effort", "continued_in", "offset", "sig",
                  "ep_cli", "ep_other", "bg", "last_act")
 
     def __init__(self):
@@ -87,6 +90,7 @@ class _Fold:
         self.ai_title: str | None = None
         self.agent_name: str | None = None
         self.last_model: str | None = None    # 마지막 실사용 모델(재개 시 계승)
+        self.last_effort: str | None = None   # 그 응답의 effort(목록 표시용)
         self.continued_in: str | None = None  # continued-in 레코드: 이 대화가 이어진 새 세션 id
         self.offset = 0                       # 접은 바이트 수(완성된 줄 끝)
         self.sig = b""                        # 오프셋 직전 64바이트 — 앞부분 재작성 감지용
@@ -148,6 +152,9 @@ class _Fold:
                 _mdl = _m.get("model")
                 if _mdl and _mdl != "<synthetic>":
                     self.last_model = _mdl
+                    _eff = obj.get("effort")
+                    if isinstance(_eff, str) and _eff:
+                        self.last_effort = _eff
 
     def _bg_feed(self, obj: dict, ts) -> None:
         """백그라운드 쉘·모니터의 시작/끝 표식(claude 가 jsonl 에 남기는 도구 결과·작업 알림, 실측 2.1.x).
@@ -210,6 +217,7 @@ class _Fold:
             # 마지막 줄이 custom-title/snapshot(타임스탬프 없음)일 수 있으므로 last_ts 사용
             ended_at=self.last_ts,
             last_activity_at=self.last_act,
+            last_effort=self.last_effort,
             message_count=self.message_count,
             line_count=self.line_count,
             size_bytes=stat.st_size,
