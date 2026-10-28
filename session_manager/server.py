@@ -39,12 +39,22 @@ class AskReq(BaseModel):
 
 
 class ServiceReq(BaseModel):
-    """외부 서비스 등록·수정 바디(서비스 대장 S2). bases = {용도: 원본 세션 id}."""
+    """외부 서비스 등록·수정 바디(서비스 대장 S2). bases = {용도: 원본 세션 id}. oneshot = 세션 없는 단발 실행 허용."""
     id: str | None = None
     name: str | None = None
     bases: dict[str, str] | None = None
     limits: dict | None = None
     status: str | None = None
+    oneshot: bool | None = None
+
+
+class OneshotReq(BaseModel):
+    """세션 없는 단발 실행(2026-10-28). system 은 기본 시스템 프롬프트를 바꾼다(--system-prompt)."""
+    prompt: str
+    system: str | None = None
+    model: str
+    effort: str | None = None
+    timeout: int = 60
 
 
 class ServiceRequestReq(BaseModel):
@@ -97,6 +107,9 @@ COOKIE_PATH = (BASE_PATH + "/") if BASE_PATH else "/"
 from session_manager.housekeeping import BUILTIN_MODELS as SELECTABLE_MODELS  # noqa: E402  내장 기본(2026-10-12 갱신)
 # --model 값 안전 토큰(argv 리스트라 셸 주입 위험은 없으나 오타·쓰레기 차단).
 _MODEL_TOKEN_RE = __import__("re").compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+# 세션 없는 단발 실행: 한 번에 도는 claude 수 상한(넘으면 429 busy)·프롬프트/시스템 길이 상한
+_oneshot_slots = threading.BoundedSemaphore(3)
+ONESHOT_MAX_CHARS = 100_000
 
 # 루프백(로컬) 요청은 인증 생략. SM_TRUST_LOCAL=0 이면 끔.
 # 서버가 127.0.0.1 에만 바인딩되고, 외부는 nginx(도커 브리지 IP)로 들어오므로
@@ -565,6 +578,9 @@ def create_app() -> FastAPI:
         if saved:
             return {"models": saved["models"], "source": "merged", "updated_at": saved.get("updated_at")}
         return {"models": SELECTABLE_MODELS, "source": "builtin"}
+
+    def _model_ids() -> set:
+        return {m.get("id") for m in list_models()["models"] if isinstance(m, dict)}
 
     @app.post("/api/sessions/{session_id}/model")
     async def set_session_model(session_id: str, request: Request):
@@ -1969,6 +1985,46 @@ def create_app() -> FastAPI:
                                   "model") if g[k]}})
         return JSONResponse(r, status_code=(404 if "error" in r else 200))
 
+    # ---- 외부 API v1: 세션 없는 단발 실행(2026-10-28, 번역 서비스 요청) ----
+    # 이어받을 세션이 없어 빠르고(실측 4~6초) 남는 기록도 없다. 서비스 토큰은 oneshot 이 켜진 것만(미들웨어 http_allowed).
+    # 감사 기록에는 호출자·모델·시간·비용만 — 프롬프트·답 본문은 남기지 않는다.
+    @app.post("/api/v1/oneshot")
+    def api_v1_oneshot(body: OneshotReq, request: Request):
+        token = (request.query_params.get("token")
+                 or auth.bearer(request.headers.get("authorization")))
+        svc = services.identify(token) if services.looks_like(token) else None
+        who = {"service": svc["id"]} if svc else {"token": policy.token_id(token)}
+        if services.looks_like(token) and (not svc or not svc.get("oneshot")):
+            return JSONResponse({"error": "service_scope"}, status_code=403)   # 루프백으로 들고 온 서비스 토큰도 같은 규칙
+        if body.model not in _model_ids():
+            return JSONResponse({"error": "bad_model", "allowed": sorted(_model_ids())}, status_code=400)
+        if body.effort is not None and body.effort not in webapi.ONESHOT_EFFORTS:
+            return JSONResponse({"error": "bad_effort", "allowed": list(webapi.ONESHOT_EFFORTS)}, status_code=400)
+        prompt = body.prompt or ""
+        if not prompt.strip():
+            return JSONResponse({"error": "empty_prompt"}, status_code=400)
+        if len(prompt) > ONESHOT_MAX_CHARS or len(body.system or "") > ONESHOT_MAX_CHARS:
+            return JSONResponse({"error": "too_long", "max_chars": ONESHOT_MAX_CHARS}, status_code=413)
+        ok, reason, _ = policy.check_quota(token, svc)
+        if not ok:
+            policy.audit({"event": "oneshot", **who, "blocked": reason})
+            return JSONResponse({"error": reason}, status_code=429)
+        if not _oneshot_slots.acquire(blocking=False):
+            return JSONResponse({"error": "busy"}, status_code=429)
+        try:
+            budgets = [b for b in (policy.max_call_usd(),
+                                   ((svc or {}).get("limits") or {}).get("max_call_usd")) if b]
+            r = webapi.oneshot(prompt, model=body.model, system=body.system, effort=body.effort,
+                               timeout=max(5, min(int(body.timeout or 60), 300)),
+                               max_budget_usd=(min(budgets) if budgets else None))
+        finally:
+            _oneshot_slots.release()
+        policy.record_usage(token, r.get("cost_usd"), service=svc)
+        policy.audit({"event": "oneshot", **who, "model": r["model"], "effort": body.effort,
+                      "duration_s": r["duration_s"], "cost_usd": r.get("cost_usd"), "is_error": r["is_error"],
+                      **{k: True for k in ("isolation_breach", "persisted") if r.get(k)}})
+        return r
+
     @app.get("/api/v1/labels")
     def api_v1_labels():
         return {"labels": labels.label_counts()}
@@ -2000,8 +2056,10 @@ def create_app() -> FastAPI:
     @app.post("/api/owner/services")
     def owner_service_create(body: ServiceReq, request: Request):
         def run():
-            rec, token = services.create(body.id or "", body.name or "", body.bases or {}, body.limits)
-            policy.audit({"event": "service_create", "service": rec["id"], "bases": rec["bases"]})
+            rec, token = services.create(body.id or "", body.name or "", body.bases or {}, body.limits,
+                                         oneshot=bool(body.oneshot))
+            policy.audit({"event": "service_create", "service": rec["id"], "bases": rec["bases"],
+                          "oneshot": rec["oneshot"]})
             return {"service": rec, "token": token,
                     "note": "토큰 원문은 지금 한 번만 보입니다. 서비스 env 에 넣고 이 응답은 남기지 마세요."}
         return _svc_call(request, run)
@@ -2009,9 +2067,11 @@ def create_app() -> FastAPI:
     @app.post("/api/owner/services/{sid}")
     def owner_service_update(sid: str, body: ServiceReq, request: Request):
         def run():
-            rec = services.update(sid, name=body.name, bases=body.bases, limits=body.limits, status=body.status)
+            rec = services.update(sid, name=body.name, bases=body.bases, limits=body.limits, status=body.status,
+                                  oneshot=body.oneshot)
             policy.audit({"event": "service_update", "service": sid,
-                          **{k: v for k, v in (("status", body.status), ("bases", body.bases)) if v is not None}})
+                          **{k: v for k, v in (("status", body.status), ("bases", body.bases),
+                                               ("oneshot", body.oneshot)) if v is not None}})
             return {"service": rec}
         return _svc_call(request, run)
 

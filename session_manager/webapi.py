@@ -574,6 +574,110 @@ def ephemeral_ask(session_id: str, prompt: str, skip_permissions: bool = True,
     return r
 
 
+ONESHOT_EFFORTS = ("low", "medium", "high")
+
+
+def oneshot_dir():
+    """단발 실행의 작업 폴더 — 비어 있는 고정 폴더(프로젝트 CLAUDE.md·설정을 읽히지 않게)."""
+    from session_manager import config
+    d = config.data_dir() / "oneshot"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def oneshot(prompt: str, *, model: str, system: str | None = None, effort: str | None = None,
+            timeout: int = 60, max_budget_usd: float | None = None) -> dict:
+    """세션 없는 단발 실행(2026-10-28, 번역 서비스 요청) — 이어받을 세션도 남길 기록도 없는 claude -p 한 번.
+
+    격리는 PC 사이 묻기와 같다(_ISOLATED_ARGS: 도구·MCP·훅 없음, 기록 안 남김, 권한 건너뛰기 없음). system 이 있으면
+    --system-prompt 로 기본 시스템 프롬프트를 바꾼다. 이어받는 과거가 없으니 --max-budget-usd 가 이번 실행분과 그대로 비교된다.
+    그래도 기록이 생겼으면(미래 claude 가 --no-session-persistence 를 무시) 지우고 persisted=True.
+    tool_use 가 나오면 계약 위반이라 답을 버린다(isolation_breach).
+    """
+    from session_manager import lifecycle, osdep
+    sid = str(uuid.uuid4())
+    exe = shutil.which("claude") or "claude"
+    if prompt.startswith("-"):
+        prompt = " " + prompt          # 프롬프트가 claude 옵션으로 읽히지 않게
+    argv = [exe, "-p", prompt, "--session-id", sid, "--output-format", "stream-json", "--verbose",
+            *_ISOLATED_ARGS, "--model", model]
+    if system:
+        argv += ["--system-prompt", system]
+    if effort:
+        argv += ["--effort", effort]
+    if max_budget_usd and max_budget_usd > 0:
+        argv += ["--max-budget-usd", str(max_budget_usd)]
+    stdin_prompt = None
+    if len(subprocess.list2cmdline(argv)) > ARGV_PROMPT_MAX:    # 긴 프롬프트는 stdin 으로(ephemeral_ask 와 같은 이유)
+        stdin_prompt = prompt.lstrip().encode("utf-8")
+        del argv[2]
+
+    answer: list[str] = []
+    tool_uses: list[str] = []
+    result_text = None
+    run_cost = RunCost()
+    is_error = False
+    proc = None
+    t0 = time.monotonic()
+    try:
+        from session_manager import ptyd
+        proc = subprocess.Popen(argv, cwd=str(oneshot_dir()), env=ptyd.clean_env(),
+                                stdin=subprocess.PIPE if stdin_prompt is not None else subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                creationflags=osdep.NO_WINDOW)
+        osdep.guard_child(proc.pid)        # 고아 방지(Job Object)
+        try:
+            out, _err = proc.communicate(input=stdin_prompt, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            is_error = True
+            result_text = f"시간초과({timeout}s)"
+            out = b""
+            try:
+                proc.kill()
+                proc.communicate(timeout=5)
+            except Exception:  # noqa: BLE001
+                try:
+                    proc.wait(timeout=3)
+                except Exception:  # noqa: BLE001
+                    pass
+        for line in out.decode("utf-8", "replace").splitlines():
+            try:
+                o = json.loads(line)
+            except Exception:  # noqa: BLE001
+                continue
+            if not isinstance(o, dict):
+                continue
+            run_cost.feed(o)
+            t = o.get("type")
+            if t == "assistant":
+                for b in o.get("message", {}).get("content", []):
+                    if b.get("type") == "text":
+                        answer.append(b.get("text", ""))
+                    elif b.get("type") == "tool_use":
+                        tool_uses.append(b.get("name", "?"))
+            elif t == "result":
+                result_text = o.get("result")
+                is_error = bool(o.get("is_error"))
+    finally:
+        duration_s = round(time.monotonic() - t0, 2)
+        try:
+            if proc is not None and proc.poll() is None:
+                proc.kill(); proc.wait(timeout=3)
+        except Exception:  # noqa: BLE001
+            pass
+        persisted = _fork_jsonl_exists(sid)
+        if persisted:
+            lifecycle.delete_fork(sid)
+
+    r = {"answer": "".join(answer) or result_text or "", "is_error": is_error, "model": model,
+         "duration_s": duration_s, "cost_usd": run_cost.usd()}
+    if tool_uses:
+        r.update(answer="", is_error=True, isolation_breach=True)
+    if persisted:
+        r["persisted"] = True
+    return r
+
+
 async def _send(ws, obj: dict) -> None:
     try:
         await ws.send_text(json.dumps(obj, ensure_ascii=False))

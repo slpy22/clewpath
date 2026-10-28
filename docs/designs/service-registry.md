@@ -92,6 +92,15 @@
 | `GET …/profile` | ✅ | ✅ | 자기 base 만(읽기) |
 | `POST …/profile`, `…/labels`, `…/title` | ✅ | ❌ (로컬로 이동) | ❌ |
 | `GET /api/v1/service/me` (신규) | — | — | 자기 서비스 정보·오늘 사용량·한도 |
+| `POST /api/v1/oneshot` (0.33.4) | ✅ | ✅ | 서비스의 `oneshot` 이 켜졌을 때만 |
+
+**세션 없는 단발 실행**(`POST /api/v1/oneshot`, 2026-10-28 번역 서비스 요청·사장님 승인): 이어받을 세션 없이 `claude -p` 한 번.
+body `{prompt, system?, model, effort?: low|medium|high, timeout?: 60(5~300)}` → `{answer, is_error, model, duration_s, cost_usd}`.
+격리는 PC 사이 묻기와 같다(`_ISOLATED_ARGS`: 도구·MCP·훅 없음, `--no-session-persistence`, 권한 건너뛰기 없음) + `--session-id` 로 기록이
+생겼는지 확인해 있으면 지운다(`persisted:true`). `system` 은 `--system-prompt`(기본 시스템 프롬프트 교체), model 은 `/api/models` 목록만,
+작업 폴더는 비어 있는 `data_dir/oneshot`. 이어받는 과거가 없어 `--max-budget-usd`(전역·서비스 `max_call_usd` 중 작은 값)가 그대로 듣는다.
+동시 3건(넘으면 429 `busy`), 프롬프트·system 각 10만 자(413). 서비스별 하루 한도·감사(호출자·모델·시간·비용만 — 본문은 남기지 않음).
+`oneshot` 서비스는 원본(bases) 없이 등록된다(`POST /api/owner/services {"id","name","bases":{},"oneshot":true}`). 실측(Sonnet 5.5, effort low): 3.6초.
 
 서비스 토큰의 한도는 서비스별 `limits` 를 쓴다(지금은 전역 `SM_API_DAILY_*` 를 토큰별로 적용).
 
