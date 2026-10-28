@@ -913,6 +913,9 @@
     #app[data-view] #paneDetail.mon-mode{display:flex!important}
     #app[data-view] #paneDetail.fb-mode{display:flex!important}   /* 파일 편집기는 목록(탐색기)과 나란히 항상 보임 */
     #app[data-view] #paneDetail.term-mode{display:grid!important}  /* 터미널도 — 탭 막대로 목록 보기를 바꿔도 사라지지 않게(2026-10-15) */
+    /* 터미널 막대(‹ 목록·📖 이력)는 PC 에서 빈 줄만 차지 — 막대째 숨기고 행 하나를 줄인다(2026-10-28) */
+    #paneDetail.term-mode>.backbar.termbar{display:none}
+    #paneDetail.term-mode{grid-template-rows:auto minmax(0,1fr)}
     #paneDetail{font-size:15px}
     /* 드래그 구분선 */
     #resizer{display:block;position:relative;cursor:col-resize;background:var(--surface);
@@ -3623,24 +3626,13 @@ async function loadTerminal(s, safe, opt){
   // 바의 버튼들은 '지금 전경인 탭'에 작동해야 한다 — 구축 시점의 s 를 붙들면 탭 전환 뒤
   // 엉뚱한(첫) 세션에 작동한다. 활성 탭을 그때그때 읽는다.
   const cur=()=>{ const t=findTab(TABS.active); return t?t.s:s; };
-  const bar=listBack();
-  const hist=el('button',null,'📖 이력'); hist.title='과거 대화를 뷰어로 보기';
+  // 막대 = 폰 전용(‹ 목록 · 📖 이력). PC(≥880px)는 머리 줄 💬 뷰어가 같은 일을 해 막대째 숨긴다(사장님 2026-10-28).
+  // 터미널 종료는 탭 × → '⏹ 세션 종료' 한 곳(막대 ⏹ 종료는 같은 날 뺐다).
+  const bar=listBack(); bar.classList.add('termbar');
+  const hist=el('button','term-hist','📖 이력'); hist.title='과거 대화를 뷰어로 보기';
   hist.style.cssText='margin-left:auto;color:var(--accent);padding:10px 14px;font-weight:650';
   hist.onclick=()=>{ const c=cur(); leaveTerminalView(); loadViewer(c); };
   bar.appendChild(hist);
-  // 종료: persist PTY 는 화면을 닫아도 살아 있어(재접속 설계) 여기서 끝내는 게 유일한 UI 경로.
-  // (탭 스트립의 × 는 '화면만 닫기/세션 종료'를 고르게 하고, 이 버튼은 바로 종료.)
-  const stop=el('button',null,'⏹ 종료'); stop.title='이 터미널의 claude 프로세스를 종료합니다';
-  stop.style.cssText='color:#e66;padding:10px 14px;font-weight:650';
-  stop.onclick=async()=>{
-    if(!confirm('열려 있는 터미널(claude)을 종료할까요?\n화면을 닫아도 유지되던 프로세스가 완전히 끝납니다.')) return;
-    const c=cur(), ck=TABS.active;
-    if(!await stopSessionTerminal(c)) return;
-    removeTab(ck); saveTabs();              // PTY 가 죽었으니 탭도 내린다
-    const next=recentTab();                 // 최근에 본 탭으로
-    if(next){ switchTab(next.key); } else { leaveTerminalView(); loadDetail(c); }
-  };
-  bar.appendChild(stop);
   main.appendChild(bar);
   // 탭 스트립(모니터 범례 칩 재사용) — 뒤로가기 바 다음 행(위 CSS grid 행 참고)
   const strip=el('div','mon-legend term-tabs'); main.appendChild(strip);

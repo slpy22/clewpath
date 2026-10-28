@@ -178,7 +178,7 @@ test("T107 목록 줄·알림으로 '다른 기기가 가져간 터미널'을 �
 });
 
 // ---------------------------------------------------------------- 4. 탭 닫기·⏹ 종료 뒤 최근 본 탭
-test("T108 보던 탭을 닫거나(× → 화면만 닫기·⏹ 세션 종료) 터미널 막대 ⏹ 종료로 끝내면 첫 탭이 아니라 '최근에 본 탭'으로 간다", async () => {
+test("T108 보던 탭을 닫거나(× → 화면만 닫기·⏹ 세션 종료) 끝내면 첫 탭이 아니라 '최근에 본 탭'으로 간다 — 종료는 × 한 곳(막대 ⏹ 종료 없음, 2026-10-28)", async () => {
   const ids = ["a", "b", "c", "d", "e"].map((c) => c.repeat(8) + "-1111-2222-3333-444444444444");
   const { ctx, pd } = await boot({ mem: { tabs: ids },
     pre: `SESSIONS = ${JSON.stringify(ids.map((id, i) => ({ session_id: id, title: id[0].toUpperCase(), live_terminal: true, cwd: "E:/p" + i, mtime: 9 - i })))};
@@ -187,13 +187,13 @@ test("T108 보던 탭을 닫거나(× → 화면만 닫기·⏹ 세션 종료) �
   const got = { start: at(ctx) };
   ev(ctx, `closeTab('${ids[1]}')`); __modalBtn(ctx, "화면만 닫기").onclick(); await tick(RENDER);
   got.closeView = at(ctx);
-  const stop = pd.children[0].children.find((b) => b.textContent === "⏹ 종료");
-  await stop.onclick(); await tick(RENDER);
+  got.barNoStop = !pd.children[0].children.some((b) => String(b.textContent).includes("종료"));
+  ev(ctx, `closeTab('${ids[2]}')`); await __modalBtn(ctx, "⏹ 세션 종료").onclick(); await tick(RENDER);
   got.barStop = at(ctx);
   ev(ctx, `closeTab('${ids[3]}')`); await __modalBtn(ctx, "⏹ 세션 종료").onclick(); await tick(RENDER);
   got.closeStop = at(ctx);
   got.tabs = ev(ctx, "TABS.list.map((t) => sessLabel(t.s)).join(',')");
-  assert.deepEqual(got, { start: "terminal:b", closeView: "terminal:c", barStop: "terminal:d", closeStop: "terminal:e", tabs: "A,E" });
+  assert.deepEqual(got, { start: "terminal:b", closeView: "terminal:c", barNoStop: true, barStop: "terminal:d", closeStop: "terminal:e", tabs: "A,E" });
 });
 function __modalBtn(ctx, label) { return ev(ctx, "__modal.btns").find((b) => b.textContent === label); }
 
@@ -363,4 +363,18 @@ test("T114 업데이트 확인: 최신 릴리스가 이 OS 용이 아니면(unsu
     "새 버전": "0.32.2→0.33.0",
     "개발 소스": "개발 소스에서 실행 중입니다 (v0.32.2). 이 PC 는 git 으로 갱신하세요 — 자동 업데이트는 소스 트리 보호를 위해 막혀 있습니다.",
   });
+});
+
+// ---------------------------------------------------------------- 터미널 막대 정리(2026-10-28 사장님)
+test("T115 터미널 막대에는 ‹ 목록·📖 이력만(⏹ 종료 없음) — 막대는 termbar 표시가 붙고, PC 폭(≥880px) 규칙에서만 막대째 숨기며 행을 2개로 줄인다. 폰 규칙에는 숨김이 없다", async () => {
+  const { ctx, pd } = await boot({ mem: { tabs: [A, B] } });
+  ev(ctx, `switchTab('${A}')`); await tick(RENDER);
+  const bar = pd.children[0];
+  const got = { cls: String(bar.className), btns: bar.children.map((b) => String(b.textContent)), hist: String(bar.children[1].className) };
+  const css = readFileSync(INDEX, "utf-8").replace(/\r/g, "");
+  const pcAt = css.indexOf("/* ---- 데스크톱(≥880px)");
+  const rule = "#paneDetail.term-mode>.backbar.termbar{display:none}";
+  got.pcHide = css.indexOf(rule) > pcAt && pcAt > 0 && css.indexOf(rule) === css.lastIndexOf(rule);
+  got.pcRows = css.slice(pcAt).includes("#paneDetail.term-mode{grid-template-rows:auto minmax(0,1fr)}");
+  assert.deepEqual(got, { cls: "backbar toonly termbar", btns: ["‹ 목록", "📖 이력"], hist: "term-hist", pcHide: true, pcRows: true });
 });
