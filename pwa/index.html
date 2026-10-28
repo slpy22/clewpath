@@ -106,19 +106,6 @@
     #qs button{position:relative}
     #qs button.attn::after{content:'';position:absolute;top:3px;right:3px;width:7px;height:7px;border-radius:50%;background:#e8a03c;
       box-shadow:0 0 0 2px var(--bg)}               /* 볼 일 점 — 열린 탭 중 권한·입력 대기(🔔 배지와 같은 주황) */
-    /* 빈 상세 칸 '최근 화면'(§3-6) — 폰은 빈 안내 자체가 숨어 있다 */
-    .detail-empty{flex-direction:column;gap:16px}
-    .qs-recent{display:flex;flex-direction:column;gap:10px;width:min(560px,100%)}
-    .qs-rh{display:flex;align-items:center;gap:10px;font-size:.76rem;color:var(--muted)}
-    .qs-rh::before,.qs-rh::after{content:'';flex:1;height:1px;background:var(--line)}
-    .qs-rg{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px}
-    .qs-rb{display:flex;align-items:center;gap:10px;min-width:0;padding:10px 12px;border-radius:11px;border:1px solid var(--line);
-      background:var(--surface);color:var(--ink);text-align:left}
-    .qs-rb:hover{border-color:var(--accent);background:var(--surface2)}
-    .qs-rb .qi{flex:none;font-size:1.1rem}
-    .qs-rb .qt{display:flex;flex-direction:column;min-width:0}
-    .qs-rb .qn{font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-    .qs-rb small{color:var(--muted);font-size:.74rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   }
   @media (min-width:880px) and (max-width:1099px){ #qs .ql{display:none} #qs button{padding:0 9px} }
   /* ---- 화면 바로가기 끝 ---- */
@@ -130,7 +117,35 @@
   /* 모바일: 한 화면씩(목록↔상세 전환) */
   #app[data-view=detail] #paneList{display:none}
   #app[data-view=list] #paneDetail{display:none}
-  .detail-empty{display:none}
+  /* 🏠 홈(빈 상세 칸, home-dashboard.md) — 폰은 🏠 을 누르면 상세 쪽에 보인다(2026-10-28 전엔 숨김) */
+  .detail-empty{display:flex;flex-direction:column;gap:16px;padding:14px 12px;color:var(--muted)}
+  .home-dash{display:flex;flex-direction:column;gap:14px;width:min(760px,100%)}
+  .hd-idle{padding:14px;border:1px dashed var(--line);border-radius:12px;text-align:center;font-size:.9rem}
+  .hd-sec{display:flex;flex-direction:column;gap:6px}
+  .hd-h{display:flex;align-items:center;gap:8px;font-size:.8rem;font-weight:650;color:var(--ink2)}
+  .hd-h .n{font-size:.72rem;padding:1px 7px;border-radius:9px;background:var(--surface2);color:var(--muted);font-weight:600}
+  .hd-sec.k-att .hd-h{color:#e8a03c}
+  .hd-row{display:flex;align-items:center;gap:10px;min-width:0;padding:11px 12px;border-radius:11px;border:1px solid var(--line);
+    background:var(--surface);color:var(--ink);text-align:left;min-height:48px}
+  .hd-row:hover{border-color:var(--accent);background:var(--surface2)}
+  .hd-row.k-att{border-color:#e8a03c66;background:color-mix(in srgb,#e8a03c 9%,var(--surface))}
+  .hd-row .qi{flex:none;font-size:1.1rem}
+  .hd-row .qt{display:flex;flex-direction:column;min-width:0;flex:1}
+  .hd-row .qn{font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .hd-row small{color:var(--muted);font-size:.76rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .hd-row .tm{flex:none;font-size:.76rem;color:var(--muted);white-space:nowrap}
+  .qs-recent{display:flex;flex-direction:column;gap:10px;width:min(760px,100%)}
+  .qs-rh{display:flex;align-items:center;gap:10px;font-size:.76rem;color:var(--muted)}
+  .qs-rh::before,.qs-rh::after{content:'';flex:1;height:1px;background:var(--line)}
+  .qs-rg{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px}
+  .qs-rb{display:flex;align-items:center;gap:10px;min-width:0;padding:10px 12px;border-radius:11px;border:1px solid var(--line);
+    background:var(--surface);color:var(--ink);text-align:left}
+  .qs-rb:hover{border-color:var(--accent);background:var(--surface2)}
+  .qs-rb .qi{flex:none;font-size:1.1rem}
+  .qs-rb .qt{display:flex;flex-direction:column;min-width:0}
+  .qs-rb .qn{font-weight:650;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .qs-rb small{color:var(--muted);font-size:.74rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .de-msg{font-size:.86rem;text-align:center}
 
   /* ---- 목록 ---- */
   .search{position:sticky;top:0;z-index:2;padding:12px 14px;background:var(--bg)}
@@ -931,8 +946,10 @@
     #app.side-off #btn-side{color:var(--accent)}
     .backbar.tolist{display:none}              /* '목록' 뒤로가기 숨김(목록 항상 보임) */
     .backbar.toonly>.toback{display:none}      /* 터미널·뷰어 줄: '목록' 버튼만 숨기고 나머지 버튼은 둔다 */
-    .detail-empty{display:flex;height:100%;align-items:center;justify-content:center;
-      color:var(--muted);padding:40px;text-align:center}
+    /* 홈: 가운데 정렬하되 내용이 칸보다 길면 위가 잘리지 않게(첫·끝 자식 margin auto) */
+    .detail-empty{min-height:100%;align-items:center;padding:32px 40px}
+    .detail-empty>:first-child{margin-top:auto}
+    .detail-empty>:last-child{margin-bottom:auto}
     .sbtn{width:56px;font-size:1.3rem}
     .msg{max-width:80%}
     /* 마우스 hover 피드백(터치엔 영향 없음) */
@@ -1612,15 +1629,17 @@ let SELECTED_ID=null;
 
 // ---- 2-pane 헬퍼 (모바일=한화면 전환, 데스크톱=좌목록+우상세 동시) ----
 const paneList=()=>$('#paneList'), paneDetail=()=>$('#paneDetail');
-function showListPane(){ $('#app').setAttribute('data-view','list'); }
+function showListPane(){ $('#app').setAttribute('data-view','list'); if(innerWidth<880) headList(); }   // 폰: 홈에서 목록으로 오면 제목 '세션'
 function showDetailPane(){ $('#app').setAttribute('data-view','detail'); }
 // 빈 상세 칸 — 안내 한 줄 + (PC) '최근 화면' 단추(renderEmptyPane, quick-switch §3-6). 바깥 상자는 그대로 'detail-empty' 하나
 let EMPTY_BOX=null;
 function detailPlaceholder(txt){ paneEnter('empty'); const p=paneDetail(); closeInlineMonitor(); p.classList.remove('term-mode','fb-mode','mon-mode'); p.innerHTML=''; headList();
-  const box=el('div','detail-empty'); box._txt=txt||''; box._shape=''; box._btns=[]; EMPTY_BOX=box; p.appendChild(box); renderEmptyPane(); }
+  const box=el('div','detail-empty'); box._txt=txt||''; box._shape=''; box._btns=[]; box._rows=[]; EMPTY_BOX=box; p.appendChild(box); renderEmptyPane(); }
 // 머리 줄 제목(#head) — 상세 칸 화면이 저마다 적는다(세션 상세·뷰어·파일·관제·터미널 재개…). 폰은 한 칸씩이라 목록 칸으로 오면 '세션'.
-// PC 는 두 칸이 함께 보여 제목이 상세 칸 화면 이름을 따른다 — 목록을 새로 받을 때(⟳·보기 전환·재연결) 덮지 않고, 상세 칸이 비면 '세션'(quick-switch 6단계)
-function headList(){ if(innerWidth<880||PANE_NOW.kind==='empty') $('#head').textContent='세션'; }
+// PC 는 두 칸이 함께 보여 제목이 상세 칸 화면 이름을 따른다 — 목록을 새로 받을 때(⟳·보기 전환·재연결) 덮지 않는다(quick-switch 6단계).
+// 상세 칸이 비면 그 칸이 🏠 홈이라 '홈'(2026-10-28, home-dashboard.md) — 폰은 홈 화면(상세 쪽)을 보고 있을 때만
+function headList(){ const home=PANE_NOW.kind==='empty'&&(innerWidth>=880||$('#app').getAttribute('data-view')==='detail');
+  if(home) $('#head').textContent='홈'; else if(innerWidth<880) $('#head').textContent='세션'; }
 function highlightSelected(){ document.querySelectorAll('.srow').forEach(r=>
   r.classList.toggle('sel', r.dataset.sid===SELECTED_ID)); }
 // ---- 화면 진입 기록(quick-switch §8 2단계) ----
@@ -1646,6 +1665,7 @@ function navTicket(){ const n=++NAV_SEQ, g=PANE_NOW.gen, pc=pcNow(); return ()=>
 function navPassive(){ const n=NAV_SEQ, g=PANE_NOW.gen, pc=pcNow(); return ()=>n===NAV_SEQ&&g===PANE_NOW.gen&&pc===pcNow(); }
 function paneEnter(kind, ref){
   const p=paneDetail(), r=ref||{};
+  homeSeenSet(PANE_NOW.sid); if(r.session_id) homeSeenSet(r.session_id);   // 🏠 '방금 끝남'에서 이 기기가 이미 본 것을 뺀다(보다가 끝난 것도)
   if(kind!=='terminal'&&(p.classList.contains('term-mode')||termView.main)) leaveTerminalView();   // 연결·탭 배지를 닫는다 — 재연결·화면 복귀가 떠난 터미널로 끌고 가지 않게(T2)
   if(kind!=='terminal') CURRENT_TERM_SID=null;                  // 그 세션 알림이 무시되지 않게(T3)
   if(kind!=='viewer') closeLiveViewer();
@@ -7042,7 +7062,9 @@ function quickGoHome(){
   if(MON_OV) MON_OV.close();
   SELECTED_ID=null; highlightSelected();
   if(PANE_NOW.kind!=='empty') detailPlaceholder();
-  showListPane(); renderQuickSoon();
+  // 폰도 🏠 은 홈 화면(사장님 2026-10-28) — 목록은 아래 💬 세션. PC 는 두 칸이 함께라 목록 칸 그대로
+  if(innerWidth<880){ showDetailPane(); headList(); } else showListPane();
+  renderQuickSoon();
 }
 async function quickGo(kind){
   if(kind==='home') return quickGoHome();
@@ -7192,31 +7214,88 @@ function quickTitleSync(){
 }
 quickTitleSync();
 window.addEventListener('resize', quickTitleSync);
-// 빈 상세 칸(§3-6) — 안내 + '최근 화면'(갈 수 있는 기억만 = 흐림 빼고, 마지막 화면이 맨 앞·나머지는 단추 순서). 첫 목록 전엔 기억을 확인하지
-// 못해 모두 흐림(quickTargets)이라 단추가 없다. 목록 칸이 접혀 있으면 '왼쪽에서 …'는 틀린 말이라 ◧ 안내로 바꾼다. 폰은 빈 안내 자체가
-// 숨어 있다(CSS). 모습(안내·단추 차례)이 같으면 글자만 고친다 — 💬 칸의 '방금 → 1분 전'처럼 매분 바뀌는 글자로 20초 갱신이 단추를 새로
-// 만들면 Tab 으로 둔 키보드 커서가 빠졌다(검토). 차례가 바뀌어 새로 그릴 때는 커서가 있던 칸의 새 단추로 커서를 옮긴다
+// ---- 🏠 홈(docs/designs/home-dashboard.md, 2026-10-28) — 빈 상세 칸 = 지금 볼 일 · 작업 중 · 방금 끝남 · 최근 화면 ----
+// 새 요청 없이 20초 목록(SESSIONS)만 쓴다. 목록 줄 배지(sessionBadge)와 같은 판정이라 둘이 어긋나지 않는다.
+const HOME_DONE_S=6*3600;   // '방금 끝남' = 끝난 지 6시간 안(사장님 결정)
+// 이 기기에서 세션을 마지막으로 본 시각(서버 시계 초, sm_seen_<PC>) — '방금 끝남'에서 이미 본 것을 뺀다. 7일 지난 것은 적을 때 지운다
+function homeSeen(){ const m=lsJson(paneKey('sm_seen'),{}); return (m&&typeof m==='object'&&!Array.isArray(m))?m:{}; }
+function homeSeenSet(sid){ if(!sid) return; const now=Date.now()/1000+CLOCK_SKEW, m=homeSeen(); m[sid]=now;
+  for(const k of Object.keys(m)) if(!(now-m[k]<7*86400)) delete m[k]; lsSet(paneKey('sm_seen'), m); }
+function homeSessions(){
+  const now=Date.now()/1000+CLOCK_SKEW, seen=homeSeen(), rt=(s,f)=>(s.runtime&&s.runtime[f])||0;
+  const att=[], work=[], done=[];
+  for(const s of (SESSIONS||[])){ if(s.headless||s.continued_in) continue;   // claude -p 기록·이어진 옛 줄은 빼고
+    const b=sessionBadge(s), t=b&&b.text;
+    if(t==='권한 대기'||t==='입력 대기') att.push(s);
+    else if(t==='작업 중'||t==='백그라운드') work.push(s);
+    else if(s.runtime&&s.runtime.phase==='ready'){ const r=rt(s,'ready_at'); if(r&&now-r<HOME_DONE_S&&!(seen[s.session_id]>=r)) done.push(s); } }
+  const wt=(s)=>rt(s,'permission_at')||rt(s,'waiting_at');
+  att.sort((a,b)=>wt(a)-wt(b));                                 // 오래 기다린 것이 위
+  work.sort((a,b)=>rt(b,'thinking_at')-rt(a,'thinking_at'));
+  done.sort((a,b)=>rt(b,'ready_at')-rt(a,'ready_at'));
+  return {att, work, done:done.slice(0,8)};
+}
+// 기다린·작업한 시간 — '방금' · 'N분째' · 'N시간째'
+function homeFor(t){ if(!t) return ''; const d=Math.max(0,Date.now()/1000+CLOCK_SKEW-t);
+  return d<60?'방금':d<3600?Math.floor(d/60)+'분째':Math.floor(d/3600)+'시간째'; }
+// 홈 한 줄 — 누르면 볼 일·작업 중은 그 세션 터미널(목록 줄과 같은 규칙: 인계 확인·재개 선택은 jumpToSession), 끝남은 대화 보기
+function homeRow(k, s){
+  const b=el('button','hd-row k-'+k); b.type='button'; b.dataset.k=k+':'+s.session_id;
+  b.appendChild(el('span','qi')); const t=el('span','qt'); t.appendChild(el('span','qn')); t.appendChild(el('small')); b.appendChild(t);
+  b.appendChild(el('span','tm'));
+  b.onclick=()=>{ const c=(SESSIONS||[]).find(x=>x.session_id===s.session_id)||s; if(k==='done') loadViewer(c); else jumpToSession(c); };
+  homeRowFill(b,k,s); return b;
+}
+function homeRowFill(b, k, s){
+  const rt=s.runtime||{}, bd=sessionBadge(s), tx=bd?bd.text:'';
+  let icon, sub, meta;
+  if(k==='att'){ const perm=tx==='권한 대기'; icon=perm?'✋':'💬';
+    sub=rt.note?String(rt.note).slice(0,60):(perm?'도구 사용 허락 필요':'답을 기다림'); meta=homeFor(perm?rt.permission_at:rt.waiting_at); }
+  else if(k==='work'){ const bg=tx==='백그라운드'; icon=s.agent?'🛰':bg?'🐚':'⚙';
+    sub=bg?(bgText(s)||'백그라운드 작업'):'작업 중'; meta=bg?'':homeFor(rt.thinking_at); }
+  else { icon='✅'; sub='완료'; meta=todoAgo(rt.ready_at); }
+  b.children[0].textContent=icon; b.children[1].children[0].textContent=sessLabel(s);
+  b.children[1].children[1].textContent=[baseName(s.cwd||''), sub].filter(Boolean).join(' · ');
+  b.children[2].textContent=meta;
+  b.title=sessLabel(s)+(s.cwd?' · '+s.cwd:'')+(k==='done'?' — 누르면 대화 보기':' — 누르면 터미널로');
+}
+// 빈 상세 칸 = 홈. 위에서부터 🔔 지금 볼 일 · ⚙ 작업 중 · ✅ 방금 끝남(빈 칸은 숨김, 셋 다 비면 한 줄) → '최근 화면'(§3-6: 갈 수 있는 기억만 =
+// 흐림 빼고, 마지막 화면이 맨 앞) → 안내 한 줄. 첫 목록 전엔 세션도 기억도 확인하지 못해 안내만. 목록 칸이 접혀 있으면 '왼쪽에서 …'는
+// 틀린 말이라 ◧ 안내로, 폰은 목록이 아래 💬 세션이라 그 안내를 뺀다. 모습(칸·줄 차례)이 같으면 글자만 고친다 — '4분째'처럼 매분 바뀌는
+// 글자로 20초 갱신이 단추를 새로 만들면 Tab 으로 둔 키보드 커서가 빠졌다(검토). 차례가 바뀌어 새로 그릴 때는 커서가 있던 칸의 새 단추로 옮긴다
 function renderEmptyPane(list){
   const box=EMPTY_BOX;
   if(!box||PANE_NOW.kind!=='empty'||paneDetail().children[0]!==box) return;
   const last=quickLast();
   const recent=(list||quickTargets()).filter(o=>o.has&&!o.dim).sort((a,b)=>(b.kind===last)-(a.kind===last));
   const app=$('#app'), off=!!app&&app.classList.contains('side-off'), txt=box._txt||'왼쪽에서 세션을 선택하세요';
-  const msg=(off&&/^왼쪽에서 /.test(txt))?(recent.length?'◧ 로 목록 칸을 펼치거나 최근 화면으로 가세요':txt.replace(/^왼쪽에서 /,'◧ 로 목록 칸을 펼쳐 ')):txt;
-  const shape=JSON.stringify([msg, recent.map(o=>o.kind)]);
-  if(box._shape===shape){ recent.forEach((o,i)=>quickRecentFill(box._btns[i],o)); return; }
-  const a=document.activeElement, had=(box._btns||[]).includes(a)?a.dataset.k:'';
-  box._shape=shape; box._btns=[];
+  let msg=(off&&/^왼쪽에서 /.test(txt))?(recent.length?'◧ 로 목록 칸을 펼치거나 최근 화면으로 가세요':txt.replace(/^왼쪽에서 /,'◧ 로 목록 칸을 펼쳐 ')):txt;
+  if(innerWidth<880&&/^왼쪽에서 /.test(msg)) msg='';
+  const h=LIST_READY?homeSessions():{att:[],work:[],done:[]};
+  const secs=[['att','🔔 지금 볼 일',h.att],['work','⚙ 작업 중',h.work],['done','✅ 방금 끝남',h.done]].filter(x=>x[2].length);
+  const idle=LIST_READY&&!secs.length;
+  const shape=JSON.stringify([msg, recent.map(o=>o.kind), secs.map(([k,,l])=>[k,l.map(s=>s.session_id)]), idle]);
+  if(box._shape===shape){ recent.forEach((o,i)=>quickRecentFill(box._btns[i],o));
+    let i=0; for(const [k,,l] of secs) for(const s of l) homeRowFill(box._rows[i++],k,s); return; }
+  const a=document.activeElement, mine=[...(box._btns||[]),...(box._rows||[])], had=mine.includes(a)?a.dataset.k:'';
+  box._shape=shape; box._btns=[]; box._rows=[];
   box.innerHTML='';
-  box.appendChild(el('div','de-msg',msg));
-  if(!recent.length) return;
-  const wrap=el('div','qs-recent'); wrap.appendChild(el('div','qs-rh','최근 화면'));
-  const grid=el('div','qs-rg');
-  for(const o of recent){ const b=el('button','qs-rb'); b.type='button'; b.dataset.k=o.kind;
-    b.appendChild(el('span','qi')); const t=el('span','qt'); t.appendChild(el('span','qn')); t.appendChild(el('small')); b.appendChild(t);
-    quickRecentFill(b,o); b.onclick=()=>quickGo(o.kind); grid.appendChild(b); box._btns.push(b); }
-  wrap.appendChild(grid); box.appendChild(wrap);
-  const nb=had&&box._btns.find(b=>b.dataset.k===had); if(nb) try{ nb.focus(); }catch(e){}
+  if(secs.length||idle){ const dash=el('div','home-dash');
+    if(idle) dash.appendChild(el('div','hd-idle','기다리는 일 없음 · 돌고 있는 세션 없음'));
+    for(const [k,label,l] of secs){ const sec=el('div','hd-sec k-'+k), hh=el('div','hd-h',label);
+      hh.appendChild(el('span','n',String(l.length))); sec.appendChild(hh);
+      for(const s of l){ const b=homeRow(k,s); sec.appendChild(b); box._rows.push(b); }
+      dash.appendChild(sec); }
+    box.appendChild(dash); }
+  if(recent.length){
+    const wrap=el('div','qs-recent'); wrap.appendChild(el('div','qs-rh','최근 화면'));
+    const grid=el('div','qs-rg');
+    for(const o of recent){ const b=el('button','qs-rb'); b.type='button'; b.dataset.k=o.kind;
+      b.appendChild(el('span','qi')); const t=el('span','qt'); t.appendChild(el('span','qn')); t.appendChild(el('small')); b.appendChild(t);
+      quickRecentFill(b,o); b.onclick=()=>quickGo(o.kind); grid.appendChild(b); box._btns.push(b); }
+    wrap.appendChild(grid); box.appendChild(wrap); }
+  if(msg) box.appendChild(el('div','de-msg',msg));
+  const nb=had&&[...box._btns,...box._rows].find(b=>b.dataset.k===had); if(nb) try{ nb.focus(); }catch(e){}
 }
 // '최근 화면' 단추 하나의 글자 — 그림 · 이름 · (칸 · 보조 글) · 툴팁
 function quickRecentFill(b, o){
@@ -7227,7 +7306,7 @@ function quickRecentFill(b, o){
 // 기억 없음은 흐리게 '고르기…', 다른 기기가 보는 터미널은 '👀 가져오기'(누르면 인계 확인창). 덮개(z 60) 위에서도 보이게 위 층으로(qs-sheet)
 function showQuickSheet(anchor){
   const box=el('div');
-  { const here=PANE_NOW.kind==='empty'&&!MON_OV&&$('#app').getAttribute('data-view')!=='detail';
+  { const here=PANE_NOW.kind==='empty'&&!MON_OV&&$('#app').getAttribute('data-view')==='detail';   // 폰 홈 = 상세 쪽 빈 칸
     const h=popItem('🏠','홈','아무것도 고르지 않은 처음 화면', ()=>quickGoHome(), 'qs-it'); h.dataset.k='home';
     if(here) h.appendChild(el('span','qtag now','지금')); box.appendChild(h); }
   for(const o of quickTargets()){

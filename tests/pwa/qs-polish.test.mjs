@@ -92,7 +92,7 @@ const head = (ctx) => ctx.document.getElementById("head").textContent;
 const btn = (nav, i) => [String(nav.children[i].className), nav.children[i].title];
 
 // ---------------------------------------------------------------- 1. PC 머리 줄 제목
-test("T105 PC 머리 줄 제목은 상세 칸 화면 이름을 따른다 — 목록을 새로 받아도(⟳·보기 전환·재연결) '세션'으로 덮지 않고, 상세 칸이 비면 '세션'. 폰은 목록 칸으로 돌아오니 지금처럼 '세션'", async () => {
+test("T105 PC 머리 줄 제목은 상세 칸 화면 이름을 따른다 — 목록을 새로 받아도(⟳·보기 전환·재연결) '세션'으로 덮지 않고, 상세 칸이 비면 그 칸이 🏠 홈이라 '홈'(2026-10-28). 폰은 목록 칸으로 돌아오니 지금처럼 '세션'", async () => {
   const got = await each(["터미널", "파일", "뷰어", "상세", "관제", "빈 칸", "폰"], async (p) => {
     const phone = p === "폰";
     const { ctx } = await boot({ width: phone ? 390 : 1400, mem: p === "상세" ? { viewer: { sid: B, kind: "detail", name: "B" } } : {} });
@@ -111,7 +111,7 @@ test("T105 PC 머리 줄 제목은 상세 칸 화면 이름을 따른다 — 목
     "뷰어": { open: "뷰어", list: "뷰어", view: "뷰어" },
     "상세": { open: "세션 상세", list: "세션 상세", view: "세션 상세" },
     "관제": { open: "관제", list: "관제", view: "관제" },
-    "빈 칸": { open: "뷰어", empty: "세션", list: "세션", view: "세션" },
+    "빈 칸": { open: "뷰어", empty: "홈", list: "홈", view: "홈" },
     "폰": { open: "뷰어", list: "세션", view: "세션" },
   });
 });
@@ -377,4 +377,61 @@ test("T115 터미널 막대에는 ‹ 목록·📖 이력만(⏹ 종료 없음) 
   got.pcHide = css.indexOf(rule) > pcAt && pcAt > 0 && css.indexOf(rule) === css.lastIndexOf(rule);
   got.pcRows = css.slice(pcAt).includes("#paneDetail.term-mode{grid-template-rows:auto minmax(0,1fr)}");
   assert.deepEqual(got, { cls: "backbar toonly termbar", btns: ["‹ 목록", "📖 이력"], hist: "term-hist", pcHide: true, pcRows: true });
+});
+
+// ---------------------------------------------------------------- 🏠 홈 개편(2026-10-28, docs/designs/home-dashboard.md)
+// 홈 한 줄 — [칸, 이름, 보조 글, 시간]
+const homeRows = (pd) => { const box = pd.children[0], d = box.children.find((c) => String(c.className) === "home-dash");
+  if (!d) return null;
+  return d.children.map((sec) => String(sec.className) === "hd-idle" ? sec.textContent
+    : [String(sec.className).replace("hd-sec k-", ""), sec.children[0].textContent + " " + sec.children[0].children[0].textContent,
+       ...sec.children.slice(1).map((b) => [b.children[1].children[0].textContent, b.children[1].children[1].textContent, b.children[2].textContent])]); };
+test("T116 🏠 홈: 🔔 지금 볼 일(권한·입력 대기, 오래 기다린 것 위) · ⚙ 작업 중(작업·백그라운드) · ✅ 방금 끝남(6시간 안, 이 기기에서 그 뒤 안 본 것) — claude -p 기록·6시간 넘은 완료는 빼고, 빈 칸은 숨기며 셋 다 비면 한 줄. 끝남을 누르면 대화 보기, 보고 오면 빠진다. 20초 갱신은 단추를 새로 만들지 않고 글자만. 폰 🏠 은 상세 쪽 홈(제목 '홈', '왼쪽에서' 안내 없음)", async () => {
+  const id = (c) => c.repeat(8) + "-1111-2222-3333-444444444444";
+  const rt = (o) => JSON.stringify(o).replace(/"NOW-(\d+)"/g, "now-$1");
+  const S = [
+    ["a", { phase: "permission", permission_at: "NOW-240", note: "Bash 실행 권한이 필요합니다" }],
+    ["b", { phase: "waiting", waiting_at: "NOW-600" }],
+    ["c", { phase: "thinking", thinking_at: "NOW-720" }],
+    ["d", { phase: "background", ready_at: "NOW-60" }, { shells: 2 }],
+    ["e", { phase: "ready", ready_at: "NOW-1800" }],
+    ["f", { phase: "ready", ready_at: "NOW-25200" }],                 // 7시간 전 — 빼기
+    ["h", { phase: "permission", permission_at: "NOW-30" }, null, true],   // claude -p 기록 — 빼기
+  ];
+  const pre = `const now = Date.now() / 1000; SESSIONS = [${S.map(([c, r, bg, hl]) =>
+    `{ session_id: '${id(c)}', title: '${c.toUpperCase()}', cwd: 'E:/w/${c}', mtime: 1, runtime: ${rt(r)}, bg: ${JSON.stringify(bg || null)}, headless: ${!!hl} }`).join(",")}];`;
+  const got = {};
+  { const { ctx, pd } = await boot({ mem: {}, pre });
+    ev(ctx, "quickGoHome()"); await tick(QS);
+    got.head = head(ctx);
+    got.rows = homeRows(pd);
+    const before = pd.children[0].children[0];
+    await ev(ctx, "loadList()"); await tick(QS);                         // 20초 갱신과 같은 길
+    got.same = pd.children[0].children[0] === before;
+    const done = homeRows(pd).find((x) => x[0] === "done");
+    got.doneBefore = done.length - 2;
+    before.children.find((x) => String(x.className) === "hd-sec k-done").children[1].onclick(); await tick(QS);
+    got.click = at(ctx);
+    ev(ctx, "quickGoHome()"); await tick(QS);
+    got.afterSeen = homeRows(pd).map((x) => Array.isArray(x) ? x[0] : x);
+  }
+  { const { ctx, pd } = await boot({ mem: {} }); ev(ctx, "quickGoHome()"); await tick(QS); got.idle = homeRows(pd); }
+  { const { ctx, pd } = await boot({ ready: false, mem: {} }); ev(ctx, "detailPlaceholder()"); got.beforeList = homeRows(pd); }
+  { const { ctx, pd, app } = await boot({ width: 390, mem: {}, pre });
+    ev(ctx, "quickGoHome()"); await tick(QS);
+    got.phone = [app.getAttribute("data-view"), head(ctx), pd.children[0].children.some((c) => String(c.className) === "de-msg"), homeRows(pd).length];
+    ev(ctx, "showListPane()"); got.phoneList = head(ctx); }
+  assert.deepEqual(got, {
+    head: "홈",
+    rows: [
+      ["att", "🔔 지금 볼 일 2", ["B", "b · 답을 기다림", "10분째"], ["A", "a · Bash 실행 권한이 필요합니다", "4분째"]],
+      ["work", "⚙ 작업 중 2", ["C", "c · 작업 중", "12분째"], ["D", "d · 🐚 쉘 2", ""]],
+      ["done", "✅ 방금 끝남 1", ["E", "e · 완료", "30분 전"]],
+    ],
+    same: true, doneBefore: 1, click: "viewer:e",
+    afterSeen: ["att", "work"],
+    idle: ["기다리는 일 없음 · 돌고 있는 세션 없음"],
+    beforeList: null,
+    phone: ["detail", "홈", false, 3], phoneList: "세션",
+  });
 });

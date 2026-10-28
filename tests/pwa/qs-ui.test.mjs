@@ -125,7 +125,7 @@ test("T87 CSS·HTML 가드: 폰은 #qs 를 숨기고 PC(880px~)만 보이며 880
     "#app.side-off #main{grid-template-columns:minmax(0,1fr)}",
     "#app.side-off[data-view] #paneList,#app.side-off #resizer{display:none!important}",
     "#app[data-view=list] #paneDetail{display:none}",
-    ".detail-empty{display:none}",
+    ".detail-empty{display:flex;flex-direction:column;gap:16px;padding:14px 12px;color:var(--muted)}",   // 2026-10-28: 폰도 🏠 홈(전엔 숨김)
   ]) assert.ok(flat.includes(rule), "바뀜: " + rule);
 });
 
@@ -306,8 +306,10 @@ test("T92 단축키가 터미널로 새지 않는다 — 릴레이 xterm 은 이
 
 // ---------------------------------------------------------------- 빈 상세 칸 '최근 화면'
 test("T93 빈 상세 칸(PC) '최근 화면': 갈 수 있는 기억만(흐림 빼고), 마지막 화면이 맨 앞 — 첫 목록 전엔 없음. 목록 칸이 접혀 있으면 '◧ …' 안내, 바깥 상자는 'detail-empty' 하나 그대로, 누르면 그 화면", async () => {
-  const pane = (pd) => { const box = pd.children[0], r = box.children.find((c) => String(c.className) === "qs-recent");
-    return { kids: pd.children.length, cls: String(box.className), msg: box.children[0].textContent,
+  // 홈 개편(2026-10-28) 뒤 칸 차례 = [홈 묶음] [최근 화면] [안내] — 차례 번호가 아니라 이름(class)으로 찾는다
+  const kid = (box, cls) => box.children.find((c) => String(c.className) === cls);
+  const pane = (pd) => { const box = pd.children[0], r = kid(box, "qs-recent"), m = kid(box, "de-msg");
+    return { kids: pd.children.length, cls: String(box.className), msg: m ? m.textContent : "",
              recent: r ? r.children[1].children.map((b) => b.dataset.k + ":" + b.children[1].children[0].textContent) : [] }; };
   const got = {};
   { const { ctx, pd } = await boot({ mem: {} });
@@ -317,7 +319,7 @@ test("T93 빈 상세 칸(PC) '최근 화면': 갈 수 있는 기억만(흐림 �
     ev(ctx, "setSideOff(true)"); got.folded = pane(pd).msg;
     ev(ctx, "setSideOff(false)"); got.unfolded = pane(pd).msg;
     ev(ctx, "detailPlaceholder('삭제됨'); setSideOff(true)"); got.deleted = pane(pd).msg; ev(ctx, "setSideOff(false)");
-    const r = pd.children[0].children[1].children[1].children;
+    const r = kid(pd.children[0], "qs-recent").children[1].children;
     r.find((b) => b.dataset.k === "viewer").onclick(); await tick(QS); got.click = at(ctx);
   }
   { const { pd } = await boot({ mem: { tabs: null, viewer: null } }); got.two = pane(pd).recent; }
@@ -365,7 +367,7 @@ test("T94 뷰어 막대에 세션 이름(‹ 목록 다음) · 단추 강조는 
 });
 
 // ---------------------------------------------------------------- 🏠 홈(2026-10-26 사장님) — 머리 줄·시트 맨 앞, 아무것도 고르지 않은 처음 화면
-test("T95 🏠 홈: PC 머리 줄 맨 앞 단추(빈 상세 칸이면 파랑) · 누르면 어떤 화면에서든 빈 상세 칸(최근 화면)·선택 해제·목록 칸 · 폰 시트 맨 앞 줄 · Alt+0 · 첫 목록 전에도 된다", async () => {
+test("T95 🏠 홈: PC 머리 줄 맨 앞 단추(빈 상세 칸이면 파랑) · 누르면 어떤 화면에서든 빈 상세 칸(홈)·선택 해제·목록 칸 · 폰 시트 맨 앞 줄(폰은 상세 쪽 홈 화면, 2026-10-28) · Alt+0 · 첫 목록 전에도 된다", async () => {
   const realNav = (ctx) => ctx.document.getElementById("qs");
   const got = {};
   { const { ctx } = await boot({ mem: {} });
@@ -402,7 +404,7 @@ test("T95 🏠 홈: PC 머리 줄 맨 앞 단추(빈 상세 칸이면 파랑) ·
     emptyOn: "on", termOff: "",
     afterTerm: ["empty", null, false, "detail-empty", "on"], tabsKept: true,
     afterFiles: ["empty", false], alt0: "empty",
-    sheet: ["home", "홈", 5], phone: ["empty", "list"],
+    sheet: ["home", "홈", 5], phone: ["empty", "detail"],
     beforeList: ["empty", 0],
   });
 });
