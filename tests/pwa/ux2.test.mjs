@@ -164,7 +164,7 @@ test("쉘·모니터: 목록 줄에 🐚 쉘 n · 📡 모니터 m 칩, phase ba
   const chips = (r) => r.children[0].children[0].children.filter((k) => cls(k).startsWith("schip"))
     .map((k) => (k.children.length ? k.children.map((x) => x.textContent) : [k.textContent]));
   const bChip = rs.find((r) => r.dataset.sid === B).children[0].children[0].children.find((k) => cls(k).startsWith("schip bg"));
-  same(chips(rs.find((r) => r.dataset.sid === B)), [["🐚 쉘 2", "📡 모니터 1"]], "쉘·모니터는 위아래 두 줄");
+  same(chips(rs.find((r) => r.dataset.sid === B)), [["🐚 2", "📡 1"]], "쉘·모니터는 위아래 두 줄, 아이콘+숫자만(뜻은 툴팁)");
   assert.equal(cls(bChip), "schip bg stack");
   assert.ok(bChip.title.includes("🐚 쉘 2 · 📡 모니터 1"));
   same(chips(rs.find((r) => r.dataset.sid === A)), [], "0개면 칩 없음");
@@ -174,11 +174,12 @@ test("쉘·모니터: 목록 줄에 🐚 쉘 n · 📡 모니터 m 칩, phase ba
   assert.equal(ev(ctx, "bgText({})"), "");
   // 서브에이전트도(2026-10-28): 한 종류만이면 한 줄 칩, 셋이면 세 줄
   same(ev(ctx, "bgLines({bg:{shells:1,monitors:0,agents:2}})"), ["🐚 쉘 1", "🤖 에이전트 2"]);
+  same(ev(ctx, "bgLines({bg:{shells:1,monitors:0,agents:2}}, true)"), ["🐚 1", "🤖 2"]);
   seed(ctx, `SESSIONS[1].bg={shells:0, monitors:0, agents:1}; SESSIONS[1].runtime={phase:'background', ready_at:Date.now()/1000-5};
     SESSIONS[0].bg={shells:1, monitors:2, agents:3};`);
   const rs2 = rowsOf(render(ctx).children.filter((k) => cls(k) === "glist").find((g) => rowsOf(g).some((r) => r.dataset.sid === A)));
-  same(chips(rs2.find((r) => r.dataset.sid === B)), [["🤖 에이전트 1"]]);
-  same(chips(rs2.find((r) => r.dataset.sid === A)), [["🐚 쉘 1", "📡 모니터 2", "🤖 에이전트 3"]]);
+  same(chips(rs2.find((r) => r.dataset.sid === B)), [["🤖 1"]]);
+  same(chips(rs2.find((r) => r.dataset.sid === A)), [["🐚 1", "📡 2", "🤖 3"]]);
   // 🔔 최근 끝난 작업에 안 들어간다
   assert.equal(ev(ctx, "todoSessions().ready.length"), 0);
 });

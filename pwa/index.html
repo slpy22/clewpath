@@ -2123,10 +2123,12 @@ function cleanupLeft(s){ const t=s&&s.cleanup_at; if(!t) return null; return (t-
 function cleanupText(s){ const d=cleanupLeft(s); if(d==null) return '';
   return d<1?'오늘 지워짐':Math.floor(d)+'일 뒤 지워짐'; }
 function cleanupDate(s){ try{ const x=new Date(s.cleanup_at*1000); return (x.getMonth()+1)+'/'+x.getDate(); }catch(e){ return ''; } }
-// 돌고 있는 백그라운드 쉘·모니터·서브에이전트 — 한 종류에 한 줄(목록 칩은 위아래로 쌓는다), 없으면 []
-function bgLines(s){ const b=s&&s.bg; if(!b) return [];
-  const p=[]; if(b.shells) p.push('🐚 쉘 '+b.shells); if(b.monitors) p.push('📡 모니터 '+b.monitors);
-  if(b.agents) p.push('🤖 에이전트 '+b.agents); return p; }
+// 돌고 있는 백그라운드 쉘·모니터·서브에이전트 — 한 종류에 한 줄(목록 칩은 위아래로 쌓는다), 없으면 [].
+// short = 목록 칩용 아이콘+숫자만(2026-10-28 사장님 — 이름이 잘리지 않게, 뜻은 툴팁)
+function bgLines(s, short){ const b=s&&s.bg; if(!b) return [];
+  const w=(ic,name,n)=>ic+' '+(short?'':name+' ')+n;
+  const p=[]; if(b.shells) p.push(w('🐚','쉘',b.shells)); if(b.monitors) p.push(w('📡','모니터',b.monitors));
+  if(b.agents) p.push(w('🤖','에이전트',b.agents)); return p; }
 function bgText(s){ return bgLines(s).join(' · '); }
 // 줄 여럿이면 위아래로 쌓은 칩, 한 줄이면 평소 칩
 function stackChip(cls, lines){
@@ -2702,7 +2704,7 @@ function renderRows(wrap,q){
       // #라벨 칩은 목록에서 뺐다(2026-10-12 사장님) — 위 라벨 필터는 그대로. 대신 돌고 있는 쉘·모니터 수.
       { const d=cleanupLeft(s); if(d!=null&&d<=CLEANUP_SOON&&!s.headless){ const g=el('span','schip gone'+(d<=CLEANUP_ALERT?' hot':''),'⏳ '+cleanupText(s));
         g.title='claude 가 보관 기간이 지난 대화 기록을 '+cleanupDate(s)+'쯤 지웁니다 — 재개해서 한 번 주고받으면 기한이 늘어납니다'; r1.appendChild(g); } }
-      { const ls=bgLines(s); if(ls.length){ const g=stackChip('bg',ls);
+      { const ls=bgLines(s,true); if(ls.length){ const g=stackChip('bg',ls);
         g.title='백그라운드에서 돌고 있는 '+bgText(s)+' — 남아 있는 동안은 「완료」로 바뀌지 않습니다'; r1.appendChild(g); } }
       if(s.resume_model){
         // 모델 위 · 에포트 아래(2026-10-28 사장님: 한 줄이면 칩이 길어 세션 이름이 잘린다)
