@@ -160,13 +160,25 @@ test("쉘·모니터: 목록 줄에 🐚 쉘 n · 📡 모니터 m 칩, phase ba
     SESSIONS[0].bg={shells:0, monitors:0};`);
   const wrap = render(ctx);
   const rs = rowsOf(wrap.children.filter((k) => cls(k) === "glist").find((g) => rowsOf(g).some((r) => r.dataset.sid === A)));
-  const chips = (r) => r.children[0].children[0].children.filter((k) => cls(k).startsWith("schip")).map((k) => k.textContent);
-  same(chips(rs.find((r) => r.dataset.sid === B)), ["🐚 쉘 2 · 📡 모니터 1"]);
+  // 칩 한 개 = 줄 목록(여러 줄이면 위아래로 쌓은 칩의 줄들, 2026-10-28)
+  const chips = (r) => r.children[0].children[0].children.filter((k) => cls(k).startsWith("schip"))
+    .map((k) => (k.children.length ? k.children.map((x) => x.textContent) : [k.textContent]));
+  const bChip = rs.find((r) => r.dataset.sid === B).children[0].children[0].children.find((k) => cls(k).startsWith("schip bg"));
+  same(chips(rs.find((r) => r.dataset.sid === B)), [["🐚 쉘 2", "📡 모니터 1"]], "쉘·모니터는 위아래 두 줄");
+  assert.equal(cls(bChip), "schip bg stack");
+  assert.ok(bChip.title.includes("🐚 쉘 2 · 📡 모니터 1"));
   same(chips(rs.find((r) => r.dataset.sid === A)), [], "0개면 칩 없음");
   const b = ev(ctx, "sessionBadge(SESSIONS[1])");
   assert.equal(b.text, "백그라운드"); assert.equal(b.pulse, true);
   assert.equal(ev(ctx, "bgText({bg:{shells:0,monitors:3}})"), "📡 모니터 3");
   assert.equal(ev(ctx, "bgText({})"), "");
+  // 서브에이전트도(2026-10-28): 한 종류만이면 한 줄 칩, 셋이면 세 줄
+  same(ev(ctx, "bgLines({bg:{shells:1,monitors:0,agents:2}})"), ["🐚 쉘 1", "🤖 에이전트 2"]);
+  seed(ctx, `SESSIONS[1].bg={shells:0, monitors:0, agents:1}; SESSIONS[1].runtime={phase:'background', ready_at:Date.now()/1000-5};
+    SESSIONS[0].bg={shells:1, monitors:2, agents:3};`);
+  const rs2 = rowsOf(render(ctx).children.filter((k) => cls(k) === "glist").find((g) => rowsOf(g).some((r) => r.dataset.sid === A)));
+  same(chips(rs2.find((r) => r.dataset.sid === B)), [["🤖 에이전트 1"]]);
+  same(chips(rs2.find((r) => r.dataset.sid === A)), [["🐚 쉘 1", "📡 모니터 2", "🤖 에이전트 3"]]);
   // 🔔 최근 끝난 작업에 안 들어간다
   assert.equal(ev(ctx, "todoSessions().ready.length"), 0);
 });

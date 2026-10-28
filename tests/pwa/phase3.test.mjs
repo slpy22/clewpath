@@ -200,7 +200,11 @@ test("🧠 칩에 마지막 응답의 에포트도 — 'Opus 5.5 · high'(없으
   ev(ctx, "renderRows(globalThis.__wrap, '')");
   const byId = Object.fromEntries(rows(wrap).map((row) => [row.dataset.sid, row]));
   const chip = (id) => byId[id].children[0].children[0].children.find((k) => cls(k).startsWith("schip model"));
-  same([A, B, C].map((id) => chip(id).textContent), ["🧠 Opus 5.5 · high", "🧠 Sonnet 5.5 · xhigh", "🧠 Opus 5"]);
+  // 모델 위 · 에포트 아래 두 줄(2026-10-28 사장님: 한 줄이면 칩이 길어 이름이 잘린다), 에포트 없으면 평소 한 줄 칩
+  const lines = (c) => (c.children.length ? c.children.map((x) => x.textContent) : [c.textContent]);
+  same([A, B, C].map((id) => lines(chip(id))), [["🧠 Opus 5.5", "high"], ["🧠 Sonnet 5.5", "xhigh"], ["🧠 Opus 5"]]);
+  same([A, B, C].map((id) => cls(chip(id))), ["schip model stack", "schip model set stack", "schip model"]);
+  assert.equal(ev(ctx, `modelEffort({last_effort:'high'}, 'claude-opus-5-5')`), "Opus 5.5 · high", "모델 고르기 안내는 한 줄 그대로");
   assert.ok(chip(B).title.includes("에포트 xhigh(마지막 응답)") && !chip(C).title.includes("에포트"));
   same(["claude-haiku-5-5", "claude-opus-4-8", "claude-fable-5-1", "claude-opus-5-5-20261001", "gpt-x"].map((m) => ev(ctx, `modelShort(${JSON.stringify(m)})`)),
        ["Haiku 5.5", "Opus 4.8", "Fable 5.1", "Opus 5.5", "gpt-x"]);

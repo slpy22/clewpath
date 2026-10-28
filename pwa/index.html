@@ -201,6 +201,9 @@
     border-color:color-mix(in srgb,var(--muted) 26%,transparent);cursor:pointer}
   .schip.model.set{background:var(--accent-wash);color:var(--accent);
     border-color:color-mix(in srgb,var(--accent) 40%,transparent)}
+  /* 여러 줄 칩(모델/에포트, 쉘/모니터/에이전트)은 위아래로 쌓는다 — 가로로 길면 세션 이름이 잘린다(2026-10-28 사장님) */
+  .schip.stack{display:inline-flex;flex-direction:column;align-items:center;justify-content:center;
+    line-height:1.2;border-radius:8px;padding:1px 6px;white-space:nowrap}
   .spath{font-family:var(--mono);font-size:.7rem;color:var(--muted);margin-top:3px;
     overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .sbtn{width:54px;flex:none;display:grid;place-items:center;font-size:1.3rem;
@@ -2120,9 +2123,15 @@ function cleanupLeft(s){ const t=s&&s.cleanup_at; if(!t) return null; return (t-
 function cleanupText(s){ const d=cleanupLeft(s); if(d==null) return '';
   return d<1?'오늘 지워짐':Math.floor(d)+'일 뒤 지워짐'; }
 function cleanupDate(s){ try{ const x=new Date(s.cleanup_at*1000); return (x.getMonth()+1)+'/'+x.getDate(); }catch(e){ return ''; } }
-// 돌고 있는 백그라운드 쉘·모니터 수 문구(없으면 '')
-function bgText(s){ const b=s&&s.bg; if(!b) return '';
-  const p=[]; if(b.shells) p.push('🐚 쉘 '+b.shells); if(b.monitors) p.push('📡 모니터 '+b.monitors); return p.join(' · '); }
+// 돌고 있는 백그라운드 쉘·모니터·서브에이전트 — 한 종류에 한 줄(목록 칩은 위아래로 쌓는다), 없으면 []
+function bgLines(s){ const b=s&&s.bg; if(!b) return [];
+  const p=[]; if(b.shells) p.push('🐚 쉘 '+b.shells); if(b.monitors) p.push('📡 모니터 '+b.monitors);
+  if(b.agents) p.push('🤖 에이전트 '+b.agents); return p; }
+function bgText(s){ return bgLines(s).join(' · '); }
+// 줄 여럿이면 위아래로 쌓은 칩, 한 줄이면 평소 칩
+function stackChip(cls, lines){
+  if(lines.length<2) return el('span','schip '+cls,lines[0]||'');
+  const c=el('span','schip '+cls+' stack'); for(const t of lines) c.appendChild(el('span','sl',t)); return c; }
 // 목록 행의 재개 버튼 아이콘 = 세션 상태(2026-09-30): 🖥 클루패스 터미널 실행 중 / ⌨·🧬·🤖… 다른 곳에서 실행 중(출처) / ▶ 재개
 function rowResumeIcon(s){
   if(s.live_terminal) return '🖥';
@@ -2693,10 +2702,11 @@ function renderRows(wrap,q){
       // #라벨 칩은 목록에서 뺐다(2026-10-12 사장님) — 위 라벨 필터는 그대로. 대신 돌고 있는 쉘·모니터 수.
       { const d=cleanupLeft(s); if(d!=null&&d<=CLEANUP_SOON&&!s.headless){ const g=el('span','schip gone'+(d<=CLEANUP_ALERT?' hot':''),'⏳ '+cleanupText(s));
         g.title='claude 가 보관 기간이 지난 대화 기록을 '+cleanupDate(s)+'쯤 지웁니다 — 재개해서 한 번 주고받으면 기한이 늘어납니다'; r1.appendChild(g); } }
-      { const t=bgText(s); if(t){ const g=el('span','schip bg',t);
-        g.title='백그라운드에서 돌고 있는 쉘·모니터 — 남아 있는 동안은 「완료」로 바뀌지 않습니다'; r1.appendChild(g); } }
+      { const ls=bgLines(s); if(ls.length){ const g=stackChip('bg',ls);
+        g.title='백그라운드에서 돌고 있는 '+bgText(s)+' — 남아 있는 동안은 「완료」로 바뀌지 않습니다'; r1.appendChild(g); } }
       if(s.resume_model){
-        const mc=el('span','schip model'+(s.model_override?' set':''),'🧠 '+modelEffort(s,s.resume_model));
+        // 모델 위 · 에포트 아래(2026-10-28 사장님: 한 줄이면 칩이 길어 세션 이름이 잘린다)
+        const mc=stackChip('model'+(s.model_override?' set':''),['🧠 '+modelShort(s.resume_model)].concat(s.last_effort?[s.last_effort]:[]));
         mc.title='재개 모델'+(s.model_override?'(설정됨)':'(감지값)')+(s.last_effort?' · 에포트 '+s.last_effort+'(마지막 응답)':'')+' — 클릭해 변경';
         mc.onclick=(e)=>{ e.stopPropagation(); showModelPicker(s); };
         r1.appendChild(mc);

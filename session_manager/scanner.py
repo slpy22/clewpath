@@ -157,17 +157,19 @@ class _Fold:
                         self.last_effort = _eff
 
     def _bg_feed(self, obj: dict, ts) -> None:
-        """백그라운드 쉘·모니터의 시작/끝 표식(claude 가 jsonl 에 남기는 도구 결과·작업 알림, 실측 2.1.x).
+        """백그라운드 쉘·모니터·서브에이전트의 시작/끝 표식(claude 가 jsonl 에 남기는 도구 결과·작업 알림, 실측 2.1.x).
         시작: Bash 결과 'Command running in background with ID: X' / '…moved to the background (ID: X)',
-              Monitor 결과 'Monitor started (task X, …'. 끝: '<task-notification>' 의 <status>, TaskStop 결과,
+              Monitor 결과 'Monitor started (task X, …', Agent 결과 'Async agent launched successfully. … agentId: X',
+              Workflow 결과 'Workflow launched in background. Task ID: X'(2026-10-28 실측 — 에이전트로 센다).
+              끝: '<task-notification>' 의 <status>, TaskStop 결과,
               모니터 만료 알림(<status> 없이 사건 모양으로 온다 — _expired_task).
         문장 **앞머리**만 본다 — 다른 도구 출력에 같은 글귀가 인용돼도(이 파일을 grep 한 결과 등) 세지 않게."""
         for text, is_result in _bg_texts(obj):
             if is_result:
                 m = _BG_START.match(text)
                 if m:
-                    tid = m.group(2) or m.group(3) or m.group(4)
-                    kind = "monitor" if m.group(4) else "shell"
+                    tid = m.group(2) or m.group(3) or m.group(4) or m.group(5) or m.group(6)
+                    kind = "monitor" if m.group(4) else "agent" if (m.group(5) or m.group(6)) else "shell"
                     self.bg[tid] = (kind, _epoch(ts))
                     continue
                 m = _BG_STOPPED.match(text)
@@ -238,7 +240,10 @@ class _Fold:
 
 _BG_START = re.compile(r"(Command running in background with ID: (\w+)"
                        r"|Command did not complete within .{0,40}?moved to the background \(ID: (\w+)\)"
-                       r"|Monitor started \(task (\w+))")
+                       r"|Monitor started \(task (\w+)"
+                       # 서브에이전트: 첫 줄 뒤 안내문 다음 줄에 'agentId: X'(2026-10-28 실측 103건)
+                       r"|Async agent launched successfully\.[\s\S]{0,600}?agentId: (\w+)"
+                       r"|Workflow launched in background\. Task ID: (\w+))")
 _BG_STOPPED = re.compile(r'\{"message":"Successfully stopped task: (\w+)')
 _TASK_ID = re.compile(r"<task-id>(\w+)</task-id>")
 # 모니터 만료 문구(claude 가 붙인다): 2.1.27x~ '[Monitor expired after Nm with … Re-arm it …]'(N = 20·25·30 실측),
@@ -295,14 +300,14 @@ def _bg_texts(obj: dict):
 
 
 def bg_counts(meta: "SessionMeta", since: float | None) -> dict:
-    """지금 살아 있는 claude 프로세스(시작 시각 since, epoch 초) 이후에 시작해 아직 안 끝난 쉘·모니터 수."""
-    out = {"shells": 0, "monitors": 0}
+    """지금 살아 있는 claude 프로세스(시작 시각 since, epoch 초) 이후에 시작해 아직 안 끝난 쉘·모니터·서브에이전트 수."""
+    out = {"shells": 0, "monitors": 0, "agents": 0}
     if since is None:
         return out
     for _tid, kind, t0 in meta.bg_open or []:
         if t0 and t0 + 2 < since:      # 이전 프로세스의 작업 = 함께 죽었다(2초 여유: 시계 오차)
             continue
-        out["shells" if kind == "shell" else "monitors"] += 1
+        out[{"shell": "shells", "agent": "agents"}.get(kind, "monitors")] += 1
     return out
 
 

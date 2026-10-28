@@ -177,11 +177,11 @@ def test_bg_shell_monitor_tracking(fake_claude_home, monkeypatch):
     assert sorted(x[0] for x in m.bg_open) == ["bmo1", "bold", "bsh2"], "모니터 이벤트(상태 없음)로는 안 끝난다"
     since = scanner._epoch("2026-10-12T04:30:00Z") * 1000
     c = bgtasks.counts(m, {"started_at": since})
-    assert c == {"shells": 1, "monitors": 1}, "프로세스 시작 전(bold) 작업은 함께 죽었다"
+    assert c == {"shells": 1, "monitors": 1, "agents": 0}, "프로세스 시작 전(bold) 작업은 함께 죽었다"
     assert bgtasks.counts(m, None) is None
     rt = {"phase": "ready", "ready_at": 1}
     assert bgtasks.hold_ready(rt, c)["phase"] == "background" and rt["phase"] == "ready"
-    assert bgtasks.hold_ready(rt, {"shells": 0, "monitors": 0}) is rt
+    assert bgtasks.hold_ready(rt, {"shells": 0, "monitors": 0, "agents": 0}) is rt
     assert bgtasks.hold_ready({"phase": "thinking"}, c)["phase"] == "thinking"
 
 
@@ -235,7 +235,50 @@ def test_bg_monitor_expiry_ends(fake_claude_home):
     m = scanner.scan_one("ffff0002")
     assert sorted(x[0] for x in m.bg_open) == ["blive", "bsh9", "bwatch", "bwatch2"], \
         "만료(두 문구, 20m·30m, 본문·첨부)는 끝, 사건 중간·인용·쉘은 끝 아님"
-    assert scanner.bg_counts(m, scanner._epoch("2026-10-21T00:59:00Z")) == {"shells": 1, "monitors": 3}
+    assert scanner.bg_counts(m, scanner._epoch("2026-10-21T00:59:00Z")) == {"shells": 1, "monitors": 3, "agents": 0}
+
+
+def test_bg_subagent_tracking(fake_claude_home):
+    """서브에이전트(Agent 백그라운드)·워크플로도 백그라운드 작업으로 센다(2026-10-28 사장님: 감지 못 함).
+    시작 = 도구 결과 'Async agent launched successfully. … agentId: X' / 'Workflow launched in background. Task ID: X',
+    끝 = 같은 id 의 작업 알림 <status>(completed·killed) 또는 TaskStop. 인용된 글귀·동기 에이전트 결과는 세지 않는다."""
+    from tests.conftest import write_session
+    from session_manager import bgtasks
+
+    def res(text, ts):
+        return {"type": "user", "timestamp": ts, "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t", "content": [{"type": "text", "text": text}]}]}}
+    launched = ("Async agent launched successfully. (This tool result is internal metadata — never quote it.)\n"
+                "agentId: {} (internal ID - do not mention to user. Use SendMessage with to: '{}', …)")
+
+    def note(tid, status):
+        return f"<task-notification>\n<task-id>{tid}</task-id>\n<status>{status}</status>\n</task-notification>"
+    lines = [
+        {"type": "permission-mode"},
+        res(launched.format("a1111aaaa2222bbbb", "a1111aaaa2222bbbb"), "2026-10-28T01:00:00Z"),
+        res(launched.format("a3333cccc4444dddd", "a3333cccc4444dddd"), "2026-10-28T01:00:01Z"),
+        res(launched.format("a5555eeee6666ffff", "a5555eeee6666ffff"), "2026-10-28T01:00:02Z"),
+        res("Workflow launched in background. Task ID: wo2okp5ij\nSummary: 조사", "2026-10-28T01:00:03Z"),
+        res("조사 결과: Async agent launched successfully. agentId: aquoted", "2026-10-28T01:00:04Z"),   # 동기 결과 속 인용
+        res("Command running in background with ID: bsh1. Output", "2026-10-28T01:00:05Z"),
+        {"type": "user", "timestamp": "2026-10-28T01:05:00Z", "message": {"role": "user",
+         "content": note("a1111aaaa2222bbbb", "completed")}},
+        {"type": "attachment", "timestamp": "2026-10-28T01:06:00Z", "attachment": {"type": "queued_command",
+         "prompt": note("a3333cccc4444dddd", "killed")}},
+    ]
+    write_session(fake_claude_home, "P--x", "ffff0003", lines)
+    m = scanner.scan_one("ffff0003")
+    assert sorted(x[0] for x in m.bg_open) == ["a5555eeee6666ffff", "bsh1", "wo2okp5ij"]
+    c = scanner.bg_counts(m, scanner._epoch("2026-10-28T00:59:00Z"))
+    assert c == {"shells": 1, "monitors": 0, "agents": 2}
+    assert bgtasks.busy({"shells": 0, "monitors": 0, "agents": 1}), "에이전트만 남아도 '완료' 아님"
+    assert bgtasks.hold_ready({"phase": "ready", "ready_at": 1}, {"agents": 1})["phase"] == "background"
+    import json
+    with open(m.jsonl_path, "a", encoding="utf-8") as f:   # 증분: 남은 것도 끝나면 0
+        for tid in ("a5555eeee6666ffff", "wo2okp5ij"):
+            f.write(json.dumps({"type": "user", "timestamp": "2026-10-28T01:10:00Z", "message": {"role": "user",
+                    "content": note(tid, "completed")}}) + "\n")
+    assert scanner.bg_counts(scanner.scan_one("ffff0003"), scanner._epoch("2026-10-28T00:59:00Z"))["agents"] == 0
 
 
 def test_stop_push_held_while_background(monkeypatch):
