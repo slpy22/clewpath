@@ -35,7 +35,7 @@ test("renderRows: (Host 가 빼고 남은) 지금 돌고 있는 claude -p 는 �
   assert.equal(all.length, 5);
   const h = all.find((r) => r.dataset.sid === H1);
   assert.ok(h.classList.contains("dim"));
-  same(h.children[0].children[0].children.filter((k) => cls(k).startsWith("schip")).map((k) => k.textContent), ["🤖 자동 실행"]);
+  same(h.children[0].children.find((k) => cls(k) === "sside").children.find((k) => cls(k) === "schips").children.filter((k) => cls(k).startsWith("schip")).map((k) => k.textContent), ["🤖 자동 실행"]);
 });
 
 test("목록 줄 클릭: 실행 중인 클루패스 터미널이면 바로 터미널, 아니면 상세 — 열린 탭이어도 프로세스가 꺼졌으면 탭을 닫고 상세", async () => {
@@ -161,9 +161,9 @@ test("쉘·모니터: 목록 줄에 🐚 쉘 n · 📡 모니터 m 칩, phase ba
   const wrap = render(ctx);
   const rs = rowsOf(wrap.children.filter((k) => cls(k) === "glist").find((g) => rowsOf(g).some((r) => r.dataset.sid === A)));
   // 칩 한 개 = 줄 목록(여러 줄이면 위아래로 쌓은 칩의 줄들, 2026-10-28)
-  const chips = (r) => r.children[0].children[0].children.filter((k) => cls(k).startsWith("schip"))
+  const chips = (r) => (r.children[0].children.find((k) => cls(k) === "sside")?.children.find((k) => cls(k) === "schips")?.children || []).filter((k) => cls(k).startsWith("schip"))
     .map((k) => (k.children.length ? k.children.map((x) => x.textContent) : [k.textContent]));
-  const bChip = rs.find((r) => r.dataset.sid === B).children[0].children[0].children.find((k) => cls(k).startsWith("schip bg"));
+  const bChip = rs.find((r) => r.dataset.sid === B).children[0].children.find((k) => cls(k) === "sside").children.find((k) => cls(k) === "schips").children.find((k) => cls(k).startsWith("schip bg"));
   same(chips(rs.find((r) => r.dataset.sid === B)), [["🐚 2", "📡 1"]], "쉘·모니터는 위아래 두 줄, 아이콘+숫자만(뜻은 툴팁)");
   assert.equal(cls(bChip), "schip bg stack");
   assert.ok(bChip.title.includes("🐚 쉘 2 · 📡 모니터 1"));

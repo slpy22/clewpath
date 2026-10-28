@@ -17,7 +17,11 @@ const C = "cccccccc-1111-2222-3333-444444444444";
 const D = "dddddddd-1111-2222-3333-444444444444";
 
 const cls = (e) => String(e.className);
-const chipsOf = (row) => row.children[0].children[0].children.filter((k) => cls(k).startsWith("schip")).map((k) => k.textContent);
+// 상태 문구·칩 = 오른쪽 칸(.sside, 이름 줄+메타 줄 두 줄 높이 — 2026-10-28)
+// 상태 문구는 오른쪽 칸 위, 칩들은 그 아래 .schips
+const sideOf = (row) => row.children[0].children.find((k) => cls(k) === "sside") || { children: [] };
+const chipBox = (row) => sideOf(row).children.find((k) => cls(k) === "schips") || { children: [] };
+const chipsOf = (row) => chipBox(row).children.filter((k) => cls(k).startsWith("schip")).map((k) => k.textContent);
 const rows = (wrap) => wrap.children.filter((k) => cls(k) === "glist").flatMap((g) => g.children);
 
 // ---------------------------------------------------------------- 목록 카드
@@ -49,17 +53,18 @@ test("renderRows: 폴더 그룹(최신순)·상태 점/문구·🔗 피어 칩(�
   const a = byId[A], a1 = a.children[0].children[0];
   assert.equal(cls(a1.children[0]), "sdot pulse"); assert.equal(a1.children[0].style["--c"], "#2f81f7");
   assert.equal(a1.children[1].textContent, "알파");
-  assert.equal(a1.children[2].textContent, "작업 중");
+  assert.equal(a1.children.length, 2, "이름 줄엔 점과 이름만");
+  assert.equal(sideOf(a).children[0].textContent, "작업 중", "상태 문구는 오른쪽 칸 맨 앞");
   same(chipsOf(a), ["🧠 Opus 5"], "#라벨 칩은 목록에서 뺐다(2026-10-12) · 피어 이름 칩도 없음 — 출처는 재개 버튼 아이콘");
-  assert.ok(a1.children.find((k) => cls(k) === "schip model set"), "설정된 모델은 set 클래스");
+  assert.ok(chipBox(a).children.find((k) => cls(k) === "schip model set"), "설정된 모델은 set 클래스");
   assert.equal(a.children.at(-2).textContent, "🔗", "피어(출처 불명) → 재개 버튼이 출처 아이콘"); assert.ok(a.children.at(-2).title.includes("작업 중"));
   assert.equal(a.children.at(-1).textContent, "⋯", "맨 오른쪽 ⋯ 메뉴(2026-10-12)");
   assert.ok(!a.children.some((k) => k.textContent === "✎"), "✎ 이름은 상세 머리로(오터치 방지, 2026-10-12)");
   assert.equal(a.children[0].children[1].children.map((k) => k.textContent).join("|"), "3 msgs|2.0KB|1분 전");
-  assert.equal(a.children[0].children.length, 2, "cwd 가 대표와 같으면 경로 줄 없음");
+  same(a.children[0].children.map(cls), ["sr1", "smeta2 one", "sside"], "cwd 가 대표와 같으면 경로 줄 없음");
   // B: 권한 대기 → ✋ 버튼 + 상태 문구 클릭 가능, 우리 PTY(live_terminal) → 🔗 없음, 🖥, 이름은 slug, 경로 줄 있음
   const b = byId[B], b1 = b.children[0].children[0];
-  assert.equal(b1.children[2].textContent, "권한 대기"); assert.equal(b1.children[2].style.cursor, "pointer");
+  assert.equal(sideOf(b).children[0].textContent, "권한 대기"); assert.equal(sideOf(b).children[0].style.cursor, "pointer");
   same(chipsOf(b), [], "우리 PTY 가 떠 있으면 피어 칩을 달지 않는다");
   assert.equal(b1.children[1].textContent, "beta-slug");
   same(b.children.map((k) => k.textContent), ["", "✋", "🖥", "⋯"]);
@@ -172,7 +177,7 @@ test("renderRows: 옛 줄은 ⏩ 이어받음 칩+dim, 열기/재개는 이어�
   const old = byId[OLD];
   assert.ok(old.classList.contains("dim"), "옛 줄은 흐리게");
   same(chipsOf(old), ["⏩ 이어받음"]);
-  assert.ok(old.children[0].children[0].children.find((k) => cls(k) === "schip cont").title.includes("열면 그 세션으로"));
+  assert.ok(chipBox(old).children.find((k) => cls(k) === "schip cont").title.includes("열면 그 세션으로"));
   same(chipsOf(byId[NEW]), [], "agent_name 칩은 목록에 없다(상세에서만)");
   old.children[0].onclick();                                        // 정보 클릭 → 이어받은 세션 상세
   old.children.at(-2).onclick();                                    // ▶ → 이어받은 세션 재개
@@ -199,7 +204,7 @@ test("🧠 칩에 마지막 응답의 에포트도 — 'Opus 5.5 · high'(없으
   const wrap = stubEl("div"); ctx.__wrap = wrap;
   ev(ctx, "renderRows(globalThis.__wrap, '')");
   const byId = Object.fromEntries(rows(wrap).map((row) => [row.dataset.sid, row]));
-  const chip = (id) => byId[id].children[0].children[0].children.find((k) => cls(k).startsWith("schip model"));
+  const chip = (id) => chipBox(byId[id]).children.find((k) => cls(k).startsWith("schip model"));
   // 모델 위 · 에포트 아래 두 줄(2026-10-28 사장님: 한 줄이면 칩이 길어 이름이 잘린다), 에포트 없으면 평소 한 줄 칩
   const lines = (c) => (c.children.length ? c.children.map((x) => x.textContent) : [c.textContent]);
   same([A, B, C].map((id) => lines(chip(id))), [["🧠 Opus 5.5", "high"], ["🧠 Sonnet 5.5", "xhigh"], ["🧠 Opus 5"]]);
