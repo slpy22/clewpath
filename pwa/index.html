@@ -2802,7 +2802,7 @@ function editSessionTags(s,onDone){
   return {body,inp,box,save,cur};
 }
 
-// ---- 🧹 정기 작업(2026-10-12): Host 의 작업 줄 하나가 차례로 돈다 — 쉬는 세션 정리 · 모델 목록 갱신 ----
+// ---- 🧹 정기 작업(2026-10-12): Host 의 작업 줄 하나가 차례로 돈다 — housekeeping.JOBS 6개(설정 줄 설명도 같이 고칠 것) ----
 async function hkPost(path,body){
   let cred={};
   if(MODE==='relay'){ cred=await ensurePriv(); if(cred===null) throw new Error('2차 인증이 필요합니다'); }
@@ -6636,7 +6636,7 @@ function showSettings(){
   row('🖥','PC 짝(원격 묻기)','다른 PC 와 짝 · 초대 · 해제 · 모두 끄기 (조회 전용)',showPclink,{status:setStat.pclink});
 
   sec('세션');
-  row('🧹','정기 작업','쉬는 세션 정리 · 모델 목록 갱신',showHousekeeping,{status:setStat.housekeeping});
+  row('🧹','정기 작업','쉬는 세션 정리 · 작업 장부(5분마다) · 모델 목록 갱신 · 지워질 세션 예고 · 서빙 세션 보관 · API 사본 정리',showHousekeeping,{status:setStat.housekeeping});
   row('🗑','휴지통','삭제한 세션 되살리기 (30일 보관)',showTrash,{local:true,status:setStat.trash});
   row('🏷','통신 이름 맞추기','다른 세션이 부르는 이름을 화면 이름과 같게',showNameSync,{local:true,status:setStat.names});
   row('📥','세션 가져오기','내보낸 세션 zip 불러오기',importSession);

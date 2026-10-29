@@ -361,3 +361,13 @@ def test_keep_serving_resumes_only_expiring_profiled_sessions(fake_claude_home, 
     assert "1개 기한 연장" in r["summary"]
     r = hk.keep_serving(metas, now, run=lambda argv, **kw: NS(returncode=1))
     assert r["kept"] == [] and r["failed"][0]["session_id"] == "serve-old"
+
+
+def test_settings_row_names_every_job():
+    """설정 🧹 정기 작업 줄 설명이 작업을 다 말한다 — 두 개만 적혀 5분마다 도는 작업 장부가 안 보였다(2026-10-29 사장님)."""
+    import re
+    from pathlib import Path
+    html = (Path(__file__).resolve().parents[1] / "pwa" / "index.html").read_text(encoding="utf-8")
+    row = re.search(r"row\('🧹','정기 작업','([^']*)'", html).group(1)
+    missing = [j["name"] for j in hk.JOBS.values() if " ".join(j["name"].split()[:2]) not in row]
+    assert not missing, f"설정 줄 설명에 빠진 작업: {missing}"
