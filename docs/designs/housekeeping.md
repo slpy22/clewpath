@@ -29,6 +29,9 @@
    실패에도 claude 버전을 적어 11-04(7일 뒤)까지 다시 읽지 않았다 → ① 실패는 `at`·`version` 을 바꾸지 않아 다음 주기(24시간)에 다시
    ② 실패하면 닫기 전 화면 꼬리 12줄(이메일 가림)을 `housekeeping.json` 의 `probe.last_screen` 에(화면에는 안 냄) ③ 「지금 실행」은 강제로
    다시 읽음(`kick(force=True)`, 작업 줄이 때가 돼 세운 것은 평소대로) ④ 시작 화면 기다림 30초 → 60초.
+   **0.33.12(같은 날) 진짜 원인**: 0.33.11 의 실패 화면 꼬리가 바로 보여 줬다 — claude 2.1.312 는 입력칸을 `❯` 가 아니라 `> ` 로
+   그린다(`> Try "…"`, 아래 `⏵⏵ auto mode on`). `❯` 만 찾아 매번 start_timeout 이었다(일시 지연 아님). 줄 맨 앞의 `❯`·`>` 둘 다
+   입력칸으로 본다(`_PROMPT_RE`·`_ECHO_RE`). 실기: 진짜 claude 2.1.312 로 18.9초·12개 읽음.
 2. 이 PC 실사용 모델(assistant message.model). 화면을 아직 못 읽었으면 1 대신 내장 기본(BUILTIN_MODELS). 화면 이름 → id 는 같은 이름의 알려진 id 우선(Haiku 4.5 → 날짜 붙은 id).
    0.22.1(2026-10-14 사장님): 운영측(CP) 목록은 쓰지 않는다 — 모델 목록은 각 PC 가 관리. CP `/config/models` 는 옛 Host 호환으로만 남김.
 합본은 `data_dir/models.json`, `/api/models` 가 우선 쓴다. 구독(OAuth) 계정이라 Models API·자격 파일은 쓰지 않는다.

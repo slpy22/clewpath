@@ -156,6 +156,25 @@ def test_probe_failure_keeps_screen_tail_and_waits_60s():
     assert ok["ok"] and "screen" not in ok, "성공하면 화면을 남기지 않는다"
 
 
+def test_probe_reads_with_plain_gt_prompt():
+    """claude 2.1.312 는 입력칸을 `>\\xa0` 로 그린다(2026-10-29 실패 화면 꼬리 — ❯ 만 찾다가 60초 기다리고 start_timeout)."""
+    class Gt(FakeClaude):
+        def write(self, s):
+            if s == "/model":
+                self.writes.append(s)
+                self.typed = s
+                self.out.append(f"\n{ESC}[30B>\xa0/model")
+            else:
+                super().write(s)
+    start = (f"{ESC}[2J{ESC}[H ▐▛███▛█   Claude Code v2.1.312\n▝▜██████▀  Opus 5.5 with high effort · Claude Max\n"
+             f"{'─' * 40}\n>\xa0Try \"how do I log an error?\"\n{'─' * 40}\n  ⏵⏵ auto mode on (shift+tab to cycle)")
+    fake = Gt(start, [picker(["Opus 5.5 x", "Sonnet 5.5 z"])])
+    r = _run(fake)
+    assert r["ok"] and [m["label"] for m in r["models"]] == ["Opus 5.5", "Sonnet 5.5"]
+    assert fake.writes.count("\r") == 1
+    assert mp._PROMPT_RE.search("❯ Try something") and not mp._PROMPT_RE.search("Opus 5.5 > Sonnet")
+
+
 def test_probe_no_echo_no_enter():
     class Mute(FakeClaude):
         def write(self, s):

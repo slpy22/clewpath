@@ -199,6 +199,10 @@ _BAD_START = ("trust this folder", "Select login method", "Do you want to use th
 
 
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+# 입력칸 줄 — 줄 맨 앞(공백 뒤)의 ❯ 또는 > 와 공백. claude 2.1.312 는 `>\xa0Try "…"` 로 그린다(2026-10-29 실패 화면 꼬리로 확인 —
+# ❯ 만 찾아 60초를 기다려도 시작을 못 알아봤다). 신뢰 질문의 `❯ No, exit` 같은 고르기 줄은 _BAD_START 가 먼저 거른다
+_PROMPT_RE = re.compile(r"^[ \xa0]*[❯>][ \xa0]", re.M)
+_ECHO_RE = re.compile(r"^[ \xa0]*[❯>][ \xa0]*/model\b", re.M)
 SCREEN_TAIL_LINES = 12
 
 
@@ -253,7 +257,7 @@ def probe(exe: str, cwd: str, timeout: float = 60.0, spawn=None) -> dict:
     res: dict = {"ok": False, "models": [], "session_id": sid}
     try:
         # 1) 시작 화면: 배너 + 입력칸. 다른 질문이 떠 있으면 아무것도 고르지 않고 끝낸다.
-        started = wait_for(lambda t: "Claude Code v" in t and "❯" in t or any(b in t for b in _BAD_START),
+        started = wait_for(lambda t: "Claude Code v" in t and _PROMPT_RE.search(t) is not None or any(b in t for b in _BAD_START),
                            timeout)
         t = screen()
         if any(b in t for b in _BAD_START):
@@ -268,7 +272,7 @@ def probe(exe: str, cwd: str, timeout: float = 60.0, spawn=None) -> dict:
             return res
         # 2) 입력칸에 /model 만 있는지 확인한 뒤에만 Enter 1번
         proc.write("/model")
-        if not wait_for(lambda t: re.search(r"❯\s*/model\b", t) is not None, 5):
+        if not wait_for(lambda t: _ECHO_RE.search(t) is not None, 5):
             res["error"] = "no_input_echo"
             return res
         proc.write("\r")
