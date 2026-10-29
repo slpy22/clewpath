@@ -584,6 +584,37 @@ def leave(team_id: str, agent_ref: str) -> dict:
     return {"left": True, "agent_id": m["agent_id"]}
 
 
+def set_manager(team_id: str, agent_ref: str) -> dict:
+    """관리 세션 바꾸기(2026-10-29 사장님 — 관리 세션이 지워지면 다른 세션을 관리로): 구성원 하나를 관리로 올리고 옛 관리는
+    일반 구성원으로 내린다(지워진 세션이면 그다음 '이 팀에서 빼기'). 비서 팀(portfolio)은 비서 지정(assistant_set)으로만."""
+    with _Tx() as c:
+        t = _team_row(c, team_id)
+        if t["kind"] == "portfolio":
+            raise TeamError("portfolio_locked", 409)
+        m = _member_row(c, t["id"], agent_ref)
+        new, old = m["agent_id"], t["manager_agent"]
+        if not (old == new and m["member_role"] == "manager"):    # 이미 관리면 멱등
+            if old:
+                c.execute("UPDATE memberships SET member_role='worker' WHERE team_id=? AND agent_id=? AND left_at IS NULL",
+                          (t["id"], old))
+            c.execute("UPDATE memberships SET member_role='manager' WHERE team_id=? AND agent_id=? AND left_at IS NULL",
+                      (t["id"], new))
+            c.execute("UPDATE teams SET manager_agent=? WHERE id=?", (new, t["id"]))
+            _event(c, t["id"], "manager_changed", agent_id=new, payload={"alias": m["alias"], "from": old})
+    return member(team_id, new)
+
+
+def session_gone(session_id: str | None) -> bool:
+    """세션 기록이 이 PC 에 없다(휴지통으로 지웠거나 claude 가 정리) — 지워진 관리 세션은 팀에서 뺄 수 있다."""
+    if not session_id:
+        return True
+    try:
+        from session_manager import scanner
+        return scanner.scan_one(str(session_id)) is None
+    except Exception:  # noqa: BLE001  모르면 '있다' 로(관리를 함부로 빼지 않게)
+        return False
+
+
 def move(team_id: str, agent_ref: str, to_team: str, alias: str | None = None,
          member_role: str = "worker") -> dict:
     """팀 이동(eng E-10): 옛 소속은 left 로 닫고 새 소속을 연다. 에이전트·세션 이력은 그대로."""

@@ -1398,10 +1398,17 @@ def create_app() -> FastAPI:
     @app.post("/api/owner/teams/{team_id}/members/{agent}/leave")
     def owner_team_member_leave(team_id: str, agent: str):
         def run():
-            if _team.member(team_id, agent)["member_role"] == "manager":
-                raise _team.TeamError("manager_cannot_leave", 409)   # 관리가 빠지면 관제가 멈춘다
+            m = _team.member(team_id, agent)
+            # 살아 있는 관리는 빼지 않는다(관제가 멈춘다 — 먼저 다른 구성원을 관리로). 세션이 지워진 관리는 뺄 수 있다(2026-10-29)
+            if m["member_role"] == "manager" and not _team.session_gone(m.get("session_id")):
+                raise _team.TeamError("manager_cannot_leave", 409)
             return _team.leave(team_id, agent)
         return _owner_sync(team_id, _owner_team(run))
+
+    @app.post("/api/owner/teams/{team_id}/manager")
+    def owner_team_set_manager(team_id: str, body: dict = Body(...)):
+        # 관리 세션 바꾸기 — 구성원 하나를 관리로(옛 관리는 일반 구성원). 관제 그룹도 새 관리로 맞춘다
+        return _owner_sync(team_id, _owner_team(_team.set_manager, team_id, str(body.get("agent_id") or "")))
 
     @app.post("/api/owner/teams/{team_id}/notify")
     def owner_team_notify(team_id: str, body: dict = Body(...)):

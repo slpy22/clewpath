@@ -77,7 +77,9 @@ def _client(monkeypatch):
     return TestClient(S.create_app(), base_url="http://127.0.0.1")
 
 
-def test_owner_team_api_works_via_relay_and_agent_api_stays_local(T, monkeypatch):
+def test_owner_team_api_works_via_relay_and_agent_api_stays_local(T, fake_claude_home, monkeypatch):
+    from tests.conftest import write_session
+    write_session(fake_claude_home, "F--w", "s-m", [{"type": "permission-mode"}])   # 살아 있는(지워지지 않은) 관리 세션
     t = T.create_team("Web", manager_session="s-m")
     T.sync_group(t["id"])
     via = {"X-ClewPath-Via": "relay"}
@@ -89,12 +91,55 @@ def test_owner_team_api_works_via_relay_and_agent_api_stays_local(T, monkeypatch
         assert r.status_code == 200 and r.json()["monitor_sync"] == "ok"
         assert mongroups.get(T.get_team(t["id"])["monitor_group_id"])["subs"] == ["s-a"]
         mgr = T.get_team(t["id"])["manager_agent"]
-        assert c.post(f"/api/owner/teams/{t['code']}/members/{mgr}/leave", headers=via).status_code == 409
+        assert c.post(f"/api/owner/teams/{t['code']}/members/{mgr}/leave", headers=via).status_code == 409, "살아 있는 관리는 못 뺀다"
         fe = [m for m in T.get_team(t["id"])["members"] if m["alias"] == "fe"][0]["agent_id"]
         assert c.post(f"/api/owner/teams/{t['code']}/members/{fe}/leave", headers=via).status_code == 200
         r = c.post(f"/api/owner/teams/{t['code']}/notify", json={"notify": {"error": False}}, headers=via)
         assert r.json()["notify"]["error"] is False
         assert c.post(f"/api/owner/teams/{t['code']}/rename", json={"name": "웹"}, headers=via).json()["name"] == "웹"
+
+
+def test_owner_change_manager_and_remove_deleted_manager(T, fake_claude_home, monkeypatch):
+    """관리 세션 바꾸기(2026-10-29 사장님): 구성원 하나를 ⭐ 관리로 — 옛 관리는 일반 구성원, 관제 그룹도 새 관리로.
+    세션이 지워진 관리는 팀에서 뺄 수 있고(관리 없음 → 다른 구성원을 관리로), 살아 있는 관리는 못 뺀다. 비서 팀은 잠김."""
+    from tests.conftest import write_session
+    for sid in ("s-a", "s-b"):
+        write_session(fake_claude_home, "F--w", sid, [{"type": "permission-mode"}])
+    t = T.create_team("Web", manager_session="s-gone")             # 관리 세션 기록이 이 PC 에 없다(지워짐)
+    T.add_member(t["id"], "fe", session_id="s-a")
+    T.add_member(t["id"], "be", session_id="s-b")
+    T.sync_group(t["id"])
+    ag = {m["alias"]: m["agent_id"] for m in T.get_team(t["id"])["members"]}
+    old_mgr = T.get_team(t["id"])["manager_agent"]
+    with _client(monkeypatch) as c:
+        r = c.post(f"/api/owner/teams/{t['code']}/manager", json={"agent_id": ag["fe"]}, headers={"X-ClewPath-Via": "relay"})
+        assert r.status_code == 200 and r.json()["member_role"] == "manager" and r.json()["monitor_sync"] == "ok"
+        tm = T.get_team(t["id"])
+        roles = {m["alias"]: m["member_role"] for m in tm["members"]}
+        assert tm["manager_agent"] == ag["fe"] and roles["fe"] == "manager" and roles["be"] == "worker"
+        assert [r for a, r in roles.items() if a not in ("fe", "be")] == ["worker"], "옛 관리는 일반 구성원으로"
+        g = mongroups.get(tm["monitor_group_id"])
+        assert g["manager"] == "s-a" and sorted(g["subs"]) == ["s-b", "s-gone"], "관제 그룹도 새 관리로"
+        assert c.post(f"/api/owner/teams/{t['code']}/manager", json={"agent_id": ag["fe"]}).status_code == 200, "멱등"
+        assert c.post(f"/api/owner/teams/{t['code']}/members/{ag['fe']}/leave").status_code == 409, "살아 있는 관리는 못 뺀다"
+        assert c.post(f"/api/owner/teams/{t['code']}/members/{old_mgr}/leave").status_code == 200, "지워진 세션(옛 관리)은 뺀다"
+        assert c.post(f"/api/owner/teams/{t['code']}/manager", json={"agent_id": "없는구성원"}).status_code == 404
+    # 지워진 관리 세션이 아직 관리일 때도 뺄 수 있다 → 관리 없음
+    t2 = T.create_team("Old", manager_session="s-gone2")
+    T.add_member(t2["id"], "w", session_id="s-b2")
+    m2 = T.get_team(t2["id"])["manager_agent"]
+    with _client(monkeypatch) as c:
+        r = c.post(f"/api/owner/teams/{t2['code']}/members/{m2}/leave")
+        assert r.status_code == 200 and r.json()["monitor_sync"] == "no_manager"
+    assert T.get_team(t2["id"])["manager_agent"] is None
+    events = [k for (k,) in team._read().execute("SELECT kind FROM events WHERE team_id=? ORDER BY id", (t["id"],))]
+    assert "manager_changed" in events
+    p = T.create_team("비서", kind="portfolio", manager_session="s-asst")
+    T.add_member(p["id"], "w2", session_id="s-a2")
+    w2 = [m["agent_id"] for m in T.get_team(p["id"])["members"] if m["alias"] == "w2"][0]
+    with pytest.raises(team.TeamError) as e:
+        T.set_manager(p["id"], w2)
+    assert e.value.code == "portfolio_locked", "비서 팀은 비서 지정(assistant_set)으로만"
 
 
 def test_owner_approval_create_execute(T, monkeypatch):

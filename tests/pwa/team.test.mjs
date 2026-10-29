@@ -88,7 +88,7 @@ test("펼치기: 기기에 기억 · 구성원만(탭 없음) · 이름은 세�
   const t = texts(ctx);
   assert.ok(!t.some((x) => /^(일감|기록|⚙ 설정)/.test(x)), "일감·기록·설정 탭은 없다");
   assert.ok(t.includes("관리 세션") && t.includes("프론트 세션") && t.includes("UI · 별칭 프론트"));
-  assert.ok(t.includes("옛워커") && t.includes("세션 s-gone · 목록에 없음"));
+  assert.ok(t.includes("옛워커") && t.includes("세션 s-gone · 지워짐(목록에 없음)"));
   assert.equal(ev(ctx, `${FLAT}.filter(n => String(n.className).startsWith('srow tm'))[0].dataset.agent`), "ag_m", "관리가 맨 위");
   assert.ok(ev(ctx, `${FLAT}.some(n => n.className === 'glist tmembers')`), "구성원 = 세션 목록의 줄 묶음(.glist)");
   assert.ok(texts(ctx).includes("▼"));
@@ -224,4 +224,30 @@ test("팀 ⋯ 메뉴: 이름 바꾸기(prompt → rename API, 취소는 무동�
   assert.deepEqual(old, ["작업 장부", "보관 풀기", "이 팀 삭제"]);
   const asst = JSON.parse(ev(ctx, "JSON.stringify(teamMenuItems(TEAMS[0], {assistant:true}).map(x => x[1]))"));
   assert.deepEqual(asst, ["비서 열기", "펼치기"]);
+});
+
+test("관리 세션 바꾸기·지워진 세션 빼기(2026-10-29 사장님): 일반 구성원 ⋯ = ⭐ 관리로 지정 + 빼기 · 지워진 구성원은 '지워짐' + 빼기(관리여도) · 살아 있는 관리는 빼기 대신 안내 · 관리가 지워졌으면 팀 칸에 경고", async () => {
+  const ctx = await boot();
+  ev(ctx, "globalThis.__pop = null; openPop = (a, box, title) => { globalThis.__pop = { title, box }; return box; };");
+  const menu = (ref) => {
+    ev(ctx, `(() => { const t = TEAMS[1]; const m = t.members.find(x => x.agent_id === '${ref}'); memberMenu(t, m, memberSess(m), el('button')); })()`);
+    return ev(ctx, "__pop.box.children.map(c => c.className === 'popsep' ? '—' : c.className === 'cwd' ? '※' + c.textContent"
+      + " : (c.children[1] && c.children[1].children[0] ? c.children[1].children[0].textContent : ''))");
+  };
+  const fe = menu("ag_f");
+  assert.ok(fe.includes("관리 세션으로 지정") && fe.includes("이 팀에서 빼기"), JSON.stringify(fe));
+  assert.deepEqual(menu("ag_x"), ["※이 구성원의 세션은 지워졌습니다(목록에 없음).", "—", "이 팀에서 빼기"], "지워진 세션엔 관리 지정 없이 빼기만");
+  const mg = menu("ag_m");
+  assert.ok(!mg.includes("이 팀에서 빼기") && mg.includes("※관리 세션을 바꾸려면 다른 구성원 ⋯ 에서 「⭐ 관리 세션으로 지정」"), JSON.stringify(mg));
+  // 지정 → POST /manager
+  ev(ctx, "confirm = () => true");
+  await ev(ctx, "memberSetManager(TEAMS[1], TEAMS[1].members[1])");
+  const post = ev(ctx, "__calls.find(c => c[1].endsWith('/manager'))");
+  assert.equal(post[1], "/api/owner/teams/WEB/manager");
+  assert.equal(JSON.stringify(post[2].body), JSON.stringify({ agent_id: "ag_f" }));
+  // 관리 세션이 지워진 팀: 경고 줄 + 관리 ⋯ 에 빼기
+  ev(ctx, "LIST_READY = true; SESSIONS = SESSIONS.filter(s => s.session_id !== 's-m'); TEAM_OPEN.add('WEB'); renderTeamRows(__w)");
+  assert.ok(texts(ctx).includes("관리 세션이 지워졌습니다 — 구성원 ⋯ 에서 「⭐ 관리 세션으로 지정」"));
+  assert.deepEqual(menu("ag_m"), ["※이 구성원의 세션은 지워졌습니다(목록에 없음).", "—", "이 팀에서 빼기"]);
+  assert.ok(texts(ctx).includes("세션 s-gone · 지워짐(목록에 없음)"));
 });

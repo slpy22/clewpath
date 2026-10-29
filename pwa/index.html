@@ -379,6 +379,7 @@
   .tsec{font-size:.74rem;font-weight:700;color:var(--muted);letter-spacing:.02em;margin:12px 12px 4px 0}
   .tinner .tsec{margin-left:0}
   .tnote{font-size:.74rem;color:var(--muted);margin:2px 12px 6px 0;line-height:1.5}
+  .tmembers>.tnote.warn{color:var(--warn);font-weight:650;margin:4px 12px}
   .tline{display:block;width:100%;text-align:left;background:transparent;font-size:.8rem;color:var(--ink2);
     padding:5px 12px 5px 0;line-height:1.45;word-break:break-word}
   .tline.link{cursor:pointer;color:var(--ink)} .tline.link:hover{color:var(--accent)}
@@ -4810,7 +4811,7 @@ function teamEditing(){
   if(TEAM_NEW||Object.values(TEAM_UI).some(u=>u.adding)) return true;
   const a=document.activeElement; return !!(a&&/^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName||'')&&a.closest&&a.closest('#paneList'));
 }
-const TEAM_ERR={alias_taken:'같은 별칭이 이미 있습니다', already_member:'이미 이 팀 구성원입니다', manager_cannot_leave:'관리는 뺄 수 없습니다',
+const TEAM_ERR={alias_taken:'같은 별칭이 이미 있습니다', already_member:'이미 이 팀 구성원입니다', manager_cannot_leave:'관리 세션은 먼저 다른 구성원을 ⭐ 관리로 지정한 뒤 뺄 수 있습니다', portfolio_locked:'비서 팀은 비서 지정으로만 바꿉니다',
   no_monitor_group:'관리 세션이 없어 관제·알림이 없습니다', name_required:'이름을 적으세요', alias_required:'별칭을 적으세요',
   team_not_found:'팀을 찾을 수 없습니다'};
 function teamErrText(m){ m=String(m||''); return TEAM_ERR[m]||m; }
@@ -5067,6 +5068,9 @@ function teamBody(t){ return teamMembers(t); }
 function teamMembers(t){
   const w=el('div','glist tmembers'); const u=tui(t.code);
   const ms=[...(t.members||[])].sort((a,b)=>(b.member_role==='manager')-(a.member_role==='manager'));
+  // 관리 세션이 없거나 지워졌다 — 관제·알림이 멈춘다. 구성원 ⋯ 에서 다른 세션을 관리로(2026-10-29 사장님)
+  if(!t.archived&&t.kind!=='portfolio'&&ms.length){ const mg=ms.find(m=>m.member_role==='manager');
+    if(!mg||(LIST_READY&&!memberSess(mg))) w.appendChild(el('div','tnote warn',(mg?'관리 세션이 지워졌습니다':'관리 세션이 없습니다')+' — 구성원 ⋯ 에서 「⭐ 관리 세션으로 지정」')); }
   ms.forEach(m=>{
     const s=memberSess(m);
     const row=el('div','srow tm'+(s?'':' dim')); row.dataset.agent=m.agent_id;
@@ -5079,7 +5083,7 @@ function teamMembers(t){
     if(m.member_role==='manager') r1.appendChild(el('span','schip mgr','관리'));
     if(bd){ const st=el('span','sstate',bd.text); st.style.setProperty('--c',bd.c); r1.appendChild(st); }
     info.appendChild(r1);
-    const where=s?null:(m.session_id?'세션 '+m.session_id.slice(0,8)+' · 목록에 없음':'세션 없음');
+    const where=s?null:(m.session_id?'세션 '+m.session_id.slice(0,8)+' · 지워짐(목록에 없음)':'세션 없음');
     const al=(s&&m.alias&&m.alias!==nm)?'별칭 '+m.alias:null;
     const rt=s?relFrom(s):null;
     const role=(m.role&&m.role.replace(/[\s_]/g,'')!==String(nm).replace(/[\s_]/g,''))?m.role:null;   // 세션 이름과 같은 역할은 되풀이하지 않는다
@@ -5102,15 +5106,27 @@ function memberLeave(t,m){
       if(r&&r.error) throw new Error(r.error); tui(t.code).career=null; toast('뺐습니다'); reloadTeams(t.code); }
     catch(e){ toast('빼기 실패: '+teamErrText(e.message)); } })();
 }
+function memberSetManager(t,m){
+  return (async()=>{ if(!confirm(`'${m.alias}' 을(를) ${t.name} 의 관리 세션으로 지정할까요? 지금 관리는 일반 구성원이 되고, 관제·호출 실패 알림은 새 관리 세션을 따라갑니다.`)) return;
+    try{ const r=await T.api('POST','/api/owner/teams/'+encodeURIComponent(t.code)+'/manager',{body:{agent_id:m.agent_id}});
+      if(r&&r.error) throw new Error(r.error); toast('관리 세션을 바꿨습니다'); reloadTeams(t.code); }
+    catch(e){ toast('바꾸기 실패: '+teamErrText(e.message)); } })();
+}
+// 구성원 ⋯: 세션 메뉴(있으면) + 관리로 지정(일반 구성원·세션이 있을 때) + 이 팀에서 빼기(일반 구성원, 또는 세션이 지워진 관리)
 function memberMenu(t,m,s,anchor){
-  const box=el('div'); let sep=false;
+  const box=el('div');
   const items=s?rowMenuItems(continuedTarget(s)).filter(x=>x[4]!=='danger'):[];
   for(const [i,l,sub,fn,cls] of items) box.appendChild(popItem(i,l,sub,fn,cls));
-  if(!t.archived&&m.member_role!=='manager'){
-    box.appendChild(el('div','popsep'));
-    box.appendChild(popItem('➖','이 팀에서 빼기','세션·경력은 그대로',()=>memberLeave(t,m),'danger'));
+  if(!s) box.appendChild(el('div','cwd',m.session_id?'이 구성원의 세션은 지워졌습니다(목록에 없음).':'이 구성원에 붙은 세션이 없습니다.'));
+  const mgr=m.member_role==='manager';
+  if(!t.archived&&t.kind!=='portfolio'){
+    const acts=[];
+    if(!mgr&&s) acts.push(popItem('⭐','관리 세션으로 지정','구성원에게 일을 나누는 세션 — 지금 관리는 일반 구성원으로',()=>memberSetManager(t,m)));
+    if(!mgr||!s) acts.push(popItem('➖','이 팀에서 빼기',mgr?'지워진 관리 세션 — 뺀 뒤 다른 구성원을 ⭐ 관리로':'세션·경력은 그대로',()=>memberLeave(t,m),'danger'));
+    else acts.push(el('div','cwd','관리 세션을 바꾸려면 다른 구성원 ⋯ 에서 「⭐ 관리 세션으로 지정」'));
+    if(box.children.length) box.appendChild(el('div','popsep'));
+    acts.forEach(x=>box.appendChild(x));
   }
-  if(!box.children.length) box.appendChild(el('div','cwd','이 구성원의 세션을 목록에서 찾을 수 없습니다.'));
   return openPop(anchor,box,(s?sessLabel(s):m.alias)+' · '+t.name);
 }
 function toggleCareer(t,m){
