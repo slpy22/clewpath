@@ -1039,7 +1039,7 @@ def create_app() -> FastAPI:
     @app.post("/api/owner/housekeeping/{job}/run")
     def housekeeping_run(job: str):
         from session_manager import housekeeping
-        if not housekeeping.kick(job):
+        if not housekeeping.kick(job, force=True):
             return JSONResponse({"error": "unknown_job"}, status_code=404)
         return {"queued": job}
 

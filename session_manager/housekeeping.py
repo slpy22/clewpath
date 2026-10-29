@@ -35,7 +35,7 @@ JOBS = {
     "idle_sessions": {"name": "쉬는 세션 정리", "interval": 15 * 60, "default_on": True,
                       "desc": "오래 아무 일도 안 한 ClewPath 터미널을 끕니다(기록은 남아 다시 열면 이어짐)"},
     "models": {"name": "모델 목록 갱신", "interval": 24 * 3600, "default_on": True,
-               "desc": "claude /model 화면(claude 가 업데이트됐을 때·7일마다 숨은 터미널로 읽음) + 이 PC 실사용 모델로 재개 모델 목록을 새로 만듭니다(화면을 못 읽었으면 내장 기본)"},
+               "desc": "claude /model 화면(claude 가 업데이트됐을 때·7일마다 숨은 터미널로 읽음, 실패하면 다음 날 다시, 「지금 실행」은 바로 다시 읽음) + 이 PC 실사용 모델로 재개 모델 목록을 새로 만듭니다(화면을 못 읽었으면 내장 기본)"},
     "worklog": {"name": "작업 장부 채우기", "interval": 5 * 60, "default_on": True,
                 "desc": "모든 세션의 요청·답 요약을 비서용 장부에 이어 적습니다(읽기만 · claude 가 기록을 지워도 장부는 남음)"},
     "serve_keep": {"name": "서빙 세션 보관 유지", "interval": 24 * 3600, "default_on": True,
@@ -296,12 +296,15 @@ def _maybe_probe(d: dict, force: bool = False) -> tuple[dict | None, str]:
     r = modelprobe.probe(exe, cwd)
     ids = (d.get("probe_sessions") or []) + [r["session_id"]]
     d["probe_sessions"] = ids[-_PROBE_KEEP_IDS:]
-    pr = dict(pr, at=int(time.time()), version=ver, last_error=r.get("error"))
     if r.get("ok"):
-        pr["ok_models"] = r["models"]
+        pr = {k: v for k, v in pr.items() if k not in ("fail_at", "last_screen")}
+        pr.update(at=int(time.time()), version=ver, last_error=None, ok_models=r["models"])
         note = f"화면 목록 {len(r['models'])}개 새로 읽음(claude {ver})"
     else:
-        note = f"⚠ 화면 읽기 실패({r.get('error')}) — 이전 목록 사용"
+        # 실패는 at·version 을 바꾸지 않는다 — 바꾸면 다음 claude 업데이트나 7일 뒤까지 다시 읽지 않았다(2026-10-28 실측).
+        # 그대로 두면 다음 주기(24시간)에 다시 때가 된다. 화면 꼬리는 원인 진단용(이 PC 데이터 폴더에만, 화면에 안 냄)
+        pr = dict(pr, fail_at=int(time.time()), last_error=r.get("error"), last_screen=r.get("screen") or [])
+        note = f"⚠ 화면 읽기 실패({r.get('error')}) — 이전 목록 사용, 다음 주기에 다시"
     d["probe"] = pr
     return pr, note
 
@@ -311,9 +314,9 @@ def hidden_session_ids() -> set[str]:
     return set(_load().get("probe_sessions") or [])
 
 
-def refresh_models(metas=None, probe: bool = True) -> dict:
+def refresh_models(metas=None, probe: bool = True, force: bool = False) -> dict:
     """재개 모델 목록 합본: ① claude /model 화면(이 계정이 고를 수 있는 것, 화면 순서) ② 이 PC 실사용.
-    화면을 아직 못 읽었으면 ① 대신 내장 기본(BUILTIN_MODELS)."""
+    화면을 아직 못 읽었으면 ① 대신 내장 기본(BUILTIN_MODELS). force = 「지금 실행」 — 때가 아니어도 화면을 다시 읽는다."""
     from session_manager import modelprobe
     base = [dict(x) for x in BUILTIN_MODELS]
     observed = observed_models(metas)
@@ -327,7 +330,7 @@ def refresh_models(metas=None, probe: bool = True) -> dict:
     if probe:
         with _lock:
             d = _load()
-        pr, note = _maybe_probe(d)
+        pr, note = _maybe_probe(d, force=force)
         with _lock:
             d2 = _load()
             for k in ("probe", "probe_sessions"):
@@ -460,15 +463,20 @@ def _run_worklog() -> dict:
 
 _RUNNERS = {"idle_sessions": reap_idle, "models": refresh_models, "serve_keep": keep_serving,
             "cleanup_watch": watch_cleanup, "worklog": _run_worklog, "fork_cleanup": _run_fork_cleanup}
+# 「지금 실행」이면 때가 아니어도 하는 작업(force=True 로 부른다) — 모델 목록: claude 버전이 같아도 화면을 다시 읽는다
+_FORCEABLE = {"models"}
+_forced: set[str] = set()
 
 
-def run_job(jid: str) -> dict:
+def run_job(jid: str, force: bool = False) -> dict:
     """작업 하나를 지금 이 스레드에서 실행하고 결과를 기록한다(작업 줄과 테스트가 쓴다)."""
     global _running
+    force = force or jid in _forced
+    _forced.discard(jid)
     _running = jid
     t0 = time.time()
     try:
-        res = _RUNNERS[jid]()
+        res = _RUNNERS[jid](force=True) if force and jid in _FORCEABLE else _RUNNERS[jid]()
         ok = True
     except Exception as e:  # noqa: BLE001  작업 하나의 실패가 Host 를 죽이면 안 된다
         res = {"summary": f"실패: {type(e).__name__}: {e}"}
@@ -483,10 +491,12 @@ def run_job(jid: str) -> dict:
     return res
 
 
-def kick(jid: str) -> bool:
-    """「지금 실행」 — 작업 줄 뒤에 세운다(이미 같은 작업이 서 있으면 한 번만)."""
+def kick(jid: str, force: bool = False) -> bool:
+    """작업 줄 뒤에 세운다(이미 같은 작업이 서 있으면 한 번만). force = 「지금 실행」(사람이 누름) — _FORCEABLE 작업은 때가 아니어도 한다."""
     if jid not in JOBS:
         return False
+    if force:
+        _forced.add(jid)
     if jid not in list(_q.queue):
         _q.put(jid)
     return True

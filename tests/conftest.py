@@ -34,12 +34,13 @@ from session_manager import modelprobe as _modelprobe  # noqa: E402
 if not getattr(_modelprobe.probe, "_test_guard", False):
     _real_probe = _modelprobe.probe
 
-    def _probe_without_real_claude(exe, cwd, timeout=30.0, spawn=None):
+    def _probe_without_real_claude(exe, cwd, timeout=60.0, spawn=None):
         if spawn is None:
             raise RuntimeError("시험 중에는 진짜 claude 를 띄우지 않습니다 — modelprobe.probe 에 spawn 을 주입하세요")
         return _real_probe(exe, cwd, timeout=timeout, spawn=spawn)
 
     _probe_without_real_claude._test_guard = True
+    _probe_without_real_claude.__wrapped__ = _real_probe     # inspect.signature 가 진짜 기본값을 보게
     _modelprobe.probe = _probe_without_real_claude
 
 # 진짜 데이터 폴더의 핵심 파일을 시험이 지우지 않는지 시험마다 본다(2026-10-22 맥 실기 3b-2 이슈 B: 전체 시험 전후로 진짜

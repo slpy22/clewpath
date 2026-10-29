@@ -198,8 +198,20 @@ _BAD_START = ("trust this folder", "Select login method", "Do you want to use th
               "Choose the text style")
 
 
-def probe(exe: str, cwd: str, timeout: float = 30.0, spawn=None) -> dict:
-    """숨은 터미널에서 /model 화면을 읽는다 → {ok, models:[{label,one_m,…}], session_id, error?}.
+_EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+SCREEN_TAIL_LINES = 12
+
+
+def screen_tail(text: str, n: int = SCREEN_TAIL_LINES) -> list[str]:
+    """실패 때 남길 화면 — 빈 줄을 뺀 마지막 n 줄(줄당 160자), 계정 이메일은 가린다(원인 진단용, 이 PC 데이터 폴더에만)."""
+    lines = [ln.rstrip()[:160] for ln in (text or "").splitlines() if ln.strip()]
+    return [_EMAIL_RE.sub("<이메일>", ln) for ln in lines[-n:]]
+
+
+# 2026-10-29: 30초 → 60초. 10-28 17:16 Host 재기동 20분 뒤 한 번 30초 안에 시작 화면이 안 떠 실패(다시 해 보면 5.5초)
+def probe(exe: str, cwd: str, timeout: float = 60.0, spawn=None) -> dict:
+    """숨은 터미널에서 /model 화면을 읽는다 → {ok, models:[{label,one_m,…}], session_id, error?, screen?}.
+    실패하면 screen 에 닫기 직전 화면 꼬리(screen_tail)를 담는다 — 원인을 나중에 알 수 있게.
     spawn(argv, cwd, env, rows, cols) 는 테스트용 주입(기본 osdep.spawn_pty)."""
     sid = str(uuid.uuid4())
     env = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE", "SM_"))}
@@ -281,6 +293,8 @@ def probe(exe: str, cwd: str, timeout: float = 30.0, spawn=None) -> dict:
             res["error"] = "parse_failed"
         return res
     finally:
+        if not res.get("ok"):
+            res["screen"] = screen_tail(screen())       # 닫기(Esc) 전 화면
         try:
             proc.write("\x1b")                          # 고르기 화면 닫기(선택 없이)
             time.sleep(0.5)

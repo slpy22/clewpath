@@ -163,8 +163,10 @@ def test_api_and_remote_privilege(fake_claude_home, monkeypatch):
         assert not labels.get("abc").get("keep")
         hk.refresh_models([], probe=False)
         assert c.get("/api/models").json()["source"] == "merged"
+    assert "models" in hk._forced, "「지금 실행」 API 는 강제로 세운다"
     while not hk._q.empty():
         hk._q.get_nowait()
+    hk._forced.clear()
     assert connector._is_privileged_api("/api/owner/housekeeping")
     assert connector._is_privileged_api("/api/owner/housekeeping/idle_sessions/run")
     assert not connector._is_privileged_api("/api/owner/housekeeping/models/run")
@@ -235,12 +237,43 @@ def test_maybe_probe_runs_on_version_change_only(fake_claude_home, monkeypatch):
     ver["v"] = "2.1.300"
     hk._maybe_probe(d)
     assert len(calls) == 2, "claude 가 업데이트되면 다시 읽는다"
-    monkeypatch.setattr(modelprobe, "probe", lambda exe, cwd: {"ok": False, "models": [], "session_id": "sid9", "error": "no_picker"})
+    fails = []
+
+    def fail_probe(exe, cwd):
+        fails.append(cwd)
+        return {"ok": False, "models": [], "session_id": f"sid9{len(fails)}", "error": "start_timeout",
+                "screen": ["Claude Code v2.1.301", "<이메일>"]}
+    monkeypatch.setattr(modelprobe, "probe", fail_probe)
     ver["v"] = "2.1.301"
     pr, note = hk._maybe_probe(d)
-    assert "실패" in note and pr["ok_models"][0]["label"] == "Opus 5.5", "실패하면 이전 목록 유지"
+    assert "실패" in note and "다음 주기에 다시" in note and pr["ok_models"][0]["label"] == "Opus 5.5", "실패하면 이전 목록 유지"
+    assert pr["version"] == "2.1.300" and pr["last_error"] == "start_timeout" and pr["last_screen"] == ["Claude Code v2.1.301", "<이메일>"]
+    pr, note = hk._maybe_probe(d)
+    assert len(fails) == 2, "실패는 버전을 적지 않는다 — 같은 버전이어도 다음 주기에 다시 읽는다(2026-10-28 실측: 7일 동안 안 읽음)"
     hk._save(d)
-    assert hk.hidden_session_ids() == {"sid1", "sid2", "sid9"}
+    assert hk.hidden_session_ids() == {"sid1", "sid2", "sid91", "sid92"}
+    monkeypatch.setattr(modelprobe, "probe", fake_probe)
+    pr, note = hk._maybe_probe(d)
+    assert "새로 읽음" in note and pr["version"] == "2.1.301" and pr["last_error"] is None
+    assert "last_screen" not in pr and "fail_at" not in pr, "성공하면 지난 실패 흔적을 지운다"
+
+
+def test_run_now_forces_model_reread(terms, monkeypatch):
+    """「지금 실행」(API → kick(force=True))이면 claude 버전이 같아도 화면을 다시 읽는다. 작업 줄이 때가 돼 세운 것은 평소대로."""
+    got = []
+    monkeypatch.setitem(hk._RUNNERS, "models", lambda force=False: got.append(force) or {"summary": "ok"})
+    monkeypatch.setattr(hk, "_forced", set())
+    assert hk.kick("models")
+    hk._q.get_nowait(); hk.run_job("models")
+    assert hk.kick("models", force=True)
+    hk._q.get_nowait(); hk.run_job("models")
+    hk.run_job("models")
+    assert got == [False, True, False], "강제는 한 번만"
+    hk.kick("idle_sessions", force=True)                         # 강제 대상이 아닌 작업은 인자 없이 부른다
+    hk._q.get_nowait()
+    monkeypatch.setitem(hk._RUNNERS, "idle_sessions", lambda: {"summary": "idle"})
+    assert hk.run_job("idle_sessions")["summary"] == "idle"
+    assert hk._forced == set()
 
 
 def test_idle_uses_conversation_time_not_file_mtime(terms, fake_claude_home):

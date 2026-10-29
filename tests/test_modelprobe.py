@@ -142,6 +142,20 @@ def test_probe_aborts_on_trust_dialog():
     assert not fake.alive
 
 
+def test_probe_failure_keeps_screen_tail_and_waits_60s():
+    """시작 화면이 안 뜨면 start_timeout + 닫기 전 화면 꼬리(빈 줄 빼고, 이메일 가림). 기다리는 시간 기본은 60초(2026-10-29)."""
+    import inspect
+    fake = FakeClaude(f"{ESC}[2J{ESC}[H Loading…\n\n signed in as boss.kim@example.co.kr\n Checking for updates", [""])
+    r = mp.probe("claude.exe", "E:/t", timeout=1, spawn=lambda argv, cwd, env, rr, c: fake)
+    assert not r["ok"] and r["error"] == "start_timeout"
+    assert [x.strip() for x in r["screen"]] == ["Loading…", "signed in as <이메일>", "Checking for updates"]
+    assert "/model" not in fake.writes and "\r" not in fake.writes and not fake.alive
+    assert inspect.signature(mp.probe).parameters["timeout"].default == 60.0
+    assert len(mp.screen_tail("\n".join(f"줄{i}" for i in range(30)))) == mp.SCREEN_TAIL_LINES
+    ok = _run(FakeClaude(START, [picker(["Opus 5.5 x"])]))
+    assert ok["ok"] and "screen" not in ok, "성공하면 화면을 남기지 않는다"
+
+
 def test_probe_no_echo_no_enter():
     class Mute(FakeClaude):
         def write(self, s):
