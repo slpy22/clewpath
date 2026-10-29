@@ -231,6 +231,8 @@
   .lview button{flex:1;padding:8px 0;border-radius:8px;color:var(--ink2);font-size:.88rem;background:transparent}
   .lview button.on{background:var(--accent2);color:#fff;font-weight:600}
   .lview+.search{padding-top:10px}
+  /* 파일 보기의 탐색기 머리(제목·정렬·찾기 칸)도 .lhead 에 실려 스크롤해도 남는다(2026-10-29 사장님) */
+  .fbhead{background:var(--bg)}
   /* ---- 📁 파일 보기(VS Code 탐색기·편집기) ---- */
   .fbex{display:flex;align-items:center;gap:8px;padding:12px 8px 6px 16px}
   .fbex-t{font-size:.7rem;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--ink2)}
@@ -242,7 +244,7 @@
   .fbfilter{position:relative;display:block;margin:2px 10px 8px}
   .fbfilter .si{position:absolute;left:9px;top:50%;transform:translateY(-50%);width:14px;height:14px;color:var(--muted);display:flex}
   .fbfilter .si svg{width:14px;height:14px}
-  .fbfilter input{width:100%;height:32px;padding:0 10px 0 30px;border-radius:9px;border:1px solid var(--line);
+  .fbfilter input{width:100%;height:32px;padding:0 32px 0 30px;border-radius:9px;border:1px solid var(--line);
     background:var(--surface);color:var(--ink);font-size:.84rem;outline:none;-webkit-appearance:none;appearance:none}
   .fbfilter input:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-wash)}
   .fbtree{padding:0 6px 18px;font-size:13px;outline:none}
@@ -485,6 +487,14 @@
   .search{display:flex;gap:8px;align-items:center}
   .search input{flex:1;min-width:0}
   .search .sref{flex:none;width:42px;height:44px;border-radius:11px;background:var(--surface);border:1px solid var(--line);color:var(--ink2);font-size:1.05rem}
+  /* 검색 지우기 ✕(2026-10-29 사장님) — 글자가 있을 때만. 세션 목록·파일 탐색기 공통 */
+  .sbox{position:relative;flex:1;min-width:0;display:flex}
+  .search .sbox input{padding-right:40px}
+  .sclr{position:absolute;right:4px;top:50%;transform:translateY(-50%);width:32px;height:32px;border-radius:8px;
+    display:flex;align-items:center;justify-content:center;color:var(--muted);background:transparent;font-size:.9rem}
+  .sclr:hover{background:var(--surface2);color:var(--ink)}
+  .fbfilter .sclr{right:2px;width:28px;height:28px;font-size:.8rem}
+  input[type=search]::-webkit-search-cancel-button{-webkit-appearance:none;appearance:none;display:none}
   .lview .assist{flex:1;padding:8px 0;border-radius:8px;color:var(--ink2);font-size:.88rem;background:transparent}
   /* ---- 화면 재배치 2단계(2026-10-12): 목록 줄 ⋯ 메뉴 · 🔔 할 일 · 폰 아래 탭 막대 · 자동 실행 기록 접기 ---- */
   .sbtn.more{width:40px;font-size:1.15rem;color:var(--ink2)}
@@ -1798,6 +1808,15 @@ function listErrText(){
   return LIST_ERR==='agent_offline'?['PC 가 꺼져 있습니다','PC 꺼짐',connErrText(LIST_ERR)]
     :['목록을 받지 못했습니다','연결 실패','목록을 받지 못했습니다 — 연결을 확인하세요'];
 }
+// 검색 칸 지우기 ✕(2026-10-29 사장님) — 글자가 있을 때만 보이고, 누르면 비운 뒤 onClear(바로 다시 그리기)·입력칸에 초점.
+// inp.oninput 을 먼저 달아 둔 뒤 부른다(그 앞에 ✕ 보임 갱신을 끼운다)
+function addSearchClear(box,inp,onClear){
+  const b=el('button','sclr','✕'); b.type='button'; b.title='검색 지우기'; b.setAttribute('aria-label','검색 지우기');
+  const sync=()=>b.classList.toggle('hidden',!inp.value);
+  const prev=inp.oninput; inp.oninput=(ev)=>{ sync(); if(prev) prev(ev); };
+  b.onclick=(ev)=>{ if(ev&&ev.preventDefault) ev.preventDefault(); inp.value=''; sync(); onClear(); inp.focus(); };
+  sync(); box.appendChild(b); return b;
+}
 async function loadList(q){
   const main=paneList(); headList();
   main.innerHTML=''; syncTabbar();
@@ -1808,21 +1827,23 @@ async function loadList(q){
   seg.appendChild(segBtn('sessions','세션')); seg.appendChild(segBtn('groups','👥 팀')); seg.appendChild(segBtn('files','📁 파일'));
   { const b=el('button','assist','🧑‍💼 비서'); b.title='개인 비서 세션 열기'; b.onclick=()=>openAssistant(); seg.appendChild(b); }
   const lhead=el('div','lhead'); lhead.appendChild(seg); main.appendChild(lhead);
-  const sb=el('div','search'); const inp=el('input');
-  inp.placeholder='검색 (경로·이름)'; inp.value=q||''; sb.appendChild(inp);
+  const sb=el('div','search'); const sbox=el('span','sbox'); const inp=el('input');
+  inp.placeholder='검색 (경로·이름)'; inp.value=q||''; sbox.appendChild(inp); sb.appendChild(sbox);
   { const rb=el('button','sref','⟳'); rb.title='목록 새로고침(20초마다 자동)'; rb.setAttribute('aria-label','목록 새로고침'); rb.onclick=()=>loadList(inp.value); sb.appendChild(rb); }
   lhead.appendChild(sb);
   const chipsWrap=el('div','chips hidden'); main.appendChild(chipsWrap);
   const listWrap=el('div'); main.appendChild(listWrap);
   const spin=el('div','spin'); listWrap.appendChild(spin);
-  if(LIST_VIEW==='files') sb.style.display='none';
+  let fbBox=null;
+  if(LIST_VIEW==='files'){ sb.style.display='none'; fbBox=el('div','fbhead'); lhead.appendChild(fbBox); }
   if(LIST_VIEW==='groups'){ sb.style.display='none'; const tpc=pcNow(); fetchTeams().then(ts=>{ if(setTeams(ts,tpc)&&LIST_VIEW==='groups'&&SESSIONS) rerender(); }); }
   const rerender=()=>{
     if(LIST_VIEW==='groups'){ renderTeamRows(listWrap); return; }
     // 파일 보기: 탐색기는 한 번만 그린다(20초 목록 갱신이 펼친 트리를 갈아엎지 않게)
-    if(LIST_VIEW==='files'){ if(FB.wrap!==listWrap) renderFbExplorer(listWrap); else fbRenderTree(); return; }
+    if(LIST_VIEW==='files'){ if(FB.wrap!==listWrap) renderFbExplorer(listWrap,fbBox); else fbRenderTree(); return; }
     renderChips(chipsWrap,rerender); renderRows(listWrap,inp.value); };
   inp.oninput=()=>{ clearTimeout(inp._t); inp._t=setTimeout(rerender,200); };
+  addSearchClear(sbox,inp,()=>{ clearTimeout(inp._t); rerender(); });
   showListPane();
   // 데스크톱: 우측 안내. 단 살아있는 터미널 뷰(term-mode)는 비우지 않는다 — 재연결
   // 흐름(_scheduleReconnect→loadList)과 새로고침 버튼이 이 경로라, 여기서 pane 을
@@ -2641,6 +2662,70 @@ function continuedTarget(s){
   }
   return cur;
 }
+// 세션 줄의 정보 칸(점·이름·오른쪽 상태/칩·메시지·용량·시간·경로) — 세션 목록과 팀 구성원 줄이 같이 쓴다(2026-10-29 사장님:
+// 팀 목록에서도 세션 목록과 같은 정보). repr = 폴더 머리의 대표 경로(같으면 경로 줄 생략, 팀은 null 이라 늘 보인다)
+function sessRowInfo(srow,s,repr){
+  if(s.session_id===SELECTED_ID) srow.classList.add('sel');
+  if((s.picker_hidden && !s.picker_expose) || s.headless) srow.classList.add('dim');  // 픽커 미표시·자동 실행 = 흐리게
+  // 탭 영역(정보) → 상세
+  const info=el('button','sinfo');
+  const r1=el('div','sr1');
+  const bd=sessionBadge(s);
+  if(bd){ const d=el('span','sdot'+(bd.pulse?' pulse':'')); d.style.setProperty('--c',bd.c); r1.appendChild(d); }
+  r1.appendChild(el('span','sname',s.title||s.label_name||s.slug||s.session_id.slice(0,8)));
+  // 상태 문구·칩은 이름 줄이 아니라 오른쪽 칸(이름 줄 + 메시지·용량·시간 줄 두 줄 높이)에 세운다 — 이름이 덜 잘린다(2026-10-28 사장님)
+  const side=el('div','sside'), chips=el('div','schips');   // 오른쪽 칸: 위 상태 문구 · 아래 칩들
+  if(bd){ const t=el('span','sstate',bd.text); t.style.setProperty('--c',bd.c);
+    if(bd.text==='권한 대기'){ t.style.cursor='pointer'; t.onclick=(e)=>{e.stopPropagation();showApprove(s);}; }
+    side.appendChild(t); }
+  if(s.agent&&s.agent.kind==='background'){
+    const g=el('span','schip agentbg','🤖 '+(s.agent.name||'에이전트'));
+    g.title='백그라운드 에이전트가 이 세션 사용 중 - 이어재개 잠김(포크는 가능)';
+    chips.appendChild(g);
+  }
+  // 피어(다른 곳에서 살아 있는 세션)는 칩 대신 오른쪽 재개 버튼 아이콘이 출처를 보여 준다(2026-09-30 사장님:
+  // 'worker-3-ax-52' 같은 SendMessage 이름 칩은 봐도 이해가 안 됨)
+  if(s.headless){
+    const g=el('span','schip gear','🤖 자동 실행');
+    g.title='claude -p(비대화형) 단발 실행 — 다른 세션·스크립트가 맡긴 일감. 끝나면 목록에서 사라집니다';
+    chips.appendChild(g);
+  } else if(s.picker_hidden&&!s.picker_expose){
+    const g=el('span','schip gear','⚙ 에이전트');
+    g.title='claude 재개 목록(피커)에 없는 세션 - 에이전트/포크 산물. 상세에서 설명 보기';
+    chips.appendChild(g);
+  }
+  if(s.continued_in){
+    // 옛 줄(continued-in): claude 가 대화를 새 세션으로 이어갔다. 열면 그 세션으로 보낸다(0.9.9)
+    const tgt=(SESSIONS||[]).find(x=>x.session_id===s.continued_in);
+    const g=el('span','schip cont','⏩ 이어받음');
+    g.title='이 세션은 '+s.continued_in.slice(0,8)+'… 로 이어졌습니다'+(tgt?' — 열면 그 세션으로 갑니다':' (이어받은 세션이 목록에 없음)');
+    chips.appendChild(g); srow.classList.add('dim');
+  }
+  // #라벨 칩은 목록에서 뺐다(2026-10-12 사장님) — 위 라벨 필터는 그대로. 대신 돌고 있는 쉘·모니터 수.
+  { const d=cleanupLeft(s); if(d!=null&&d<=CLEANUP_SOON&&!s.headless){ const g=el('span','schip gone'+(d<=CLEANUP_ALERT?' hot':''),'⏳ '+cleanupText(s));
+    g.title='claude 가 보관 기간이 지난 대화 기록을 '+cleanupDate(s)+'쯤 지웁니다 — 재개해서 한 번 주고받으면 기한이 늘어납니다'; chips.appendChild(g); } }
+  { const ls=bgLines(s,true); if(ls.length){ const g=stackChip('bg',ls);
+    g.title='백그라운드에서 돌고 있는 '+bgText(s)+' — 남아 있는 동안은 「완료」로 바뀌지 않습니다'; chips.appendChild(g); } }
+  if(s.resume_model){
+    // 모델 위 · 에포트 아래(2026-10-28 사장님: 한 줄이면 칩이 길어 세션 이름이 잘린다)
+    const mc=stackChip('model'+(s.model_override?' set':''),['🧠 '+modelShort(s.resume_model)].concat(s.last_effort?[s.last_effort]:[]));
+    mc.title='재개 모델'+(s.model_override?'(설정됨)':'(감지값)')+(s.last_effort?' · 에포트 '+s.last_effort+'(마지막 응답)':'')+' — 클릭해 변경';
+    mc.onclick=(e)=>{ e.stopPropagation(); showModelPicker(s); };
+    chips.appendChild(mc);
+  }
+  info.appendChild(r1);
+  const meta=el('div','smeta2 one');
+  meta.appendChild(el('span',null,(s.message_count||0)+' msgs'));
+  meta.appendChild(el('span',null,fmtBytes(s.size_bytes)));
+  { const rt=relFrom(s); if(rt)meta.appendChild(el('span',null,rt)); }
+  info.appendChild(meta);
+  if(s.cwd&&s.cwd!==repr) info.appendChild(el('div','spath',s.cwd));
+  if(chips.children.length) side.appendChild(chips);
+  if(side.children.length) info.appendChild(side);
+  // 실행 중인 클루패스 터미널(또는 열린 탭)이면 바로 그 화면, 아니면 상세(2026-10-12 사장님)
+  info.onclick=()=>jumpToSession(continuedTarget(s));
+  return {info,r1,bd};
+}
 function renderRows(wrap,q){
   q=(q||'').toLowerCase().trim();
   const rows=SESSIONS.filter(s=>{
@@ -2676,65 +2761,7 @@ function renderRows(wrap,q){
     const glist=el('div','glist');
     const mkRow=(s)=>{
       const srow=el('div','srow'); srow.dataset.sid=s.session_id;
-      if(s.session_id===SELECTED_ID) srow.classList.add('sel');
-      if((s.picker_hidden && !s.picker_expose) || s.headless) srow.classList.add('dim');  // 픽커 미표시·자동 실행 = 흐리게
-      // 탭 영역(정보) → 상세
-      const info=el('button','sinfo');
-      const r1=el('div','sr1');
-      const bd=sessionBadge(s);
-      if(bd){ const d=el('span','sdot'+(bd.pulse?' pulse':'')); d.style.setProperty('--c',bd.c); r1.appendChild(d); }
-      r1.appendChild(el('span','sname',s.title||s.label_name||s.slug||s.session_id.slice(0,8)));
-      // 상태 문구·칩은 이름 줄이 아니라 오른쪽 칸(이름 줄 + 메시지·용량·시간 줄 두 줄 높이)에 세운다 — 이름이 덜 잘린다(2026-10-28 사장님)
-      const side=el('div','sside'), chips=el('div','schips');   // 오른쪽 칸: 위 상태 문구 · 아래 칩들
-      if(bd){ const t=el('span','sstate',bd.text); t.style.setProperty('--c',bd.c);
-        if(bd.text==='권한 대기'){ t.style.cursor='pointer'; t.onclick=(e)=>{e.stopPropagation();showApprove(s);}; }
-        side.appendChild(t); }
-      if(s.agent&&s.agent.kind==='background'){
-        const g=el('span','schip agentbg','🤖 '+(s.agent.name||'에이전트'));
-        g.title='백그라운드 에이전트가 이 세션 사용 중 - 이어재개 잠김(포크는 가능)';
-        chips.appendChild(g);
-      }
-      // 피어(다른 곳에서 살아 있는 세션)는 칩 대신 오른쪽 재개 버튼 아이콘이 출처를 보여 준다(2026-09-30 사장님:
-      // 'worker-3-ax-52' 같은 SendMessage 이름 칩은 봐도 이해가 안 됨)
-      if(s.headless){
-        const g=el('span','schip gear','🤖 자동 실행');
-        g.title='claude -p(비대화형) 단발 실행 — 다른 세션·스크립트가 맡긴 일감. 끝나면 목록에서 사라집니다';
-        chips.appendChild(g);
-      } else if(s.picker_hidden&&!s.picker_expose){
-        const g=el('span','schip gear','⚙ 에이전트');
-        g.title='claude 재개 목록(피커)에 없는 세션 - 에이전트/포크 산물. 상세에서 설명 보기';
-        chips.appendChild(g);
-      }
-      if(s.continued_in){
-        // 옛 줄(continued-in): claude 가 대화를 새 세션으로 이어갔다. 열면 그 세션으로 보낸다(0.9.9)
-        const tgt=(SESSIONS||[]).find(x=>x.session_id===s.continued_in);
-        const g=el('span','schip cont','⏩ 이어받음');
-        g.title='이 세션은 '+s.continued_in.slice(0,8)+'… 로 이어졌습니다'+(tgt?' — 열면 그 세션으로 갑니다':' (이어받은 세션이 목록에 없음)');
-        chips.appendChild(g); srow.classList.add('dim');
-      }
-      // #라벨 칩은 목록에서 뺐다(2026-10-12 사장님) — 위 라벨 필터는 그대로. 대신 돌고 있는 쉘·모니터 수.
-      { const d=cleanupLeft(s); if(d!=null&&d<=CLEANUP_SOON&&!s.headless){ const g=el('span','schip gone'+(d<=CLEANUP_ALERT?' hot':''),'⏳ '+cleanupText(s));
-        g.title='claude 가 보관 기간이 지난 대화 기록을 '+cleanupDate(s)+'쯤 지웁니다 — 재개해서 한 번 주고받으면 기한이 늘어납니다'; chips.appendChild(g); } }
-      { const ls=bgLines(s,true); if(ls.length){ const g=stackChip('bg',ls);
-        g.title='백그라운드에서 돌고 있는 '+bgText(s)+' — 남아 있는 동안은 「완료」로 바뀌지 않습니다'; chips.appendChild(g); } }
-      if(s.resume_model){
-        // 모델 위 · 에포트 아래(2026-10-28 사장님: 한 줄이면 칩이 길어 세션 이름이 잘린다)
-        const mc=stackChip('model'+(s.model_override?' set':''),['🧠 '+modelShort(s.resume_model)].concat(s.last_effort?[s.last_effort]:[]));
-        mc.title='재개 모델'+(s.model_override?'(설정됨)':'(감지값)')+(s.last_effort?' · 에포트 '+s.last_effort+'(마지막 응답)':'')+' — 클릭해 변경';
-        mc.onclick=(e)=>{ e.stopPropagation(); showModelPicker(s); };
-        chips.appendChild(mc);
-      }
-      info.appendChild(r1);
-      const meta=el('div','smeta2 one');
-      meta.appendChild(el('span',null,(s.message_count||0)+' msgs'));
-      meta.appendChild(el('span',null,fmtBytes(s.size_bytes)));
-      { const rt=relFrom(s); if(rt)meta.appendChild(el('span',null,rt)); }
-      info.appendChild(meta);
-      if(s.cwd&&s.cwd!==repr) info.appendChild(el('div','spath',s.cwd));
-      if(chips.children.length) side.appendChild(chips);
-      if(side.children.length) info.appendChild(side);
-      // 실행 중인 클루패스 터미널(또는 열린 탭)이면 바로 그 화면, 아니면 상세(2026-10-12 사장님)
-      info.onclick=()=>jumpToSession(continuedTarget(s));
+      const {info,bd}=sessRowInfo(srow,s,repr);
       // 큰 터치 버튼: (권한대기면 승인) / 재개
       if(bd&&bd.text==='권한 대기'){
         const bA=el('button','sbtn resume','✋'); bA.title='원격 승인';
@@ -2745,8 +2772,8 @@ function renderRows(wrap,q){
       bR.title=rowResumeTitle(s);
       bR.onclick=()=>showResumeChooser(continuedTarget(s));
       srow.appendChild(bR);
-      // ⋯ 메뉴: 재개·대화 보기·이름 바꾸기·파일·상세(위험 동작은 넣지 않는다 — 상세의 위험 구역에서만)
-      const bM=el('button','sbtn more','⋯'); bM.title='메뉴 — 재개 · 대화 보기 · 이름 바꾸기 · 파일 · 상세';
+      // ⋯ 메뉴: 재개·대화 보기·이름 바꾸기·파일·상세 + 구분선 뒤 ⏹ 중지(살아 있을 때)·삭제(되돌리기는 상세의 위험 구역에서만)
+      const bM=el('button','sbtn more','⋯'); bM.title='메뉴 — 재개 · 대화 보기 · 이름 바꾸기 · 파일 · 상세 · 중지 · 삭제';
       bM.setAttribute('aria-label','세션 메뉴'); bM.setAttribute('aria-haspopup','menu');
       bM.onclick=(e)=>{ if(e&&e.stopPropagation) e.stopPropagation(); return rowMenu(continuedTarget(s),bM); };
       srow.appendChild(bM);
@@ -4429,7 +4456,11 @@ const FB_SVG={
   refresh:'<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13.2 8A5.2 5.2 0 1 1 11.7 4.3M13 2v3h-3" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   collapse:'<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="2.2" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M5.5 8h5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
   search:'<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.3" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="m10.2 10.2 3.3 3.3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>'};
-function renderFbExplorer(wrap){
+// box = 목록 고정 머리(.lhead) 안 자리 — 제목·정렬·찾기 칸을 거기 그려 트리를 스크롤해도 남게 한다(2026-10-29 사장님).
+// 정렬·새로고침으로 다시 그릴 땐 box 없이 불려 지난 자리를 쓴다
+function renderFbExplorer(wrap,box){
+  if(box) FB.headBox=box; else if(FB.wrap!==wrap) FB.headBox=null;
+  const hb=FB.headBox||wrap; if(FB.headBox) FB.headBox.innerHTML='';
   FB.wrap=wrap; wrap.innerHTML=''; fbRestoreState();
   const roots=fbRoots();
   const head=el('div','fbex');
@@ -4442,11 +4473,11 @@ function renderFbExplorer(wrap){
       ()=>{ FB.sort=FB.sort==='mtime'?'name':'mtime'; FB.kids={}; fbSaveState(); renderFbExplorer(wrap); });
   act(FB_SVG.refresh,'새로고침',()=>{ FB.kids={}; FB.errs={}; renderFbExplorer(wrap); });
   act(FB_SVG.collapse,'모두 접기',()=>{ FB.open.clear(); fbSaveState(); fbRenderTree(); });
-  head.appendChild(acts); wrap.appendChild(head);
+  head.appendChild(acts); hb.appendChild(head);
   const fw=el('label','fbfilter'); const si=el('span','si'); si.innerHTML=FB_SVG.search; fw.appendChild(si);
   const fi=el('input'); fi.type='search'; fi.placeholder='폴더·세션 이름으로 찾기'; fi.value=FB.q||'';
   fi.oninput=()=>{ FB.q=fi.value.trim(); clearTimeout(fi._t); fi._t=setTimeout(fbRenderTree,120); };
-  fw.appendChild(fi); wrap.appendChild(fw);
+  fw.appendChild(fi); addSearchClear(fw,fi,()=>{ FB.q=''; clearTimeout(fi._t); fbRenderTree(); }); hb.appendChild(fw);
   const tree=el('div','fbtree'); tree.tabIndex=0; tree.onkeydown=fbTreeKey; tree.setAttribute('role','tree');
   wrap.appendChild(tree); FB.tree=tree;
   const p=fbRenderTree();
@@ -5074,6 +5105,18 @@ function teamMembers(t){
   ms.forEach(m=>{
     const s=memberSess(m);
     const row=el('div','srow tm'+(s?'':' dim')); row.dataset.agent=m.agent_id;
+    // 세션이 있으면 세션 목록 줄과 같은 정보 칸(상태·칩·모델·메시지·용량·시간·경로) + 팀 것(관리 표시·역할·별칭) 한 줄(2026-10-29 사장님)
+    if(s){ row.dataset.sid=s.session_id;
+      const {info,r1}=sessRowInfo(row,s,null);
+      if(m.member_role==='manager') r1.appendChild(el('span','schip mgr','관리'));
+      const nm=sessLabel(s);
+      const al=(m.alias&&m.alias!==nm)?'별칭 '+m.alias:null;
+      const role=(m.role&&m.role.replace(/[\s_]/g,'')!==String(nm).replace(/[\s_]/g,''))?m.role:null;
+      if(role||al) info.insertBefore(el('div','smeta2 tmrole',[role,al].filter(Boolean).join(' · ')),info.children[2]||null);
+      row.appendChild(info);
+      const mb=el('button','sbtn more','⋯'); mb.setAttribute('aria-label','구성원 메뉴'); mb.setAttribute('aria-haspopup','menu');
+      mb.onclick=(e)=>{ if(e&&e.stopPropagation) e.stopPropagation(); return memberMenu(t,m,s,mb); };
+      row.appendChild(mb); w.appendChild(row); return; }
     const info=el('button','sinfo'); const r1=el('div','sr1');
     const bd=s&&sessionBadge(s);
     const dd=el('span','sdot'+(bd&&bd.pulse?' pulse':'')); dd.style.setProperty('--c',bd?bd.c:((m.live||(s&&sessionIsLive(s)))?'var(--good)':'var(--line2)')); r1.appendChild(dd);
@@ -5115,8 +5158,10 @@ function memberSetManager(t,m){
 // 구성원 ⋯: 세션 메뉴(있으면) + 관리로 지정(일반 구성원·세션이 있을 때) + 이 팀에서 빼기(일반 구성원, 또는 세션이 지워진 관리)
 function memberMenu(t,m,s,anchor){
   const box=el('div');
-  const items=s?rowMenuItems(continuedTarget(s)).filter(x=>x[4]!=='danger'):[];
-  for(const [i,l,sub,fn,cls] of items) box.appendChild(popItem(i,l,sub,fn,cls));
+  // 세션 메뉴에서 삭제만 뺀다(팀 화면에서 세션을 지우지 않게) — ⏹ 중지는 남긴다(2026-10-29 사장님)
+  const items=s?rowMenuItems(continuedTarget(s)).filter(x=>x[1]!=='삭제'):[];
+  let sep=false;
+  for(const [i,l,sub,fn,cls] of items){ if(cls==='danger'&&!sep){ box.appendChild(el('div','popsep')); sep=true; } box.appendChild(popItem(i,l,sub,fn,cls)); }
   if(!s) box.appendChild(el('div','cwd',m.session_id?'이 구성원의 세션은 지워졌습니다(목록에 없음).':'이 구성원에 붙은 세션이 없습니다.'));
   const mgr=m.member_role==='manager';
   if(!t.archived&&t.kind!=='portfolio'){
@@ -6886,7 +6931,8 @@ function openPop(anchor,content,title){
   return box;
 }
 // 목록 줄 ⋯ 메뉴(2026-10-12 사장님: 재개·뷰어·이름 변경·상세 보기… + 삭제). 삭제는 휴지통(30일 복구)·확인창이라
-// 맨 아래 구분선 뒤 빨간 글씨로만 둔다. 강제 종료·되돌리기는 넣지 않는다 — 상세의 「위험 구역」에서만(원격 2차 인증).
+// 맨 아래 구분선 뒤 빨간 글씨로만 둔다. 살아 있는 세션은 그 위에 ⏹ 중지(2026-10-29 사장님 — 확인창, 원격 2차 인증):
+// 클루패스 터미널이면 터미널 종료, 다른 곳에서 띄운 것이면 상세의 강제 종료와 같은 확인창. 되돌리기는 상세의 「위험 구역」에서만.
 function rowMenuItems(s){
   const it=[]; const bd=sessionBadge(s);
   if(bd&&bd.text==='권한 대기') it.push(['✋','원격 승인','claude 가 도구 사용 허락을 기다립니다',()=>showApprove(s),'warn']);
@@ -6897,16 +6943,28 @@ function rowMenuItems(s){
   it.push(['✎','이름 바꾸기',null,()=>renameNative(s)]);
   if(s.cwd) it.push(['📂','파일 보기',baseName(s.cwd),()=>openFilesFor(s)]);
   it.push(['ℹ','상세 보기','정보 · 포크 · 내보내기 · 위험 구역',()=>loadDetail(s)]);
-  if(sessionIsLive(s)) it.push(['🗑','삭제','실행 중 — 먼저 끝내야 지울 수 있습니다(상세의 위험 구역)',()=>loadDetail(s),'danger']);
+  if(sessionIsLive(s)){
+    it.push(['⏹','중지',(s.live_terminal?'클루패스 터미널을 끝냅니다':((s.peer?peerOriginLabel(s.peer).text:'다른 곳')+'에서 실행 중 — 강제로 끝냅니다'))+' · 기록은 남음',()=>stopFromMenu(s),'danger']);
+    it.push(['🗑','삭제','실행 중 — 위 ⏹ 중지로 먼저 끝내야 지울 수 있습니다',()=>loadDetail(s),'danger']); }
   else it.push(['🗑','삭제','휴지통으로 · 30일 안에 되살릴 수 있음',()=>doDelete(s),'danger']);
   return it;
 }
 function rowMenu(s,anchor){
-  const box=el('div');
+  const box=el('div'); let sep=false;
   for(const [i,l,sub,fn,cls] of rowMenuItems(s)){
-    if(cls==='danger') box.appendChild(el('div','popsep'));   // 위험한 것은 떨어뜨려 둔다
+    if(cls==='danger'&&!sep){ box.appendChild(el('div','popsep')); sep=true; }   // 위험한 것은 떨어뜨려 둔다
     box.appendChild(popItem(i,l,sub,fn,cls)); }
   return openPop(anchor,box,sessLabel(s));
+}
+// ⋯ → ⏹ 중지: 클루패스 터미널은 확인창 뒤 터미널 종료(탭 × 의 ⏹ 세션 종료와 같은 길), 다른 곳에서 띄운 claude 는 강제 종료 확인창
+async function stopFromMenu(s){
+  if(!s.live_terminal) return killSession(s);
+  const ok=await confirmSheet({title:'세션 중지', main:'"'+sessLabel(s)+'" 의 클루패스 터미널을 끝낼까요?',
+    sub:'진행 중인 작업은 멈춥니다. 대화 기록(jsonl)은 그대로 남아 다시 재개할 수 있습니다.'+(MODE==='relay'?' 원격은 2차 인증을 거칩니다.':''),
+    action:'중지', danger:true, busyText:'끝내는 중…',
+    run: async()=>{ if(!await stopSessionTerminal(s)) throw new Error('끝내지 못했습니다'); }});
+  if(ok) listTick();
+  return ok;
 }
 // ---- 🔔 할 일(ux-reorg §4-5): 사람이 손대야 풀리는 것만 모은다 — 승인 요청 · 권한 대기 · 입력 대기 (+ 최근 완료 참고) ----
 let TODO_APPROVALS=[], TODO_AT=0;

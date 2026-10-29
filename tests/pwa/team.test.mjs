@@ -251,3 +251,27 @@ test("관리 세션 바꾸기·지워진 세션 빼기(2026-10-29 사장님): �
   assert.deepEqual(menu("ag_m"), ["※이 구성원의 세션은 지워졌습니다(목록에 없음).", "—", "이 팀에서 빼기"]);
   assert.ok(texts(ctx).includes("세션 s-gone · 지워짐(목록에 없음)"));
 });
+
+test("구성원 줄 = 세션 목록 줄과 같은 정보(2026-10-29 사장님): 상태·모델 칩·메시지·용량·시간·경로 + 팀 것(관리·역할·별칭) · ⋯ 에 ⏹ 중지(삭제는 없음)", async () => {
+  const ctx = await boot();
+  ev(ctx, "Object.assign(SESSIONS[1], {cwd:'F:/p/front', message_count: 42, size_bytes: 2048, resume_model:'claude-opus-5-5', last_effort:'high', live_terminal:true, mtime: Date.now()/1000 - 60, ended_at: new Date(Date.now()-60000).toISOString()});"
+    + "TEAM_OPEN.add('WEB'); renderTeamRows(__w)");
+  await tick(); await tick();
+  const row = ev(ctx, `${FLAT}.find(n => String(n.className).startsWith('srow tm') && n.dataset.agent === 'ag_f')`);
+  const info = row.children[0];
+  // 같은 세션을 세션 목록 함수로 그린 정보 칸과 모양이 같다(팀은 폴더 머리가 없어 경로 줄이 늘 보인다)
+  const ref = ev(ctx, "(() => { const r = el('div','srow'); return sessRowInfo(r, SESSIONS[1], null).info; })()");
+  const shape = (n) => { const f = (x) => [String(x.className || "") + ":" + String(x.textContent || ""), ...(x.children || []).flatMap(f)]; return f(n); };
+  const got = shape(info).filter((x) => !x.startsWith("schip mgr") && !x.startsWith("smeta2 tmrole"));
+  assert.deepEqual(got, shape(ref));
+  const t = shape(info).join("\n");
+  assert.ok(t.includes("42 msgs") && t.includes("spath:F:/p/front") && t.includes("🧠"), t);
+  assert.ok(t.includes("smeta2 tmrole:UI · 별칭 프론트"), "역할·별칭은 팀 것으로 한 줄 더");
+  assert.equal(row.dataset.sid, "s-f");
+  // ⋯ = 세션 메뉴(⏹ 중지 포함, 삭제 빼고) + 팀 것
+  ev(ctx, "globalThis.__pop = null; openPop = (a, box, title) => { globalThis.__pop = { title, box }; return box; };");
+  row.children.at(-1).onclick({ stopPropagation() {} });
+  const labels = ev(ctx, "__pop.box.children.map(c => c.className === 'popsep' ? '—' : (c.children[1] && c.children[1].children[0] ? c.children[1].children[0].textContent : '※'))");
+  assert.ok(labels.includes("중지") && !labels.includes("삭제"), JSON.stringify(labels));
+  assert.equal(labels[labels.indexOf("중지") - 1], "—", "중지는 구분선 뒤");
+});

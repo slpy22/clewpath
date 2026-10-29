@@ -50,11 +50,11 @@ test("목록 줄 클릭: 실행 중인 클루패스 터미널이면 바로 터�
   same(ev(ctx, "TABS.list.length"), 0);
 });
 
-test("⋯ 메뉴: 자주 쓰는 것만(재개/터미널·대화·이름·파일·상세), 위험 동작은 없다 · 항목을 누르면 닫히고 실행", async () => {
+test("⋯ 메뉴: 자주 쓰는 것(재개/터미널·대화·이름·파일·상세) + 살아 있으면 ⏹ 중지, 되돌리기는 없다 · 항목을 누르면 닫히고 실행", async () => {
   const ctx = await load();
   seed(ctx, "globalThis.__c=[]; renameNative=(s)=>__c.push(['rename',s.session_id]); showResumeChooser=(s)=>__c.push(['resume',s.session_id]);"
     + "loadTerminal=(s)=>__c.push(['term',s.session_id]); loadViewer=(s)=>__c.push(['view',s.session_id]); loadDetail=(s)=>__c.push(['detail',s.session_id]);"
-    + "openFilesFor=(s)=>__c.push(['files',s.session_id]); showApprove=(s)=>__c.push(['approve',s.session_id]); doDelete=(s)=>__c.push(['delete',s.session_id]);");
+    + "openFilesFor=(s)=>__c.push(['files',s.session_id]); showApprove=(s)=>__c.push(['approve',s.session_id]); doDelete=(s)=>__c.push(['delete',s.session_id]); stopFromMenu=(s)=>__c.push(['stop',s.session_id]);");
   const wrap = render(ctx);
   const [a, b] = rowsOf(wrap.children.filter((k) => cls(k) === "glist").find((g) => rowsOf(g).some((r) => r.dataset.sid === A)));
   const more = b.children.at(-1);
@@ -77,10 +77,12 @@ test("⋯ 메뉴: 자주 쓰는 것만(재개/터미널·대화·이름·파일�
   // 실행 중(우리 PTY) → 첫 항목이 터미널 열기 / 권한 대기면 맨 위 ✋
   ev(ctx, `SESSIONS[0].runtime={phase:'permission', permission_at:Date.now()/1000-5}`);
   const items2 = ev(ctx, "rowMenuItems(SESSIONS[0])");
-  same(items2.map((x) => x[1]), ["원격 승인", "터미널 열기", "대화 보기", "이름 바꾸기", "파일 보기", "상세 보기", "삭제"]);
+  same(items2.map((x) => x[1]), ["원격 승인", "터미널 열기", "대화 보기", "이름 바꾸기", "파일 보기", "상세 보기", "중지", "삭제"]);
   assert.ok(items2.at(-1)[2].startsWith("실행 중"), "실행 중이면 바로 지우지 않고 상세(위험 구역)로");
+  assert.equal(items2.at(-2)[4], "danger", "살아 있으면 ⏹ 중지(2026-10-29 사장님) — 삭제와 함께 구분선 뒤");
+  assert.ok(items2.at(-2)[2].includes("클루패스 터미널"));
   for (const x of items2) x[3]();
-  same(ev(ctx, "__c"), [["rename", B], ["approve", A], ["term", A], ["view", A], ["rename", A], ["files", A], ["detail", A], ["detail", A]]);
+  same(ev(ctx, "__c"), [["rename", B], ["approve", A], ["term", A], ["view", A], ["rename", A], ["files", A], ["detail", A], ["stop", A], ["detail", A]]);
   ev(ctx, "rowMenuItems(SESSIONS[1]).at(-1)[3]()");
   same(ev(ctx, "__c").at(-1), ["delete", B], "실행 중 아니면 삭제(확인창·휴지통)");
   // 다른 곳에서 실행 중(피어) → '재개…' + 출처
@@ -274,4 +276,22 @@ test("곧 지워질 세션(claude 보관 기간): 7일 안 = 목록 ⏳ 칩·�
   assert.ok(chips.some(([c, t]) => c === "schip gone hot" && t === "⏳ 2일 뒤 지워짐"));
   assert.ok(chips.some(([c, t]) => c === "schip gone" && t === "⏳ 5일 뒤 지워짐"));
   assert.ok(!chips.some(([, t]) => t.includes("20일")), "7일 넘게 남으면 칩 없음");
+});
+
+test("⋯ → ⏹ 중지(2026-10-29 사장님): 클루패스 터미널은 확인창 뒤 terminal/stop · 다른 곳에서 띄운 것은 강제 종료 확인창 · 꺼져 있으면 항목 없음", async () => {
+  const ctx = await load();
+  ev(ctx, "globalThis.__api = []; T = Object.assign({}, T, { api: async (v, p, o) => { __api.push([v, p]); return {ok:true}; } });"
+    + "globalThis.__sheet = null; confirmSheet = async (o) => { __sheet = o; await o.run(); return true; }; listTick = () => {}; toast = () => {};"
+    + "globalThis.__kill = []; killSession = (s) => __kill.push(s.session_id);");
+  const a = { session_id: "a", title: "알파", live_terminal: true };
+  const stop = ev(ctx, "(s) => rowMenuItems(s).find(x => x[1] === '중지')");
+  assert.ok(await ev(ctx, "stopFromMenu")(a));
+  assert.equal(ev(ctx, "__sheet.action"), "중지");
+  assert.ok(ev(ctx, "__sheet.danger"));
+  assert.deepEqual([...ev(ctx, "__api").at(-1)], ["POST", "/api/sessions/a/terminal/stop"], "원격이면 2차 인증 확인 뒤 종료");
+  const p = { session_id: "p", title: "피어", peer: { origin: { origin: "terminal" } } };
+  assert.ok(stop(p)[2].includes("강제로"));
+  await ev(ctx, "stopFromMenu")(p);
+  assert.deepEqual([...ev(ctx, "__kill")], ["p"]);
+  assert.equal(stop({ session_id: "z", title: "꺼짐" }), undefined, "살아 있지 않으면 중지 없음");
 });
