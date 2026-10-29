@@ -80,14 +80,14 @@ test("팀 목록: 🧑‍💼 개인비서 맨 위 · 머리는 폴더 머리 �
     labels: { "s-m": "관리", "s-f": "프론트 · UI", "s-gone": "옛워커" } }));
 });
 
-test("펼치기: 기기에 기억 · 구성원만(탭 없음) · 이름은 세션 이름(별칭은 보조) · 누르면 세션 줄처럼 · 관제는 안 열림 · 빼기는 구성원 메뉴", async () => {
+test("펼치기: 기기에 기억 · 구성원만(탭 없음) · 이름은 세션 이름(별칭은 안 보임) · 누르면 세션 줄처럼 · 관제는 안 열림 · 빼기는 구성원 메뉴", async () => {
   const ctx = await boot();
   click(ctx, "n => n.className === 'gtext' && (n.text||'').includes('Web')");
   assert.equal(ev(ctx, "LS.getItem('sm_team_open')"), '["WEB"]');
   await tick(); await tick();
   const t = texts(ctx);
   assert.ok(!t.some((x) => /^(일감|기록|⚙ 설정)/.test(x)), "일감·기록·설정 탭은 없다");
-  assert.ok(t.includes("관리 세션") && t.includes("프론트 세션") && t.includes("UI · 별칭 프론트"));
+  assert.ok(t.includes("관리 세션") && t.includes("프론트 세션") && t.includes("UI") && !t.some((x) => x.includes("별칭")));
   assert.ok(t.includes("옛워커") && t.includes("세션 s-gone · 지워짐(목록에 없음)"));
   assert.equal(ev(ctx, `${FLAT}.filter(n => String(n.className).startsWith('srow tm'))[0].dataset.agent`), "ag_m", "관리가 맨 위");
   assert.ok(ev(ctx, `${FLAT}.some(n => n.className === 'glist tmembers')`), "구성원 = 세션 목록의 줄 묶음(.glist)");
@@ -252,21 +252,21 @@ test("관리 세션 바꾸기·지워진 세션 빼기(2026-10-29 사장님): �
   assert.ok(texts(ctx).includes("세션 s-gone · 지워짐(목록에 없음)"));
 });
 
-test("구성원 줄 = 세션 목록 줄과 같은 정보(2026-10-29 사장님): 상태·모델 칩·메시지·용량·시간·경로 + 팀 것(관리·역할·별칭) · ⋯ 에 ⏹ 중지(삭제는 없음)", async () => {
+test("구성원 줄 = 세션 목록 줄과 같은 정보(2026-10-29 사장님): 상태·모델 칩·메시지·용량·시간·경로 + 팀 것(관리·역할) · 별칭·폴더 없음(10-30) · ⋯ 에 ⏹ 중지(삭제는 없음)", async () => {
   const ctx = await boot();
   ev(ctx, "Object.assign(SESSIONS[1], {cwd:'F:/p/front', message_count: 42, size_bytes: 2048, resume_model:'claude-opus-5-5', last_effort:'high', live_terminal:true, mtime: Date.now()/1000 - 60, ended_at: new Date(Date.now()-60000).toISOString()});"
     + "TEAM_OPEN.add('WEB'); renderTeamRows(__w)");
   await tick(); await tick();
   const row = ev(ctx, `${FLAT}.find(n => String(n.className).startsWith('srow tm') && n.dataset.agent === 'ag_f')`);
   const info = row.children[0];
-  // 같은 세션을 세션 목록 함수로 그린 정보 칸과 모양이 같다(팀은 폴더 머리가 없어 경로 줄이 늘 보인다)
-  const ref = ev(ctx, "(() => { const r = el('div','srow'); return sessRowInfo(r, SESSIONS[1], null).info; })()");
+  // 같은 세션을 세션 목록 함수로 그린 정보 칸과 모양이 같다(경로 줄은 빼고)
+  const ref = ev(ctx, "(() => { const r = el('div','srow'); return sessRowInfo(r, SESSIONS[1], SESSIONS[1].cwd).info; })()");
   const shape = (n) => { const f = (x) => [String(x.className || "") + ":" + String(x.textContent || ""), ...(x.children || []).flatMap(f)]; return f(n); };
   const got = shape(info).filter((x) => !x.startsWith("schip mgr") && !x.startsWith("smeta2 tmrole"));
   assert.deepEqual(got, shape(ref));
   const t = shape(info).join("\n");
-  assert.ok(t.includes("42 msgs") && t.includes("spath:F:/p/front") && t.includes("🧠"), t);
-  assert.ok(t.includes("smeta2 tmrole:UI · 별칭 프론트"), "역할·별칭은 팀 것으로 한 줄 더");
+  assert.ok(t.includes("42 msgs") && !t.includes("spath") && t.includes("🧠"), t);
+  assert.ok(t.includes("smeta2 tmrole:UI") && !t.includes("별칭"), "역할만 팀 것으로 한 줄 더(별칭은 안 보임)");
   assert.equal(row.dataset.sid, "s-f");
   // ⋯ = 세션 메뉴(⏹ 중지 포함, 삭제 빼고) + 팀 것
   ev(ctx, "globalThis.__pop = null; openPop = (a, box, title) => { globalThis.__pop = { title, box }; return box; };");

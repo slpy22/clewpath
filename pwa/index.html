@@ -2663,7 +2663,7 @@ function continuedTarget(s){
   return cur;
 }
 // 세션 줄의 정보 칸(점·이름·오른쪽 상태/칩·메시지·용량·시간·경로) — 세션 목록과 팀 구성원 줄이 같이 쓴다(2026-10-29 사장님:
-// 팀 목록에서도 세션 목록과 같은 정보). repr = 폴더 머리의 대표 경로(같으면 경로 줄 생략, 팀은 null 이라 늘 보인다)
+// 팀 목록에서도 세션 목록과 같은 정보). repr = 폴더 머리의 대표 경로(같으면 경로 줄 생략, 팀은 s.cwd 라 늘 생략)
 function sessRowInfo(srow,s,repr){
   if(s.session_id===SELECTED_ID) srow.classList.add('sel');
   if((s.picker_hidden && !s.picker_expose) || s.headless) srow.classList.add('dim');  // 픽커 미표시·자동 실행 = 흐리게
@@ -5105,14 +5105,14 @@ function teamMembers(t){
   ms.forEach(m=>{
     const s=memberSess(m);
     const row=el('div','srow tm'+(s?'':' dim')); row.dataset.agent=m.agent_id;
-    // 세션이 있으면 세션 목록 줄과 같은 정보 칸(상태·칩·모델·메시지·용량·시간·경로) + 팀 것(관리 표시·역할·별칭) 한 줄(2026-10-29 사장님)
+    // 세션이 있으면 세션 목록 줄과 같은 정보 칸(상태·칩·모델·메시지·용량·시간) + 팀 것(관리 표시·역할) 한 줄(2026-10-29 사장님)
+    // 별칭·폴더는 안 보인다(2026-10-30 사장님)
     if(s){ row.dataset.sid=s.session_id;
-      const {info,r1}=sessRowInfo(row,s,null);
+      const {info,r1}=sessRowInfo(row,s,s.cwd);
       if(m.member_role==='manager') r1.appendChild(el('span','schip mgr','관리'));
       const nm=sessLabel(s);
-      const al=(m.alias&&m.alias!==nm)?'별칭 '+m.alias:null;
       const role=(m.role&&m.role.replace(/[\s_]/g,'')!==String(nm).replace(/[\s_]/g,''))?m.role:null;
-      if(role||al) info.insertBefore(el('div','smeta2 tmrole',[role,al].filter(Boolean).join(' · ')),info.children[2]||null);
+      if(role) info.insertBefore(el('div','smeta2 tmrole',role),info.children[2]||null);
       row.appendChild(info);
       const mb=el('button','sbtn more','⋯'); mb.setAttribute('aria-label','구성원 메뉴'); mb.setAttribute('aria-haspopup','menu');
       mb.onclick=(e)=>{ if(e&&e.stopPropagation) e.stopPropagation(); return memberMenu(t,m,s,mb); };
@@ -5120,17 +5120,16 @@ function teamMembers(t){
     const info=el('button','sinfo'); const r1=el('div','sr1');
     const bd=s&&sessionBadge(s);
     const dd=el('span','sdot'+(bd&&bd.pulse?' pulse':'')); dd.style.setProperty('--c',bd?bd.c:((m.live||(s&&sessionIsLive(s)))?'var(--good)':'var(--line2)')); r1.appendChild(dd);
-    // 이름은 그 세션의 이름 그대로(2026-10-15 사장님) — 팀 안 별칭은 아래 줄에 보조로
+    // 지워진 세션 — 이름 대신 팀 안 별칭
     const nm=s?sessLabel(s):m.alias;
     r1.appendChild(el('span','sname',nm));
     if(m.member_role==='manager') r1.appendChild(el('span','schip mgr','관리'));
     if(bd){ const st=el('span','sstate',bd.text); st.style.setProperty('--c',bd.c); r1.appendChild(st); }
     info.appendChild(r1);
     const where=s?null:(m.session_id?'세션 '+m.session_id.slice(0,8)+' · 지워짐(목록에 없음)':'세션 없음');
-    const al=(s&&m.alias&&m.alias!==nm)?'별칭 '+m.alias:null;
     const rt=s?relFrom(s):null;
     const role=(m.role&&m.role.replace(/[\s_]/g,'')!==String(nm).replace(/[\s_]/g,''))?m.role:null;   // 세션 이름과 같은 역할은 되풀이하지 않는다
-    info.appendChild(el('div','smeta2',[role,al,where,rt].filter(Boolean).join(' · ')));
+    info.appendChild(el('div','smeta2',[role,where,rt].filter(Boolean).join(' · ')));
     if(s) info.onclick=()=>jumpToSession(continuedTarget(s));
     row.appendChild(info);
     const mb=el('button','sbtn more','⋯'); mb.setAttribute('aria-label','구성원 메뉴'); mb.setAttribute('aria-haspopup','menu');
