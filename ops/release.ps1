@@ -174,9 +174,17 @@ if ($uvExe) {
 } else { Log "uv 를 못 찾아 lock 검사를 건너뜁니다" }
 if (-not $SkipTests) {
     Log "테스트 실행(pytest -q)…"
-    $t = & $Python -m pytest -q 2>&1 | Select-Object -Last 1
+    $out = @(& $Python -m pytest -q 2>&1 | ForEach-Object { "$_" })
+    $rc = $LASTEXITCODE
+    $t = $out | Select-Object -Last 1
     Log "  $t"
-    if ($LASTEXITCODE -ne 0 -or $t -notmatch 'passed' -or $t -match 'failed') { Fail "테스트 실패 — 릴리스 중단" }
+    if ($rc -ne 0 -or $t -notmatch 'passed' -or $t -match 'failed') {
+        # 어느 시험인지 남긴다(2026-10-29: 기록 123개 중 19번 테스트로 멈췄는데 이름이 없어 간헐 실패를 가려낼 수 없었다)
+        $pyLog = Join-Path $PSScriptRoot "logs\pytest-$Version.txt"
+        $out | Set-Content -Path $pyLog -Encoding UTF8
+        $out | Where-Object { $_ -match '^(FAILED|ERROR) ' } | Select-Object -First 10 | ForEach-Object { Log "  $_" }
+        Fail "테스트 실패 — 릴리스 중단 (전체 출력: $pyLog)"
+    }
     # 페어링 e2e 게이트(설계 6-1): 실 CP 를 상대로 tests/e2e 를 돈다. SM_E2E_CP_URL 이 없으면 건너뛰고 알린다.
     if ($env:SM_E2E_CP_URL) {
         Log "e2e 실행(pytest -m e2e, CP=$($env:SM_E2E_CP_URL))…"

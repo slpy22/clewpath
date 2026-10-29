@@ -53,6 +53,16 @@ def test_laptop_cp_tunnel_and_pwa_image_step():
     assert "-SkipImages" in s
 
 
+def test_failed_test_names_are_logged():
+    # 2026-10-29: 출시 기록 123개 중 19번이 테스트로 멈췄는데 이름이 없어 간헐 실패를 가려낼 수 없었다 —
+    # 실패하면 FAILED/ERROR 줄을 출시 기록에, 전체 출력을 logs/pytest-<ver>.txt 에
+    s = _src()
+    block = s[s.index('Log "테스트 실행(pytest -q)…"'):s.index("# 페어링 e2e 게이트")]
+    assert "$rc = $LASTEXITCODE" in block, "파이프 뒤 종료 코드를 바로 잡는다"
+    assert "'^(FAILED|ERROR) '" in block and 'logs\\pytest-$Version.txt' in block
+    assert block.index("Set-Content -Path $pyLog") < block.index('Fail "테스트 실패')
+
+
 def test_token_never_printed():
     s = _src()
     # 토큰은 python 인자(--admin-token $tok)로만 쓰이고, Log/Write-Host 줄에는 등장하지 않는다

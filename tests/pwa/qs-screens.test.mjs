@@ -272,7 +272,9 @@ test("T49 느린 망(목록이 3초 안에 오지 않음): 방금 본 터미널 
   await tick(700);
   const waiting = { now: ev(ctx, "PANE_NOW.kind"), told: ev(ctx, "__toasts.some((m) => m.includes('확인하는 중'))") };
   await p; await tick(RENDER);
-  assert.deepEqual({ waiting, now: ev(ctx, "PANE_NOW.kind"), lists: ev(ctx, "__lists"), conns: ev(ctx, "__tc.length"), inTime: Date.now() - t0 < 3700 },
+  // 실제 시계: 한 번 기다림(3초)이면 통과, 두 번(6초)이면 실패. 전엔 3.7초로 잡아 CPU 가 바쁜 전체 시험에서 타이머가 조금만 늦어도
+  // 넘었다(2026-10-29 부하 재현 8번 중 1번 — 출시가 테스트로 멈추던 간헐 실패). 두 번 기다리지 않음은 lists:1 도 함께 본다
+  assert.deepEqual({ waiting, now: ev(ctx, "PANE_NOW.kind"), lists: ev(ctx, "__lists"), conns: ev(ctx, "__tc.length"), inTime: Date.now() - t0 < 5500 },
                    { waiting: { now: "viewer", told: true }, now: "terminal", lists: 1, conns: 2, inTime: true });
 });
 
