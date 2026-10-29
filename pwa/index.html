@@ -125,6 +125,7 @@
   .hd-h{display:flex;align-items:center;gap:8px;font-size:.8rem;font-weight:650;color:var(--ink2)}
   .hd-h .n{font-size:.72rem;padding:1px 7px;border-radius:9px;background:var(--surface2);color:var(--muted);font-weight:600}
   .hd-sec.k-att .hd-h{color:#e8a03c}
+  .hd-sec.k-bg .hd-h{color:#a371f7}
   .hd-row{display:flex;align-items:center;gap:10px;min-width:0;padding:11px 12px;border-radius:11px;border:1px solid var(--line);
     background:var(--surface);color:var(--ink);text-align:left;min-height:48px}
   .hd-row:hover{border-color:var(--accent);background:var(--surface2)}
@@ -1681,7 +1682,7 @@ function navTicket(){ const n=++NAV_SEQ, g=PANE_NOW.gen, pc=pcNow(); return ()=>
 function navPassive(){ const n=NAV_SEQ, g=PANE_NOW.gen, pc=pcNow(); return ()=>n===NAV_SEQ&&g===PANE_NOW.gen&&pc===pcNow(); }
 function paneEnter(kind, ref){
   const p=paneDetail(), r=ref||{};
-  homeSeenSet(PANE_NOW.sid); if(r.session_id) homeSeenSet(r.session_id);   // 🏠 '방금 끝남'에서 이 기기가 이미 본 것을 뺀다(보다가 끝난 것도)
+  homeSeenSet(PANE_NOW.sid); if(r.session_id) homeSeenSet(r.session_id);   // 🏠 완료 칸의 '새로'를 이 기기가 이미 본 것에서 뗀다(보다가 끝난 것도)
   if(kind!=='terminal'&&(p.classList.contains('term-mode')||termView.main)) leaveTerminalView();   // 연결·탭 배지를 닫는다 — 재연결·화면 복귀가 떠난 터미널로 끌고 가지 않게(T2)
   if(kind!=='terminal') CURRENT_TERM_SID=null;                  // 그 세션 알림이 무시되지 않게(T3)
   if(kind!=='viewer') closeLiveViewer();
@@ -7248,27 +7249,31 @@ function quickTitleSync(){
 }
 quickTitleSync();
 window.addEventListener('resize', quickTitleSync);
-// ---- 🏠 홈(docs/designs/home-dashboard.md, 2026-10-28) — 빈 상세 칸 = 지금 볼 일 · 작업 중 · 방금 끝남 · 최근 화면 ----
+// ---- 🏠 홈(docs/designs/home-dashboard.md, 2026-10-28) — 빈 상세 칸 = 열린 터미널(대기 · 작업 중 · 백그라운드 · 완료) · 최근 화면 ----
 // 새 요청 없이 20초 목록(SESSIONS)만 쓴다. 목록 줄 배지(sessionBadge)와 같은 판정이라 둘이 어긋나지 않는다.
-const HOME_DONE_S=6*3600;   // '방금 끝남' = 끝난 지 6시간 안(사장님 결정)
-// 이 기기에서 세션을 마지막으로 본 시각(서버 시계 초, sm_seen_<PC>) — '방금 끝남'에서 이미 본 것을 뺀다. 7일 지난 것은 적을 때 지운다
+// 2026-10-29 사장님: 열린 터미널을 네 상태로 — '방금 끝남'(6시간·안 본 것) 대신 ✅ 완료 = 실행 중인 claude 전부 중 나머지(sessionIsLive)
+// 이 기기에서 세션을 마지막으로 본 시각(서버 시계 초, sm_seen_<PC>) — 완료 칸에서 그 뒤 안 본 것에 '새로'를 붙인다. 7일 지난 것은 적을 때 지운다
 function homeSeen(){ const m=lsJson(paneKey('sm_seen'),{}); return (m&&typeof m==='object'&&!Array.isArray(m))?m:{}; }
 function homeSeenSet(sid){ if(!sid) return; const now=Date.now()/1000+CLOCK_SKEW, m=homeSeen(); m[sid]=now;
   for(const k of Object.keys(m)) if(!(now-m[k]<7*86400)) delete m[k]; lsSet(paneKey('sm_seen'), m); }
 function homeSessions(){
-  const now=Date.now()/1000+CLOCK_SKEW, seen=homeSeen(), rt=(s,f)=>(s.runtime&&s.runtime[f])||0;
-  const att=[], work=[], done=[];
+  const rt=(s,f)=>(s.runtime&&s.runtime[f])||0;
+  const att=[], work=[], bg=[], done=[];
   for(const s of (SESSIONS||[])){ if(s.headless||s.continued_in) continue;   // claude -p 기록·이어진 옛 줄은 빼고
     const b=sessionBadge(s), t=b&&b.text;
     if(t==='권한 대기'||t==='입력 대기') att.push(s);
-    else if(t==='작업 중'||t==='백그라운드') work.push(s);
-    else if(s.runtime&&s.runtime.phase==='ready'){ const r=rt(s,'ready_at'); if(r&&now-r<HOME_DONE_S&&!(seen[s.session_id]>=r)) done.push(s); } }
+    else if(t==='작업 중') work.push(s);
+    else if(t==='백그라운드') bg.push(s);
+    else if(sessionIsLive(s)) done.push(s); }                   // 끝났거나 아직 한 번도 묻지 않은 열린 터미널
   const wt=(s)=>rt(s,'permission_at')||rt(s,'waiting_at');
   att.sort((a,b)=>wt(a)-wt(b));                                 // 오래 기다린 것이 위
   work.sort((a,b)=>rt(b,'thinking_at')-rt(a,'thinking_at'));
+  bg.sort((a,b)=>rt(b,'ready_at')-rt(a,'ready_at'));
   done.sort((a,b)=>rt(b,'ready_at')-rt(a,'ready_at'));
-  return {att, work, done:done.slice(0,8)};
+  return {att, work, bg, done};
 }
+// 완료 칸에서 이 기기가 끝난 뒤 아직 안 본 것
+function homeUnseen(s){ const r=s.runtime&&s.runtime.phase==='ready'&&s.runtime.ready_at; return !!r&&!(homeSeen()[s.session_id]>=r); }
 // ⏳ 곧 지워질 대화(2차) — claude 가 3일 안에 지울 기록(🔔 할 일 숫자와 같은 기준). 📌 keep 은 '쉬는 세션 정리' 제외일 뿐 claude 삭제를
 // 막지 못한다 — 늘리려면 재개해서 한 번 주고받거나 내보내기라 누르면 그 안내가 있는 상세로 간다(홈은 읽기 전용)
 const HOME_GONE_MAX=3;
@@ -7294,13 +7299,13 @@ function homePcLines(){
 // 기다린·작업한 시간 — '방금' · 'N분째' · 'N시간째'
 function homeFor(t){ if(!t) return ''; const d=Math.max(0,Date.now()/1000+CLOCK_SKEW-t);
   return d<60?'방금':d<3600?Math.floor(d/60)+'분째':Math.floor(d/3600)+'시간째'; }
-// 홈 한 줄 — 누르면 볼 일·작업 중은 그 세션 터미널(목록 줄과 같은 규칙: 인계 확인·재개 선택은 jumpToSession), 끝남은 대화 보기
+// 홈 한 줄 — 열린 터미널 네 칸은 누르면 그 세션 터미널(목록 줄과 같은 규칙: 인계 확인·재개 선택은 jumpToSession), 곧 지워질 대화는 상세
 function homeRow(k, s){
   const b=el('button','hd-row k-'+k); b.type='button'; b.dataset.k=k+':'+s.session_id;
   b.appendChild(el('span','qi')); const t=el('span','qt'); t.appendChild(el('span','qn')); t.appendChild(el('small')); b.appendChild(t);
   b.appendChild(el('span','tm'));
   b.onclick=()=>{ const c=(SESSIONS||[]).find(x=>x.session_id===s.session_id)||s;
-    if(k==='done') loadViewer(c); else if(k==='gone') loadDetail(c); else jumpToSession(c); };
+    if(k==='gone') loadDetail(c); else jumpToSession(c); };
   homeRowFill(b,k,s); return b;
 }
 function homeRowFill(b, k, s){
@@ -7308,16 +7313,17 @@ function homeRowFill(b, k, s){
   let icon, sub, meta;
   if(k==='att'){ const perm=tx==='권한 대기'; icon=perm?'✋':'💬';
     sub=rt.note?String(rt.note).slice(0,60):(perm?'도구 사용 허락 필요':'답을 기다림'); meta=homeFor(perm?rt.permission_at:rt.waiting_at); }
-  else if(k==='work'){ const bg=tx==='백그라운드'; icon=s.agent?'🛰':bg?'🐚':'⚙';
-    sub=bg?(bgText(s)||'백그라운드 작업'):'작업 중'; meta=bg?'':homeFor(rt.thinking_at); }
+  else if(k==='work'){ icon=s.agent?'🛰':'⚙'; sub='작업 중'; meta=homeFor(rt.thinking_at); }
+  else if(k==='bg'){ icon=s.agent?'🛰':'🐚'; sub=bgText(s)||'백그라운드 작업'; meta=''; }
   else if(k==='gone'){ icon='⏳'; sub='claude 보관 기간 끝 — 재개하면 늘어남'; meta=cleanupText(s); }
-  else { icon='✅'; sub='완료'; meta=todoAgo(rt.ready_at); }
+  else { const fin=rt.phase==='ready'&&rt.ready_at; icon=fin?'✅':'🖥';
+    sub=fin?(homeUnseen(s)?'완료 · 새로':'완료'):'열려 있음'; meta=fin?todoAgo(rt.ready_at):''; }
   b.children[0].textContent=icon; b.children[1].children[0].textContent=sessLabel(s);
   b.children[1].children[1].textContent=[baseName(s.cwd||''), sub].filter(Boolean).join(' · ');
   b.children[2].textContent=meta;
-  b.title=sessLabel(s)+(s.cwd?' · '+s.cwd:'')+(k==='done'?' — 누르면 대화 보기':k==='gone'?' — '+cleanupDate(s)+'쯤 지워짐 · 누르면 상세(재개·내보내기)':' — 누르면 터미널로');
+  b.title=sessLabel(s)+(s.cwd?' · '+s.cwd:'')+(k==='gone'?' — '+cleanupDate(s)+'쯤 지워짐 · 누르면 상세(재개·내보내기)':' — 누르면 터미널로');
 }
-// 빈 상세 칸 = 홈. 위에서부터 🔔 지금 볼 일 · ⚙ 작업 중 · ✅ 방금 끝남(빈 칸은 숨김, 셋 다 비면 한 줄) → '최근 화면'(§3-6: 갈 수 있는 기억만 =
+// 빈 상세 칸 = 홈. 위에서부터 🔔 대기 · ⚙ 작업 중 · 🐚 백그라운드 · ✅ 완료(열린 터미널, 빈 칸은 숨김, 넷 다 비면 한 줄) → '최근 화면'(§3-6: 갈 수 있는 기억만 =
 // 흐림 빼고, 마지막 화면이 맨 앞) → 안내 한 줄. 첫 목록 전엔 세션도 기억도 확인하지 못해 안내만. 목록 칸이 접혀 있으면 '왼쪽에서 …'는
 // 틀린 말이라 ◧ 안내로, 폰은 목록이 아래 💬 세션이라 그 안내를 뺀다. 모습(칸·줄 차례)이 같으면 글자만 고친다 — '4분째'처럼 매분 바뀌는
 // 글자로 20초 갱신이 단추를 새로 만들면 Tab 으로 둔 키보드 커서가 빠졌다(검토). 차례가 바뀌어 새로 그릴 때는 커서가 있던 칸의 새 단추로 옮긴다
@@ -7329,8 +7335,8 @@ function renderEmptyPane(list){
   const app=$('#app'), off=!!app&&app.classList.contains('side-off'), txt=box._txt||'왼쪽에서 세션을 선택하세요';
   let msg=(off&&/^왼쪽에서 /.test(txt))?(recent.length?'◧ 로 목록 칸을 펼치거나 최근 화면으로 가세요':txt.replace(/^왼쪽에서 /,'◧ 로 목록 칸을 펼쳐 ')):txt;
   if(innerWidth<880&&/^왼쪽에서 /.test(msg)) msg='';
-  const h=LIST_READY?homeSessions():{att:[],work:[],done:[]};
-  const secs=[['att','🔔 지금 볼 일',h.att],['work','⚙ 작업 중',h.work],['done','✅ 방금 끝남',h.done]].filter(x=>x[2].length);
+  const h=LIST_READY?homeSessions():{att:[],work:[],bg:[],done:[]};
+  const secs=[['att','🔔 대기',h.att],['work','⚙ 작업 중',h.work],['bg','🐚 백그라운드',h.bg],['done','✅ 완료',h.done]].filter(x=>x[2].length);
   const idle=LIST_READY&&!secs.length;
   homeSvcLoad();
   const goneAll=LIST_READY?homeGone():[], gone=goneAll.slice(0,HOME_GONE_MAX), pc=LIST_READY?homePcLines():[];
@@ -7343,7 +7349,7 @@ function renderEmptyPane(list){
   box._shape=shape; box._btns=[]; box._rows=[];
   box.innerHTML='';
   if(secs.length||idle){ const dash=el('div','home-dash');
-    if(idle) dash.appendChild(el('div','hd-idle','기다리는 일 없음 · 돌고 있는 세션 없음'));
+    if(idle) dash.appendChild(el('div','hd-idle','열린 터미널 없음 · 기다리는 일 없음'));
     for(const [k,label,l] of secs){ const sec=el('div','hd-sec k-'+k), hh=el('div','hd-h',label);
       hh.appendChild(el('span','n',String(l.length))); sec.appendChild(hh);
       for(const s of l){ const b=homeRow(k,s); sec.appendChild(b); box._rows.push(b); }
