@@ -2,6 +2,8 @@
 
 훅으로는 못 보는 것: 관리 에이전트가 `claude -p --resume <하위>` 로 부른 호출이 오류로
 끝났는지(비-0 종료·타임아웃). 그 사실은 관리 세션의 Bash tool_result(is_error) 에만 남는다.
+백그라운드로 보낸 호출(run_in_background·시간 초과로 백그라운드행)은 결과가 '실행 중(ID: X)' 이라
+작업 id 로 기억해 두고, 나중 끝 알림(<task-notification> 의 <status>failed)으로 판정한다(2026-10-29).
 하위 세션의 훅(Stop)은 정상 응답일 때만 오므로, 실패는 여기서만 잡힌다.
 
 비용: 그룹당 파일 1개(관리 세션), 2초 폴링, 완성된 줄만 오프셋 증분(monitor.Tailer 재사용),
@@ -19,6 +21,8 @@ from session_manager import appconfig, mongroups, push
 from session_manager.monitor import Tailer, parse_calllines, resolve_peer
 
 _SENDMSG_FAIL_RE = re.compile(r'"success"\s*:\s*false')
+_STATUS_RE = re.compile(r"<status>(\w+)</status>")
+_SUMMARY_RE = re.compile(r"<summary>([\s\S]*?)</summary>")
 
 
 def _sendmsg_failed(text: str) -> bool:
@@ -65,6 +69,7 @@ class _GroupTail:
         self.tailer = Tailer(path)
         self.tailer.seek_end()
         self.pending: dict[str, str] = {}    # tool_use_id → 호출된 하위 sid
+        self.bg_pending: dict[str, str] = {}  # 백그라운드로 간 호출의 작업 id → 하위 sid(끝 알림 <status> 로 판정)
         self.polls_since_miss = 0
 
     @property
@@ -125,15 +130,41 @@ class Watcher:
         t.tailer = Tailer(t.path)
         t.tailer.seek_end()
         t.pending = {}
+        t.bg_pending = {}
         print(f"[monwatch] [{t.group.get('name')}] 관리 세션 이어받음 → {new_id[:8]} 로 추적 전환")
 
+    def _bg_done(self, t: _GroupTail, obj: dict) -> int:
+        """백그라운드로 간 하위 호출의 끝 알림(<task-notification>, user 본문·대기 명령 첨부) — failed 면 알림.
+        머리(첫 <event> 앞)만 본다 — 출력 속에 인용된 다른 알림으로 판정하지 않게(scanner._bg_feed 와 같은 규칙)."""
+        if not t.bg_pending:
+            return 0
+        from session_manager.scanner import _TASK_ID, _bg_texts
+        n = 0
+        for text, is_result in _bg_texts(obj):
+            if is_result or not text.startswith("<task-notification>"):
+                continue
+            i = text.find("<event>")
+            head = text if i < 0 else text[:i]
+            st = _STATUS_RE.search(head)
+            if not st:
+                continue                                  # 모니터 사건 알림 등 — 끝이 아니다
+            for tid in _TASK_ID.findall(head):
+                target = t.bg_pending.pop(tid, None)
+                if target and st.group(1) == "failed":
+                    sm = _SUMMARY_RE.search(head)
+                    n += int(self._notify(t.group, target, sm.group(1).strip() if sm else head) or 0)
+        return n
+
     def _drain(self, t: _GroupTail) -> int:
+        from session_manager.scanner import _BG_START
         n = 0
         subs = t.subs
         for obj in t.tailer.read_new():
             if isinstance(obj, dict) and obj.get("type") == "continued-in" and obj.get("continuedInSessionId"):
                 self._follow_continuation(t, str(obj["continuedInSessionId"]))
                 break                                     # 새 파일은 다음 폴링부터
+            if isinstance(obj, dict) and obj.get("type") in ("user", "attachment"):
+                n += self._bg_done(t, obj)
             if not isinstance(obj, dict) or obj.get("type") not in ("user", "assistant"):
                 continue
             msg = obj.get("message")
@@ -179,6 +210,15 @@ class Watcher:
                     # (죽은 워커: "No agent named … is reachable")
                     if b.get("is_error") or _sendmsg_failed(text):
                         n += int(self._notify(t.group, target, text) or 0)
+                        continue
+                    # run_in_background(또는 시간 초과로 백그라운드행) — 결과는 '실행 중' 이고 성패는 나중 끝 알림에 온다(2026-10-29)
+                    m = _BG_START.match(text)
+                    bid = m and (m.group(2) or m.group(3))
+                    if bid:
+                        t.bg_pending[bid] = target
+                        if len(t.bg_pending) > _MAX_PENDING:
+                            for k in list(t.bg_pending)[:len(t.bg_pending) - _MAX_PENDING]:
+                                t.bg_pending.pop(k, None)
         return n
 
 

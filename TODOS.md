@@ -177,9 +177,9 @@
   — 감시 출력 속에 인용된 다른 알림의 `<status>`·`<task-id>` 로 끝내지 않게. 이 PC 기록 117개 재생: 새로 닫힘 20(모두 만료 근거), 새로 열림 0
 - [ ] (후속) 기록이 안 남는 끝 대비 — claude 화면에서 멈춤·에이전트 정리(orphan summary 가 'these leave no transcript marker' 라고 함)·만료 문구 변경 시 다시 유령.
   jsonl 수 > 0 일 때만 살아 있는 claude pid 의 자손 중 Bash 도구 쉘(명령줄에 `.claude/shell-snapshots/snapshot-bash-`, 모니터도 같은 모양)이 0개면 0 으로 보기(psutil 읽기만, MCP 서버 자손은 무시)
-- [ ] (후속, 낮음) 하위 에이전트·워크플로가 띄운 쉘·모니터는 `<id>/subagents/**` 기록에만 있어 목록 수에 안 잡힘(본 턴이 끝나면 '완료'·완료 푸시) — 위 프로세스 확인과 함께
-- [ ] (후속, 낮음) 비서 브리핑 `worklog._live_state` 는 `bgtasks.hold_ready` 를 안 거쳐, 목록이 '백그라운드'인 세션을 비서는 '완료'로 봄
-- [ ] (후속, 낮음) monwatch: `run_in_background` 로 보낸 하위 호출의 실패(알림 `<status>failed</status>`, 첨부 포함)를 못 잡음 — pending 을 작업 id 로 옮겨 알림에서 판정
+- [x] (0.33.13, 2026-10-29) 하위 에이전트·워크플로가 띄운 쉘·모니터도 센다 — `scanner.sub_bg_open`(지금 프로세스 뒤 바뀐 `<id>/subagents/**` 만, scandir), 부모로 온 끝 알림(`bg_shut`)은 빼고 끝 표식 없는 유령은 2시간 뒤 제외(실측 900건 중 하위 끝 851·부모 끝 34·끝 없음 12). 15세션 25ms
+- [x] (0.33.13) 비서 브리핑 `worklog._live_state` 도 `bgtasks.hold_ready` — 목록과 같이 'background'(+`state.bg` 수), 비서 스킬 설명에 background 추가
+- [x] (0.33.13) monwatch: 백그라운드로 간 하위 호출(run_in_background·시간 초과)은 작업 id 로 기억해 끝 알림 `<status>failed</status>`(본문·첨부)로 '호출 실패'
 - [ ] (검토) 모니터 만료 때 claude 가 bash 만 끝내고 `tail -F | grep` 손자 프로세스는 남김(삼흥 6쌍, 부모 없음·claude.exe 밖) — 정리 기능은 불가침 원칙(ClewPath 가 띄우지 않은 프로세스) 검토 뒤
 - [x] 0.19.4 세션 상세 머리에 태그(#칩 × 빼기 · ＋ 태그: 입력/기존 태그 골라 저장), 목록 위 태그 필터는 유지
 - [x] 0.20.0 정기 작업(docs/designs/housekeeping.md): 쉬는 세션 정리(4시간·세션 잠금 재확인·📌 항상 켜 두기) · 모델 목록 갱신(CP+실사용 합본) · 설정 🧹 화면

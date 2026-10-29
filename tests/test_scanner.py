@@ -281,6 +281,51 @@ def test_bg_subagent_tracking(fake_claude_home):
     assert scanner.bg_counts(scanner.scan_one("ffff0003"), scanner._epoch("2026-10-28T00:59:00Z"))["agents"] == 0
 
 
+def test_bg_from_subagent_records(fake_claude_home):
+    """하위 에이전트·워크플로가 띄운 쉘·모니터는 <세션>/subagents/** 기록에만 있다 — 그것도 센다(2026-10-29 사장님).
+    하위 기록 안의 끝, 부모로 온 끝 알림(하위가 먼저 끝난 경우)은 빼고, 끝 표식이 없어도 2시간 넘은 것은 유령으로 본다.
+    지금 프로세스가 뜨기 전에 바뀐 하위 기록은 읽지 않는다."""
+    import json, os
+    from pathlib import Path
+    from tests.conftest import write_session
+
+    def res(text, ts):
+        return {"type": "user", "timestamp": ts, "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "t", "content": text}]}}
+
+    def note(tid, ts):
+        return {"type": "user", "timestamp": ts, "message": {"role": "user",
+                "content": f"<task-notification>\n<task-id>{tid}</task-id>\n<status>completed</status>\n</task-notification>"}}
+    write_session(fake_claude_home, "P--x", "ffff0005", [{"type": "permission-mode"},
+                  note("bparent", "2026-10-29T01:20:00Z")])          # 하위가 띄우고 부모로 온 끝
+    m = scanner.scan_one("ffff0005")
+    assert m.bg_shut == ["bparent"] and m.bg_open == []
+    sub = Path(m.jsonl_path).with_suffix("") / "subagents"
+    (sub / "workflows" / "wf_1").mkdir(parents=True)
+
+    def put(p, lines):
+        p.write_text("".join(json.dumps(x) + "\n" for x in lines), encoding="utf-8")
+    put(sub / "agent-a1.jsonl", [
+        res("Command running in background with ID: bopen. Output", "2026-10-29T01:00:00Z"),
+        res("Command running in background with ID: bdone. Output", "2026-10-29T01:00:01Z"),
+        res("Command running in background with ID: bparent. Output", "2026-10-29T01:00:02Z"),
+        res("Command running in background with ID: bghost. Output", "2026-10-28T22:00:00Z"),    # 3시간 넘게 끝 없음
+        note("bdone", "2026-10-29T01:05:00Z")])
+    put(sub / "workflows" / "wf_1" / "agent-w1.jsonl", [
+        res("Monitor started (task bmon, timeout 90000ms).", "2026-10-29T01:00:03Z")])
+    old = sub / "agent-old.jsonl"
+    put(old, [res("Command running in background with ID: bstale. Output", "2026-10-29T01:00:04Z")])
+    since = scanner._epoch("2026-10-28T21:00:00Z")
+    os.utime(old, (since - 600, since - 600))                         # 프로세스가 뜨기 전에 바뀐 파일
+    now = scanner._epoch("2026-10-29T01:30:00Z")
+    m = scanner.scan_one("ffff0005")
+    assert scanner.bg_counts(m, since, now=now) == {"shells": 1, "monitors": 1, "agents": 0}
+    assert scanner.bg_counts(m, since, now=scanner._epoch("2026-10-29T03:10:00Z")) == {"shells": 0, "monitors": 0, "agents": 0}, \
+        "끝 표식이 없어도 2시간 지나면 세지 않는다"
+    assert scanner.bg_counts(m, scanner._epoch("2026-10-29T01:10:00Z"), now=now)["shells"] == 0, \
+        "지금 프로세스 전에 시작한 작업은 함께 죽었다"
+
+
 def test_stop_push_held_while_background(monkeypatch):
     from session_manager import push, bgtasks
     sent = []

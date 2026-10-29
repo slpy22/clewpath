@@ -52,6 +52,9 @@ class SessionMeta:
     # 아직 끝났다는 표시가 없는 백그라운드 작업(쉘·모니터): [[task_id, "shell"|"monitor", 시작 epoch 초], ...]
     # claude 가 다시 뜨면 이전 작업은 함께 죽으므로, '지금 몇 개' 는 프로세스 시작 이후 것만 센다(bg_counts).
     bg_open: list = field(default_factory=list)
+    # 여기서 끝 알림을 받았지만 여기서 시작하지 않은 작업 id — 하위 에이전트가 시작하고 그 에이전트가 먼저 끝나 부모로 온 끝(2026-10-29
+    # 실측 34/900). bg_counts 가 하위 기록(subagents/**)의 열린 작업에서 뺀다
+    bg_shut: list = field(default_factory=list)
     # 마지막 '대화' 시각(user·assistant·작업 알림 줄). 쉬는 세션 판정용 — 파일 mtime 은 claude 가 쉬는 동안에도
     # 끝에 시각 없는 메타 줄(last-prompt·mode·atis-latch 등)을 다시 써서 갱신되므로 못 쓴다(2026-10-13 실측).
     last_activity_at: str | None = None
@@ -73,7 +76,7 @@ class _Fold:
     """
     __slots__ = ("meta", "started_at", "last_ts", "line_count", "message_count", "custom_title",
                  "interactive_markers", "ai_title", "agent_name", "last_model", "last_effort", "continued_in", "offset", "sig",
-                 "ep_cli", "ep_other", "bg", "last_act")
+                 "ep_cli", "ep_other", "bg", "last_act", "bg_shut")
 
     def __init__(self):
         # 메타 필드는 첫 줄에 없을 수 있다(사이드체인 메시지 등) → '처음 등장하는 값'
@@ -98,6 +101,7 @@ class _Fold:
         self.ep_other = False                 # 그 밖의 entrypoint(sdk-cli 등 헤드리스)를 본 적 있나
         self.bg: dict[str, tuple[str, float]] = {}   # 열린 백그라운드 작업 id → (종류, 시작 시각)
         self.last_act: str | None = None      # 마지막 대화 줄 timestamp(쉬는 동안 claude 가 스스로 쓰는 줄 제외)
+        self.bg_shut: dict[str, None] = {}     # 여기서 시작하지 않은 작업의 끝(순서 유지·상한 _BG_SHUT_MAX)
 
     def feed(self, line: str) -> None:
         line = line.strip()
@@ -174,7 +178,7 @@ class _Fold:
                     continue
                 m = _BG_STOPPED.match(text)
                 if m:
-                    self.bg.pop(m.group(1), None)
+                    self._close(m.group(1))
                     continue
             if text.startswith("<task-notification>"):
                 # 알림 머리(첫 <event> 앞)만 본다 — 감시 출력 속에 인용된 다른 알림의 <status>·<task-id> 로 끝내지 않게
@@ -182,11 +186,17 @@ class _Fold:
                 head = text if i < 0 else text[:i]
                 if "<status>" in head:
                     for tid in _TASK_ID.findall(head):
-                        self.bg.pop(tid, None)
+                        self._close(tid)
                 else:
                     tid = _expired_task(text)
                     if tid and self.bg.get(tid, ("",))[0] == "monitor":
                         self.bg.pop(tid, None)
+
+    def _close(self, tid: str) -> None:
+        if self.bg.pop(tid, None) is None:
+            self.bg_shut[tid] = None
+            if len(self.bg_shut) > _BG_SHUT_MAX:
+                self.bg_shut.pop(next(iter(self.bg_shut)))
 
     def feed_bytes(self, chunk: bytes) -> int:
         """완성된 줄만 접고, 접은 바이트 수를 돌려준다(부분 줄은 접지 않음)."""
@@ -235,6 +245,7 @@ class _Fold:
             continued_in=self.continued_in,
             headless=(self.ep_other and not self.ep_cli),
             bg_open=[[k, v[0], v[1]] for k, v in self.bg.items()],
+            bg_shut=list(self.bg_shut),
         )
 
 
@@ -299,13 +310,50 @@ def _bg_texts(obj: dict):
             yield b["text"], False
 
 
-def bg_counts(meta: "SessionMeta", since: float | None) -> dict:
-    """지금 살아 있는 claude 프로세스(시작 시각 since, epoch 초) 이후에 시작해 아직 안 끝난 쉘·모니터·서브에이전트 수."""
+_BG_SHUT_MAX = 500
+# 하위 에이전트(Agent·Workflow)가 띄운 작업은 끝 표식이 아예 없는 것이 있다(2026-10-29 실측 12/900 — 쉘 11·모니터 1).
+# 그런 유령이 세션을 계속 '백그라운드'로 붙잡지(완료 알림도 미룸) 않게, 끝 표식이 없어도 이만큼 지나면 세지 않는다
+SUB_BG_MAX_S = 2 * 3600
+
+
+def sub_bg_open(meta: "SessionMeta", since: float) -> list:
+    """하위 에이전트 기록(<세션>/subagents/**/*.jsonl)에서 아직 안 끝난 작업 [[id, 종류, 시작]] — 지금 프로세스가 뜬 뒤 바뀐 파일만
+    읽는다(그 전 파일엔 지금 프로세스의 작업이 없다). 2026-10-29: 전엔 본 기록만 봐서 하위 에이전트의 쉘이 남아도 '완료'였다."""
+    out: list = []
+    # scandir 의 항목 정보로 mtime 을 본다(Windows 는 폴더 읽기에 딸려 와 파일마다 stat 하지 않음 — 20초 목록마다 도는 길)
+    stack = [str(Path(meta.jsonl_path).with_suffix("") / "subagents")]
+    while stack:
+        try:
+            it = os.scandir(stack.pop())
+        except OSError:
+            continue
+        with it:
+            for e in it:
+                try:
+                    if e.is_dir(follow_symlinks=False):
+                        stack.append(e.path)
+                    elif e.name.endswith(".jsonl") and e.stat(follow_symlinks=False).st_mtime + 2 >= since:
+                        out.extend(_scan_one(Path(e.path)).bg_open or [])
+                except Exception:  # noqa: BLE001
+                    continue
+    return out
+
+
+def bg_counts(meta: "SessionMeta", since: float | None, now: float | None = None) -> dict:
+    """지금 살아 있는 claude 프로세스(시작 시각 since, epoch 초) 이후에 시작해 아직 안 끝난 쉘·모니터·서브에이전트 수.
+    하위 에이전트가 띄운 것도 센다(부모로 온 끝 알림은 빼고, SUB_BG_MAX_S 넘은 것은 유령으로 본다)."""
     out = {"shells": 0, "monitors": 0, "agents": 0}
     if since is None:
         return out
-    for _tid, kind, t0 in meta.bg_open or []:
+    import time
+    now = time.time() if now is None else now
+    shut = set(meta.bg_shut or [])
+    mine = [(x, False) for x in meta.bg_open or []]
+    subs = [(x, True) for x in sub_bg_open(meta, since)]
+    for (tid, kind, t0), from_sub in mine + subs:
         if t0 and t0 + 2 < since:      # 이전 프로세스의 작업 = 함께 죽었다(2초 여유: 시계 오차)
+            continue
+        if from_sub and (tid in shut or not t0 or now - t0 > SUB_BG_MAX_S):
             continue
         out[{"shell": "shells", "agent": "agents"}.get(kind, "monitors")] += 1
     return out

@@ -102,6 +102,26 @@ def test_brief_shows_recent_and_waiting(fake_claude_home, monkeypatch):
     assert b["sessions"][0]["recent"][0] == {"n": 1, "ts": b["sessions"][0]["recent"][0]["ts"], "request": "오늘 일", "result": "했음"}
 
 
+def test_brief_state_matches_list_background(fake_claude_home, monkeypatch):
+    """턴은 끝났어도(ready) 쉘·모니터·서브에이전트가 남은 세션은 비서에게도 'background'(+수) — 목록과 같은 판정(2026-10-29).
+    전엔 목록이 '백그라운드'인 세션을 비서는 '완료'로 봤다. 남은 게 없으면 그대로 ready."""
+    from datetime import datetime, timezone
+    iso = lambda t: datetime.fromtimestamp(t, timezone.utc).isoformat().replace("+00:00", "Z")
+    now = time.time()
+    shell = {"type": "user", "timestamp": iso(now - 300), "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "t", "content": "Command running in background with ID: bsh1. Output"}]}}
+    write_session(fake_claude_home, "E--w", "bg1", [U("빌드 돌려 줘", iso(now - 400)), shell, A("돌려 뒀습니다", iso(now - 290))])
+    write_session(fake_claude_home, "E--w", "done1", [U("끝난 일", iso(now - 400)), A("끝", iso(now - 290))])
+    monkeypatch.setattr("session_manager.hooks.status_map", lambda: {
+        "bg1": {"phase": "ready", "ready_at": now - 280}, "done1": {"phase": "ready", "ready_at": now - 280}})
+    monkeypatch.setattr("session_manager.peers.peer_map", lambda: {
+        sid: {"name": sid, "socket": "P", "started_at": (now - 3600) * 1000} for sid in ("bg1", "done1")})
+    worklog.collect()
+    st = {s["session_id"]: s["state"] for s in worklog.brief(days=2)["sessions"]}
+    assert st["bg1"]["phase"] == "background" and st["bg1"]["bg"] == {"shells": 1, "monitors": 0, "agents": 0}
+    assert st["done1"]["phase"] == "ready" and "bg" not in st["done1"]
+
+
 def test_session_send_approval(fake_claude_home, monkeypatch):
     from session_manager import approvals, team, webterm
     write_session(fake_claude_home, "E--w", "tgt", [U("일")])

@@ -133,3 +133,41 @@ def test_thread_start_stop_idempotent():
     monwatch.stop()
     t1.join(timeout=2)
     assert not t1.is_alive()
+
+
+def _note(tid, status, summary, attach=False):
+    text = (f"<task-notification>\n<task-id>{tid}</task-id>\n<tool-use-id>x</tool-use-id>\n"
+            f"<status>{status}</status>\n<summary>{summary}</summary>\n</task-notification>")
+    if attach:
+        return {"type": "attachment", "timestamp": "2026-10-29T00:00:02Z",
+                "attachment": {"type": "queued_command", "prompt": text}}
+    return {"type": "user", "timestamp": "2026-10-29T00:00:02Z", "message": {"role": "user", "content": text}}
+
+
+def test_background_call_failure_comes_from_task_notification(fake_claude_home):
+    """백그라운드로 보낸 하위 호출(run_in_background·시간 초과로 백그라운드행)은 결과가 '실행 중' 이라 정상처럼 보인다 —
+    나중 끝 알림의 <status>failed 로 '호출 실패'(2026-10-29). completed·모르는 작업·인용된 알림은 조용히."""
+    path = write_session(fake_claude_home, "F--proj", M, [])
+    g = mongroups.save("포털", M, [S1], labels={S1: "포털개발"})
+    w, got = _watcher()
+    w.poll()
+    _append(path,
+            _use("t1", f'claude -p --resume {S1} "고쳐"'),
+            _res("t1", "Command running in background with ID: bx1. Output is being written to: C:/o.txt", False),
+            _use("t2", f'claude -p --resume {S1} "또"'),
+            _res("t2", "Command did not complete within its 300s timeout and was moved to the background (ID: bx2). Output …", False),
+            _use("t3", f'claude -p --resume {S1} "셋"'),
+            _res("t3", "Command running in background with ID: bx3.", False))
+    assert w.poll() == 0 and got == [], "'실행 중' 결과는 실패가 아니다"
+    _append(path, _note("bx1", "completed", 'Background command "고쳐" completed (exit code 0)'),
+            _note("zzz", "failed", "다른 작업"),
+            {"type": "user", "timestamp": "2026-10-29T00:00:03Z", "message": {"role": "user", "content":
+             "<task-notification>\n<task-id>mon1</task-id>\n<event>인용: <task-id>bx3</task-id> <status>failed</status></event>"}})
+    assert w.poll() == 0 and got == [], "성공·모르는 작업·감시 출력 속 인용은 알리지 않는다"
+    _append(path, _note("bx2", "failed", 'Background command "또" failed with exit code 1'),
+            _note("bx3", "failed", 'Background command "셋" failed with exit code 2', attach=True))
+    assert w.poll() == 2
+    assert got == [(g["id"], S1, 'Background command "또" failed with exit code 1'),
+                   (g["id"], S1, 'Background command "셋" failed with exit code 2')]
+    _append(path, _note("bx2", "failed", "두 번째"))
+    assert w.poll() == 1 - 1, "같은 작업은 한 번만"

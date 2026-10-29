@@ -198,12 +198,19 @@ def collect(metas=None, run_budget: int = PER_RUN_BYTES, per_session: int = PER_
 
 
 # ---------------------------------------------------------------- 비서용 조회
-def _live_state(sid: str, rt_map, peer_map, now: float) -> dict:
-    from session_manager import hooks, webterm
-    rt = hooks.effective(rt_map.get(sid), alive=bool(peer_map.get(sid) or webterm.has_terminal(sid)), quiet_s=None, now=now) or {}
+def _live_state(sid: str, rt_map, peer_map, now: float, meta=None) -> dict:
+    """목록과 같은 판정 — 턴이 끝났어도 쉘·모니터·서브에이전트가 남았으면 'background'(bgtasks.hold_ready).
+    2026-10-29: 전엔 이 보정 없이 목록이 '백그라운드'인 세션을 비서는 '완료(ready)'로 봤다."""
+    from session_manager import bgtasks, hooks, webterm
     p = peer_map.get(sid)
-    return {"phase": rt.get("phase"), "live": bool(p or webterm.has_terminal(sid)),
-            "address": ("uds:" + p["socket"]) if p and p.get("socket") else None}
+    live = bool(p or webterm.has_terminal(sid))
+    rt = hooks.effective(rt_map.get(sid), alive=live, quiet_s=None, now=now) or {}
+    bg = bgtasks.counts(meta, p)
+    rt = bgtasks.hold_ready(rt, bg) or {}
+    out = {"phase": rt.get("phase"), "live": live, "address": ("uds:" + p["socket"]) if p and p.get("socket") else None}
+    if bgtasks.busy(bg):
+        out["bg"] = bg
+    return out
 
 
 def brief(days: float = 2, per_session: int = 3, limit: int = 40) -> dict:
@@ -245,7 +252,7 @@ def _sess_view(c, r, per_session, rt_map, pmap, metas, now) -> dict:
     m = metas.get(sid)
     return {"session_id": sid, "title": r["title"], "cwd": r["cwd"], "last_ts": r["last_ts"], "turns_total": r["n"],
             "gone_at": r["gone_at"], "cleanup_at": retention.delete_at(m.mtime) if m else None,
-            "state": _live_state(sid, rt_map, pmap, now),
+            "state": _live_state(sid, rt_map, pmap, now, m),
             "recent": [{"n": t["n"], "ts": t["ts"], "request": _short(t["request"], 400), "result": _short(t["result"], 500)}
                        for t in turns]}
 
