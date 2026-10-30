@@ -70,3 +70,29 @@ test("파일 보기: 탐색기 머리·찾기 칸이 고정 머리(.lhead)에 �
   await ev(ctx, "renderFbExplorer(FB.wrap)");
   assert.deepEqual(box.children.map((k) => String(k.className)), ["fbex", "fbfilter"]);
 });
+
+// 하위 폴더 세션은 상위 폴더 묶음에 함께, 줄에는 상위 폴더 안의 상대경로(2026-10-30 사장님)
+test("세션 목록 묶음: 세션 있는 폴더의 하위 폴더 세션은 그 묶음에 · 상대경로 ↳ · 드라이브 루트는 묶지 않음", async () => {
+  const ctx = await load();
+  const S = [
+    { session_id: "s-sub", title: "하위", cwd: "E:\\proj\\my_research\\dump", project_folder: "E--proj-my-research-dump", ended_at: "2026-10-30T03:00:00Z" },
+    { session_id: "s-oth", title: "다른", cwd: "E:\\other", project_folder: "E--other", ended_at: "2026-10-30T02:00:00Z" },
+    { session_id: "s-top", title: "상위", cwd: "E:\\Proj", project_folder: "E--Proj", ended_at: "2026-10-30T01:00:00Z" },
+    { session_id: "s-sub2", title: "하위2", cwd: "E:\\proj\\prior", project_folder: "E--proj-prior", ended_at: "2026-10-29T01:00:00Z" },
+    { session_id: "s-root", title: "루트", cwd: "E:\\", project_folder: "E--", ended_at: "2026-10-28T01:00:00Z" },
+    { session_id: "s-like", title: "비슷", cwd: "E:\\proj2", project_folder: "E--proj2", ended_at: "2026-10-27T01:00:00Z" }];
+  ev(ctx, "SESSIONS = " + JSON.stringify(S));
+  const w = stubEl("div");
+  ctx.__w = w;
+  ev(ctx, "renderRows(__w, '')");
+  const heads = w.children.filter((n) => String(n.className) === "ghead").map((h) => flat(h).find((x) => String(x.className) === "gpath").textContent);
+  assert.deepEqual(heads, ["E:\\Proj", "E:\\other", "E:\\", "E:\\proj2"], "하위 둘은 E:\\Proj 묶음으로(대소문자 무시), 루트·이름만 비슷한 폴더는 따로");
+  const lists = w.children.filter((n) => String(n.className) === "glist");
+  const first = lists[0].children.map((r) => r.dataset.sid);
+  assert.deepEqual(first, ["s-sub", "s-top", "s-sub2"], "줄 순서는 목록 순서 그대로");
+  const paths = flat(lists[0]).filter((x) => String(x.className).startsWith("spath")).map((x) => x.textContent);
+  assert.deepEqual(paths, ["↳ my_research\\dump", "↳ prior"], "상위 세션 줄엔 경로 없음, 하위는 상대경로");
+  assert.equal(w.children.filter((n) => String(n.className) === "ghead")[0].children.at(-1).textContent, "3");
+  assert.equal(ev(ctx, "relPath('/Users/me/a', '/Users/me/a/b/c')"), "b/c");
+  assert.equal(ev(ctx, "relPath('/', '/Users')"), null, "/ 는 상위로 치지 않는다");
+});

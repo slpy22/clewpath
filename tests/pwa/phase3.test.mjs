@@ -68,7 +68,7 @@ test("renderRows: 폴더 그룹(최신순)·상태 점/문구·🔗 피어 칩(�
   same(chipsOf(b), [], "우리 PTY 가 떠 있으면 피어 칩을 달지 않는다");
   assert.equal(b1.children[1].textContent, "beta-slug");
   same(b.children.map((k) => k.textContent), ["", "✋", "🖥", "⋯"]);
-  assert.equal(b.children[0].children[2].textContent, "F:/p1/sub");
+  assert.equal(b.children[0].children[2].textContent, "↳ sub", "묶음 폴더(F:/p1) 안의 하위 폴더는 상대경로(2026-10-30)");
   assert.ok(b.children[0].children[1].children.map((k) => k.textContent).includes("5시간 전"));
   // C: 🤖 배경 에이전트 + ⚙(피커 미표시) + dim
   const c = byId[C];

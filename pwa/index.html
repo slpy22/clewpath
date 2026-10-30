@@ -2128,6 +2128,13 @@ function baseName(p){ if(!p)return''; const parts=p.split(/[\\/]/).filter(Boolea
 function groupRepr(list){ // 대표 cwd: 가장 짧은(루트) 경로
   const cwds=list.map(s=>s.cwd).filter(Boolean);
   return cwds.length? cwds.sort((a,b)=>a.length-b.length)[0] : (list[0].project_folder||'(기타)'); }
+// 경로 비교 열쇠: 구분자 /, 끝 / 없음, Windows 드라이브 경로는 대소문자 무시
+function pathKey(p){ let k=String(p||'').replace(/\\/g,'/').replace(/\/+$/,''); if(/^[a-z]:/i.test(k)) k=k.toLowerCase(); return k; }
+// p 가 root 의 하위 폴더인가 — 드라이브 루트·/ 는 상위로 치지 않는다(전부 한 묶음이 되지 않게)
+function isUnderPath(root,p){ const rk=pathKey(root); if(!rk||/^[a-z]:$/.test(rk)) return false; return pathKey(p).startsWith(rk+'/'); }
+// root 안에서의 상대경로 — 같으면 '', 하위가 아니면 null
+function relPath(root,p){ if(!root||!p) return null; if(pathKey(root)===pathKey(p)) return '';
+  if(!isUnderPath(root,p)) return null; return String(p).replace(/[\\/]+$/,'').slice(String(root).replace(/[\\/]+$/,'').length+1); }
 
 // ---- 훅 기반 실시간 상태 -> 뱃지 (신선도 게이트: 오래된 신호는 표시하지 않는다) ----
 // 서버-클라이언트 시계 오차 보정값(초). 목록 응답의 now 로 갱신.
@@ -2663,7 +2670,7 @@ function continuedTarget(s){
   return cur;
 }
 // 세션 줄의 정보 칸(점·이름·오른쪽 상태/칩·메시지·용량·시간·경로) — 세션 목록과 팀 구성원 줄이 같이 쓴다(2026-10-29 사장님:
-// 팀 목록에서도 세션 목록과 같은 정보). repr = 폴더 머리의 대표 경로(같으면 경로 줄 생략, 팀은 s.cwd 라 늘 생략)
+// 팀 목록에서도 세션 목록과 같은 정보). repr = 폴더 머리의 대표 경로(같으면 경로 줄 생략, 하위 폴더면 상대경로, 팀은 s.cwd 라 늘 생략)
 function sessRowInfo(srow,s,repr){
   if(s.session_id===SELECTED_ID) srow.classList.add('sel');
   if((s.picker_hidden && !s.picker_expose) || s.headless) srow.classList.add('dim');  // 픽커 미표시·자동 실행 = 흐리게
@@ -2719,7 +2726,9 @@ function sessRowInfo(srow,s,repr){
   meta.appendChild(el('span',null,fmtBytes(s.size_bytes)));
   { const rt=relFrom(s); if(rt)meta.appendChild(el('span',null,rt)); }
   info.appendChild(meta);
-  if(s.cwd&&s.cwd!==repr) info.appendChild(el('div','spath',s.cwd));
+  { const rel=relPath(repr,s.cwd);
+    if(rel) info.appendChild(el('div','spath sub','↳ '+rel));           // 묶음 폴더 안의 하위 폴더 세션(2026-10-30 사장님)
+    else if(rel===null&&s.cwd&&s.cwd!==repr) info.appendChild(el('div','spath',s.cwd)); }
   if(chips.children.length) side.appendChild(chips);
   if(side.children.length) info.appendChild(side);
   // 실행 중인 클루패스 터미널(또는 열린 탭)이면 바로 그 화면, 아니면 상세(2026-10-12 사장님)
@@ -2740,12 +2749,18 @@ function renderRows(wrap,q){
   for(const s of rows){ const k=s.project_folder||'(기타)';
     if(!groups.has(k))groups.set(k,[]); groups.get(k).push(s); }
   // (claude -p 단발 기록은 Host 가 목록에서 아예 뺀다 — 2026-10-12 사장님. 지금 돌고 있는 것만 🤖 칩으로 보인다)
-  const arr=[...groups.entries()].map(([k,list])=>({k,list,
-    latest:list.reduce((m,s)=>Math.max(m,Date.parse(s.ended_at||'')||0),0)}));
+  // 세션이 있는 폴더의 하위 폴더 세션은 그 폴더 묶음에 함께(2026-10-30 사장님) — 가장 바깥 상위 묶음으로 합치고, 줄 순서는 목록 순서 그대로
+  const order=new Map(rows.map((s,i)=>[s,i]));
+  const tops=[];
+  for(const g of [...groups.entries()].map(([k,list])=>({k,list,repr:groupRepr(list)})).sort((a,b)=>pathKey(a.repr).length-pathKey(b.repr).length)){
+    const up=tops.find(t=>isUnderPath(t.repr,g.repr));
+    if(up) up.list.push(...g.list); else tops.push(g); }
+  for(const g of tops) g.list.sort((a,b)=>order.get(a)-order.get(b));
+  const arr=tops.map(g=>Object.assign(g,{latest:g.list.reduce((m,s)=>Math.max(m,Date.parse(s.ended_at||'')||0),0)}));
   arr.sort((a,b)=>b.latest-a.latest);
 
   for(const g of arr){
-    const repr=groupRepr(g.list);
+    const repr=g.repr;
     const collapsed = q ? false : COLLAPSED.has(g.k);  // 검색 중엔 항상 펼침
     const gh=el('button','ghead');
     gh.appendChild(el('span','chev',collapsed?'▶':'▼'));
