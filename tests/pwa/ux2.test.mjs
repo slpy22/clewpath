@@ -42,7 +42,8 @@ test("목록 줄 클릭: 실행 중인 클루패스 터미널이면 바로 터�
   const ctx = await load();
   seed(ctx, "globalThis.__c=[]; loadTerminal=(s)=>__c.push(['term',s.session_id]); loadDetail=(s)=>__c.push(['detail',s.session_id]); switchTab=(k)=>__c.push(['tab',k]);");
   const wrap = render(ctx);
-  const [a, b] = rowsOf(wrap.children.filter((k) => cls(k) === "glist").find((g) => rowsOf(g).some((r) => r.dataset.sid === A)));
+  const rs = rowsOf(wrap.children.filter((k) => cls(k) === "glist").find((g) => rowsOf(g).some((r) => r.dataset.sid === A)));
+  const a = rs.find((r) => r.dataset.sid === A), b = rs.find((r) => r.dataset.sid === B);   // 줄 순서는 깊이 → 이름(2026-10-30)
   a.children[0].onclick(); b.children[0].onclick();
   ev(ctx, `TABS.list=[{key:'k-b', s:{session_id:${JSON.stringify(B)}}}]`);
   await b.children[0].onclick();                          // 꺼진 것으로 보이면 판정 전에 목록을 한 번 새로 받는다(받지 못하면 지금 목록으로)
@@ -56,7 +57,8 @@ test("⋯ 메뉴: 자주 쓰는 것(재개/터미널·대화·이름·파일·�
     + "loadTerminal=(s)=>__c.push(['term',s.session_id]); loadViewer=(s)=>__c.push(['view',s.session_id]); loadDetail=(s)=>__c.push(['detail',s.session_id]);"
     + "openFilesFor=(s)=>__c.push(['files',s.session_id]); showApprove=(s)=>__c.push(['approve',s.session_id]); doDelete=(s)=>__c.push(['delete',s.session_id]); stopFromMenu=(s)=>__c.push(['stop',s.session_id]);");
   const wrap = render(ctx);
-  const [a, b] = rowsOf(wrap.children.filter((k) => cls(k) === "glist").find((g) => rowsOf(g).some((r) => r.dataset.sid === A)));
+  const rs = rowsOf(wrap.children.filter((k) => cls(k) === "glist").find((g) => rowsOf(g).some((r) => r.dataset.sid === A)));
+  const a = rs.find((r) => r.dataset.sid === A), b = rs.find((r) => r.dataset.sid === B);   // 줄 순서는 깊이 → 이름(2026-10-30)
   const more = b.children.at(-1);
   assert.equal(more.textContent, "⋯"); assert.equal(more.getAttribute("aria-haspopup"), "menu");
   let stopped = false;

@@ -2749,13 +2749,14 @@ function renderRows(wrap,q){
   for(const s of rows){ const k=s.project_folder||'(기타)';
     if(!groups.has(k))groups.set(k,[]); groups.get(k).push(s); }
   // (claude -p 단발 기록은 Host 가 목록에서 아예 뺀다 — 2026-10-12 사장님. 지금 돌고 있는 것만 🤖 칩으로 보인다)
-  // 세션이 있는 폴더의 하위 폴더 세션은 그 폴더 묶음에 함께(2026-10-30 사장님) — 가장 바깥 상위 묶음으로 합치고, 줄 순서는 목록 순서 그대로
-  const order=new Map(rows.map((s,i)=>[s,i]));
+  // 세션이 있는 폴더의 하위 폴더 세션은 그 폴더 묶음에 함께(2026-10-30 사장님) — 가장 바깥 상위 묶음으로 합친다.
+  // 묶음 안 줄 순서 = 폴더 깊이(얕은 것 먼저) → 같은 깊이면 세션 이름 순(2026-10-30 사장님)
+  const depth=(s)=>s.cwd?pathKey(s.cwd).split('/').filter(Boolean).length:0;
   const tops=[];
   for(const g of [...groups.entries()].map(([k,list])=>({k,list,repr:groupRepr(list)})).sort((a,b)=>pathKey(a.repr).length-pathKey(b.repr).length)){
-    const up=tops.find(t=>isUnderPath(t.repr,g.repr));
+    const up=tops.find(t=>pathKey(t.repr)===pathKey(g.repr)||isUnderPath(t.repr,g.repr));   // 대소문자·끝 \ 만 다른 같은 폴더도 한 묶음
     if(up) up.list.push(...g.list); else tops.push(g); }
-  for(const g of tops) g.list.sort((a,b)=>order.get(a)-order.get(b));
+  for(const g of tops) g.list.sort((a,b)=>depth(a)-depth(b)||sessLabel(a).localeCompare(sessLabel(b),'ko',{numeric:true}));
   const arr=tops.map(g=>Object.assign(g,{latest:g.list.reduce((m,s)=>Math.max(m,Date.parse(s.ended_at||'')||0),0)}));
   arr.sort((a,b)=>b.latest-a.latest);
 
