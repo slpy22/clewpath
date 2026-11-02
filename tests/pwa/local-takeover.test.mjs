@@ -57,6 +57,23 @@ test("terminal.html: 통지 없이 끊기면 기존 회색 '재연결' 안내, �
   assert.equal(f.posted.at(-1).m.fork, "ffffffff-1111-2222-3333-444444444444");
 });
 
+// 숨은 탭(display:none iframe)은 크기를 보내지 않는다 — 숨은 iframe 은 9x5 같은 크기로 fit 돼 claude 가 그 폭으로
+// 다시 그리고, 그 출력이 위쪽 이력에 좁게 남았다(2026-11-02 사장님 실사고). 다시 보이면 보낸다
+test("terminal.html: 숨은 iframe(frameElement 가 화면에 없음)은 resize 를 보내지 않고, 보이면 보낸다", () => {
+  const { ctx, ws, term } = bootTerminal();
+  let visible = false;
+  vm.runInContext("window", ctx).frameElement = { getClientRects: () => (visible ? [{}] : []) };
+  ws.onopen();
+  const resizes = () => ws.sent.map((s) => JSON.parse(s)).filter((m) => m.type === "resize");
+  assert.equal(resizes().length, 0, "숨은 동안은 크기 통지 없음");
+  term.cols = 9; term.rows = 5;
+  vm.runInContext("sendResize()", ctx);
+  assert.equal(resizes().length, 0, "숨은 iframe 의 작은 크기도 보내지 않는다");
+  visible = true; term.cols = 120; term.rows = 30;
+  vm.runInContext("sendResize()", ctx);
+  assert.deepEqual(resizes(), [{ type: "resize", cols: 120, rows: 30 }]);
+});
+
 function pinPaneDetail(ctx) {
   const pd = stubEl("div");
   ctx.document.querySelector = (s) => (s === "#paneDetail" ? pd : stubEl());
