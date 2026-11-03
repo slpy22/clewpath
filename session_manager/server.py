@@ -546,6 +546,7 @@ def create_app() -> FastAPI:
         sessions = [m for m in scanner.scan_all()
                     if (include_headless or not m.headless) and m.session_id not in hidden]
         recs = labels.all_records()  # 라벨은 1회만 로드(세션마다 파일 읽지 않음)
+        solo = labels.standalone_folders()            # 별도 프로젝트로 둔 폴더(하위여도 상위 묶음에 넣지 않음)
         groups = scanner.group_by_project(sessions)
         project_list = []
         for folder, items in groups.items():
@@ -556,7 +557,9 @@ def create_app() -> FastAPI:
                 "session_count": len(items),
                 "total_size_bytes": sum(s.size_bytes for s in items),
                 "latest_mtime": max(s.mtime for s in items),
-                "sessions": [_with_labels(s.to_dict(), recs) for s in items_sorted],
+                "sessions": [dict(_with_labels(s.to_dict(), recs),
+                                  standalone=bool(s.cwd) and labels.folder_key(s.cwd) in solo)
+                             for s in items_sorted],
             })
         project_list.sort(key=lambda p: p["latest_mtime"], reverse=True)
         return {
@@ -1013,6 +1016,15 @@ def create_app() -> FastAPI:
         if r.get("error") == "session_live":
             return JSONResponse(r, status_code=409)
         return r
+
+    @app.post("/api/sessions/{session_id}/standalone")
+    def set_standalone(session_id: str, on: bool = Body(..., embed=True)):
+        """「별도 프로젝트」 — 이 세션 폴더를 상위 폴더 묶음에 넣지 않고 따로 보인다(폴더 단위, ClewPath 저장소에만)."""
+        meta = scanner.scan_one(session_id)
+        if meta is None or not meta.cwd:
+            return JSONResponse({"error": "no_cwd"}, status_code=404)
+        labels.set_standalone(meta.cwd, on)
+        return {"session_id": session_id, "cwd": meta.cwd, "standalone": on}
 
     @app.post("/api/sessions/{session_id}/keep")
     def set_keep(session_id: str, keep: bool = Body(..., embed=True)):
@@ -1853,6 +1865,7 @@ def create_app() -> FastAPI:
         peer_of = peers.peer_map()
         sessions = scanner.scan_all()
         recs = labels.all_records()  # 라벨 1회 로드
+        solo = labels.standalone_folders()            # 별도 프로젝트로 둔 폴더(2026-11-03)
         from session_manager import housekeeping as _hk
         hidden = _hk.hidden_session_ids()            # 모델 목록 읽기용으로 잠깐 띄운 claude 의 빈 기록(숨김)
         out = []
@@ -1907,6 +1920,8 @@ def create_app() -> FastAPI:
                 "labels": rec.get("labels", []),
                 "label_name": rec.get("name"),
                 "keep": bool(rec.get("keep")),      # 항상 켜 두기(쉬는 세션 정리 제외)
+                # 별도 프로젝트 폴더 — 하위 폴더여도 목록·파일 보기에서 상위 폴더 묶음에 넣지 않는다(2026-11-03)
+                "standalone": bool(s.cwd) and labels.folder_key(s.cwd) in solo,
                 # 재개 모델: 오버라이드 있으면 그것, 없으면 감지(마지막 실사용).
                 "last_model": s.last_model,
                 "last_effort": s.last_effort,       # 마지막 응답의 effort(표시용, 재개 때 넘기지 않음)

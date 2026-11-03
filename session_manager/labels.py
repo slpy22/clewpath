@@ -155,3 +155,40 @@ def session_ids_with_label(label: str) -> set[str]:
     with _LOCK:
         return {sid for sid, rec in _load()["sessions"].items()
                 if label in rec.get("labels", [])}
+
+
+# ---- 별도 프로젝트 폴더(2026-11-03 사장님) ----
+# 목록은 세션이 있는 폴더의 하위 폴더 세션을 그 폴더 묶음에 함께 보인다(PWA). 여기 적힌 폴더는 하위여도 묶지 않고
+# 따로(같은 높이로) 보인다. 세션이 아니라 폴더 단위 — 같은 폴더의 세션은 늘 함께 움직인다. 열쇠 = folder_key(cwd).
+def folder_key(cwd: str) -> str:
+    """경로 비교 열쇠 — PWA pathKey 와 같은 규칙(구분자 /, 끝 / 없음, 드라이브 경로는 소문자)."""
+    k = str(cwd or "").replace("\\", "/").rstrip("/")
+    if len(k) >= 2 and k[1] == ":" and k[0].isalpha():
+        k = k.lower()
+    return k
+
+
+def standalone_folders() -> set[str]:
+    with _LOCK:
+        return set((_load().get("folders") or {}).keys())
+
+
+def set_standalone(cwd: str, on: bool) -> bool:
+    """폴더를 별도 프로젝트로 두거나(on) 되돌린다. 바뀌었으면 True."""
+    key = folder_key(cwd)
+    if not key:
+        return False
+    with _LOCK:
+        data = _load()
+        folders = dict(data.get("folders") or {})
+        if on:
+            if key in folders:
+                return False
+            folders[key] = {"standalone": True, "cwd": str(cwd), "updated_at": _now()}
+        else:
+            if key not in folders:
+                return False
+            folders.pop(key)
+        data["folders"] = folders
+        _save(data)
+        return True
