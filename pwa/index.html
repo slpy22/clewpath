@@ -416,6 +416,14 @@
   .ghead .gcount{font-size:.78rem;font-weight:650;color:var(--accent);background:var(--accent-wash);flex:none;
     border:1px solid color-mix(in srgb,var(--accent) 35%,transparent);
     border-radius:999px;padding:3px 11px;font-variant-numeric:tabular-nums}
+  /* 폴더 머리 숫자 = 작업 중 · 열림 · 전체(2026-11-03 사장님) — 0 은 흐리게 */
+  .ghead .gcount.g3{display:flex;align-items:center;gap:7px;padding:3px 10px}
+  .ghead .gcount .gn{display:inline-flex;align-items:center;gap:3px}
+  .ghead .gcount .gn i{font-style:normal;font-size:.62rem;line-height:1}
+  .ghead .gcount .gn.busy i{color:#2f81f7}
+  .ghead .gcount .gn.open i{color:#3fb950}
+  .ghead .gcount .gn.zero{opacity:.38}
+  .ghead .gcount .gn.all{color:var(--ink)}
 
   /* ---- 상세 ---- */
   .detail{padding:16px}
@@ -2747,6 +2755,18 @@ function sessRowInfo(srow,s,repr){
   info.onclick=()=>jumpToSession(continuedTarget(s));
   return {info,r1,bd};
 }
+// 폴더 머리 숫자(2026-11-03 사장님): 작업 중(응답 생성 중) · 열림(이 PC 어딘가에서 claude 가 떠 있음) · 전체
+function sessBusy(s){ const bd=sessionBadge(s); return !!(bd&&bd.text==='작업 중')||!!(s.peer&&s.peer.status==='busy'); }
+function sessOpen(s){ return !!(s.live_terminal||s.peer)||sessBusy(s); }
+function groupCounts(list){ return {busy:list.filter(sessBusy).length, open:list.filter(sessOpen).length, all:list.length}; }
+function groupCount(list){
+  const c=groupCounts(list), w=el('span','gcount g3');
+  const n=(cls,ic,v)=>{ const x=el('span','gn '+cls+(v?'':' zero')); if(ic) x.appendChild(el('i',null,ic)); x.appendChild(el('span',null,String(v))); return x; };
+  w.appendChild(n('busy','●',c.busy)); w.appendChild(n('open','●',c.open)); w.appendChild(n('all','',c.all));
+  w.title='작업 중 '+c.busy+' · 열림 '+c.open+' · 전체 '+c.all;
+  w.setAttribute('aria-label',w.title);
+  return w;
+}
 function renderRows(wrap,q){
   q=(q||'').toLowerCase().trim();
   const rows=SESSIONS.filter(s=>{
@@ -2783,7 +2803,7 @@ function renderRows(wrap,q){
     gt.appendChild(el('div','gbase','📁 '+baseName(repr)));
     gt.appendChild(el('div','gpath',repr));
     gh.appendChild(gt);
-    gh.appendChild(el('span','gcount',g.list.length+''));
+    gh.appendChild(groupCount(g.list));
     gh.onclick=()=>{ if(COLLAPSED.has(g.k))COLLAPSED.delete(g.k); else COLLAPSED.add(g.k);
       renderRows(wrap,q); };
     wrap.appendChild(gh);

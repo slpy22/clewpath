@@ -44,7 +44,7 @@ test("renderRows: 폴더 그룹(최신순)·상태 점/문구·🔗 피어 칩(�
   const heads = wrap.children.filter((k) => cls(k) === "ghead");
   assert.equal(heads.length, 2);
   same(heads.map((h) => h.children[1].children[0].textContent), ["📁 p2", "📁 p1"], "폴더 최신순");
-  same(heads.map((h) => h.children[2].textContent), ["2", "2"], "그룹 건수");
+  same(heads.map((h) => h.children[2].title), ["작업 중 0 · 열림 0 · 전체 2", "작업 중 1 · 열림 2 · 전체 2"], "그룹 건수 = 작업 중 · 열림 · 전체(2026-11-03)");
   assert.equal(heads[1].children[1].children[1].textContent, "F:/p1", "대표 cwd = 가장 짧은 경로");
   const r = rows(wrap);
   assert.equal(r.length, 4);

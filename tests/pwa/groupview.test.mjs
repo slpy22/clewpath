@@ -94,7 +94,32 @@ test("세션 목록 묶음: 세션 있는 폴더의 하위 폴더 세션은 그 
   assert.deepEqual(first, ["s-top2", "s-top", "s-sub3", "s-sub2", "s-sub"], "얕은 폴더 먼저, 같은 깊이는 세션 이름 순(2026-10-30)");
   const paths = flat(lists[0]).filter((x) => String(x.className).startsWith("spath")).map((x) => x.textContent);
   assert.deepEqual(paths, ["↳ alpha", "↳ prior", "↳ my_research\\dump"], "상위 세션 줄엔 경로 없음, 하위는 상대경로");
-  assert.equal(w.children.filter((n) => String(n.className) === "ghead")[0].children.at(-1).textContent, "5");
+  assert.equal(w.children.filter((n) => String(n.className) === "ghead")[0].children.at(-1).title, "작업 중 0 · 열림 0 · 전체 5");
   assert.equal(ev(ctx, "relPath('/Users/me/a', '/Users/me/a/b/c')"), "b/c");
   assert.equal(ev(ctx, "relPath('/', '/Users')"), null, "/ 는 상위로 치지 않는다");
+});
+
+// 폴더 머리 숫자 = 작업 중 · 열림 · 전체(2026-11-03 사장님)
+test("세션 목록 폴더 머리: 작업 중 · 열림 · 전체 세 숫자, 0 은 흐리게", async () => {
+  const ctx = await load();
+  const now = Math.floor(Date.now() / 1000);
+  const S = [
+    { session_id: "a", title: "가", cwd: "E:\\p", project_folder: "E--p", ended_at: "2026-11-03T05:00:00Z", runtime: { phase: "thinking", thinking_at: now }, live_terminal: true },
+    { session_id: "b", title: "나", cwd: "E:\\p\\s", project_folder: "E--p-s", ended_at: "2026-11-03T04:00:00Z", peer: { name: "x", status: "busy" } },
+    { session_id: "c", title: "다", cwd: "E:\\p", project_folder: "E--p", ended_at: "2026-11-03T03:00:00Z", peer: { name: "y", status: "idle" }, runtime: { phase: "ready", ready_at: now } },
+    { session_id: "d", title: "라", cwd: "E:\\p", project_folder: "E--p", ended_at: "2026-11-03T02:00:00Z" },
+    { session_id: "e", title: "마", cwd: "E:\\q", project_folder: "E--q", ended_at: "2026-11-03T01:00:00Z", runtime: { phase: "thinking", thinking_at: now } }];
+  ev(ctx, "SESSIONS = " + JSON.stringify(S));
+  const w = stubEl("div");
+  ctx.__w = w;
+  ev(ctx, "renderRows(__w, '')");
+  const cnt = w.children.filter((n) => String(n.className) === "ghead").map((h) => h.children.at(-1));
+  assert.deepEqual(cnt.map((c) => c.title), ["작업 중 2 · 열림 3 · 전체 4", "작업 중 1 · 열림 1 · 전체 1"],
+    "하위 폴더 세션도 묶음 숫자에 · 훅이 작업 중이면 피어가 없어도 열림으로 셈");
+  const nums = (c) => c.children.map((x) => [String(x.className), flat(x).at(-1).textContent]);
+  assert.deepEqual(nums(cnt[0]), [["gn busy", "2"], ["gn open", "3"], ["gn all", "4"]]);
+  ev(ctx, "SESSIONS.forEach(s => { delete s.runtime; delete s.peer; delete s.live_terminal; })");
+  const w2 = stubEl("div"); ctx.__w = w2; ev(ctx, "renderRows(__w, '')");
+  const c2 = w2.children.filter((n) => String(n.className) === "ghead")[0].children.at(-1);
+  assert.deepEqual(c2.children.map((x) => String(x.className)), ["gn busy zero", "gn open zero", "gn all"], "0 은 흐리게(전체는 그대로)");
 });
