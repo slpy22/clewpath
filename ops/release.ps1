@@ -29,7 +29,7 @@ param(
     [string]$CpUrl = "http://127.0.0.1:5200",
     [string]$HostUrl = "http://127.0.0.1:5100",
     [string]$DownloadBase = "https://clewpath.pyongso.com/cp/updates/download",
-    [string]$EnvFile = "D:/Work_Projects/018_whisper/util/.env",
+    [string]$EnvFile = "D:/Work_Projects/018_stt/util/.env",
     [string]$Python = "python",
     [string[]]$Platforms = @("win", "mac"),
     [string]$TunnelHost = "kisworker",
