@@ -24,33 +24,52 @@ from typing import Any
 
 _CACHE_TTL = 10.0          # PWA 목록 폴링 대비 CLI(실측 0.5s) 호출 절약
 _lock = threading.Lock()
-_cache: dict[str, Any] = {"at": 0.0, "list": []}
+_cache: dict[str, Any] = {"at": 0.0, "list": [], "ok": False}
+
+
+class Unavailable(Exception):
+    """실행 중 목록을 받지 못했다(claude 없음·시간 초과·옛 CLI·JSON 목록 아님)."""
 
 
 def _fetch() -> list[dict]:
+    """`claude agents --json` → 목록. 받지 못하면 Unavailable — '실행 중인 게 없다'(빈 목록)와 구분한다(2026-11-04)."""
     exe = shutil.which("claude")
     if not exe:
-        return []
+        raise Unavailable("claude 명령 없음")
     try:
-        out = subprocess.run([exe, "agents", "--json"], capture_output=True,
-                             timeout=15).stdout.decode("utf-8", "replace")
-        data = json.loads(out or "[]")
-        return data if isinstance(data, list) else []
-    except Exception:  # noqa: BLE001
-        return []
+        r = subprocess.run([exe, "agents", "--json"], capture_output=True, timeout=15)
+        data = json.loads(r.stdout.decode("utf-8", "replace"))
+    except Exception as e:  # noqa: BLE001  (시간 초과·빈 출력·JSON 아님)
+        raise Unavailable(str(e)) from e
+    if r.returncode != 0 or not isinstance(data, list):
+        raise Unavailable(f"rc={r.returncode}")
+    return data
 
 
 def snapshot(max_age: float = _CACHE_TTL) -> list[dict]:
-    """활성 세션 목록(대화형+백그라운드). 실패/미지원 CLI 는 빈 목록(기능 축소만)."""
+    """활성 세션 목록(대화형+백그라운드). 실패/미지원 CLI 는 빈 목록(기능 축소만) — 성공 여부는 available()."""
     with _lock:
         now = time.time()
         if now - _cache["at"] > max_age:
             try:
-                _cache["list"] = _fetch()
+                _cache["list"] = list(_fetch())
+                _cache["ok"] = True
             except Exception:  # noqa: BLE001  (어떤 실패도 기능 축소로만)
                 _cache["list"] = []
+                _cache["ok"] = False
             _cache["at"] = now
         return _cache["list"]
+
+
+def available(max_age: float = _CACHE_TTL) -> bool:
+    """마지막 조회가 성공했는가 — 성공했으면 목록에 없는 세션은 '어디에도 떠 있지 않다' 로 믿어도 된다.
+
+    실패(옛 CLI 등)면 화면이 훅 활동 시각으로 추정한다(externallyActive 의 2차). 2026-11-04 사장님: 방금 닫은 세션을
+    재개하자 'ClewPath 밖에서 사용 중' 확인 창이 떴다 — 실행 중 목록에 없는데도 10분 추정이 늘 돌았다.
+    """
+    snapshot(max_age)
+    with _lock:
+        return bool(_cache["ok"])
 
 
 def occupancy_map() -> dict[str, dict]:

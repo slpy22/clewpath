@@ -78,6 +78,14 @@ def _fresh_peer_cache():
     peers._cache["at"] = 0
 
 
+@pytest.fixture(autouse=True)
+def _peer_pids_alive(monkeypatch):
+    """시험의 가짜 피어 파일은 111·333 같은 없는 pid 를 쓴다 — 생존 확인(peers._gone)은 기본으로 끈다.
+    생존 확인 자체는 test_resume_gate.py 가 진짜 함수로 확인한다."""
+    from session_manager import peers
+    monkeypatch.setattr(peers, "_gone", lambda pid, peer: False)
+
+
 @pytest.fixture
 def fake_claude_home(tmp_path, monkeypatch):
     """가짜 ~/.claude 구조를 만들고 환경변수로 주입한다."""

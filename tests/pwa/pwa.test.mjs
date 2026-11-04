@@ -37,6 +37,20 @@ test("externallyActive: 피어 레지스트리·agents·훅 순서", () => {
   assert.equal(ctx.externallyActive({ runtime: { phase: "ready", active_at: now() - 3600 } }), false);
 });
 
+test("externallyActive: 실행 중 목록을 받아 왔으면 훅 시각으로 추정하지 않는다 · 끝난 세션은 제외(2026-11-04)", () => {
+  ev(ctx, "CLOCK_SKEW = 0");
+  const fresh = { phase: "ready", active_at: now() - 60 };
+  assert.equal(ctx.externallyActive({ agent_known: true, runtime: fresh }), false, "목록에 없음 = 어디에도 안 떠 있음");
+  assert.equal(ctx.externallyActive({ agent_known: false, runtime: fresh }), true, "목록을 못 받았으면 예전처럼 추정");
+  assert.equal(ctx.externallyActive({ agent_known: true, agent: { kind: "interactive" }, live_terminal: false }), true);
+  assert.equal(ctx.externallyActive({ agent_known: true, peer: { name: "w" }, live_terminal: false }), true);
+  assert.equal(ctx.externallyActive({ runtime: { phase: "ended", active_at: now() - 60 } }), false, "SessionEnd 도 active_at 을 갱신한다");
+  assert.equal(ctx.externallyActive({ runtime: { phase: "ready", active_at: now() - 60, gone_at: now() - 59 } }), false,
+    "ClewPath 가 끝낸 뒤로 신호 없음");
+  assert.equal(ctx.externallyActive({ runtime: { phase: "thinking", thinking_at: now() - 30, active_at: now() - 30, gone_at: now() - 60 } }), true,
+    "끝낸 뒤 다른 곳에서 다시 신호가 왔다");
+});
+
 test("tabEvKind / relIso: 배지 툴팁 문구", () => {
   assert.equal(ctx.tabEvKind({ role: "assistant", tools: ["Bash", "Read"] }), "도구 실행(Bash, Read)");
   assert.equal(ctx.tabEvKind({ role: "assistant", tools: ["a", "b", "c", "d"] }), "도구 실행(a, b, c 외)");

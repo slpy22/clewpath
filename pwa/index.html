@@ -2353,9 +2353,15 @@ function externallyActive(s){
   if(s.agent&&s.agent.kind==='interactive'&&!s.live_terminal) return true;
   // 1차-b(확정): 피어 레지스트리(~/.claude/sessions) — 살아 있는 대화형 세션은 여기 반드시 있다
   if(s.peer&&!s.live_terminal) return true;
-  // 2차(폴백): 훅 신선도 휴리스틱 - agents 데이터가 없는 환경(구 CLI 등)용
+  // 2차(폴백): 훅 신선도 휴리스틱 - agents 데이터가 없는 환경(구 CLI 등)용.
+  // 2026-11-04 사장님: 실행 중 목록을 받아 왔는데도(agent_known) 늘 돌아서, 방금 닫은 세션을 재개하면 10분 동안
+  // 이 확인 창이 떴다 → 목록을 받아 왔으면 1차가 답이다(목록에 없음 = 어디에도 안 떠 있음).
+  if(s.agent_known) return false;
   const rt=s.runtime;
   if(!rt||!rt.phase||s.live_terminal) return false;   // PTY 소유 시 재개=재접속이라 무관
+  // 끝난 세션: SessionEnd 훅(ended)도 active_at 을 갱신하고, ClewPath 가 프로세스를 끝냈으면(gone_at) 그 뒤 신호가 없다
+  if(rt.phase==='ended') return false;
+  if(typeof rt.gone_at==='number'&&rt.gone_at>=(rt.active_at||0)) return false;
   const now=Date.now()/1000+CLOCK_SKEW;
   const recent=(t,w)=>typeof t==='number'&&t>0&&(now-t)<w;
   const M=60;

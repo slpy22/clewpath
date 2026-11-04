@@ -48,6 +48,8 @@ def _read_all() -> list[dict]:
             sid = d.get("sessionId")
             if not isinstance(d, dict) or not sid:
                 continue
+            if _gone(d.get("pid"), {"proc_start": d.get("procStart"), "started_at": d.get("startedAt")}):
+                continue                                # 강제 종료로 남은 파일 — 떠 있는 세션이 아니다
             out.append({
                 "session_id": str(sid), "pid": d.get("pid"),
                 "name": str(d.get("name") or ""), "status": str(d.get("status") or ""),
@@ -61,6 +63,34 @@ def _read_all() -> list[dict]:
     except OSError:
         return out
     return out
+
+
+def _gone(pid, peer: dict) -> bool:
+    """레지스트리 파일은 있는데 그 프로세스는 이미 없다(또는 pid 가 다른 프로세스로 재사용됐다).
+
+    claude 는 끝날 때 자기 파일을 지우지만, 강제 종료(ClewPath 터미널 닫기·작업 관리자)면 지울 틈이 없다.
+    그대로 믿으면 그 세션이 'ClewPath 밖에서 사용 중' 으로 보여 재개 때 확인 창이 뜬다(2026-11-04 조사).
+    판별할 수 없으면(psutil 없음·권한 없음) 예전처럼 믿는다 — 떠 있는 세션을 없다고 잘못 보는 쪽이 더 위험하다.
+    """
+    try:
+        import psutil
+    except ImportError:
+        return False
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    try:
+        if not psutil.pid_exists(pid):
+            return True
+        ct = psutil.Process(pid).create_time()
+    except psutil.NoSuchProcess:
+        return True
+    except Exception:  # noqa: BLE001  AccessDenied 등 — 판별 불가
+        return False
+    return same_process(peer, {"create_time": ct}) is False
 
 
 def _remember(peers: list[dict]) -> None:

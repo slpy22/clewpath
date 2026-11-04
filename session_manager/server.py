@@ -1899,6 +1899,7 @@ def create_app() -> FastAPI:
         runtime = hooks.status_map()   # 훅이 채운 세션별 '지금' 상태
         # claude 공식 실시간 점유(대화형·bg) - 재개 잠금 예고/동시재개 판정의 1차 근거
         occupancy = agents.occupancy_map()
+        occupancy_ok = agents.available()   # 위 목록을 정말 받아 왔나(실패면 화면이 훅 시각으로 추정)
         # 피어 레지스트리(~/.claude/sessions): 우리 PTY 가 아닌 대화형 세션도 '떠 있음'(이름·idle/busy)
         peer_of = peers.peer_map()
         sessions = scanner.scan_all()
@@ -1984,6 +1985,8 @@ def create_app() -> FastAPI:
                 # 지금 돌고 있는 백그라운드 쉘·모니터 수(살아 있는 세션만, 없으면 None)
                 "bg": bg,
                 "agent": occupancy.get(s.session_id),
+                # 실행 중 목록(agent)을 정말 받아 왔나 — True 면 agent 가 비어 있을 때 '어디에도 안 떠 있음'(2026-11-04)
+                "agent_known": occupancy_ok,
                 # 이 세션의 PTY 가 지금 살아있는가(화면 유무 무관 - 재접속 대상)
                 "live_terminal": live_term,
                 # 지금 화면이 붙어 있는가 + 그 screen_id(v0.9.4 인계 확인창의 근거; 20초 폴링이라 참고값)
@@ -1996,7 +1999,7 @@ def create_app() -> FastAPI:
             out = out[:limit]
         # now: 클라이언트가 runtime 타임스탬프의 신선도를 판정할 때 서버 시계
         # 기준으로 보정하게 한다(폰과 PC 시계가 어긋나도 뱃지가 안 깨지게).
-        return {"total": len(out), "sessions": out, "now": int(time.time())}
+        return {"total": len(out), "sessions": out, "now": int(time.time()), "agents_ok": occupancy_ok}
 
     # ---- 외부 API v1: 일회성 fork 질의 (원본 불변, fork 자동삭제) ----
     @app.post("/api/v1/sessions/{session_id}/ask")

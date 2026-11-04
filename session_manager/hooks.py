@@ -285,13 +285,21 @@ def mark_gone(session_id: str, reason: str = "process_exit") -> bool:
     """세션 프로세스가 끝났다(ClewPath 터미널 종료·강제 종료 등). 응답 도중이었으면 '종료' 로 접는다.
 
     2026-10-06 실사고: 관리 세션이 RESULT 직후 워커 터미널을 내려 Stop 훅이 오지 않았고, 그 세션이
-    목록에서 몇 시간째 '작업중' 으로 보였다. 이미 ready/idle/ended 면 그대로 둔다(정상 종료의 기록 보존).
+    목록에서 몇 시간째 '작업중' 으로 보였다. 이미 ready/idle/ended 면 상태 이름은 그대로 둔다(정상 종료의 기록 보존).
+
+    상태와 상관없이 gone_at(프로세스가 끝난 시각)은 남긴다(2026-11-04 사장님: ClewPath 터미널을 닫으면 강제 종료라
+    SessionEnd 훅이 안 와서, 바로 재개하면 10분 동안 'ClewPath 밖에서 사용 중' 확인 창이 떴다). 화면은
+    gone_at ≥ active_at 이면 '그 뒤로 어디서도 신호가 없었다' = 떠 있지 않다로 본다.
     """
     _load_status_once()
     st = _STATUS.get(session_id)
-    if not st or st.get("phase") not in ACTIVE_PHASES:
+    if not st:
         return False
     now = int(time.time())
+    st["gone_at"] = now
+    if st.get("phase") not in ACTIVE_PHASES:
+        _persist_status()
+        return False
     st["phase"] = "ended"
     st["ended_at"] = now
     st["note"] = "응답 도중 프로세스 종료" if reason == "process_exit" else str(reason)[:200]
