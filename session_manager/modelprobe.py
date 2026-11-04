@@ -106,6 +106,10 @@ class Screen:
 
     def _csi(self, params: str, final: str) -> None:
         if params.startswith(("?", ">", "<", "=")):
+            # 대체 화면 들고 나기(전체 화면 표시 방식) — 새 판에서 다시 그리므로 비우고 시작한다(남은 글자가 섞이지 않게)
+            if params[1:] in ("1049", "1047", "47") and final in "hl":
+                self.g = [[" "] * self.cols for _ in range(self.rows)]
+                self.r = self.c = 0
             return
         nums = [int(x) if x.isdigit() else 0 for x in params.split(";")] if params else []
         a = (nums[0] if nums and nums[0] else 1)
@@ -133,6 +137,40 @@ class Screen:
             mode = nums[0] if nums else 0
             if mode in (2, 3):
                 self.g = [[" "] * self.cols for _ in range(self.rows)]
+            elif mode == 0 and 0 <= self.r < self.rows:     # 커서부터 화면 끝까지
+                self.g[self.r][self.c:] = [" "] * (self.cols - self.c)
+                for y in range(self.r + 1, self.rows):
+                    self.g[y] = [" "] * self.cols
+        elif final == "d":                                  # 줄 절대 위치
+            self.r = a - 1
+        elif final == "X" and 0 <= self.r < self.rows:      # 글자 지우기(커서 그대로)
+            row = self.g[self.r]
+            for x in range(self.c, min(self.cols, self.c + a)):
+                row[x] = " "
+        elif final in "P@" and 0 <= self.r < self.rows:     # 글자 빼기·끼우기
+            row = self.g[self.r]
+            if final == "P":
+                del row[self.c:self.c + a]
+                row.extend([" "] * (self.cols - len(row)))
+            else:
+                row[self.c:self.c] = [" "] * a
+                del row[self.cols:]
+        elif final in "LM" and 0 <= self.r < self.rows:     # 줄 끼우기·빼기
+            for _ in range(min(a, self.rows - self.r)):
+                if final == "L":
+                    self.g.insert(self.r, [" "] * self.cols)
+                    self.g.pop()
+                else:
+                    self.g.pop(self.r)
+                    self.g.append([" "] * self.cols)
+        elif final in "ST":                                 # 화면 올리기·내리기
+            for _ in range(min(a, self.rows)):
+                if final == "S":
+                    self.g.pop(0)
+                    self.g.append([" "] * self.cols)
+                else:
+                    self.g.pop()
+                    self.g.insert(0, [" "] * self.cols)
         self._clamp()
 
     def text(self) -> str:

@@ -1801,24 +1801,62 @@ def create_app() -> FastAPI:
             status = {"cap": 409, "exists": 409, "no_cwd": 404}.get(e.code, 400 if e.code.startswith("bad_") else 500)
             return JSONResponse({"error": e.code, "message": str(e)}, status_code=status)
 
-    # ---- 원격 권한 승인: 실행 중인 ClewPath 터미널의 권한 프롬프트에 키 주입 ----
+    # ---- 원격 선택(🔔·✋): ClewPath 터미널에 지금 떠 있는 선택 창 그대로 읽고 고른다(2026-11-04 사장님) ----
+    #      옛 고정 버튼(허용=1·계속 허용=2·거부=Esc)은 화면과 선택지가 달라 무엇이 골라질지 몰랐다(파일 쓰기의 2번 = accept edits 모드).
+    @app.get("/api/owner/sessions/{session_id}/prompt")
+    def owner_session_prompt(session_id: str):
+        from session_manager import hooks, termprompt
+        tr = termprompt.read(session_id)
+        meta = scanner.scan_one(session_id)
+        tool = termprompt.pending_tool(meta.jsonl_path) if meta else None
+        st = hooks.status_of(session_id) or {}
+        return {"terminal": bool(tr), "prompt": (tr or {}).get("prompt"), "tool": tool,
+                "phase": st.get("phase"), "note": st.get("note")}
+
     @app.post("/api/owner/sessions/{session_id}/respond")
     async def owner_session_respond(session_id: str, request: Request):
-        from session_manager import webterm
-        body = await request.json()
-        action = str((body or {}).get("action") or "")
-        # claude TUI 권한 다이얼로그: 숫자키 즉시 선택, Esc = 거부.
-        # (키맵은 claude 버전에 따라 바뀔 수 있음 - qa-checklist 에서 실물 검증)
-        keys = {"allow": "1", "allow_session": "2", "deny": "\x1b"}
-        if action not in keys:
-            return JSONResponse({"error": "action 은 allow/allow_session/deny"},
-                                status_code=400)
-        if not webterm.write_to(session_id, keys[action]):
+        from session_manager import hooks, termprompt, webterm
+        body = await request.json() or {}
+        action = str(body.get("action") or "")
+        if action not in ("choose", "cancel", "allow", "allow_session", "deny"):
+            return JSONResponse({"error": "action 은 choose/cancel(옛 allow/allow_session/deny)"}, status_code=400)
+        tr = termprompt.read(session_id)
+        if tr is None:
             return JSONResponse(
                 {"error": "no_terminal",
-                 "hint": "이 세션이 ClewPath 터미널(권한확인 유지 모드)로 실행 중일 때만 원격 승인이 가능합니다"},
+                 "hint": "이 세션이 ClewPath 터미널(권한확인 유지 모드)로 실행 중일 때만 원격 선택이 가능합니다"},
                 status_code=409)
-        return {"ok": True, "sent": action}
+        p = tr.get("prompt")
+        if action in ("cancel", "deny"):
+            if not p:
+                return JSONResponse({"error": "no_prompt", "hint": "지금 터미널에 선택 창이 없습니다"}, status_code=409)
+            key, after = "\x1b", "idle"
+        else:
+            if action == "choose":
+                try:
+                    n = int(body.get("n"))
+                except (TypeError, ValueError):
+                    return JSONResponse({"error": "n(선택 번호)이 필요합니다"}, status_code=400)
+                label = str(body.get("label") or "")
+            else:
+                # 옛 화면(앱에 묶인 PWA): 화면 글자로 맞는 선택지를 찾고, 없으면 보내지 않는다(엉뚱한 번호 방지)
+                want = (lambda c: c["label"] == "Yes") if action == "allow" else (
+                    lambda c: c["label"].startswith("Yes, and") or "don't ask again" in c["label"])
+                hit = next((c for c in (p or {}).get("choices") or [] if want(c)), None)
+                if not hit:
+                    return JSONResponse({"error": "changed", "prompt": p,
+                                         "hint": "터미널의 선택지가 이 버튼과 맞지 않습니다 — 화면을 새로 열어 고르세요"},
+                                        status_code=409)
+                n, label = hit["n"], hit["label"]
+            if not termprompt.same_choice(p, n, label) or (p or {}).get("multi"):
+                return JSONResponse({"error": "changed", "prompt": p,
+                                     "hint": "그 사이 터미널의 선택지가 바뀌었습니다 — 다시 확인하고 고르세요"}, status_code=409)
+            key = str(n)
+            after = "idle" if label.lower().startswith("no") else "thinking"
+        if not webterm.write_to(session_id, key):
+            return JSONResponse({"error": "no_terminal"}, status_code=409)
+        hooks.settle(session_id, after)
+        return {"ok": True, "sent": action, "n": None if key == "\x1b" else int(key)}
 
     # ---- 동봉 스킬 설치(워커 분배 스킬, v0.9.0) — 사용자 명시 동작(설정 버튼+확인창) 경유만 ----
     #      ~/.claude/skills 에 새 파일 생성: 불가침 원칙 예외(2026-09-23 승인). 로컬 전용.
@@ -1857,7 +1895,7 @@ def create_app() -> FastAPI:
     @app.get("/api/v1/sessions")
     def api_v1_sessions(q: str | None = None, label: str | None = None,
                         limit: int = 0, include_headless: bool = False):
-        from session_manager import agents, bgtasks, hooks, peers, webterm
+        from session_manager import agents, bgtasks, hooks, peers, termprompt, webterm
         runtime = hooks.status_map()   # 훅이 채운 세션별 '지금' 상태
         # claude 공식 실시간 점유(대화형·bg) - 재개 잠금 예고/동시재개 판정의 1차 근거
         occupancy = agents.occupancy_map()
@@ -1889,6 +1927,19 @@ def create_app() -> FastAPI:
                 continue
             live_term = webterm.has_terminal(s.session_id)
             bg = bgtasks.counts(s, peer_of.get(s.session_id))
+            # 권한·입력 대기가 터미널·원격에서 이미 풀렸으면 여기서 바로잡는다(훅엔 '골랐다' 사건이 없다 — 2026-11-04)
+            seen = None
+            if (runtime.get(s.session_id) or {}).get("phase") in termprompt.WAIT_PHASES:
+                try:
+                    seen = termprompt.reconcile(s.session_id, runtime.get(s.session_id), s.jsonl_path)
+                except Exception:  # noqa: BLE001
+                    seen = None
+            rt_out = bgtasks.hold_ready(hooks.effective(
+                runtime.get(s.session_id),
+                alive=bool(live_term or peer_of.get(s.session_id) or occupancy.get(s.session_id)),
+                quiet_s=(now_ts - s.mtime) if s.mtime else None, now=now_ts), bg)
+            if rt_out and seen and seen.get("prompt") and rt_out.get("phase") in termprompt.WAIT_PHASES:
+                rt_out = dict(rt_out, choices=True)    # ClewPath 터미널에 선택 창이 보인다 → 🔔 에서 그 선택지로 고를 수 있음
             # claude -p 단발 기록(자동 실행)은 목록에 싣지 않는다(2026-10-12 사장님: claude --resume 에도 안 나오는
             # 것이라 ClewPath 에서도 볼 필요 없음). 지금 살아 돌고 있는 것만 예외로 보인다.
             # 라벨로 찾을 때도 예외(0.24.1): 서빙 원본은 -p 로 만들어야 첫 턴부터 가드레일이 걸린다(NKBOT-7 실측) —
@@ -1929,10 +1980,7 @@ def create_app() -> FastAPI:
                 "resume_model": rec.get("model") or s.last_model,
                 # 훅 기반 실시간 상태(없으면 None). 신선도 판정은 화면 쪽 책임.
                 # 쉘·모니터가 남아 있으면 턴이 끝나도 '완료' 가 아니다(2026-10-12 사장님) → phase 'background'
-                "runtime": bgtasks.hold_ready(hooks.effective(
-                    runtime.get(s.session_id),
-                    alive=bool(live_term or peer_of.get(s.session_id) or occupancy.get(s.session_id)),
-                    quiet_s=(now_ts - s.mtime) if s.mtime else None, now=now_ts), bg),
+                "runtime": rt_out,
                 # 지금 돌고 있는 백그라운드 쉘·모니터 수(살아 있는 세션만, 없으면 None)
                 "bg": bg,
                 "agent": occupancy.get(s.session_id),

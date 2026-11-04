@@ -65,6 +65,8 @@ class _TermSession:
         self.started_at = time.time()
         self.last_input = 0.0           # 화면·원격 승인으로 키가 들어간 마지막 시각
         self.last_attach = 0.0          # 화면이 붙거나 떨어진 마지막 시각(보고 있던 것도 활동)
+        # PTY 크기(rows, cols) — 화면에 뜬 선택지를 서버에서 읽을 때 쓴다(termprompt). 화면이 크기를 보내기 전엔 None
+        self.size: tuple[int, int] | None = None
 
     def feed(self, data: str) -> None:
         self.chunks.append(data)
@@ -150,6 +152,16 @@ def write_to(session_id: str, data: str) -> bool:
     except Exception:  # noqa: BLE001
         _cleanup(sess)
         return False
+
+
+def snapshot(session_id: str) -> dict | None:
+    """살아 있는 PTY 의 최근 출력(버퍼 전부)·누적 길이·크기·마지막 입력 시각 — 화면에 뜬 선택지 읽기(termprompt)용. 없으면 None."""
+    sess = _get_live(session_id)
+    if sess is None:
+        return None
+    with sess.lock:
+        return {"text": "".join(sess.chunks), "total": sess.total_len, "size": sess.size,
+                "last_input": sess.last_input}
 
 
 def _get_live(key: str) -> _TermSession | None:
@@ -608,6 +620,7 @@ def _launch(key: str, session_id: str, argv: list[str], cwd: str, persist: bool,
         # 고아 방지는 브로커의 Job 이 맡는다(브로커가 죽으면 커널이 claude 를 함께 끝냄).
         proc = _broker_spawn(key, session_id, argv, cwd, persist=persist, cap=cap)
         sess = _TermSession(key, proc, persist=persist)
+        sess.size = (24, 80)                  # 브로커에 띄운 크기(_broker_spawn) — 화면이 붙으면 resize 로 바뀐다
         _ACTIVE[key] = sess
         _start_reader(sess)
         return sess
@@ -617,6 +630,7 @@ def _launch(key: str, session_id: str, argv: list[str], cwd: str, persist: bool,
         raise TermStartError("spawn_failed", f"터미널 시작 실패: {e}",
                              f"\r\n\x1b[31m[오류] 터미널 시작 실패: {e}\x1b[0m\r\n")
     sess = _TermSession(key, proc, persist=persist)
+    sess.size = (24, 80)
     # 고아 방지 3중: ① Job Object(커널 동반 종료 - Host 가 어떻게 죽든)
     # ② 자기 등록부(① 실패 대비 부팅 청소) ③ 정상 종료 shutdown_all
     osdep.guard_child(getattr(proc, "pid", None))
@@ -858,6 +872,7 @@ async def run_terminal(ws, session_id: str, skip_permissions: bool = True,
                         rejoined = False
                         sess.proc.setwinsize(rows, max(2, cols - 1))
                     sess.proc.setwinsize(rows, cols)
+                    sess.size = (rows, cols)
                 except Exception:  # noqa: BLE001
                     pass
     except Exception:  # noqa: BLE001  (WebSocketDisconnect 포함)

@@ -254,6 +254,26 @@ def update_from_event(payload: dict) -> None:
     _persist_status()   # 재기동에도 상태 유지(스로틀 내장)
 
 
+def settle(session_id: str, phase: str) -> bool:
+    """권한·입력 대기가 풀렸다(터미널·원격에서 골랐다) → phase 로 옮긴다(2026-11-04, termprompt.reconcile·원격 응답).
+
+    대기 상태가 아니면 그대로 둔다 — 그 사이 온 훅 사건(Stop 등)이 더 정확하다.
+    """
+    _load_status_once()
+    st = _STATUS.get(session_id)
+    if not st or st.get("phase") not in ("permission", "waiting"):
+        return False
+    now = int(time.time())
+    st["phase"] = phase
+    st["active_at"] = now
+    if phase == "thinking":
+        st["thinking_at"] = now
+    st.pop("permission_at", None)
+    st.pop("note", None)
+    _persist_status()
+    return True
+
+
 # 응답 도중 상태 — 이 상태로 프로세스가 사라지면 Stop/SessionEnd 훅이 오지 않아 '작업중' 이 영영 남는다.
 ACTIVE_PHASES = ("thinking", "permission", "waiting")
 # 프로세스 흔적이 없고 jsonl 도 이만큼 조용하면 '응답 도중 종료' 로 본다(실행 중 claude 는 레지스트리·PTY·bg 점유 중

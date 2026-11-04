@@ -417,6 +417,19 @@
     border:1px solid color-mix(in srgb,var(--accent) 35%,transparent);
     border-radius:999px;padding:3px 11px;font-variant-numeric:tabular-nums}
   /* 폴더 머리 숫자 = 작업 중 · 열림 · 전체(2026-11-03 사장님) — 0 은 흐리게 */
+  /* ✋ 터미널 선택 창(2026-11-04) — 터미널 선택지 그대로, 번호 · 글자 · 덧말 */
+  .apv .apv-tool{font-family:var(--mono);font-size:.78rem;color:var(--ink2);background:var(--accent-wash);border-radius:8px;
+    padding:6px 9px;margin-bottom:8px;word-break:break-all;max-height:6.5em;overflow:auto}
+  .apv .apv-q{font-weight:650;margin:2px 0 10px}
+  .apv .apv-c{display:flex;align-items:flex-start;gap:10px;text-align:left;margin-top:6px}
+  .apv .apv-c.no{color:#f85149}
+  .apv .apv-n{flex:none;min-width:1.6em;height:1.6em;border-radius:6px;background:rgba(255,255,255,.18);display:inline-flex;
+    align-items:center;justify-content:center;font-weight:700;font-variant-numeric:tabular-nums}
+  .apv .apv-l{display:flex;flex-direction:column;gap:2px;min-width:0;word-break:break-word}
+  .apv .apv-l small{opacity:.75;font-size:.75rem}
+  .apv .apv-ro{padding:4px 2px;color:var(--ink2)}
+  .apv .apv-foot{margin-top:8px;font-size:.72rem;color:var(--muted)}
+  .apv .apv-st{margin-top:8px;color:var(--ink2);min-height:1em}
   .ghead .gcount.g3{display:flex;align-items:center;gap:7px;padding:3px 10px}
   .ghead .gcount .gn{display:inline-flex;align-items:center;gap:3px}
   .ghead .gcount .gn i{font-style:normal;font-size:.62rem;line-height:1}
@@ -2649,37 +2662,66 @@ function showBgHold(s){
   openModal('🤖 백그라운드 에이전트 사용 중', body, [go]);
 }
 
-// ---- 원격 권한 승인 (권한 대기 세션 -> PTY 키 주입) ----
+// ---- 원격 선택(✋·🔔) — ClewPath 터미널에 지금 떠 있는 선택 창을 그대로 보여 주고 그 번호를 보낸다(2026-11-04 사장님) ----
+// 옛 고정 버튼(허용·계속 허용·거부 = 1·2·Esc)은 터미널 선택지와 달라 무엇이 골라질지 몰랐다. 서버가 고를 때 다시 읽어 같은 글자일 때만 보낸다.
 const _approveBusy=new Set();
+const TOOL_KO={Bash:'명령 실행',PowerShell:'명령 실행',Write:'파일 만들기',Edit:'파일 고치기',MultiEdit:'파일 고치기',NotebookEdit:'노트북 고치기',
+  WebFetch:'웹 읽기',WebSearch:'웹 검색',AskUserQuestion:'질문',ExitPlanMode:'계획 확인',Task:'하위 에이전트',Agent:'하위 에이전트'};
 function showApprove(s){
-  const rt=s.runtime||{};
-  const body=el('div');
-  body.appendChild(el('p',null,'세션이 도구 실행 권한을 기다리고 있습니다.'));
-  if(rt.note) body.appendChild(el('div','cwd',rt.note));
-  const status=el('div'); status.style.cssText='margin-top:8px;color:var(--ink2)';
-  const act=async(action,label)=>{
-    if(_approveBusy.has(s.session_id)) return;      // 이중 주입 방지
+  const sid=encodeURIComponent(s.session_id);
+  const body=el('div','apv'), box=el('div'), status=el('div','apv-st');
+  body.appendChild(box); body.appendChild(status);
+  const line=(cls,txt)=>{ const d=el('div',cls,txt); box.appendChild(d); return d; };
+  const openTerm=(label)=>{ const b=el('button','btn ghost full',label||'🖥 터미널 열기'); b.style.marginTop='8px';
+    b.onclick=()=>{ closeModal(); jumpToSession(continuedTarget(s)); }; box.appendChild(b); };
+  const act=async(payload,label)=>{
+    if(_approveBusy.has(s.session_id)) return;      // 이중 전송 방지
     _approveBusy.add(s.session_id);
-    status.textContent=label+' 전송 중…';
+    status.textContent=label+' 보내는 중…';
     try{
-      await T.api('POST',`/api/owner/sessions/${encodeURIComponent(s.session_id)}/respond`,{body:{action}});
-      closeModal(); toast(label+' 했습니다');
+      await T.api('POST',`/api/owner/sessions/${sid}/respond`,{body:payload});
+      closeModal(); toast(label+' 보냈습니다');
       if(LIST_CTX) setTimeout(()=>LIST_CTX.rerender(), 400);
     }catch(e){
-      if(e&&e.json&&e.json.error==='no_terminal')
-        status.textContent='이 세션은 ClewPath 터미널(권한확인 유지)로 실행 중이 아니라 원격 승인이 안 됩니다. PC 화면에서 응답해 주세요.';
-      else status.textContent='실패: '+e.message;
+      const j=e&&e.json;
+      if(j&&j.error==='changed'){ status.textContent='그 사이 터미널의 선택지가 바뀌었습니다 — 새로 읽었으니 다시 고르세요'; load(true); }
+      else if(j&&j.error==='no_prompt'){ status.textContent='지금 터미널에 선택 창이 없습니다'; load(true); }
+      else if(j&&j.error==='no_terminal') status.textContent='ClewPath 터미널로 실행 중인 세션이 아니라 여기서 고를 수 없습니다';
+      else status.textContent='실패: '+(e&&e.message||e);
     }finally{ _approveBusy.delete(s.session_id); }
   };
-  const b1=el('button','btn full','✅ 허용');
-  b1.onclick=()=>act('allow','허용');
-  const b2=el('button','btn ghost full','이 세션에서 계속 허용');
-  b2.style.marginTop='8px'; b2.onclick=()=>act('allow_session','계속 허용');
-  const b3=el('button','btn ghost full','❌ 거부');
-  b3.style.cssText='margin-top:8px;color:#f85149';
-  b3.onclick=()=>act('deny','거부');
-  body.appendChild(status);
-  openModal('✋ 권한 승인', body, [b1,b2,b3]);
+  async function load(keepStatus){
+    box.innerHTML=''; if(!keepStatus) status.textContent='';
+    line('cwd','터미널 화면을 읽는 중…');
+    let r;
+    try{ r=await T.api('GET',`/api/owner/sessions/${sid}/prompt`); }
+    catch(e){ box.innerHTML=''; line('cwd','읽지 못했습니다: '+(e&&e.message||e)); openTerm(); return; }
+    box.innerHTML='';
+    if(r.tool) line('apv-tool',(TOOL_KO[r.tool.name]||r.tool.name)+(r.tool.detail?' · '+r.tool.detail:''));
+    if(!r.terminal){
+      line('apv-q','이 세션은 ClewPath 터미널로 실행 중이 아니라 여기서 고를 수 없습니다.');
+      line('cwd','세션을 띄운 그 화면(PC 의 터미널)에서 고르세요.'); return; }
+    const p=r.prompt;
+    if(!p){ line('apv-q','지금 터미널에 선택 창이 없습니다.'); line('cwd','이미 골랐거나 아직 화면에 그리는 중입니다.');
+      const rb=el('button','btn ghost full','↻ 다시 읽기'); rb.onclick=()=>load(); box.appendChild(rb); openTerm(); return; }
+    line('apv-q',p.question||'터미널이 고르기를 기다립니다');
+    if(p.multi){ line('cwd','여러 개를 고르는 질문이라 터미널에서 고르세요.');
+      for(const c of p.choices) line('apv-ro',c.n+'. '+c.label);
+      openTerm('🖥 터미널에서 고르기'); return; }
+    for(const c of p.choices){
+      const b=el('button','btn full apv-c'+(/^no\b/i.test(c.label)?' no':''));
+      b.appendChild(el('span','apv-n',String(c.n)));
+      const t=el('span','apv-l'); t.appendChild(el('span',null,c.label)); if(c.more) t.appendChild(el('small',null,c.more));
+      b.appendChild(t); b.title='터미널에 '+c.n+' 을(를) 보냅니다';
+      b.onclick=()=>act({action:'choose',n:c.n,label:c.label},c.n+'번');
+      box.appendChild(b); }
+    const esc=el('button','btn ghost full','Esc — 취소'); esc.style.marginTop='8px'; esc.onclick=()=>act({action:'cancel'},'취소(Esc)');
+    box.appendChild(esc);
+    if(p.footer) line('apv-foot','터미널 안내: '+p.footer);
+    openTerm();
+  }
+  openModal('✋ 터미널 선택', body, []);
+  return load();
 }
 // 옛 줄(continued-in) → 목록에 있는 이어받은 세션으로 따라간다(최대 8홉, 없으면 원래 것)
 function continuedTarget(s){
@@ -7090,7 +7132,8 @@ async function showTodo(){
   if(t.perm.length){ sec('perm','권한 대기',t.perm.length);
     for(const s of t.perm) box.appendChild(todoItem('perm','✋',sessLabel(s),fold(s)+' · 도구 사용 허락 필요',todoAgo(rt(s,'permission_at')),()=>showApprove(s))); }
   if(t.wait.length){ sec('wait','입력 대기',t.wait.length);
-    for(const s of t.wait) box.appendChild(todoItem('wait','💬',sessLabel(s),fold(s)+' · 답을 기다림',todoAgo(rt(s,'waiting_at')),()=>jumpToSession(s))); }
+    for(const s of t.wait){ const ch=!!(s.runtime&&s.runtime.choices);   // 터미널에 선택 창이 보이면 여기서 그 선택지로 고른다
+      box.appendChild(todoItem('wait','💬',sessLabel(s),fold(s)+(ch?' · 선택지가 떠 있음':' · 답을 기다림'),todoAgo(rt(s,'waiting_at')),()=>ch?showApprove(s):jumpToSession(s))); } }
   if(t.gone.length){ sec('gone','곧 지워질 세션',t.gone.length);
     for(const s of t.gone){ const d=cleanupLeft(s);
       box.appendChild(todoItem('gone','⏳',sessLabel(s),fold(s)+' · claude 보관 기간 끝',cleanupText(s).replace(' 지워짐',''),
