@@ -372,20 +372,25 @@ from types import SimpleNamespace as NS
 
 @contextlib.contextmanager
 def _child_conn(hold_in_grandchild=False):
-    """루프백 서버 + 자식 프로세스가 연결. (서버 포트, 클라이언트 포트, 자식 pid). hold_in_grandchild 면 손주도 그 소켓을 물려받는다(POSIX)."""
+    """루프백 서버 + 자식 프로세스가 연결. (서버 포트, 클라이언트 포트, 연결을 연 프로세스 pid). hold_in_grandchild 면 손주도 그 소켓을 물려받는다(POSIX).
+
+    pid 는 Popen 의 pid 가 아니라 그 프로세스가 스스로 알린 os.getpid() 다(2026-11-04). Windows 의 venv 파이썬
+    (.venv/Scripts/python.exe)은 실제 인터프리터를 자식으로 한 번 더 띄우는 실행기라, Popen pid(실행기)와 소켓 주인(자식)이 다르다.
+    출시 절차는 PATH 의 진짜 python 으로 돌아 통과하고 venv 로 돌리면 3건이 실패하던 원인.
+    """
     srv = socket.socket()
     srv.bind(("127.0.0.1", 0))
     srv.listen(1)
     port = srv.getsockname()[1]
-    code = ("import socket,subprocess,sys,time;s=socket.create_connection(('127.0.0.1',%d));"
+    code = ("import os,socket,subprocess,sys,time;s=socket.create_connection(('127.0.0.1',%d));"
             "g=subprocess.Popen([sys.executable,'-c','import time;time.sleep(5)'],pass_fds=(s.fileno(),)) if %r else None;"
-            "print(s.getsockname()[1],flush=True);time.sleep(5)" % (port, hold_in_grandchild))
+            "print(s.getsockname()[1],os.getpid(),flush=True);time.sleep(5)" % (port, hold_in_grandchild))
     p = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True)
     conn = None
     try:
         conn, _ = srv.accept()
-        cport = int(p.stdout.readline())
-        yield port, cport, p.pid
+        cport, owner = (int(x) for x in p.stdout.readline().split())
+        yield port, cport, owner
     finally:
         if conn:
             conn.close()
