@@ -12,13 +12,11 @@ labels 사이드카와 같은 방식: 데이터 폴더의 JSON 하나, 원본 js
 from __future__ import annotations
 
 import json
-import os
 import secrets
-import tempfile
 import threading
 from datetime import datetime, timezone
 
-from session_manager import config
+from session_manager import config, store
 
 # 그룹 알림 기본값. sub_start 는 호출이 잦으면 시끄러워 기본 off.
 # error = 관리 세션의 하위 호출(claude -p --resume)이 오류로 끝남 — 훅이 아니라
@@ -38,34 +36,28 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+# 2026-11-05 데이터 저장 정리(R1): 정본은 상태 DB(legacy_monitor_groups 표), monitor_groups.json 은 옛 판용 거울.
+store.register(store.Doc(
+    name="monitor_groups", file=lambda: groups_file(),
+    colls=[store.Coll("legacy_monitor_groups", "groups", ("id",))],
+    empty=lambda: {"version": 1, "groups": {}},
+    dump=lambda d: json.dumps(d, ensure_ascii=False, indent=2),
+    valid=lambda d: isinstance(d, dict) and isinstance(d.get("groups"), dict)))
+
+
 def _load() -> dict:
-    path = groups_file()
-    if not path.exists():
-        return {"version": 1, "groups": {}}
     try:
-        with path.open(encoding="utf-8") as f:
-            data = json.load(f)
-        if not isinstance(data, dict) or not isinstance(data.get("groups"), dict):
-            return {"version": 1, "groups": {}}
-        return data
-    except Exception:  # noqa: BLE001  손상 시에도 죽지 않음(원본 세션과 무관)
+        data = store.read_doc("monitor_groups")
+    except store.StoreUnavailable:  # 손상 시에도 죽지 않음(원본 세션과 무관)
         return {"version": 1, "groups": {}}
+    if not isinstance(data, dict) or not isinstance(data.get("groups"), dict):
+        return {"version": 1, "groups": {}}
+    return data
 
 
 def _save(data: dict) -> None:
     """_LOCK 아래서 부른다. 임시 파일은 쓰기마다 고유 이름(같은 폴더) — 다른 프로세스가 같은 파일을 써도 서로의 임시 파일을 덮지 않는다."""
-    path = groups_file()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, path)  # 원자적 교체
-    finally:
-        try:
-            os.unlink(tmp)       # 교체됐으면 이미 없다 — 실패한 경우의 찌꺼기만 치운다
-        except OSError:
-            pass
+    store.save_doc("monitor_groups", data)       # 거울은 store.write_atomic(고유 임시 파일 → os.replace, 찌꺼기 정리)
 
 
 def norm_notify(n) -> dict:

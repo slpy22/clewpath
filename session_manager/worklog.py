@@ -11,15 +11,20 @@ claude 가 보관 기간(기본 30일)이 지나 jsonl 을 지워도 장부는 �
 
 정기 작업 'worklog'(5분)가 한 번에 세션당 16MB·전체 64MB 만 읽어 이어 간다(처음 채우기는 여러 번에 나눠서).
 읽기 위치는 완성된 줄 끝에만 두고, 파일 앞부분이 바뀌거나(첫 4KB 서명) 줄어들면 그 세션을 처음부터 다시 접는다.
+
+2026-11-05 데이터 저장 정리(R1, 크로스체크 O3): 장부는 상태 DB 의 영구 표(worklog_ws·worklog_turns)다 — 다시 만들 수 있는
+캐시로 내리지 않는다(원본 jsonl 이 지워진 뒤엔 다시 만들 수 없어서). 옛 worklog.db 는 legacy_import 가 합친다(되돌림 뒤 포함).
+쓰기는 store 의 쓰기 연결 하나로 세션마다 짧은 트랜잭션, 읽기는 읽기 연결.
 """
 from __future__ import annotations
 
 import hashlib
 import json
-import sqlite3
 import threading
 import time
 from pathlib import Path
+
+from session_manager import store
 
 PER_SESSION_BYTES = 16 * 1024 * 1024
 PER_RUN_BYTES = 64 * 1024 * 1024
@@ -29,30 +34,11 @@ _HEAD = 4096
 _SIG = 64
 _lock = threading.Lock()
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS ws(
-  session_id TEXT PRIMARY KEY, path TEXT, cwd TEXT, title TEXT,
-  off INTEGER NOT NULL DEFAULT 0, head TEXT, sig TEXT, n INTEGER NOT NULL DEFAULT 0,
-  last_ts INTEGER, gone_at INTEGER, updated INTEGER);
-CREATE TABLE IF NOT EXISTS turns(
-  session_id TEXT NOT NULL, n INTEGER NOT NULL, ts INTEGER, request TEXT, result TEXT, result_ts INTEGER,
-  PRIMARY KEY(session_id, n));
-CREATE INDEX IF NOT EXISTS turns_ts ON turns(ts);
-"""
+# 표 정의는 store 형식 6(worklog_ws·worklog_turns). 옛 worklog.db 의 ws·turns 와 열이 같다(+ pc_id).
 
 
-def _db_file() -> Path:
-    from session_manager import config
-    return config.data_dir() / "worklog.db"
-
-
-def _connect() -> sqlite3.Connection:
-    f = _db_file()
-    f.parent.mkdir(parents=True, exist_ok=True)
-    c = sqlite3.connect(str(f), timeout=10)
-    c.row_factory = sqlite3.Row
-    c.executescript(_SCHEMA)
-    return c
+def _reader():
+    return store.reader()
 
 
 def _h(b: bytes) -> str:
@@ -96,13 +82,13 @@ def _read(path: Path, start: int, n: int) -> bytes:
 def _fold(c, sid: str, path: Path, budget: int) -> int:
     """한 세션을 이어 접는다 → 읽은 바이트 수."""
     from session_manager import teamlog
-    row = c.execute("SELECT * FROM ws WHERE session_id=?", (sid,)).fetchone()
+    row = c.execute("SELECT * FROM worklog_ws WHERE session_id=?", (sid,)).fetchone()
     size = path.stat().st_size
     head = _h(_read(path, 0, _HEAD))
     off, n = (row["off"], row["n"]) if row else (0, 0)
     if row and (size < off or row["head"] != head
                 or (off >= _SIG and row["sig"] != _h(_read(path, off - _SIG, _SIG)))):
-        c.execute("DELETE FROM turns WHERE session_id=?", (sid,))      # 다시 쓰인 파일 → 처음부터
+        c.execute("DELETE FROM worklog_turns WHERE session_id=?", (sid,))      # 다시 쓰인 파일 → 처음부터
         off, n = 0, 0
     if size <= off:
         return 0
@@ -125,19 +111,19 @@ def _fold(c, sid: str, path: Path, budget: int) -> int:
         human = teamlog._human_text(rec)
         if human:
             n += 1
-            c.execute("INSERT OR REPLACE INTO turns(session_id,n,ts,request,result,result_ts) VALUES(?,?,?,?,NULL,NULL)",
+            c.execute("INSERT OR REPLACE INTO worklog_turns(session_id,n,ts,request,result,result_ts) VALUES(?,?,?,?,NULL,NULL)",
                       (sid, n, ts, _clip(human, REQ_MAX)))
             last_ts = ts or last_ts
             continue
         if n:
             ans = _answer_text(rec)
             if ans:
-                c.execute("UPDATE turns SET result=?, result_ts=? WHERE session_id=? AND n=?",
+                c.execute("UPDATE worklog_turns SET result=?, result_ts=? WHERE session_id=? AND n=?",
                           (_clip(ans, RES_MAX), ts, sid, n))
                 last_ts = ts or last_ts
     off += len(done)
     sig = _h(_read(path, off - _SIG, _SIG)) if off >= _SIG else None
-    c.execute("INSERT INTO ws(session_id,path,off,head,sig,n,last_ts,updated) VALUES(?,?,?,?,?,?,?,?)"
+    c.execute("INSERT INTO worklog_ws(session_id,path,off,head,sig,n,last_ts,updated) VALUES(?,?,?,?,?,?,?,?)"
               " ON CONFLICT(session_id) DO UPDATE SET path=excluded.path, off=excluded.off, head=excluded.head,"
               " sig=excluded.sig, n=excluded.n, last_ts=excluded.last_ts, updated=excluded.updated, gone_at=NULL",
               (sid, str(path), off, head, sig, n, last_ts, int(time.time())))
@@ -160,38 +146,46 @@ def collect(metas=None, run_budget: int = PER_RUN_BYTES, per_session: int = PER_
     read = touched = 0
     behind = 0
     with _lock:
-        c = _connect()
+        r = _reader()
         try:
-            known = {r["session_id"]: r for r in c.execute("SELECT session_id, off FROM ws")}
+            known = {x["session_id"]: x["off"] for x in r.execute("SELECT session_id, off FROM worklog_ws")}
+        finally:
+            r.close()
+        todo = []
+        with store.tx() as w:                                  # 제목·폴더 갱신은 한 트랜잭션
             for m in live:
                 p = Path(m.jsonl_path)
                 if not p.exists():
                     continue
-                c.execute("UPDATE ws SET cwd=?, title=? WHERE session_id=?", (m.cwd, _title(m, recs), m.session_id))
-                k = known.get(m.session_id)
-                if k and k["off"] == p.stat().st_size:
+                w.execute("UPDATE worklog_ws SET cwd=?, title=? WHERE session_id=?", (m.cwd, _title(m, recs), m.session_id))
+                if m.session_id in known and known[m.session_id] == p.stat().st_size:
                     continue                                   # 그대로(줄어들었으면 _fold 가 처음부터 다시 접는다)
-                if read >= run_budget:
-                    behind += 1
-                    continue
-                got = _fold(c, m.session_id, p, min(per_session, run_budget - read))
-                c.execute("UPDATE ws SET cwd=?, title=? WHERE session_id=?", (m.cwd, _title(m, recs), m.session_id))
-                c.commit()
-                read += got
-                touched += 1 if got else 0
-                k2 = c.execute("SELECT off FROM ws WHERE session_id=?", (m.session_id,)).fetchone()
-                if k2 and k2["off"] < p.stat().st_size - 1:
-                    behind += 1
-            now = int(time.time())
-            present = {m.session_id for m in metas}
-            gone = [sid for sid in known if sid not in present]
-            for sid in gone:
-                c.execute("UPDATE ws SET gone_at=COALESCE(gone_at, ?) WHERE session_id=?", (now, sid))
-            c.commit()
-            total = c.execute("SELECT COUNT(*) FROM turns").fetchone()[0]
-            nses = c.execute("SELECT COUNT(*) FROM ws").fetchone()[0]
+                todo.append((m, p))
+        for m, p in todo:
+            if read >= run_budget:
+                behind += 1
+                continue
+            with store.tx() as w:                              # 세션 하나 = 짧은 트랜잭션 하나(다른 쓰기를 오래 막지 않게)
+                got = _fold(w, m.session_id, p, min(per_session, run_budget - read))
+                w.execute("UPDATE worklog_ws SET cwd=?, title=? WHERE session_id=?", (m.cwd, _title(m, recs), m.session_id))
+                k2 = w.execute("SELECT off FROM worklog_ws WHERE session_id=?", (m.session_id,)).fetchone()
+            read += got
+            touched += 1 if got else 0
+            if k2 and k2["off"] < p.stat().st_size - 1:
+                behind += 1
+        now = int(time.time())
+        present = {m.session_id for m in metas}
+        gone = [sid for sid in known if sid not in present]
+        if gone:
+            with store.tx() as w:
+                for sid in gone:
+                    w.execute("UPDATE worklog_ws SET gone_at=COALESCE(gone_at, ?) WHERE session_id=?", (now, sid))
+        r = _reader()
+        try:
+            total = r.execute("SELECT COUNT(*) FROM worklog_turns").fetchone()[0]
+            nses = r.execute("SELECT COUNT(*) FROM worklog_ws").fetchone()[0]
         finally:
-            c.close()
+            r.close()
     summary = f"세션 {nses}개 · 요청 {total}건 기록" + (f" · {touched}개 새로 읽음" if touched else "") \
         + (f" · {behind}개 아직 읽는 중" if behind else "")
     return {"read_bytes": read, "touched": touched, "behind": behind, "sessions": nses, "turns": total, "summary": summary}
@@ -221,9 +215,9 @@ def brief(days: float = 2, per_session: int = 3, limit: int = 40) -> dict:
     rt_map, pmap = hooks.status_map(), peers.peer_map()
     metas = {m.session_id: m for m in scanner.scan_all()}
     with _lock:
-        c = _connect()
+        c = _reader()
         try:
-            rows = c.execute("SELECT * FROM ws WHERE last_ts>=? ORDER BY last_ts DESC LIMIT ?", (since, int(limit))).fetchall()
+            rows = c.execute("SELECT * FROM worklog_ws WHERE last_ts>=? ORDER BY last_ts DESC LIMIT ?", (since, int(limit))).fetchall()
             out = []
             seen = set()
             for r in rows:
@@ -233,7 +227,7 @@ def brief(days: float = 2, per_session: int = 3, limit: int = 40) -> dict:
             for sid, st in rt_map.items():
                 if sid in seen or (st or {}).get("phase") not in ("permission", "waiting"):
                     continue
-                r = c.execute("SELECT * FROM ws WHERE session_id=?", (sid,)).fetchone()
+                r = c.execute("SELECT * FROM worklog_ws WHERE session_id=?", (sid,)).fetchone()
                 if r:
                     v = _sess_view(c, r, per_session, rt_map, pmap, metas, now)
                     if v["state"]["phase"] in ("permission", "waiting"):
@@ -247,7 +241,7 @@ def brief(days: float = 2, per_session: int = 3, limit: int = 40) -> dict:
 def _sess_view(c, r, per_session, rt_map, pmap, metas, now) -> dict:
     from session_manager import retention
     sid = r["session_id"]
-    turns = c.execute("SELECT n,ts,request,result,result_ts FROM turns WHERE session_id=? ORDER BY n DESC LIMIT ?",
+    turns = c.execute("SELECT n,ts,request,result,result_ts FROM worklog_turns WHERE session_id=? ORDER BY n DESC LIMIT ?",
                       (sid, int(per_session))).fetchall()
     m = metas.get(sid)
     return {"session_id": sid, "title": r["title"], "cwd": r["cwd"], "last_ts": r["last_ts"], "turns_total": r["n"],
@@ -265,12 +259,12 @@ def _short(t, n):
 
 def session_turns(session_id: str, offset: int = 0, limit: int = 50) -> dict:
     with _lock:
-        c = _connect()
+        c = _reader()
         try:
-            r = c.execute("SELECT * FROM ws WHERE session_id=?", (session_id,)).fetchone()
+            r = c.execute("SELECT * FROM worklog_ws WHERE session_id=?", (session_id,)).fetchone()
             if not r:
                 return {"session_id": session_id, "found": False, "turns": []}
-            rows = c.execute("SELECT n,ts,request,result,result_ts FROM turns WHERE session_id=? ORDER BY n LIMIT ? OFFSET ?",
+            rows = c.execute("SELECT n,ts,request,result,result_ts FROM worklog_turns WHERE session_id=? ORDER BY n LIMIT ? OFFSET ?",
                              (session_id, max(1, min(int(limit), 200)), max(0, int(offset)))).fetchall()
             return {"session_id": session_id, "found": True, "title": r["title"], "cwd": r["cwd"], "turns_total": r["n"],
                     "gone_at": r["gone_at"], "turns": [dict(x) for x in rows]}
@@ -284,11 +278,11 @@ def search(q: str, limit: int = 30) -> dict:
         return {"items": []}
     like = "%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
     with _lock:
-        c = _connect()
+        c = _reader()
         try:
             rows = c.execute(
-                "SELECT t.session_id, t.n, t.ts, t.request, t.result, w.title, w.cwd, w.gone_at FROM turns t"
-                " JOIN ws w ON w.session_id=t.session_id"
+                "SELECT t.session_id, t.n, t.ts, t.request, t.result, w.title, w.cwd, w.gone_at FROM worklog_turns t"
+                " JOIN worklog_ws w ON w.session_id=t.session_id"
                 " WHERE t.request LIKE ? ESCAPE '\\' OR t.result LIKE ? ESCAPE '\\' ORDER BY t.ts DESC LIMIT ?",
                 (like, like, max(1, min(int(limit), 200)))).fetchall()
         finally:

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,17 @@ _MAX_SESSIONS = 300
 _PERSIST_MIN_INTERVAL = 2.0     # 저장 스로틀(초) - 이벤트 폭주 시 디스크 보호
 _last_persist = 0.0
 _persist_loaded = False
+# 2026-11-05 데이터 저장 정리(R1, 설계 D2): 정본은 상태 DB(session_runtime 표), hooks-status.json 은 옛 판용 거울.
+# 훅 처리(이벤트 루프 위)는 메모리만 바꾸고 바로 답한다 — DB 잠금을 기다리지 않는다. 쓰기는
+#   ① 마지막 저장 뒤 2초가 지났고 쓰기 잠금이 비어 있으면 그 자리에서 한 번(기다리지 않음 — 비어 있지 않으면 ②로)
+#   ② 아니면 쓰기 스레드가 2초마다 바뀐 세션 행만 한 트랜잭션으로, Host 종료 때 한 번 더(flush).
+# 강제 종료 때 잃는 것은 최대 2초 분량(전과 같음 — 다음 훅이 바로잡는다).
+_mu = threading.Lock()              # _STATUS 고치기·사본 뜨기(짧게만 쥔다)
+_dirty: set[str] = set()
+_removed: set[str] = set()
+_dirty_db: str | None = None        # 바뀐 내용이 속한 상태 DB(데이터 폴더가 바뀌면 옛 것은 버린다)
+_flusher: threading.Thread | None = None
+_flusher_restarts = 0
 
 
 def _status_path():
@@ -46,34 +58,120 @@ def _status_path():
     return _cfg.data_dir() / "hooks-status.json"
 
 
+def _doc():
+    from session_manager import store
+    if "hooks" not in store.docs():
+        store.register(store.Doc(
+            name="hooks", file=lambda: _status_path(),
+            colls=[store.Coll("session_runtime", None, ("session_id",), pc=True,
+                              derive=lambda st: {"phase": st.get("phase"), "active_at": st.get("active_at"),
+                                                 "gone_at": st.get("gone_at")} if isinstance(st, dict) else {})],
+            empty=dict, dump=lambda d: json.dumps(d, ensure_ascii=False), valid=lambda d: isinstance(d, dict)))
+    return store
+
+
 def _load_status_once() -> None:
-    """기동 후 첫 이벤트/조회 때 디스크 스냅샷을 복원한다(1회)."""
+    """기동 후 첫 이벤트/조회 때 저장된 상태를 복원한다(1회)."""
     global _persist_loaded
     if _persist_loaded:
         return
     _persist_loaded = True
     try:
-        data = json.loads(_status_path().read_text(encoding="utf-8"))
+        data = _doc().read_doc("hooks")
         if isinstance(data, dict):
-            for k, v in list(data.items())[:_MAX_SESSIONS]:
-                if isinstance(v, dict):
-                    _STATUS.setdefault(k, v)
+            with _mu:
+                for k, v in list(data.items())[:_MAX_SESSIONS]:
+                    if isinstance(v, dict):
+                        _STATUS.setdefault(k, v)
     except Exception:  # noqa: BLE001
         pass
+
+
+def _mark(sid: str | None = None, removed: str | None = None) -> None:
+    """바뀐 세션(또는 밀려난 세션)을 표시한다. 저장은 _persist_status."""
+    global _dirty_db
+    try:
+        db = str(_doc().db_path())
+    except Exception:  # noqa: BLE001
+        return
+    with _mu:
+        if _dirty_db != db:
+            _dirty.clear()
+            _removed.clear()
+            _dirty_db = db
+        if sid:
+            _dirty.add(sid)
+            _removed.discard(sid)
+        if removed:
+            _removed.add(removed)
+            _dirty.discard(removed)
 
 
 def _persist_status() -> None:
-    global _last_persist
+    """표시된 변경의 저장을 맡긴다(기다리지 않음)."""
     now = time.time()
-    if now - _last_persist < _PERSIST_MIN_INTERVAL:
+    if now - _last_persist >= _PERSIST_MIN_INTERVAL and flush(blocking=False):
         return
-    _last_persist = now
+    _ensure_flusher()
+
+
+def flush(blocking: bool = True) -> bool:
+    """바뀐 세션 행을 상태 DB 에 쓴다(+ 거울). blocking=False 면 쓰기 잠금이 비어 있을 때만. 썼으면(또는 쓸 게 없으면) True."""
+    global _last_persist
+    store = _doc()
+    with _mu:
+        if not _dirty and not _removed:
+            return True
+        if _dirty_db != str(store.db_path()):
+            _dirty.clear()
+            _removed.clear()
+            return True
+        snap = {k: dict(v) for k, v in list(_STATUS.items())}   # list(items()) 는 한 번에 떠진다(GIL) — 루프 쪽 변경과 겹쳐도 안전
+        changed, gone = set(_dirty), set(_removed)
+        _dirty.clear()
+        _removed.clear()
+    gone |= {k for k in changed if k not in snap}
     try:
-        p = _status_path()
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(_STATUS, ensure_ascii=False), encoding="utf-8")
-    except Exception:  # noqa: BLE001
-        pass
+        ok = store.save_doc("hooks", snap, changed={k for k in changed if k in snap}, removed=gone, blocking=blocking)
+    except Exception as e:  # noqa: BLE001
+        _doc().log(f"[hooks] 상태 저장 실패: {e}")
+        ok = False
+    if not ok:
+        with _mu:                                   # 다음 차례에 다시
+            _dirty.update(k for k in changed if k not in _removed)
+            _removed.update(k for k in gone if k not in _dirty)
+        return False
+    _last_persist = time.time()
+    return True
+
+
+def _flush_loop() -> None:
+    while True:
+        time.sleep(_PERSIST_MIN_INTERVAL)
+        try:
+            flush(blocking=True)
+        except Exception as e:  # noqa: BLE001
+            _doc().log(f"[hooks] 쓰기 스레드 오류: {e}")
+
+
+def _ensure_flusher() -> None:
+    """쓰기 스레드를 띄운다. 죽어 있으면 다시 띄우고 사고 기록을 남긴다."""
+    global _flusher, _flusher_restarts
+    t = _flusher
+    if t is not None and t.is_alive():
+        return
+    with _mu:
+        if _flusher is not None and _flusher.is_alive():
+            return
+        died = _flusher is not None
+        _flusher = threading.Thread(target=_flush_loop, name="hooks-flush", daemon=True)
+        _flusher.start()
+    if died:
+        _flusher_restarts += 1
+        try:
+            _doc().incident("writer_thread_restarted", thread="hooks-flush", restarts=_flusher_restarts)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 # ---------------------------------------------------------------- 경로 해석
@@ -150,13 +248,13 @@ def ensure_registered(port: int) -> bool:
     except Exception as e:  # noqa: BLE001
         # 사용자의 설정 파일이 깨져 있으면 덮어쓰지 않는다 - 우리가 망가뜨린
         # 것처럼 보일뿐더러 실제 데이터 손실이 된다.
-        print(f"[hooks] settings.json 읽기 실패, 등록 건너뜀: {e}", flush=True)
+        _doc().log(f"[hooks] settings.json 읽기 실패, 등록 건너뜀: {e}")
         return False
 
     cmd = hook_command(port)
     hooks_obj = settings.setdefault("hooks", {})
     if not isinstance(hooks_obj, dict):
-        print("[hooks] settings.hooks 형식이 예상과 다름, 등록 건너뜀", flush=True)
+        _doc().log("[hooks] settings.hooks 형식이 예상과 다름, 등록 건너뜀")
         return False
 
     changed = False
@@ -193,7 +291,7 @@ def ensure_registered(port: int) -> bool:
     sp.parent.mkdir(parents=True, exist_ok=True)
     sp.write_text(json.dumps(settings, ensure_ascii=False, indent=2) + "\n",
                   encoding="utf-8")
-    print(f"[hooks] Claude 훅 등록: {', '.join(EVENTS)}", flush=True)
+    _doc().log(f"[hooks] Claude 훅 등록: {', '.join(EVENTS)}")
     return True
 
 
@@ -219,11 +317,12 @@ def update_from_event(payload: dict) -> None:
     now = int(time.time())
 
     _load_status_once()
+    evicted = None
     st = _STATUS.get(sid)
     if st is None:
         if len(_STATUS) >= _MAX_SESSIONS:
-            oldest = min(_STATUS, key=lambda k: _STATUS[k].get("active_at", 0))
-            _STATUS.pop(oldest, None)
+            evicted = min(_STATUS, key=lambda k: _STATUS[k].get("active_at", 0))
+            _STATUS.pop(evicted, None)
         st = _STATUS[sid] = {}
 
     st["active_at"] = now
@@ -251,7 +350,10 @@ def update_from_event(payload: dict) -> None:
         st["phase"] = "ended"
         st["ended_at"] = now
 
-    _persist_status()   # 재기동에도 상태 유지(스로틀 내장)
+    if evicted:
+        _mark(removed=evicted)
+    _mark(sid)
+    _persist_status()   # 재기동에도 상태 유지(기다리지 않음 — 위 _persist_status 설명)
 
 
 def settle(session_id: str, phase: str) -> bool:
@@ -270,6 +372,7 @@ def settle(session_id: str, phase: str) -> bool:
         st["thinking_at"] = now
     st.pop("permission_at", None)
     st.pop("note", None)
+    _mark(session_id)
     _persist_status()
     return True
 
@@ -298,12 +401,14 @@ def mark_gone(session_id: str, reason: str = "process_exit") -> bool:
     now = int(time.time())
     st["gone_at"] = now
     if st.get("phase") not in ACTIVE_PHASES:
+        _mark(session_id)
         _persist_status()
         return False
     st["phase"] = "ended"
     st["ended_at"] = now
     st["note"] = "응답 도중 프로세스 종료" if reason == "process_exit" else str(reason)[:200]
     st.pop("permission_at", None)
+    _mark(session_id)
     _persist_status()
     return True
 
@@ -322,6 +427,16 @@ def effective(st: dict[str, Any] | None, alive: bool, quiet_s: float | None, now
     out["note"] = "응답 도중 종료된 것으로 보임(실행 중인 프로세스 없음)"
     out["stale_from"] = st.get("phase")
     return out
+
+
+def forget(session_id: str) -> bool:
+    """세션 삭제(휴지통) 때 그 세션의 상태 행을 지운다(데이터 저장 정리 T8)."""
+    _load_status_once()
+    if _STATUS.pop(session_id, None) is None:
+        return False
+    _mark(removed=session_id)
+    _persist_status()
+    return True
 
 
 def status_of(session_id: str) -> dict[str, Any] | None:

@@ -80,20 +80,32 @@ def _file() -> Path:
     return config.data_dir() / "housekeeping.json"
 
 
+# 2026-11-05 데이터 저장 정리(R1): 정본은 상태 DB(jobs·hidden_sessions 표 + 머리), housekeeping.json·models.json 은 옛 판용 거울.
+def _docs():
+    from session_manager import store
+    if "housekeeping" not in store.docs():
+        store.register(store.Doc(
+            name="housekeeping", file=lambda: _file(),
+            colls=[store.Coll("jobs", "jobs", ("name",)),
+                   store.Coll("hidden_sessions", "probe_sessions", ("session_id",), kind="list", pc=True)],
+            empty=dict, dump=lambda d: json.dumps(d, ensure_ascii=False, indent=1), valid=lambda d: isinstance(d, dict)))
+        store.register(store.Doc(
+            name="models", file=lambda: _models_file(), colls=[],
+            empty=dict, dump=lambda d: json.dumps(d, ensure_ascii=False, indent=1), valid=lambda d: isinstance(d, dict)))
+    return store
+
+
 def _load() -> dict:
+    store = _docs()
     try:
-        d = json.loads(_file().read_text(encoding="utf-8"))
-        return d if isinstance(d, dict) else {}
-    except Exception:  # noqa: BLE001
+        d = store.read_doc("housekeeping")
+    except store.StoreUnavailable:
         return {}
+    return d if isinstance(d, dict) else {}
 
 
 def _save(d: dict) -> None:
-    f = _file()
-    f.parent.mkdir(parents=True, exist_ok=True)
-    tmp = f.with_suffix(".tmp")
-    tmp.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
-    tmp.replace(f)
+    _docs().save_doc("housekeeping", d)
 
 
 def _job_state(d: dict, jid: str) -> dict:
@@ -352,9 +364,7 @@ def refresh_models(metas=None, probe: bool = True, force: bool = False) -> dict:
     models = (models + added) if shown else (added + models)
     doc = {"models": models, "updated_at": int(time.time()), "source": "picker" if shown else "builtin",
            "picker_count": len(shown), "observed_added": [x["id"] for x in added]}
-    f = _models_file()
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps(doc, ensure_ascii=False, indent=1), encoding="utf-8")
+    _docs().save_doc("models", doc)
     summ = f"{len(models)}개" + (f" (실사용 추가: {', '.join(model_label(a) for a in doc['observed_added'])})" if added else "")
     return {"count": len(models), "added": doc["observed_added"], "source": doc["source"],
             "summary": summ + (" · " + note if note else "")}
@@ -362,7 +372,7 @@ def refresh_models(metas=None, probe: bool = True, force: bool = False) -> dict:
 
 def saved_models() -> dict | None:
     try:
-        d = json.loads(_models_file().read_text(encoding="utf-8"))
+        d = _docs().read_doc("models")
         if isinstance(d, dict) and isinstance(d.get("models"), list) and d["models"]:
             return d
     except Exception:  # noqa: BLE001

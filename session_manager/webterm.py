@@ -310,20 +310,30 @@ def _registry_path():
     return _cfg.data_dir() / "pty-registry.json"
 
 
+def _registry_doc():
+    # 2026-11-05 데이터 저장 정리(R1): 정본은 상태 DB(pty_registry 표), pty-registry.json 은 옛 판용 거울.
+    import json as _json
+    from session_manager import store
+    if "pty_registry" not in store.docs():
+        store.register(store.Doc(
+            name="pty_registry", file=lambda: _registry_path(),
+            colls=[store.Coll("pty_registry", None, ("pid",), kind="list",
+                              keyof=lambda e: str(e.get("pid")) if isinstance(e, dict) else str(e),
+                              derive=lambda e: {"session_id": e.get("sid")} if isinstance(e, dict) else {})],
+            empty=list, dump=lambda d: _json.dumps(d, ensure_ascii=False), valid=lambda d: isinstance(d, list)))
+    return store
+
+
 def _registry_load() -> list[dict]:
     try:
-        import json as _json
-        return _json.loads(_registry_path().read_text(encoding="utf-8")) or []
+        return _registry_doc().read_doc("pty_registry") or []
     except Exception:  # noqa: BLE001
         return []
 
 
 def _registry_save(entries: list[dict]) -> None:
     try:
-        import json as _json
-        p = _registry_path()
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(_json.dumps(entries, ensure_ascii=False), encoding="utf-8")
+        _registry_doc().save_doc("pty_registry", entries)
     except Exception:  # noqa: BLE001
         pass
 

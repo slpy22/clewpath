@@ -2951,6 +2951,8 @@ async function showHousekeeping(){
   let st; try{ st=await T.api('GET','/api/owner/housekeeping'); }
   catch(e){ body.innerHTML=''; body.appendChild(el('div','cwd','불러오지 못했습니다: '+e.message)); return; }
   renderHousekeeping(body,st);
+  const sbox=el('div'); body.appendChild(sbox);
+  try{ renderStoreBox(sbox,await T.api('GET','/api/owner/store')); }catch(e){}
 }
 function renderHousekeeping(body,st){
   body.innerHTML='';
@@ -2984,6 +2986,25 @@ function renderHousekeeping(body,st){
   if(st.builtin&&st.builtin.length){
     body.appendChild(el('div','setsec','항상 도는 것(설정 없음)'));
     for(const b of st.builtin) body.appendChild(el('div','hkd','· '+b.name+' — '+b.every+' · '+b.desc));
+  }
+}
+// 저장소(2026-11-05 데이터 저장 정리 R1): 상태 DB·하루 백업·알림. 업데이트 되돌림 중 저장이 끊겨 두 값을 다 보관했으면(D5)
+// 사장님이 옛 파일 값으로 되돌릴 수 있다 — 확인 창 + 원격은 2FA.
+const STORE_NOTICE={mirror_ambiguous:'업데이트 되돌림 중 저장이 끊겼던 흔적이 있어 두 값을 모두 보관했습니다(지금은 새 값 사용).',
+  restored_from_backup:'상태 DB 가 손상돼 최근 백업으로 되살렸습니다 — 최대 하루치 변경이 빠졌을 수 있습니다.',
+  both_db_names:'상태 DB 파일이 두 개 있어 clewpath.db 를 썼습니다.'};
+function renderStoreBox(box,st){
+  box.innerHTML='';
+  box.appendChild(el('div','setsec','저장소'));
+  box.appendChild(el('div','hkd','상태 DB: '+st.db+' (형식 '+st.schema+', SQLite '+st.sqlite+') · 마지막 백업: '+(st.last_backup||'아직 없음')));
+  for(const n of (st.notices||[])) box.appendChild(el('div','hkd','⚠ '+(STORE_NOTICE[n.event]||n.event)));
+  for(const k of (st.kept||[])){
+    const row=el('div','hkd'); row.appendChild(el('span',null,'보관한 옛 파일 값: '+k+' '));
+    const b=el('button','btn ghost sm','옛 파일 값으로 되돌리기');
+    b.onclick=async()=>{ await confirmSheet({title:'옛 파일 값으로 되돌리기', main:k+' 의 값으로 되돌립니다.',
+      sub:'업데이트를 되돌린 동안 옛 판에서 바꾼 이름·라벨이 이 파일에 있을 수 있습니다. 지금 값은 백업 폴더에 남지 않으니 확실할 때만 누르세요.',
+      action:'되돌리기', run:async()=>{ await hkPost('/api/owner/store/restore-kept',{kept:k}); toast('옛 파일 값으로 되돌렸습니다'); }}); };
+    row.appendChild(b); box.appendChild(row);
   }
 }
 

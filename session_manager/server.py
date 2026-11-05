@@ -354,6 +354,11 @@ async def _lifespan(app: FastAPI):
     except Exception:  # noqa: BLE001
         pass
 
+    # 상태 DB(2026-11-05 데이터 저장 정리 R1): 쓰기 연결을 열고(형식 단계·옛 파일 가져오기·worklog.db 합치기) 거울 문서를
+    # 대조한다. 첫 기동은 옮기기가 몇 초 걸릴 수 있어 스레드로(헬스체크를 막지 않게). 하루 1회 백업도 여기서 시작.
+    from session_manager import store_recovery as _store_rec
+    _store_rec.start_background()
+
     # 이전 Host 가 강제 종료되며 남긴 고아 정리(협의된 예외 - ClewPath 자신이
     # 낳은 프로세스 한정): 웹재개 스트림(서명+부모사망) + PTY(자기 등록부 기반).
     # 스레드로 - 기동을 막지 않게.
@@ -453,6 +458,7 @@ async def _lifespan(app: FastAPI):
         _devsync.stop()
         _teamwatch.stop()
         _hk.stop()                           # 앱을 내렸는데 +5분 정기 작업이 남아 돌지 않게(시험의 TestClient 도 여기로 온다)
+        _store_rec.stop_background()         # 훅 상태 마지막 쓰기 → 쓰기 연결 닫기(마지막 체크포인트도 쓰기 연결이)
         _prune.stop.set()                    # 기다리던 작업 폴더 정리도(같은 이유)
         await _pclink.stop_background()
         for t in (task, upd_task):
@@ -1054,6 +1060,26 @@ def create_app() -> FastAPI:
         if not housekeeping.kick(job, force=True):
             return JSONResponse({"error": "unknown_job"}, status_code=404)
         return {"queued": job}
+
+    # 상태 DB(2026-11-05 데이터 저장 정리): 상태·알림(애매한 거울·백업 복구) · 보존해 둔 옛 파일 값으로 되돌리기(D5)
+    @app.get("/api/owner/store")
+    def store_status():
+        from session_manager import store
+        return store.status()
+
+    @app.post("/api/owner/store/notices/clear")
+    def store_notices_clear():
+        from session_manager import store
+        store.kv_set("store.notices", [])
+        return {"ok": True}
+
+    @app.post("/api/owner/store/restore-kept")
+    def store_restore_kept(body: dict = Body(...)):
+        from session_manager import store
+        try:
+            return store.restore_kept(str(body.get("kept") or ""))
+        except ValueError as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
 
     @app.post("/api/sessions/{session_id}/picker-expose")
     def picker_expose(session_id: str, expose: bool = Body(..., embed=True)):

@@ -32,10 +32,10 @@ import threading
 import time
 from pathlib import Path
 
-from session_manager import config
+from session_manager import store
 
-SCHEMA_VERSION = 5
-_lock = threading.RLock()
+SCHEMA_VERSION = store.SCHEMA_VERSION      # 형식 단계는 store 가 한다(v1~v5 SQL 은 아래 그대로, v6~ 는 store)
+_lock = store._lock
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS teams(
@@ -139,7 +139,8 @@ class TeamError(Exception):
 
 
 def db_path() -> Path:
-    return config.data_dir() / "team.db"
+    """상태 DB 파일(R1 까지 team.db — store.db_path)."""
+    return store.db_path()
 
 
 def _now() -> int:
@@ -147,60 +148,28 @@ def _now() -> int:
 
 
 def _connect() -> sqlite3.Connection:
-    p = db_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
+    """읽기 연결(부른 쪽이 닫는다). 쓰기는 _Tx 로만 — 쓰기 연결은 store 의 하나뿐(D3)."""
     try:
-        c = sqlite3.connect(str(p), timeout=5, isolation_level=None)
-        c.row_factory = sqlite3.Row
-        c.execute("PRAGMA journal_mode=WAL")
-        c.execute("PRAGMA foreign_keys=ON")
-        v = c.execute("PRAGMA user_version").fetchone()[0]
-        if v < SCHEMA_VERSION:
-            with _lock:
-                v = c.execute("PRAGMA user_version").fetchone()[0]
-                if v < 1:
-                    c.executescript(_SCHEMA)
-                    c.execute("PRAGMA user_version=1")
-                    v = 1
-                if v < 2:
-                    c.executescript(_SCHEMA_V2 + _fts_sql())
-                    c.execute("PRAGMA user_version=2")
-                    v = 2
-                if v < 3:
-                    c.executescript(_SCHEMA_V3)
-                    c.execute("PRAGMA user_version=3")
-                    v = 3
-                if v < 4:
-                    c.executescript(_SCHEMA_V4)
-                    c.execute("PRAGMA user_version=4")
-                    v = 4
-                if v < 5:
-                    c.executescript(_SCHEMA_V5)
-                    c.execute("PRAGMA user_version=5")
-        return c
-    except sqlite3.DatabaseError as e:            # 손상·잠김 → 호출자는 503, Host 는 계속 산다
+        return store.reader()
+    except (store.StoreUnavailable, sqlite3.DatabaseError) as e:   # 손상·잠김 → 호출자는 503, Host 는 계속 산다
         raise TeamError("team_db_unavailable", 503) from e
 
 
 class _Tx:
-    """쓰기 트랜잭션(프로세스 내 직렬화 + BEGIN IMMEDIATE). 상태와 이벤트를 한 번에 커밋한다."""
+    """쓰기 트랜잭션(store.tx — 프로세스 안 직렬화 + BEGIN IMMEDIATE, 쓰기 연결 하나). 상태와 이벤트를 한 번에 커밋한다."""
 
     def __enter__(self):
-        _lock.acquire()
+        self._t = store.tx()
         try:
-            self.c = _connect()
-            self.c.execute("BEGIN IMMEDIATE")
-        except Exception:
-            _lock.release()
-            raise
-        return self.c
+            return self._t.__enter__()
+        except (store.StoreUnavailable, sqlite3.DatabaseError) as e:
+            raise TeamError("team_db_unavailable", 503) from e
 
     def __exit__(self, et, ev, tb):
         try:
-            self.c.execute("ROLLBACK" if et else "COMMIT")
-        finally:
-            self.c.close()
-            _lock.release()
+            self._t.__exit__(et, ev, tb)
+        except sqlite3.DatabaseError as e:
+            raise TeamError("team_db_unavailable", 503) from e
         if et is not None and issubclass(et, sqlite3.IntegrityError):
             raise TeamError("conflict", 409) from ev            # 동시 요청이 유일 제약에 걸림(같은 별칭·세션·idem_key)
         if et is not None and issubclass(et, sqlite3.DatabaseError):

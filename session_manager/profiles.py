@@ -17,11 +17,10 @@
 from __future__ import annotations
 
 import json
-import os
 import threading
 from datetime import datetime, timezone
 
-from session_manager import config
+from session_manager import config, store
 
 _LOCK = threading.Lock()
 _FIELDS = ("permission_mode", "allowed_tools", "denied_tools", "model",
@@ -39,25 +38,25 @@ def _file():
     return config.data_dir() / "profiles.json"
 
 
+# 2026-11-05 데이터 저장 정리(R1): 정본은 상태 DB(session_policy 표), profiles.json 은 옛 판용 거울.
+store.register(store.Doc(
+    name="profiles", file=lambda: _file(),
+    colls=[store.Coll("session_policy", "sessions", ("session_id",), pc=True)],
+    empty=lambda: {"version": 1, "sessions": {}},
+    dump=lambda d: json.dumps(d, ensure_ascii=False, indent=2),
+    valid=lambda d: isinstance(d, dict) and isinstance(d.get("sessions"), dict)))
+
+
 def _load() -> dict:
-    f = _file()
-    if not f.exists():
-        return {"version": 1, "sessions": {}}
     try:
-        with f.open(encoding="utf-8") as fh:
-            d = json.load(fh)
-        return d if isinstance(d, dict) and "sessions" in d else {"version": 1, "sessions": {}}
-    except Exception:  # noqa: BLE001
+        d = store.read_doc("profiles")
+    except store.StoreUnavailable:
         return {"version": 1, "sessions": {}}
+    return d if isinstance(d, dict) and isinstance(d.get("sessions"), dict) else {"version": 1, "sessions": {}}
 
 
 def _save(d: dict) -> None:
-    f = _file()
-    f.parent.mkdir(parents=True, exist_ok=True)
-    tmp = f.with_suffix(".tmp")
-    with tmp.open("w", encoding="utf-8") as fh:
-        json.dump(d, fh, ensure_ascii=False, indent=2)
-    os.replace(tmp, f)
+    store.save_doc("profiles", d)
 
 
 def get(session_id: str) -> dict:

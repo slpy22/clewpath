@@ -18,15 +18,17 @@
 }
 
 동시 쓰기 안전: 모듈 락 + 원자적 쓰기(임시파일 → os.replace).
+
+2026-11-05 데이터 저장 정리(R1): 정본은 상태 DB(store — session_meta·folder_meta 표). labels.json 은 옛 판이 되돌림 뒤
+읽을 수 있게 같은 모양으로 계속 쓰는 거울이다(바깥에서 바뀌면 store 가 가져온다). 함수 이름·반환 모양은 그대로.
 """
 from __future__ import annotations
 
 import json
-import os
 import threading
 from datetime import datetime, timezone
 
-from session_manager import config
+from session_manager import config, store
 
 _LOCK = threading.Lock()
 # picker: 피커 미표시 세션의 노출 정책 - "expose"(claude 재개 목록에 노출 허용) 또는 없음(은닉 유지)
@@ -38,27 +40,32 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _meta_cols(rec) -> dict:
+    rec = rec if isinstance(rec, dict) else {}
+    return {"name": rec.get("name"), "keep": 1 if rec.get("keep") else None, "model": rec.get("model")}
+
+
+store.register(store.Doc(
+    name="labels", file=lambda: config.labels_file(),
+    colls=[store.Coll("session_meta", "sessions", ("session_id",), pc=True, derive=_meta_cols),
+           store.Coll("folder_meta", "folders", ("folder_key",), pc=True)],
+    empty=lambda: {"version": 1, "sessions": {}},
+    dump=lambda d: json.dumps(d, ensure_ascii=False, indent=2),
+    valid=lambda d: isinstance(d, dict) and isinstance(d.get("sessions"), dict)))
+
+
 def _load() -> dict:
-    path = config.labels_file()
-    if not path.exists():
-        return {"version": 1, "sessions": {}}
     try:
-        with path.open(encoding="utf-8") as f:
-            data = json.load(f)
-        if not isinstance(data, dict) or "sessions" not in data:
-            return {"version": 1, "sessions": {}}
-        return data
-    except Exception:  # noqa: BLE001  손상 시에도 죽지 않음(원본 세션과 무관)
+        data = store.read_doc("labels")
+    except store.StoreUnavailable:  # 상태 DB 를 못 열어도 죽지 않음(원본 세션과 무관)
         return {"version": 1, "sessions": {}}
+    if not isinstance(data, dict) or not isinstance(data.get("sessions"), dict):
+        return {"version": 1, "sessions": {}}
+    return data
 
 
 def _save(data: dict) -> None:
-    path = config.labels_file()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)  # 원자적 교체
+    store.save_doc("labels", data)
 
 
 def _clean_labels(labels) -> list[str]:

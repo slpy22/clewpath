@@ -4,6 +4,15 @@
 설계 근거: `docs/2026-09-03-multi-session-monitoring-design.md`,
 `docs/2026-09-10-multi-terminal-tabs-design.md`
 
+## 기획: 데이터 저장 정리 — docs/designs/data-store.md (2026-11-05 사장님 요청·설계 검토, 설계서는 아직 미커밋)
+사장님 결정: team.db 를 상태 DB 로 합침 · PC 키(pc_id) 지금 넣음 · worklog 는 캐시로 내리기로 했으나 설계 검토(크로스체크 위임)에서 **영구 저장으로 바뀜**(캐시가 깨지면 원본 없는 세션 요약이 사라짐). 출시는 R1(새 DB 정본 + 옛 JSON 거울) → R2(거울 중단, 되돌림 대상이 R1 이상일 때만).
+### Phase 1 (이번 사이클) — 구현 과제는 설계서 끝 'Implementation Tasks'
+### Deferred (설계 검토 2026-11-05, 크로스체크로 TODOS 추가 결정)
+- [ ] T1 pclink 상태 파일(state.json·seen.sqlite·identity.json)을 상태 DB 로 흡수 — 왜: 짝 상태도 운영 상태라 백업·삭제 묶음에 넣으면 정리가 끝난다. 착수 조건: pclink 상태의 수명·쓰기 주기 확인. 시작점: `session_manager/pclink/policy.py`
+- [ ] T2 세션 목록 분석 결과(scanner 증분 캐시, 지금 메모리만)를 캐시 DB 에 저장 — 왜: Host 재기동 뒤 첫 목록이 빨라짐. 착수 조건: 재기동 뒤 첫 목록 지연 실측 + 캐시 무효화 조건(jsonl 재작성 = scanner.invalidate) 정리. 시작점: `session_manager/scanner.py`
+- [ ] T3 허브(009)가 다른 PC 행을 들여올 때 — 'local' → host_id 변환 규칙 + 기존 team 표의 기본키·유일 제약 재구성(`agent_sessions.session_id UNIQUE`, `ingest`·`usage` 기본키). 왜: pc_id 열만으로는 여러 PC 행을 합칠 준비가 끝나지 않는다. 허브 기획서(`docs/spec-pclink-hub-handoff.md`)로 넘길 것
+- [ ] T4 파이썬 내장 SQLite 가 3.51.3 이상(WAL 재설정 결함 수정판)이 되면 '쓰기 연결 하나' 제한 재검토 — 지금 3.45.1. 제한 해제는 성능상 필요가 확인될 때만
+
 ## 기획: PC 사이 세션 통신(pclink) — docs/designs/cross-pc-messaging.md (2026-10-22 사장님 결정)
 범위는 크로스체크(3/4)로 정함: 이 프로젝트에서는 **조회 전용 원격 묻기까지**. 실시간·작업 지시는 별도 허브 프로젝트(`docs/spec-pclink-hub-handoff.md`).
 작업은 작업 트리 `pclink/<단계>` 브랜치, 새 패키지 `session_manager/pclink/` 위주 — 맥 측 파일(런처·설치/제거·hostctl·osdep·docs/mac-*·conftest)은 건드리지 않는다(설계 4.6).

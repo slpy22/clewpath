@@ -134,14 +134,10 @@ def delete_session(session_id: str, dry_run: bool = True, force: bool = False,
         encoding="utf-8")
     _purge_old_trash()
 
-    # 우리 사이드카 라벨도 함께 제거(B안): 삭제된 세션의 유령 라벨이 labels.json
-    # 에 쌓이지 않게. 복구해도 라벨은 안 돌아온다(사용자가 다시 붙임). claude
-    # 파일이 아니라 ClewPath 자체 저장소만 건드리므로 원칙과 무관.
-    try:
-        from session_manager import labels as _labels
-        _labels.delete(session_id)
-    except Exception:  # noqa: BLE001
-        pass
+    # 우리 덧붙임 정보(이름·라벨·가드레일·훅 상태)도 함께 지운다: 삭제된 세션의 유령 행이 쌓이지 않게. claude 파일이 아니라
+    # ClewPath 자체 저장소만 건드리므로 원칙과 무관. 2026-11-05 데이터 저장 정리(T8): 사본을 버킷에 두고 복구 때 되살린다
+    # (전엔 라벨만 지우고 복구해도 안 돌아왔다). 어느 표를 지우나 = store.SESSION_TABLES_DELETE.
+    _drop_session_rows(session_id, bucket)
 
     return {"dry_run": False, "session_id": session_id,
             "deleted": moved, "errors": errors,
@@ -160,20 +156,27 @@ def _fork_pending_file() -> Path:
     return config.data_dir() / "fork_pending.json"
 
 
+def _fork_doc():
+    # 2026-11-05 데이터 저장 정리(R1): 정본은 상태 DB(fork_pending 표), fork_pending.json 은 옛 판용 거울.
+    from session_manager import store
+    if "fork_pending" not in store.docs():
+        store.register(store.Doc(
+            name="fork_pending", file=lambda: _fork_pending_file(),
+            colls=[store.Coll("fork_pending", None, ("fork_id",))],
+            empty=dict, dump=lambda d: json.dumps(d, ensure_ascii=False, indent=1), valid=lambda d: isinstance(d, dict)))
+    return store
+
+
 def _fork_pending_load() -> dict:
     try:
-        d = json.loads(_fork_pending_file().read_text(encoding="utf-8"))
+        d = _fork_doc().read_doc("fork_pending")
         return d if isinstance(d, dict) else {}
     except Exception:  # noqa: BLE001
         return {}
 
 
 def _fork_pending_save(d: dict) -> None:
-    f = _fork_pending_file()
-    f.parent.mkdir(parents=True, exist_ok=True)
-    tmp = f.with_suffix(".tmp")
-    tmp.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
-    tmp.replace(f)
+    _fork_doc().save_doc("fork_pending", d)
 
 
 def delete_fork(fork_id: str, origin: str | None = None, wait_live_s: float = 3.0) -> dict:
@@ -249,6 +252,52 @@ def list_trash() -> list[dict]:
     return out
 
 
+ROWS_FILE = "clewpath_rows.json"
+
+
+def _drop_session_rows(session_id: str, bucket: Path) -> None:
+    """세션 덧붙임 정보(labels·profiles·hooks 상태)를 지우고, 되살릴 것(이름·라벨·가드레일)은 버킷에 사본으로."""
+    try:
+        from session_manager import hooks, labels as _labels, profiles
+        rows = {"labels": _labels.get(session_id), "profiles": profiles.get(session_id)}
+        if any(rows.values()):
+            (bucket / ROWS_FILE).write_text(json.dumps({"session_id": session_id, **rows}, ensure_ascii=False, indent=1),
+                                            encoding="utf-8")
+        _labels.delete(session_id)
+        profiles.delete(session_id)
+        hooks.forget(session_id)
+    except Exception as e:  # noqa: BLE001  덧붙임 정보 정리 실패가 삭제를 막지 않는다
+        from session_manager import store as _store
+        _store.log(f"[lifecycle] 덧붙임 정보 정리 실패 {session_id}: {e}")
+
+
+def _restore_session_rows(bucket: Path) -> bool:
+    """버킷의 사본으로 이름·라벨·가드레일을 되살린다. 그 사이 새로 붙인 값이 있으면 덮지 않는다."""
+    f = bucket / ROWS_FILE
+    if not f.is_file():
+        return False
+    try:
+        d = json.loads(f.read_text(encoding="utf-8"))
+        sid = d.get("session_id")
+        from session_manager import labels as _labels, profiles
+        done = False
+        for mod, key in ((_labels, "labels"), (profiles, "profiles")):
+            rec = d.get(key)
+            if not sid or not isinstance(rec, dict) or not rec:
+                continue
+            with mod._LOCK:
+                data = mod._load()
+                if sid not in data["sessions"]:
+                    data["sessions"][sid] = rec
+                    mod._save(data)
+                    done = True
+        return done
+    except Exception as e:  # noqa: BLE001
+        from session_manager import store as _store
+        _store.log(f"[lifecycle] 덧붙임 정보 복구 실패: {e}")
+        return False
+
+
 def restore_session(bucket_name: str) -> dict:
     """휴지통 버킷을 원위치로 복구한다. 이미 같은 경로가 있으면 덮어쓰지 않고 건너뜀."""
     bucket = _trash_root() / bucket_name
@@ -274,6 +323,8 @@ def restore_session(bucket_name: str) -> dict:
             restored.append(str(orig))
         except Exception as e:  # noqa: BLE001
             errors.append(f"{orig}: {e}")
+    if restored:
+        _restore_session_rows(bucket)
     if restored and not errors and not skipped:
         try:
             shutil.rmtree(bucket)   # 전부 복구됐으면 버킷 정리

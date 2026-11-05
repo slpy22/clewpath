@@ -12,13 +12,12 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-import os
 import re
 import secrets
 import threading
 import time
 
-from session_manager import config
+from session_manager import config, store
 
 _LOCK = threading.Lock()
 
@@ -40,27 +39,37 @@ def _file():
     return config.data_dir() / "services.json"
 
 
+def _norm(d: dict) -> dict:
+    d.setdefault("services", {})
+    d.setdefault("requests", {})
+    return d
+
+
+# 2026-11-05 데이터 저장 정리(R1): 정본은 상태 DB(services·service_requests 표), services.json 은 옛 판용 거울.
+# 토큰 원문은 어디에도 없다(해시만 — 지금과 같음).
+def _svc_cols(v) -> dict:
+    return {"status": v.get("status") if isinstance(v, dict) else None}
+
+
+store.register(store.Doc(
+    name="services", file=lambda: _file(),
+    colls=[store.Coll("services", "services", ("id",), derive=_svc_cols),
+           store.Coll("service_requests", "requests", ("id",))],
+    empty=lambda: {"services": {}, "requests": {}},
+    dump=lambda d: json.dumps(d, ensure_ascii=False, indent=2),
+    valid=lambda d: isinstance(d, dict), norm=_norm))
+
+
 def _load() -> dict:
-    f = _file()
-    if not f.exists():
-        return {"services": {}, "requests": {}}
     try:
-        with f.open(encoding="utf-8") as fh:
-            d = json.load(fh)
-        d.setdefault("services", {})
-        d.setdefault("requests", {})
-        return d
-    except Exception:  # noqa: BLE001
+        d = store.read_doc("services")
+    except store.StoreUnavailable:
         return {"services": {}, "requests": {}}
+    return _norm(d) if isinstance(d, dict) else {"services": {}, "requests": {}}
 
 
 def _save(d: dict) -> None:
-    f = _file()
-    f.parent.mkdir(parents=True, exist_ok=True)
-    tmp = f.with_suffix(".tmp")
-    with tmp.open("w", encoding="utf-8") as fh:
-        json.dump(d, fh, ensure_ascii=False, indent=2)
-    os.replace(tmp, f)
+    store.save_doc("services", d)
 
 
 def _hash(token: str) -> str:

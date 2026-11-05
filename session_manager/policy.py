@@ -71,24 +71,40 @@ def _audit_file():
     return config.data_dir() / "api_audit.jsonl"
 
 
+def _usage_split(k: str) -> tuple[str, str]:
+    caller, sep, day = k.rpartition(":")
+    return (caller, day) if sep else (k, "")
+
+
+def _usage_cols(v) -> dict:
+    v = v if isinstance(v, dict) else {}
+    return {"calls": v.get("calls"), "usd": v.get("usd")}
+
+
+def _usage_doc():
+    from session_manager import store
+    if "api_usage" not in store.docs():
+        # 2026-11-05 데이터 저장 정리(R1): 정본은 상태 DB(api_usage 표 — 호출자·날짜), api_usage.json 은 옛 판용 거울.
+        store.register(store.Doc(
+            name="api_usage", file=lambda: _usage_file(),
+            colls=[store.Coll("api_usage", None, ("caller", "day"), split=_usage_split,
+                              join=lambda t: f"{t[0]}:{t[1]}" if t[1] else t[0], derive=_usage_cols)],
+            empty=dict, dump=lambda d: json.dumps(d, ensure_ascii=False, indent=2),
+            valid=lambda d: isinstance(d, dict)))
+    return store
+
+
 def _load_usage() -> dict:
-    f = _usage_file()
-    if not f.exists():
-        return {}
+    store = _usage_doc()
     try:
-        with f.open(encoding="utf-8") as fh:
-            return json.load(fh)
-    except Exception:  # noqa: BLE001
+        d = store.read_doc("api_usage")
+    except store.StoreUnavailable:
         return {}
+    return d if isinstance(d, dict) else {}
 
 
 def _save_usage(d: dict) -> None:
-    f = _usage_file()
-    f.parent.mkdir(parents=True, exist_ok=True)
-    tmp = f.with_suffix(".tmp")
-    with tmp.open("w", encoding="utf-8") as fh:
-        json.dump(d, fh, ensure_ascii=False, indent=2)
-    os.replace(tmp, f)
+    _usage_doc().save_doc("api_usage", d)
 
 
 def caller_id(token: str | None, service: dict | None = None) -> str:
