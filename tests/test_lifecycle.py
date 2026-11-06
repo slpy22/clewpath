@@ -1,6 +1,9 @@
 """lifecycle 테스트 — 삭제/cwd변경. fixture 기반, 실제 데이터 안 건드림."""
 import json
+import os
 from pathlib import Path
+
+import pytest
 
 from session_manager import lifecycle, config
 from tests.conftest import write_session
@@ -135,7 +138,7 @@ def test_delete_removes_sidecar_labels(fake_claude_home, monkeypatch, tmp_path):
     assert labels.get("lbl99999") == {}                 # 라벨도 제거됨
 
 
-def test_move_session_relocates_file_and_cwd(fake_claude_home, monkeypatch):
+def test_move_session_relocates_file_and_cwd(fake_claude_home, monkeypatch, tmp_path):
     """세션 이사: jsonl 을 새 cwd 인코딩 폴더로 이동 + cwd 치환.
 
     claude 는 '파일이 어느 인코딩 폴더에 있는지'로 세션을 찾으므로, 폴더 이동은
@@ -146,17 +149,56 @@ def test_move_session_relocates_file_and_cwd(fake_claude_home, monkeypatch):
     # cwd=F:\old\path 인 세션 생성(_make 는 그 cwd 로 만든다)
     jsonl = _make(fake_claude_home, sid="mv111111", folder=path_to_folder(r"F:\old\path"))
     assert jsonl.exists()
-    r = lifecycle.move_session("mv111111", r"F:\new\home", move_content=False, dry_run=False)
+    target = str(tmp_path / "new" / "home")           # 이 OS 의 전체 경로(맥에선 F:\... 가 전체 경로가 아니다)
+    r = lifecycle.move_session("mv111111", target, move_content=False, dry_run=False)
     assert "error" not in r, r
     # 원본 위치 비고, 새 인코딩 폴더에 존재
     assert not jsonl.exists()
-    new_jsonl = (fake_claude_home / "projects" / path_to_folder(r"F:\new\home")
+    new_jsonl = (fake_claude_home / "projects" / path_to_folder(target)
                  / "mv111111.jsonl")
     assert new_jsonl.exists()
     # cwd 치환 확인
     import json as _j
     kinds = [_j.loads(l) for l in new_jsonl.read_text(encoding="utf-8").splitlines() if l.strip()]
-    assert all(o.get("cwd") == r"F:\new\home" for o in kinds if "cwd" in o)
+    assert all(o.get("cwd") == target for o in kinds if "cwd" in o)
+
+
+@pytest.mark.parametrize("bad", ["200_nk_law_center", r"sub\dir", "./x", "..", "", "   "]
+                         + ([r"E:foo", r"\foo", "/foo"] if os.name == "nt" else []))
+@pytest.mark.parametrize("dry_run", [True, False])
+@pytest.mark.parametrize("move_content", [True, False])
+def test_move_session_rejects_non_absolute(fake_claude_home, monkeypatch, tmp_path, bad, dry_run, move_content):
+    """전체 경로가 아니면 미리보기든 실행이든 거절하고 아무것도 옮기지 않는다(2026-11-06 '남북비교' 사고)."""
+    from session_manager import lifecycle
+    work = tmp_path / "host-cwd"                      # 상대 경로가 풀릴 곳 — 여기에 아무것도 생기면 안 된다
+    work.mkdir()
+    monkeypatch.chdir(work)
+    jsonl = _make(fake_claude_home, sid="mv333333")
+    before = jsonl.read_bytes()
+    projects = sorted(p.name for p in (fake_claude_home / "projects").iterdir())
+    r = lifecycle.move_session("mv333333", bad, move_content=move_content, dry_run=dry_run)
+    assert "전체 경로" in r.get("error", ""), r
+    assert jsonl.read_bytes() == before
+    assert sorted(p.name for p in (fake_claude_home / "projects").iterdir()) == projects
+    assert list(work.iterdir()) == []
+
+
+def test_move_session_normalizes_target(fake_claude_home, tmp_path):
+    """끝의 구분자·'..'·앞뒤 공백은 정리해서 적는다 — 표기가 다르면 기록 폴더 이름이 달라져 claude 가 못 찾는다."""
+    import json as _j
+
+    from session_manager import lifecycle
+    from session_manager.pathenc import path_to_folder
+    clean = str(tmp_path / "new" / "home")
+    messy = f"  {tmp_path / 'new' / 'x' / '..' / 'home'}{os.sep}  "
+    _make(fake_claude_home, sid="mv444444")
+    plan = lifecycle.move_session("mv444444", messy, dry_run=True)
+    assert plan["new_cwd"] == clean, plan
+    r = lifecycle.move_session("mv444444", messy, dry_run=False)
+    assert r["new_cwd"] == clean, r
+    moved = fake_claude_home / "projects" / path_to_folder(clean) / "mv444444.jsonl"
+    rows = [_j.loads(l) for l in moved.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert all(o["cwd"] == clean for o in rows if "cwd" in o)
 
 
 def test_move_session_blocks_live(fake_claude_home, monkeypatch):

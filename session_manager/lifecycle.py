@@ -447,6 +447,16 @@ def move_session(session_id: str, new_cwd: str, move_content: bool = False,
     except Exception:  # noqa: BLE001
         pass
 
+    # 전체 경로만 받는다(2026-11-06 사고: 드라이브 없이 '200_nk_law_center' 입력 → 그대로 cwd 로 적히고
+    # 기록이 projects/200-nk-law-center 로 감. 내용 이동까지 켰다면 Host 작업 폴더 아래로 파일이 옮겨졌을 경로).
+    # 미리보기에서도 거절하고, 파일은 하나도 건드리지 않는다.
+    raw_cwd = (new_cwd or "").strip()
+    if not raw_cwd or not Path(raw_cwd).is_absolute():
+        return {"error": f"전체 경로를 입력하세요(드라이브·최상위 폴더부터, 예: E:\\폴더): {raw_cwd or '(비어 있음)'}",
+                "session_id": session_id}
+    # 끝의 구분자·'..'·'/' 표기를 정리한다 — 표기가 다르면 기록 폴더 이름(인코딩)도 달라져 claude 가 못 찾는다
+    new_cwd = os.path.normpath(raw_cwd)
+
     src_jsonl = Path(meta.jsonl_path)
     old_cwd = meta.cwd
     new_folder = path_to_folder(new_cwd)
