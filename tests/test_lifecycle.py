@@ -201,6 +201,36 @@ def test_move_session_normalizes_target(fake_claude_home, tmp_path):
     assert all(o["cwd"] == clean for o in rows if "cwd" in o)
 
 
+@pytest.mark.parametrize("status", ["busy", "idle"])
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_move_session_blocks_session_live_outside_clewpath(fake_claude_home, tmp_path, status, dry_run):
+    """바깥 터미널에 떠 있는 세션(claude 레지스트리)도 이동 차단 — 기록이 둘로 갈라진다(2026-11-06)."""
+    from session_manager import lifecycle
+    jsonl = _make(fake_claude_home, sid="mv555555")
+    before = jsonl.read_bytes()
+    reg = fake_claude_home / "sessions"
+    reg.mkdir()
+    (reg / "4242.json").write_text(json.dumps({"sessionId": "mv555555", "status": status, "updatedAt": 1}),
+                                   encoding="utf-8")
+    r = lifecycle.move_session("mv555555", str(tmp_path / "new"), dry_run=dry_run)
+    assert "실행 중" in r.get("error", ""), r
+    assert jsonl.read_bytes() == before
+
+
+@pytest.mark.parametrize("eol", [b"\n", b"\r\n"])
+def test_move_session_writes_lf(fake_claude_home, tmp_path, eol):
+    """이동한 기록은 LF 로 쓴다 — Windows 텍스트 모드가 CRLF 로 바꾸던 것, 이미 CRLF 인 기록도 LF 로 돌아온다."""
+    from session_manager import lifecycle
+    from session_manager.pathenc import path_to_folder
+    jsonl = _make(fake_claude_home, sid="mv666666")
+    jsonl.write_bytes(jsonl.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", eol))
+    target = str(tmp_path / "new")
+    r = lifecycle.move_session("mv666666", target, dry_run=False)
+    assert "error" not in r, r
+    data = (fake_claude_home / "projects" / path_to_folder(target) / "mv666666.jsonl").read_bytes()
+    assert b"\r" not in data and data.endswith(b"\n")
+
+
 def test_move_session_blocks_live(fake_claude_home, monkeypatch):
     """실행 중 세션은 이동 차단(파일 이동 중 손상 방지)."""
     from session_manager import lifecycle, webterm

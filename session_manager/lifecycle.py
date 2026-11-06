@@ -438,14 +438,11 @@ def move_session(session_id: str, new_cwd: str, move_content: bool = False,
     if meta is None:
         return {"error": "세션을 찾을 수 없습니다.", "session_id": session_id}
 
-    # 실행 중 세션은 파일 이동 중 손상 위험 → 차단
-    try:
-        from session_manager import webterm
-        if webterm.has_terminal(session_id):
-            return {"error": "이 세션은 실행 중입니다. 터미널을 종료한 뒤 이동하세요.",
-                    "session_id": session_id}
-    except Exception:  # noqa: BLE001
-        pass
+    # 실행 중 세션은 차단 — 파일을 옮겨도 프로세스가 옛 경로에 새 파일을 만들어 기록이 둘로 갈라진다.
+    # 삭제와 같은 판정: 우리 터미널뿐 아니라 바깥 터미널에 떠 있는 세션(claude 레지스트리)까지 본다(2026-11-06).
+    if _live_reason(session_id):
+        return {"error": "이 세션은 실행 중입니다. 터미널을 종료한 뒤 이동하세요.",
+                "session_id": session_id}
 
     # 전체 경로만 받는다(2026-11-06 사고: 드라이브 없이 '200_nk_law_center' 입력 → 그대로 cwd 로 적히고
     # 기록이 projects/200-nk-law-center 로 감. 내용 이동까지 켰다면 Host 작업 폴더 아래로 파일이 옮겨졌을 경로).
@@ -508,7 +505,8 @@ def move_session(session_id: str, new_cwd: str, move_content: bool = False,
                         pass
                 out_lines.append(line)
         target = src_jsonl if same_folder else dst_jsonl
-        target.write_text("\n".join(out_lines) + "\n", encoding="utf-8")
+        # newline: Windows 텍스트 모드가 줄바꿈을 CRLF 로 바꾸지 않게(claude 는 LF 로 쓴다, 2026-11-06 실측)
+        target.write_text("\n".join(out_lines) + "\n", encoding="utf-8", newline="\n")
         from session_manager import scanner as _sc
         _sc.invalidate(src_jsonl); _sc.invalidate(target)   # 재작성 — 증분 캐시 무효
         if not same_folder:
