@@ -2,6 +2,8 @@
 사장님 팀 API(폰에서도) · 화면에서 낸 승인 요청(생성·실행) · 에이전트 경로(/api/v1/team)는 여전히 로컬 전용."""
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from session_manager import mongroups, team
@@ -153,3 +155,36 @@ def test_owner_approval_create_execute(T, monkeypatch):
         approvals.decide(a["id"], True, "otp")
         x = c.post(f"/api/owner/approvals/{a['id']}/execute").json()
         assert x["status"] == "executed" and x["result"]["code"]
+
+
+def test_set_root_absolute_existing_only_and_reports_stale_scopes(T, tmp_path):
+    """팀 폴더 바꾸기(2026-11-07): 폴더 통째 이사 뒤 쓰기 범위·제출 증거가 옛 경로를 보지 않게. 전체 경로·있는 폴더만,
+    옛 폴더 아래 절대 경로 쓰기 범위는 고치지 않고 알려만 준다."""
+    old, new = tmp_path / "old", tmp_path / "new"
+    old.mkdir()
+    new.mkdir()
+    t = T.create_team("Law", root=str(old), manager_session="s-m")
+    T.add_member(t["id"], "fe", session_id="s-a", write_scope=[str(old / "web"), "api/**", str(tmp_path / "elsewhere")])
+    T.create_task(t["id"], "화면", "fe", write_scope={"fe": [str(old / "docs")]})
+    for bad in ("", "new", "200_nk_law_center"):
+        with pytest.raises(team.TeamError) as e:
+            T.set_root(t["id"], bad)
+        assert e.value.code == "root_not_absolute"
+    with pytest.raises(team.TeamError) as e:
+        T.set_root(t["id"], str(tmp_path / "missing"))
+    assert e.value.code == "root_not_found" and e.value.status == 404
+    assert T.get_team(t["id"])["root"] == str(old), "거절하면 그대로"
+    r = T.set_root(t["code"], os.path.join(str(new), ".", ""))   # 정규화해서 저장
+    assert r["root"] == str(new) and r["before"] == str(old)
+    assert T.get_team(t["id"])["root"] == str(new)
+    assert sorted(s["scope"] for s in r["stale_scopes"]) == sorted([str(old / "web"), str(old / "docs")])
+    assert {s.get("task") is not None for s in r["stale_scopes"]} == {True, False}
+
+
+def test_set_root_route_is_local_only(T, tmp_path, monkeypatch):
+    t = T.create_team("Law", root=str(tmp_path), manager_session="s-m")
+    with _client(monkeypatch) as c:
+        r = c.post(f"/api/owner/teams/{t['code']}/root", json={"root": str(tmp_path)}, headers={"X-ClewPath-Via": "relay"})
+        assert r.status_code == 403 and T.get_team(t["id"])["root"] == str(tmp_path)
+        assert c.post(f"/api/owner/teams/{t['code']}/root", json={"root": "x"}).json()["error"] == "root_not_absolute"
+        assert c.post(f"/api/owner/teams/{t['code']}/root", json={"root": str(tmp_path)}).status_code == 200

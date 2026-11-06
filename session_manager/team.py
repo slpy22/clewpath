@@ -349,6 +349,44 @@ def rename(team_id: str, name: str) -> dict:
     return {"id": t["id"], "code": t["code"], "name": name}
 
 
+def _under(path: str, base: str) -> bool:
+    n = os.path.normcase(os.path.normpath(path))
+    b = os.path.normcase(os.path.normpath(base))
+    return n == b or n.startswith(b.rstrip("\\/") + os.sep)
+
+
+def set_root(team_id: str, root: str) -> dict:
+    """팀 폴더(root) 바꾸기(사장님, 2026-11-07). 폴더를 통째로 옮긴 뒤 쓰기 범위 판정·제출 증거가 옛 경로를 보지 않게.
+    전체 경로·실제 있는 폴더만 받는다(2026-11-06 드라이브 없는 경로 사고). 구성원·일감의 쓰기 범위 중
+    옛 폴더 아래 절대 경로는 고치지 않고 `stale_scopes` 로 알려만 준다(무엇을 허용할지는 사람이 정한다)."""
+    raw = _clean(root, 400)
+    if not raw or not os.path.isabs(raw):
+        raise TeamError("root_not_absolute")
+    new = os.path.normpath(raw)
+    if not Path(new).is_dir():
+        raise TeamError("root_not_found", 404)
+    with _Tx() as c:
+        t = _team_row(c, team_id)
+        before = t["root"]
+        c.execute("UPDATE teams SET root=? WHERE id=?", (new, t["id"]))
+        _event(c, t["id"], "team_root_changed", payload={"root": new, "before": before})
+        stale = []
+        if before and os.path.isabs(before):
+            for m in c.execute("SELECT alias, write_scope_json FROM memberships WHERE team_id=? AND left_at IS NULL",
+                               (t["id"],)).fetchall():
+                for s in _uj(m["write_scope_json"], []) or []:
+                    if os.path.isabs(str(s)) and _under(str(s), before):
+                        stale.append({"member": m["alias"], "scope": str(s)})
+            for k in c.execute(f"SELECT id, write_scope_json FROM tasks WHERE team_id=? AND status IN"
+                               f" ({','.join('?' * len(OPEN_STATUSES))})", (t["id"], *OPEN_STATUSES)).fetchall():
+                ws = _uj(k["write_scope_json"], {})
+                for alias, scopes in (ws.items() if isinstance(ws, dict) else []):
+                    for s in scopes or []:
+                        if os.path.isabs(str(s)) and _under(str(s), before):
+                            stale.append({"task": k["id"], "member": alias, "scope": str(s)})
+    return {"id": t["id"], "code": t["code"], "root": new, "before": before, "stale_scopes": stale}
+
+
 def _label_alias(label: str | None, fallback: str) -> tuple[str, str]:
     """그룹 라벨('별칭 · 역할' 또는 자유 글) → (별칭, 역할)."""
     s = str(label or "").strip()

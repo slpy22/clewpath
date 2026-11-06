@@ -1466,6 +1466,13 @@ def create_app() -> FastAPI:
     def owner_team_rename(team_id: str, body: dict = Body(...)):
         return _owner_team(_team.rename, team_id, body.get("name", ""))
 
+    @app.post("/api/owner/teams/{team_id}/root")
+    def owner_team_root(team_id: str, request: Request, body: dict = Body(...)):
+        # 팀 폴더 바꾸기 — 쓰기 범위 판정의 기준이라 이 PC(로컬)에서만(세션 이사와 같은 판정, 2026-11-07)
+        if not _is_local(request):
+            return JSONResponse({"error": "local_only"}, status_code=403)
+        return _owner_team(_team.set_root, team_id, str(body.get("root") or ""))
+
     @app.get("/api/owner/profile")
     def owner_profile(status: str | None = None):
         return _owner_team(lambda: {"profile": _ap.profile_list(status)})
