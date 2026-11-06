@@ -69,7 +69,8 @@ def set_native_title(session_id: str, title: str,
     if agent:
         recs.append({"type": "agent-name", "agentName": title, "sessionId": session_id})
     try:
-        with open(meta.jsonl_path, "a", encoding="utf-8") as f:   # 한 번에(두 줄 사이에 다른 쓰기가 끼지 않게)
+        # 한 번에(두 줄 사이에 다른 쓰기가 끼지 않게). LF 고정 — Windows 텍스트 모드가 CRLF 로 바꾸던 것(2026-11-07)
+        with open(meta.jsonl_path, "a", encoding="utf-8", newline="\n") as f:
             f.write("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in recs))
     except Exception as e:  # noqa: BLE001
         return {"error": f"write_failed: {e}"}
@@ -139,7 +140,7 @@ def sync_agent_names(session_ids: list[str]) -> dict:
         if x["source"] == "label":    # ClewPath 이름뿐이면 claude 이름도 같이(= 기존 이름 바꾸기와 같은 두 줄)
             recs.insert(0, {"type": "custom-title", "customTitle": x["title"], "sessionId": x["session_id"]})
         try:
-            with open(meta.jsonl_path, "a", encoding="utf-8") as f:   # 한 번에(두 줄 사이에 다른 쓰기가 끼지 않게)
+            with open(meta.jsonl_path, "a", encoding="utf-8", newline="\n") as f:   # 한 번에, LF 고정
                 f.write("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in recs))
         except Exception as e:  # noqa: BLE001
             skipped.append({"session_id": x["session_id"], "reason": f"write_failed: {e}"})

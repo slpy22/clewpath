@@ -395,7 +395,7 @@ def change_cwd(session_id: str, new_cwd: str, dry_run: bool = True) -> dict:
     # 백업 후 새로 쓰기
     backup = jsonl.with_suffix(jsonl.suffix + ".bak")
     shutil.copy2(jsonl, backup)
-    with jsonl.open("w", encoding="utf-8") as f:
+    with jsonl.open("w", encoding="utf-8", newline="\n") as f:   # LF 고정(Windows 텍스트 모드 CRLF 방지)
         f.write("\n".join(new_lines) + "\n")
     from session_manager import scanner as _sc
     _sc.invalidate(jsonl)                   # 재작성 — 증분 캐시 무효(append-only 전제 깨짐)

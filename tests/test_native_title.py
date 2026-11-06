@@ -180,3 +180,11 @@ def test_agent_name_sync_label_named_session(home, monkeypatch):
                     {"type": "agent-name", "agentName": "북한법률정보센터", "sessionId": sid}]
     m = scanner.scan_one(sid)
     assert m.custom_title == m.agent_name == "북한법률정보센터" and native_title.agent_name_mismatches() == []
+
+
+def test_title_append_is_lf(home):
+    """이름 추가는 LF 로 쓴다 — Windows 텍스트 모드가 기록 끝에 CRLF 줄을 붙이던 것(2026-11-07)."""
+    _, sid, jf = home
+    jf.write_bytes(jf.read_bytes().replace(b"\r\n", b"\n"))      # 준비 파일 자체가 텍스트 모드로 써져 있을 수 있다
+    assert native_title.set_native_title(sid, "LF 확인")["ok"] is True
+    assert b"\r" not in jf.read_bytes()

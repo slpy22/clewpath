@@ -25,7 +25,7 @@ def _rewrite_cwd(src_jsonl: Path, dst_jsonl: Path, new_cwd: str | None) -> int:
     replaced = 0
     dst_jsonl.parent.mkdir(parents=True, exist_ok=True)
     with src_jsonl.open(encoding="utf-8", errors="replace") as fin, \
-         dst_jsonl.open("w", encoding="utf-8") as fout:
+         dst_jsonl.open("w", encoding="utf-8", newline="\n") as fout:   # LF 고정(Windows 텍스트 모드 CRLF 방지)
         for raw in fin:
             line = raw.rstrip("\n")
             if not line.strip():

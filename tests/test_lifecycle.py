@@ -271,3 +271,10 @@ def test_delete_fork_immediate_and_gone(fake_claude_home, monkeypatch):
     lifecycle._fork_pending_save({"gone0003": {"since": 0, "tries": 1}})
     r = lifecycle.retry_forks()
     assert r["gone"] == ["gone0003"] and lifecycle._fork_pending_load() == {}
+
+
+def test_change_cwd_writes_lf(fake_claude_home):
+    """옛 cwd 치환도 LF 로 쓴다(2026-11-07, 세션 이사와 같은 원인)."""
+    jsonl = _make(fake_claude_home)
+    lifecycle.change_cwd("aaaa1111", "F:\new", dry_run=False)
+    assert b"\r" not in jsonl.read_bytes()

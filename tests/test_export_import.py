@@ -117,3 +117,13 @@ def test_export_route_uses_its_own_temp_file_and_removes_it(fake_claude_home, tm
                 assert any(n.endswith(".jsonl") for n in z.namelist())
     assert len(seen) == 2 and seen[0] != seen[1], "요청마다 다른 임시 파일"
     assert not any(Path(p).exists() for p in seen), "보낸 뒤 지운다"
+
+
+def test_rewrite_cwd_writes_lf(tmp_path):
+    """가져오기는 LF 로 쓴다 — CRLF 원본도 LF 로(2026-11-07, 세션 이사와 같은 원인)."""
+    from session_manager.importer import _rewrite_cwd
+    src, dst = tmp_path / "a.jsonl", tmp_path / "out" / "b.jsonl"
+    src.write_bytes(b'{"cwd": "C:/old"}\r\n{"type": "x"}\r\n')
+    assert _rewrite_cwd(src, dst, "D:/new") == 1
+    assert b"\r" not in dst.read_bytes()
+    assert _rewrite_cwd(src, tmp_path / "c.jsonl", None) == 0 and b"\r" not in (tmp_path / "c.jsonl").read_bytes()
