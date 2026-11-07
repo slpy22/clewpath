@@ -483,6 +483,7 @@ def _claude_argv(session_id: str, skip_permissions: bool = True,
     새 세션(fork)을 만든다. skip_permissions=True 이면 권한확인을 생략한다.
     """
     from session_manager import config as _cfg
+    from session_manager import launch_options
     exe = _cfg.claude_exe()
     argv = [exe, "--resume", session_id]
     if fork_id:
@@ -490,15 +491,16 @@ def _claude_argv(session_id: str, skip_permissions: bool = True,
     else:
         # 세션별 모델 오버라이드(ClewPath 사이드카). 원본 세션 재개에만 적용
         # (fork 는 새 세션이라 제외). claude 파일 무수정 - 런치 플래그만 추가.
+        # 사람이 라벨로 고른 모델 → 만들 때 정한 모델(launch_settings) 순서.
         try:
             from session_manager import labels as _labels
-            _mdl = _labels.model_of(session_id)
+            _mdl = _labels.model_of(session_id) or launch_options.stored_model(session_id)
         except Exception:  # noqa: BLE001
             _mdl = None
         if _mdl:
             argv += ["--model", _mdl]
-    if skip_permissions:
-        argv.append("--dangerously-skip-permissions")
+    # 권한·도구: 만들 때 저장한 설정이 skip 보다 우선(포크도 원본 설정을 따른다 — 포크로 권한을 넓히지 못하게).
+    argv += launch_options.resume_flags(session_id, skip_permissions)
     return argv
 
 
@@ -619,6 +621,12 @@ def _spawn(session_id: str, skip_permissions: bool = True,
                 "포크로 재개하거나, PC 터미널의 claude agents 에서 해당 "
                 "에이전트를 확인·종료한 뒤 다시 재개하세요.\r\n")
     argv = _claude_argv(session_id, skip_permissions, fork_id)
+    if fork_id:
+        try:
+            from session_manager import launch_options
+            launch_options.inherit(session_id, fork_id)
+        except Exception as e:  # noqa: BLE001 — 기록 실패가 터미널을 막지 않는다
+            print(f"[webterm] 포크 생성 설정 복사 실패 {fork_id}: {e}", flush=True)
     return _launch(key, session_id, argv, cwd, persist=not fork_id, cap=cap)
 
 
@@ -754,7 +762,7 @@ _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 
 
 def start_new(cwd: str, prompt: str = "", skip_permissions: bool = True,
-              session_id: str | None = None) -> dict:
+              session_id: str | None = None, launch=None, source: str = "api") -> dict:
     """새 **대화형** 세션을 화면 없이 띄운다(워커 만들기, 2026-10-19 사장님: 워커를 -p 로 만들지 않는다).
 
     `claude --session-id <uuid> [--dangerously-skip-permissions] "<prompt>"` — 첫 지시를 받아 처리한 뒤
@@ -772,11 +780,21 @@ def start_new(cwd: str, prompt: str = "", skip_permissions: bool = True,
     if prompt.startswith("-"):
         raise TermStartError("bad_prompt", "첫 지시는 '-' 로 시작할 수 없습니다(옵션으로 읽힘)", "")
     from session_manager import config as _cfg
-    argv = [_cfg.claude_exe(), "--session-id", sid]
-    if skip_permissions:
-        argv.append("--dangerously-skip-permissions")
-    if prompt:
-        argv.append(prompt)
+    from session_manager import launch_options
+    explicit = launch is not None
+    if launch is None:
+        # 옛 길(워커 스킬 등): skip 하나로 권한을 정한다. 다시 열 때 같은 권한이 되도록 생성 설정을 함께 남긴다.
+        launch = launch_options.LaunchSpec(permission_mode="bypassPermissions" if skip_permissions else "manual")
+        argv = [_cfg.claude_exe(), "--session-id", sid]
+        if skip_permissions:
+            argv.append("--dangerously-skip-permissions")
+        if prompt:
+            argv.append(prompt)
+    else:
+        try:
+            argv = launch_options.new_argv(_cfg.claude_exe(), sid, launch, prompt)
+        except launch_options.LaunchError as e:
+            raise TermStartError(e.code, e.message, "") from e
     with session_lock(sid):
         live = _get_live(sid)
         if live is not None:
@@ -785,7 +803,12 @@ def start_new(cwd: str, prompt: str = "", skip_permissions: bool = True,
         if _live_count() >= cap:
             raise TermStartError("cap", f"동시에 열 수 있는 터미널 상한({cap}개)에 도달했습니다", "")
         sess = _launch(sid, sid, argv, cwd, persist=True, cap=cap)
-    return {"status": "started", "session_id": sid, "pid": getattr(sess.proc, "pid", None)}
+    try:
+        launch_options.save(sid, launch, source)
+    except Exception as e:  # noqa: BLE001 — 세션은 이미 떴다. 기록 실패는 알리고 넘어간다(다시 열 때 옛 동작)
+        print(f"[webterm] 생성 설정 기록 실패 {sid}: {e}", flush=True)
+    out = {"status": "started", "session_id": sid, "pid": getattr(sess.proc, "pid", None)}
+    return {**out, "permission_mode": launch.permission_mode} if explicit else out
 
 
 async def run_terminal(ws, session_id: str, skip_permissions: bool = True,

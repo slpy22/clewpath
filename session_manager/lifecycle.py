@@ -258,13 +258,15 @@ ROWS_FILE = "clewpath_rows.json"
 def _drop_session_rows(session_id: str, bucket: Path) -> None:
     """세션 덧붙임 정보(labels·profiles·hooks 상태)를 지우고, 되살릴 것(이름·라벨·가드레일)은 버킷에 사본으로."""
     try:
-        from session_manager import hooks, labels as _labels, profiles
-        rows = {"labels": _labels.get(session_id), "profiles": profiles.get(session_id)}
+        from session_manager import hooks, labels as _labels, launch_options, profiles
+        rows = {"labels": _labels.get(session_id), "profiles": profiles.get(session_id),
+                "launch": launch_options.dump(session_id)}
         if any(rows.values()):
             (bucket / ROWS_FILE).write_text(json.dumps({"session_id": session_id, **rows}, ensure_ascii=False, indent=1),
                                             encoding="utf-8")
         _labels.delete(session_id)
         profiles.delete(session_id)
+        launch_options.delete(session_id)
         hooks.forget(session_id)
     except Exception as e:  # noqa: BLE001  덧붙임 정보 정리 실패가 삭제를 막지 않는다
         from session_manager import store as _store
@@ -291,6 +293,10 @@ def _restore_session_rows(bucket: Path) -> bool:
                     data["sessions"][sid] = rec
                     mod._save(data)
                     done = True
+        if sid and isinstance(d.get("launch"), dict):        # 생성 설정 — 없으면 복구한 세션이 자동 허용으로 뜬다
+            from session_manager import launch_options
+            launch_options.put(sid, d["launch"])
+            done = True
         return done
     except Exception as e:  # noqa: BLE001
         from session_manager import store as _store

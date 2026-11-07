@@ -27,14 +27,15 @@ def _dd():
 
 
 # ---------------------------------------------------------------- 연결·형식
-def test_one_writer_connection_and_schema_v6(home):
+def test_one_writer_connection_and_schema_v7(home):
     w1 = store.writer()
     w2 = store.writer()
     assert w1 is w2                                              # 쓰기 연결은 하나
     r = store.reader()
     try:
         assert r is not w1
-        assert r.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION == 6
+        assert r.execute("PRAGMA user_version").fetchone()[0] == store.SCHEMA_VERSION == 7
+        assert r.execute("SELECT name FROM sqlite_master WHERE name='launch_settings'").fetchone(), "v7 생성 설정 표"
         assert r.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
     finally:
         r.close()
@@ -455,5 +456,5 @@ def test_restore_kept_value_via_api(home, monkeypatch):
         r = client.post("/api/owner/store/restore-kept", json={"kept": st["kept"][0]})
         assert r.status_code == 200, r.text
         assert client.post("/api/owner/store/restore-kept", json={"kept": "../labels.json"}).status_code == 400
-        assert client.get("/api/owner/store").json()["schema"] == 6
+        assert client.get("/api/owner/store").json()["schema"] == 7
     assert labels.get("s1")["name"] == "가"                      # 보존본(옛 파일) 값

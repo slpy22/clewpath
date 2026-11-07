@@ -9,11 +9,8 @@ from __future__ import annotations
 import shlex
 from pathlib import Path
 
-from session_manager import config, osdep
+from session_manager import config, launch_options, osdep
 from session_manager.scanner import scan_one, resolve_launch_cwd
-
-
-_SKIP_FLAG = "--dangerously-skip-permissions"
 
 
 def _quote(s: str) -> str:
@@ -23,6 +20,11 @@ def _quote(s: str) -> str:
     return shlex.quote(s)
 
 
+def _flags(session_id: str, skip_permissions: bool) -> str:
+    """재개 인자 — 만들 때 저장한 권한·도구가 skip 보다 우선(launch_options.resume_flags)."""
+    return "".join(" " + _quote(a) for a in launch_options.resume_flags(session_id, skip_permissions))
+
+
 def resume_command(session_id: str, skip_permissions: bool = True) -> dict:
     """재개 명령어와 작업 경로를 반환한다."""
     meta = scan_one(session_id)
@@ -30,7 +32,7 @@ def resume_command(session_id: str, skip_permissions: bool = True) -> dict:
         return {"error": "세션을 찾을 수 없습니다.", "session_id": session_id}
     # fork 세션 등은 실제 저장 폴더와 맞는 실행 디렉토리에서 재개해야 claude 가 찾는다.
     cwd = resolve_launch_cwd(meta) or meta.cwd
-    flag = f" {_SKIP_FLAG}" if skip_permissions else ""
+    flag = _flags(session_id, skip_permissions)
     cmd = f'{_quote(config.claude_exe())} --resume {session_id}{flag}'
     if not cwd:
         full = cmd
@@ -60,7 +62,7 @@ def launch_terminal(session_id: str, skip_permissions: bool = True) -> dict:
         return {**info, "launched": False,
                 "error": "작업 경로가 존재하지 않아 새 터미널을 열 수 없습니다. 명령어를 직접 실행하세요."}
 
-    flag = f" {_SKIP_FLAG}" if skip_permissions else ""
+    flag = _flags(session_id, skip_permissions)
     try:
         if not osdep.open_resume_terminal(f"claude --resume {session_id}{flag}", cwd):
             # 아직 새 터미널 창을 못 여는 OS 면 명령어 반환에 의존

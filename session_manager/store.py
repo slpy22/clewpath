@@ -31,7 +31,7 @@ from typing import Any, Callable
 from session_manager import config
 
 LOCAL_PC = "local"
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 _lock = threading.RLock()          # 쓰기 직렬화(프로세스 안). team._lock 은 이것의 별명
 _w: sqlite3.Connection | None = None
 _w_path: str | None = None
@@ -99,6 +99,13 @@ CREATE TABLE IF NOT EXISTS worklog_turns(pc_id TEXT NOT NULL DEFAULT 'local', se
   ts INTEGER, request TEXT, result TEXT, result_ts INTEGER, PRIMARY KEY(session_id, n));
 CREATE INDEX IF NOT EXISTS ix_worklog_turns_ts ON worklog_turns(ts);
 """
+# v7(프롬프트로 세션 다루기, 2026-11-07): 새 세션의 생성 설정 — 다시 열 때 같은 권한·도구로 띄운다(docs/designs/session-control.md 4-1).
+# 라벨(사람이 지우면 레코드가 사라짐)·API 프로필(Claude 세션이 MCP 로 바꿀 수 있음)과 수명을 나눠 Host 만 쓴다.
+_SCHEMA_V7 = """
+CREATE TABLE IF NOT EXISTS launch_settings(pc_id TEXT NOT NULL DEFAULT 'local', session_id TEXT NOT NULL,
+  permission_mode TEXT, effort TEXT, model TEXT, body_json TEXT NOT NULL, source TEXT, created INTEGER,
+  PRIMARY KEY(pc_id, session_id));
+"""
 # 세션 표 기본키는 지금 session_id 만으로도 유일하다(이 PC 행뿐). 허브가 다른 PC 행을 들여올 때 (pc_id, session_id) 로
 # 바꾼다(TODOS 데이터 저장 정리 T3). session_meta 등 새 표는 처음부터 (pc_id, session_id).
 
@@ -113,7 +120,7 @@ def _migrate(c: sqlite3.Connection) -> None:
         _pre_store_backup(c, v)
     steps: list[tuple[int, str]] = [
         (1, team._SCHEMA), (2, team._SCHEMA_V2 + team._fts_sql()), (3, team._SCHEMA_V3),
-        (4, team._SCHEMA_V4), (5, team._SCHEMA_V5), (6, _SCHEMA_V6),
+        (4, team._SCHEMA_V4), (5, team._SCHEMA_V5), (6, _SCHEMA_V6), (7, _SCHEMA_V7),
     ]
     for ver, sql in steps:
         if v < ver:
@@ -847,7 +854,7 @@ def reconcile_all() -> dict:
 # 세션 삭제(휴지통) 때 같이 지울 표 / 남길 표(장부·이력). session_id 열이 있는 표는 모두 둘 중 하나에 있어야 한다(시험이 검사).
 # 지울 표는 lifecycle.delete_session 이 주인 모듈(labels·profiles·hooks)로 지우고 사본을 휴지통 버킷에 둔다(복구 때 되살림).
 # 남길 표: 팀 장부·작업 장부(경력·기록 — 세션이 지워져도 남는 것이 목적), 등록부·숨김 목록(주인 모듈이 스스로 정리).
-SESSION_TABLES_DELETE = ("session_meta", "session_policy", "session_runtime")
+SESSION_TABLES_DELETE = ("session_meta", "session_policy", "session_runtime", "launch_settings")
 SESSION_TABLES_KEEP = ("agent_sessions", "ingest", "usage", "addresses", "pending_sends", "web_prompts",
                        "worklog_ws", "worklog_turns", "pty_registry", "hidden_sessions")
 

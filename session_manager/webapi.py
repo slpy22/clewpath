@@ -236,13 +236,20 @@ def _claude_argv(session_id: str, skip_permissions: bool = True,
             "--verbose"]
     if fork_id:
         argv += ["--fork-session", "--session-id", fork_id]
-    argv += _guardrail_args(guardrails or {}, skip_permissions)
+    g = guardrails or {}
+    if g.get("permission_mode"):
+        argv += _guardrail_args(g, skip_permissions)
+    else:
+        # 만들 때 저장한 권한·도구가 skip 보다 우선(저장값이 없으면 지금 동작 그대로). 가드레일의 권한 모드가 있으면 그쪽이 먼저.
+        from session_manager import launch_options
+        argv += _guardrail_args(g, False) + launch_options.resume_flags(session_id, skip_permissions)
     # 세션별 모델 오버라이드(ClewPath 사이드카): 원본 재개이고 가드레일이 모델을
     # 지정하지 않았을 때만 적용(가드레일 모델이 우선). claude 파일 무수정.
     if not fork_id and "--model" not in argv:
         try:
             from session_manager import labels as _labels
-            _mdl = _labels.model_of(session_id)
+            from session_manager import launch_options as _lo
+            _mdl = _labels.model_of(session_id) or _lo.stored_model(session_id)
         except Exception:  # noqa: BLE001
             _mdl = None
         if _mdl:
