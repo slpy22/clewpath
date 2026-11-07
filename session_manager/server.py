@@ -359,6 +359,16 @@ async def _lifespan(app: FastAPI):
     from session_manager import store_recovery as _store_rec
     _store_rec.start_background()
 
+    def _ops_recover():                    # 일괄 실행 중에 죽은 승인을 다시 실행할 수 있게(끝난 항목은 건너뛴다)
+        try:
+            from session_manager import session_ops as _so
+            n = _so.recover()
+            if n:
+                print(f"[session_ops] 실행 중에 멈춘 승인 {n}건을 되돌림", flush=True)
+        except Exception as e:  # noqa: BLE001
+            print(f"[session_ops] 승인 복구 건너뜀: {e}", flush=True)
+    threading.Thread(target=_ops_recover, name="ops-recover", daemon=True).start()
+
     # 이전 Host 가 강제 종료되며 남긴 고아 정리(협의된 예외 - ClewPath 자신이
     # 낳은 프로세스 한정): 웹재개 스트림(서명+부모사망) + PTY(자기 등록부 기반).
     # 스레드로 - 기동을 막지 않게.
@@ -476,7 +486,7 @@ def create_app() -> FastAPI:
     # ---- 인증(비밀번호 게이트 + API 토큰) ----
     # 순수 ASGI 미들웨어: 바디를 읽지 않아 POST body 파싱을 깨지 않는다.
     # 바깥문 B: 나중에 더한 미들웨어가 바깥이다 — 인증을 먼저 통과한 요청만 소유자를 추적한다.
-    from session_manager import outer_door as _outer_door
+    from session_manager import outer_door as _outer_door, session_ops as _session_ops
     app.add_middleware(_outer_door.OuterDoorMiddleware, base_path=BASE_PATH)
     app.add_middleware(AuthASGIMiddleware, base_path=BASE_PATH)
     from session_manager.pclink import routes as _pclink_routes
@@ -1475,6 +1485,63 @@ def create_app() -> FastAPI:
         if not _is_local(request):
             return JSONResponse({"error": "local_only"}, status_code=403)
         return _owner_team(_team.set_root, team_id, str(body.get("root") or ""))
+
+    # ---- 프롬프트로 세션 다루기(docs/designs/session-control.md) — 이 PC 안에서만. 판단·승인은 session_ops ----
+    def _ops(request: Request, fn, *a, **kw):
+        if not _is_local(request):
+            return JSONResponse({"error": "local_only"}, status_code=403)
+        try:
+            return fn(*a, **kw)
+        except _team.TeamError as e:
+            return JSONResponse({"error": e.code}, status_code=e.status)
+
+    def _ops_caller(request: Request) -> str | None:
+        c = request.client
+        kind, detail = _outer_door.identify(c.host if c else None, c.port if c else None,
+                                            request.scope.get("server", (None, None))[1])
+        return detail if kind == "claude" else None
+
+    @app.get("/api/v1/session-ops/capabilities")
+    def session_ops_caps(request: Request):
+        return _ops(request, _session_ops.capabilities)
+
+    @app.get("/api/v1/session-ops/find")
+    def session_ops_find(request: Request, q: str = "", cwd: str = "", limit: int = 50):
+        return _ops(request, _session_ops.find, q, cwd, limit)
+
+    @app.post("/api/v1/session-ops/rename")
+    def session_ops_rename(request: Request, body: dict = Body(...)):
+        return _ops(request, _session_ops.rename, str(body.get("session_id") or ""), str(body.get("name") or ""), _ops_caller(request))
+
+    @app.post("/api/v1/session-ops/create")
+    def session_ops_create(request: Request, body: dict = Body(...)):
+        return _ops(request, _session_ops.create, body.get("cwd"), body.get("name"), body.get("prompt") or "",
+                    body.get("options"), _ops_caller(request))
+
+    @app.post("/api/v1/session-ops/move/preview")
+    def session_ops_move_preview(request: Request, body: dict = Body(...)):
+        return _ops(request, _session_ops.preview_move, body.get("ids"), body.get("new_cwd"), _ops_caller(request))
+
+    @app.post("/api/v1/session-ops/move/request")
+    def session_ops_move_request(request: Request, body: dict = Body(...)):
+        return _ops(request, _session_ops.request, "sessions_move", {"ids": body.get("ids"), "new_cwd": body.get("new_cwd")},
+                    _ops_caller(request))
+
+    @app.post("/api/v1/session-ops/delete/preview")
+    def session_ops_delete_preview(request: Request, body: dict = Body(...)):
+        return _ops(request, _session_ops.preview_delete, body.get("ids"), _ops_caller(request))
+
+    @app.post("/api/v1/session-ops/delete/request")
+    def session_ops_delete_request(request: Request, body: dict = Body(...)):
+        return _ops(request, _session_ops.request, "sessions_delete", {"ids": body.get("ids")}, _ops_caller(request))
+
+    @app.post("/api/v1/session-ops/finish/{aid}")
+    def session_ops_finish(request: Request, aid: str):
+        return _ops(request, _session_ops.finish, aid)
+
+    @app.post("/api/v1/session-ops/restore")
+    def session_ops_restore(request: Request, body: dict = Body(...)):
+        return _ops(request, _session_ops.restore, str(body.get("bucket") or ""))
 
     @app.get("/api/owner/profile")
     def owner_profile(status: str | None = None):

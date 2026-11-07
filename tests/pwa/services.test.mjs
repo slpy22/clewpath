@@ -79,3 +79,34 @@ test("등록 승인 시트: 서비스·폴더·한도·원본 가드레일·검�
   assert.ok(t.includes("검사 경고 1개") && t.includes("⚠ 비밀값으로 보이는 파일: .env"));
   assert.ok(!t.includes('"service": "nklaw"'), "JSON 덤프 대신 읽기 좋게");
 });
+
+test("세션 이동 승인 시트: 옮길 곳·대상 전부·기록만 옮긴다는 안내", async () => {
+  const ctx = await boot(false, {});
+  const AP = { id: "ap_3", kind: "sessions_move", status: "pending", created: 1, expires: 2, requested_by: "s-1",
+    summary: "세션 2개 이동 → E:/200_nk_law_center: 남북비교, 법령 수집",
+    args: { new_cwd: "E:/200_nk_law_center", items: [{ session_id: "aaaa1111-x", title: "남북비교", cwd: "E:/004" }, { session_id: "bbbb2222-x", title: null, cwd: null }] } };
+  ev(ctx, "showApprovalSheet(" + JSON.stringify(AP) + ")");
+  const t = modals(ctx).at(-1).body.text;
+  assert.ok(t.includes("세션 이동") && t.includes("옮길 곳: E:/200_nk_law_center") && t.includes("대상 세션 2개"));
+  assert.ok(t.includes("남북비교 · E:/004") && t.includes("bbbb2222 · (폴더 없음)") && t.includes("기록만 옮깁니다"));
+  assert.ok(!t.includes('"new_cwd"'), "JSON 덤프 대신 읽기 좋게");
+});
+
+test("세션 삭제 승인 시트: 대상 전부와 복구 안내", async () => {
+  const ctx = await boot(false, {});
+  const items = Array.from({ length: 12 }, (_, i) => ({ session_id: "s" + i, title: "세션" + i, cwd: "F:/w" }));
+  ev(ctx, "showApprovalSheet(" + JSON.stringify({ id: "ap_4", kind: "sessions_delete", status: "pending", created: 1, expires: 2, summary: "세션 12개 휴지통으로", args: { items } }) + ")");
+  const t = modals(ctx).at(-1).body.text;
+  assert.ok(t.includes("대상 세션 12개") && t.includes("세션11 · F:/w") && t.includes("30일 안 복구"), "요약이 잘려도 시트엔 전부");
+});
+
+test("권한을 넓히는 새 세션 승인 시트: 넓히는 항목·옵션·첫 지시", async () => {
+  const ctx = await boot(false, {});
+  const AP = { id: "ap_5", kind: "session_create_auto", status: "pending", created: 1, expires: 2, summary: "새 세션(permission_mode=bypassPermissions)",
+    args: { cwd: "F:/w", prompt: "모든 파일을 고쳐라", widens: ["permission_mode=bypassPermissions", "allowed_tools"],
+            options: { name: "일꾼", permission_mode: "bypassPermissions", allowed_tools: ["Bash", "Edit"] } } };
+  ev(ctx, "showApprovalSheet(" + JSON.stringify(AP) + ")");
+  const t = modals(ctx).at(-1).body.text;
+  assert.ok(t.includes("폴더: F:/w") && t.includes("⚠ 넓히는 항목: permission_mode=bypassPermissions, allowed_tools"));
+  assert.ok(t.includes("allowed_tools: Bash, Edit") && t.includes("모든 파일을 고쳐라"));
+});

@@ -27,7 +27,9 @@ from session_manager import config, team
 
 TTL_S = 30 * 60
 KINDS = ("team_create", "team_import", "team_archive", "team_delete", "team_purge", "assistant_set", "delegate", "task_decide", "profile_decide",
-         "session_send", "service_register", "pclink_pair", "pclink_contact")
+         "session_send", "service_register", "pclink_pair", "pclink_contact",
+         "sessions_move", "sessions_delete", "session_create_auto")
+_SESSION_OPS = ("sessions_move", "sessions_delete", "session_create_auto")   # 인자·요약은 session_ops.prepare 가 서버에서 다시 만든다
 _ALIAS_ASSISTANT = "비서"
 _PORTFOLIO_CODE = "ASSIST"
 ASSISTANT_TITLE = "개인비서"      # 비서 세션 이름 고정(2026-10-13 사장님)
@@ -73,7 +75,8 @@ def _validate(kind: str, a: dict) -> None:
     need = {"team_create": ("name",), "team_import": ("path",), "team_archive": ("team",), "team_delete": ("team",), "team_purge": ("team",), "assistant_set": (),
             "delegate": ("team", "goal"), "task_decide": ("team", "task", "action"), "profile_decide": ("id", "decision"),
             "session_send": ("session_id", "message"), "service_register": ("request", "service", "folder", "bases"),
-            "pclink_pair": ("action",), "pclink_contact": ("peer", "session_id")}
+            "pclink_pair": ("action",), "pclink_contact": ("peer", "session_id"),
+            "sessions_move": ("items", "new_cwd"), "sessions_delete": ("items",), "session_create_auto": ("cwd", "session_id")}
     if kind not in KINDS:
         raise team.TeamError("bad_kind")
     for k in need[kind]:
@@ -100,6 +103,9 @@ def _view(r) -> dict:
 def create(kind: str, args: dict, summary: str = "", requested_by: str | None = None, notify: bool = True) -> dict:
     """notify=False: 사장님이 화면에서 직접 낸 요청 — 승인 시트가 바로 열리므로 폰 알림을 보내지 않는다."""
     args = dict(args or {})
+    if kind in _SESSION_OPS:          # 호출자가 보낸 제목·요약은 믿지 않는다 — 폰 화면이 사실을 보여 주게
+        from session_manager import session_ops
+        args, summary = session_ops.prepare(kind, args, requested_by)
     _validate(kind, args)
     aid = "ap_" + secrets.token_hex(6)
     s = team._clean(summary or _summary(kind, args), 300)
@@ -294,6 +300,21 @@ def _x_pclink_pair(a: dict, aid: str, by: str | None) -> dict:
     return service.execute_pair(a)
 
 
+def _x_sessions_move(a: dict, aid: str, by: str | None) -> dict:
+    from session_manager import session_ops
+    return session_ops.run_batch("sessions_move", a, aid)
+
+
+def _x_sessions_delete(a: dict, aid: str, by: str | None) -> dict:
+    from session_manager import session_ops
+    return session_ops.run_batch("sessions_delete", a, aid)
+
+
+def _x_session_create_auto(a: dict, aid: str, by: str | None) -> dict:
+    from session_manager import session_ops
+    return session_ops.run_create(a, aid)
+
+
 def _x_pclink_contact(a: dict, aid: str, by: str | None) -> dict:
     """첫 연락 승인 — 짝 PC 가 그 세션의 지금·앞으로 대화 전체를 30일 동안 물을 수 있게(D13)."""
     from session_manager.pclink import service
@@ -303,7 +324,8 @@ def _x_pclink_contact(a: dict, aid: str, by: str | None) -> dict:
 _EXEC = {"team_create": _x_team_create, "team_import": _x_team_import, "team_archive": _x_team_archive, "team_delete": _x_team_delete, "team_purge": _x_team_purge,
          "assistant_set": _x_assistant_set, "delegate": _x_delegate, "task_decide": _x_task_decide,
          "profile_decide": _x_profile_decide, "session_send": _x_session_send,
-         "service_register": _x_service_register, "pclink_pair": _x_pclink_pair, "pclink_contact": _x_pclink_contact}
+         "service_register": _x_service_register, "pclink_pair": _x_pclink_pair, "pclink_contact": _x_pclink_contact,
+         "sessions_move": _x_sessions_move, "sessions_delete": _x_sessions_delete, "session_create_auto": _x_session_create_auto}
 
 
 # ---------------------------------------------------------------- 비서(A-7)

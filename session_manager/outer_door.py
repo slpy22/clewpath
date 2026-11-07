@@ -43,6 +43,10 @@ OPEN = frozenset({
     "/api/sessions/{session_id}/labels", "/api/v1/sessions/{session_id}/labels", "/api/sessions/{session_id}/model",
     "/api/sessions/{session_id}/keep", "/api/sessions/{session_id}/standalone", "/api/sessions/{session_id}/picker-expose",
     "/api/sessions/{session_id}/profile", "/api/v1/sessions/{session_id}/profile", "/api/sessions/{session_id}/file/download",
+    # 프롬프트 세션 제어: 판단·승인은 session_ops 가 한다(이 문을 막으면 도구가 못 돈다)
+    "/api/v1/session-ops/rename", "/api/v1/session-ops/create", "/api/v1/session-ops/restore",
+    "/api/v1/session-ops/move/preview", "/api/v1/session-ops/move/request",
+    "/api/v1/session-ops/delete/preview", "/api/v1/session-ops/delete/request", "/api/v1/session-ops/finish/{aid}",
     # 묻기·단발 실행(토큰·한도가 따로 있음)
     "/api/v1/sessions/{session_id}/ask", "/api/v1/oneshot", "/api/v1/pclink/ask", "/api/v1/pclink/poll",
     # 팀 명부(에이전트 경로·사장님 화면)

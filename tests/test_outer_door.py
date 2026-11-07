@@ -113,7 +113,7 @@ def started(monkeypatch):
     events = {"audit": [], "push": []}
     from session_manager import policy, push
     monkeypatch.setattr(policy, "audit", lambda e: events["audit"].append(e))
-    monkeypatch.setattr(push, "send", lambda *a, **k: events["push"].append(a))
+    monkeypatch.setattr(push, "send", lambda *a, **k: str(a[0]).startswith("auto-session:") and events["push"].append(a))
     return events
 
 
