@@ -77,7 +77,7 @@ ClewPath 는 claude 를 **관찰·중계·실행**하는 도구이지, claude �
   살아 있는 세션에 글을 넣는 실시간 전달·원격 작업 지시는 만들지 않는다(받는 Claude 가 동료 요청으로 실행 — 허브 프로젝트에서 따로).
   보낸 쪽 세션 확인은 `~/.claude/sessions/*.json` **읽기만**. 가드: test_webapi_ephemeral_isolated.py·test_pclink_routes.py
 
-- 프롬프트로 세션 다루기(2026-11-07 사장님 승인, 기획 docs/designs/session-control.md 7절 — **구현은 지시 뒤, 아직 없음**) →
+- 프롬프트로 세션 다루기(2026-11-07 사장님 승인, 기획 docs/designs/session-control.md 7절 — **Host 쪽 N2~N4·바깥문은 구현됨(session_ops.py·outer_door.py·launch_options.py), N1 플러그인·N5 폴더 이사는 아직 없음**. `~/.claude.json` 은 폴더 신뢰 표시만 읽는다. 가드: test_session_ops.py·test_outer_door.py·test_launch_options.py) →
   N1 설정 화면 📦 버튼 + 확인창으로 ClewPath 플러그인(스킬 + MCP) 설치 = `claude plugin` 명령으로 Claude 설정을 씀
   (위 비서 스킬 항목의 "MCP 등록은 명령 안내만"에 대한 이 플러그인 한정 예외, 기동·업데이트 경로에선 호출 안 함).
   N2 삭제·이동은 프롬프트 요청 + 미리보기 + Host 승인(폰 탭/PC 2FA, 일괄 1회)을 명시 동작 + 확인창으로 인정.

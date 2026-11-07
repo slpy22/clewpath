@@ -4,6 +4,19 @@
 설계 근거: `docs/2026-09-03-multi-session-monitoring-design.md`,
 `docs/2026-09-10-multi-terminal-tabs-design.md`
 
+## 기획: 프롬프트로 세션 다루기 — docs/designs/session-control.md (2026-11-06 요청, 2026-11-07 설계 검토, 설계서 미커밋)
+
+### Phase 1 (이번 사이클) — 출시 ① Host, 구현 과제는 설계서 11-10 절
+- [x] 출시 ① Host 구현(2026-11-07, 미출시): launch_options·launch_settings·바깥문 B·session_ops·승인 종류·감사 알림·PWA 승인 문구 (T1~T7)
+- [ ] 저장된 생성 설정보다 넓혀서 다시 여는 화면 동작(지금은 만든 뒤 넓히는 길이 없음)
+
+### Phase 2 — 출시 ②·③
+- [ ] 출시 ② MCP(session_control_mcp, 도구 8개)·플러그인·설정 📦 버튼, 실험 X1·X2·X4·X6
+- [ ] 출시 ③ 폴더 통째 이사(메모리 복사 N5·하위 폴더·숨은 기록·팀 root 제안, 파일 잠금 대비 복사→검증→정리)
+
+### Deferred (설계 검토 2026-11-07, 위임 판정으로 추가)
+- [ ] **로컬 API 의 Origin·Host 헤더 검사(CSRF·DNS 재바인딩)** — What: 루프백 무인증 라우트에 브라우저 페이지발 요청·재바인딩을 막는 검사. Why: B 의 '비-Claude 통과'는 사람 증명이 아니고(Codex), server.py 에 Origin·Host 검사가 없다(grep 0건). JSON 본문 라우트는 text/plain 요청이 파싱되지 않아 일부 막히지만 전수 확인 안 됨. Pros: 브라우저발 원치 않는 쓰기 차단. Cons: 릴레이·PWA·앱이 보내는 헤더 전수 점검 필요. Context: 기존 문제, 이 기획 범위 밖. 시작점 server.py 미들웨어(AuthASGIMiddleware). Depends on: 없음
+
 ## 기획: 데이터 저장 정리 — docs/designs/data-store.md (2026-11-05 사장님 요청·설계 검토, 설계서는 아직 미커밋)
 사장님 결정: team.db 를 상태 DB 로 합침 · PC 키(pc_id) 지금 넣음 · worklog 는 캐시로 내리기로 했으나 설계 검토(크로스체크 위임)에서 **영구 저장으로 바뀜**(캐시가 깨지면 원본 없는 세션 요약이 사라짐). 출시는 R1(새 DB 정본 + 옛 JSON 거울) → R2(거울 중단, 되돌림 대상이 R1 이상일 때만).
 ### Phase 1 (이번 사이클) — 구현 과제는 설계서 끝 'Implementation Tasks'
