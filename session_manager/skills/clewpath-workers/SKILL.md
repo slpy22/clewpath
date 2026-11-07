@@ -1,5 +1,5 @@
 ---
-name: clewpath-workers
+name: workers
 description: 여러 Claude 세션이 한 팀으로 일하는 운영 규칙(v2). 관리 세션은 일감을 배정·승인하고, 워커들은 배정 범위 안에서 서로 직접 SendMessage 로 협업한다. 팀·에이전트·일감 이력은 ClewPath Host(127.0.0.1:5100)의 팀 명부에 쌓인다. "워커에게 시켜", "하위 세션에 분배", "일감 나눠서", "팀 만들어", "clewpath workers" 라고 하거나, 생성 프롬프트가 "너는 '<별칭>' 워커다" 이면 호출.
 ---
 

@@ -45,6 +45,19 @@ def test_find_by_name_and_folder(home, tmp_path):
     assert ops.find(cwd=str(tmp_path / "없음"))["total"] == 0
 
 
+def test_find_uses_label_name_for_unnamed_sessions(home, tmp_path):
+    """화면 이름이 ClewPath 라벨뿐인 세션도 그 이름으로 찾는다."""
+    from session_manager import labels
+    D = "dddddddd-1111-2222-3333-444444444444"
+    write_session(home, path_to_folder(str(tmp_path / "old")), D,
+                  [{"type": "user", "cwd": str(tmp_path / "old"), "message": {"role": "user", "content": "x"}, "timestamp": "2026-11-01T00:00:00Z"}])
+    scanner._CACHE.clear()
+    labels.set_record(D, name="라벨이름")
+    r = ops.find("라벨")
+    assert [(s["session_id"], s["title"]) for s in r["sessions"]] == [(D, "라벨이름")]
+    assert ops.preview_delete([D])["items"][0]["title"] == "라벨이름", "폰 승인 화면에도 같은 이름"
+
+
 def test_find_caps_results(home):
     r = ops.find(limit=2)
     assert len(r["sessions"]) == 2 and r["total"] == 3 and r["truncated"] is True

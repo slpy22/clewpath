@@ -267,7 +267,7 @@ test("showSettings(로컬): 로컬 전용 항목이 전부 보인다", async () 
   const ctx = await load({ location: LOCAL_LOC });
   assert.equal(ev(ctx, "MODE"), "local");
   const t = settingsText(ctx);
-  for (const s of ["2차 인증", "외부 접속 기기", "휴지통", "워커 스킬", "비서 스킬", "설치 상태", "재설치", "보안"]) assert.ok(t.includes(s), "로컬 표시: " + s);
+  for (const s of ["2차 인증", "외부 접속 기기", "휴지통", "ClewPath 플러그인", "설치 상태", "재설치", "보안"]) assert.ok(t.includes(s), "로컬 표시: " + s);
   assert.ok(!t.includes("이 기기 초기화") && !t.includes("내 PC"), "로컬엔 폰 전용 항목 없음");
 });
 

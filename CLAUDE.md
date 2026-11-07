@@ -78,8 +78,10 @@ ClewPath 는 claude 를 **관찰·중계·실행**하는 도구이지, claude �
   보낸 쪽 세션 확인은 `~/.claude/sessions/*.json` **읽기만**. 가드: test_webapi_ephemeral_isolated.py·test_pclink_routes.py
 
 - 프롬프트로 세션 다루기(2026-11-07 사장님 승인, 기획 docs/designs/session-control.md 7절 — **N1~N4·바깥문은 구현됨(session_ops.py·outer_door.py·launch_options.py·plugininstall.py·session_control_mcp.py), N5 폴더 이사는 아직 없음**. `~/.claude.json` 은 폴더 신뢰 표시만 읽는다. 가드: test_session_ops.py·test_outer_door.py·test_launch_options.py·test_plugininstall.py) →
-  N1 설정 화면 📦 버튼 + 확인창으로 ClewPath 플러그인(스킬 + MCP) 설치 = `claude plugin` 명령으로 Claude 설정을 씀
-  (위 비서 스킬 항목의 "MCP 등록은 명령 안내만"에 대한 이 플러그인 한정 예외, 기동·업데이트 경로에선 호출 안 함).
+  N1 설정 화면 📦 체크박스 + 적용 버튼으로 ClewPath 플러그인(세션 제어·워커·비서, 항목 하나 = 플러그인 하나)을 설치·갱신·제거 = `claude plugin` 명령으로
+  Claude 설정을 씀(위 비서 스킬 항목의 "MCP 등록은 명령 안내만"에 대한 이 플러그인 한정 예외, 기동·업데이트 경로에선 호출 안 함).
+  2026-11-07 사장님 승인으로 워커·비서 스킬도 여기로 합쳤다 — 위 두 스킬 설치 항목의 `~/.claude/skills` 파일 생성은 없어졌고, 체크한 항목의 옛 스킬 폴더는
+  사용자가 고르면 플러그인 설치 뒤 ClewPath 데이터 폴더로 옮긴다(지우지 않음, plugininstall.py).
   N2 삭제·이동은 프롬프트 요청 + 미리보기 + Host 승인(폰 탭/PC 2FA, 일괄 1회)을 명시 동작 + 확인창으로 인정.
   N3 이름 변경은 프롬프트 요청 + Claude 확인창(`requiresUserInteraction`)을 명시 동작으로 인정, 실행 중 세션은 거절.
   N4 새 세션 생성을 프롬프트로(권한 확인 모드 기본, 권한을 넓히는 옵션은 Host 승인). N5 폴더 통째 이사 때 Claude 메모리

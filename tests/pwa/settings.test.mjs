@@ -10,8 +10,7 @@ const DATA = {
   "GET /api/owner/devices": { active: 2, total: 3, devices: [] },
   "GET /api/owner/housekeeping": { idle_hours: 4, jobs: [{ id: "idle_sessions", enabled: true }, { id: "models", enabled: true }] },
   "GET /api/owner/trash": { trash: [{ bucket: "b1", session_id: "s1", items: 1 }] },
-  "GET /api/owner/skills/workers": { installed: true, up_to_date: false, path: "p" },
-  "GET /api/owner/skills/assistant": { installed: true, up_to_date: true, path: "p" },
+  "GET /api/owner/plugin": { want: "0.36.1", items: [{ key: "sessions", title: "세션 제어", installed: true, up_to_date: false }, { key: "workers", title: "워커 규칙", installed: false }] },
   "GET /api/owner/ptyd": { enabled: true, running: true, sessions: 3 },
 };
 async function boot() {
@@ -59,8 +58,7 @@ test("설정 첫 화면: 항목별 지금 상태 · 손볼 것은 주황(warn) �
   assert.ok(txt("외부 접속 기기").includes("활성 2대 · 해제 1"));
   assert.ok(txt("정기 작업").includes("쉬는 세션 4시간 뒤 정리") && txt("정기 작업").includes("2/2"));
   assert.ok(txt("휴지통").includes("세션 1개"));
-  assert.ok(txt("워커 스킬").includes("새 내용 있음") && warn("워커 스킬"));
-  assert.ok(txt("비서 스킬").includes("최신") && !warn("비서 스킬"));
+  assert.ok(txt("ClewPath 플러그인").includes("새 판 있음") && warn("ClewPath 플러그인"));
   assert.ok(txt("터미널 관리 프로세스").includes("터미널 3개"));
   const all = ev(ctx, "SETNAV.stack[0].body.text");
   assert.ok(!all.includes("고급") && !all.includes("팀 보기로"));

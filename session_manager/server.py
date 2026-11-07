@@ -1971,30 +1971,7 @@ def create_app() -> FastAPI:
 
     # ---- 동봉 스킬 설치(워커 분배 스킬, v0.9.0) — 사용자 명시 동작(설정 버튼+확인창) 경유만 ----
     #      ~/.claude/skills 에 새 파일 생성: 불가침 원칙 예외(2026-09-23 승인). 로컬 전용.
-    @app.get("/api/owner/skills/{key}")
-    def skills_status(key: str):
-        from session_manager import skillinstall
-        try:
-            return skillinstall.status(key)
-        except KeyError:
-            return JSONResponse({"error": "unknown_skill"}, status_code=404)
-
-    @app.post("/api/owner/skills/{key}/install")
-    def skills_install(request: Request, key: str, overwrite: bool = Body(False, embed=True)):
-        from session_manager import skillinstall
-        if not _is_local(request):
-            return JSONResponse({"error": "이 PC(로컬)에서만 설치할 수 있습니다."}, status_code=403)
-        try:
-            r = skillinstall.install(overwrite=overwrite, key=key)
-        except KeyError:
-            return JSONResponse({"error": "unknown_skill"}, status_code=404)
-        except FileNotFoundError:
-            return JSONResponse({"error": "bundled_missing"}, status_code=500)
-        if r.get("exists"):
-            return JSONResponse(r, status_code=409)
-        return r
-
-    # 세션 제어 플러그인(불가침 예외 N1): 설치·갱신은 설정 화면 버튼 + 확인창으로만, 이 PC 에서만.
+    # ClewPath 플러그인(불가침 예외 N1): 체크박스 + 적용 버튼으로만, 이 PC 에서만. 동봉 스킬도 플러그인 항목으로 설치한다.
     @app.get("/api/owner/plugin")
     def plugin_status(request: Request):
         from session_manager import plugininstall
@@ -2003,14 +1980,14 @@ def create_app() -> FastAPI:
         return plugininstall.status()
 
     @app.post("/api/owner/plugin/install")
-    def plugin_install(request: Request):
+    def plugin_install(request: Request, body: dict = Body(...)):
         from session_manager import plugininstall
         if not _is_local(request):
             return JSONResponse({"error": "이 PC(로컬)에서만 설치할 수 있습니다."}, status_code=403)
         try:
-            return plugininstall.install()
+            return plugininstall.apply(body.get("items"), move_old=bool(body.get("move_old")))
         except plugininstall.PluginError as e:
-            return JSONResponse({"error": e.code, "detail": e.detail}, status_code=500)
+            return JSONResponse({"error": e.code, "detail": e.detail}, status_code=400 if e.code == "unknown_item" else 500)
 
     @app.post("/api/owner/push/test")
     def push_test():

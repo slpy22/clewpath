@@ -24,7 +24,7 @@ import uuid
 from collections import deque
 from pathlib import Path
 
-from session_manager import launch_options, lifecycle, native_title, scanner, store, team
+from session_manager import labels, launch_options, lifecycle, native_title, scanner, store, team
 from session_manager.team import TeamError
 
 API_VERSION = 1
@@ -38,8 +38,8 @@ _create_lock = threading.Lock()
 _creates: deque[float] = deque()
 
 
-def _title(m) -> str:
-    return m.custom_title or m.agent_name or m.ai_title or m.slug or m.session_id[:8]
+def _title(m, label: dict | None = None) -> str:
+    return m.custom_title or m.agent_name or m.ai_title or (label or {}).get("name") or m.slug or m.session_id[:8]
 
 
 def _same_path(a: str | None, b: str | None) -> bool:
@@ -60,13 +60,16 @@ def find(query: str = "", cwd: str = "", limit: int = FIND_MAX) -> dict:
     q = (query or "").strip().lower()
     want = (cwd or "").strip()
     out = []
-    for m in scanner.scan_all():
+    metas = scanner.scan_all()
+    names = labels.get_many(m.session_id for m in metas)
+    for m in metas:
         if m.headless or m.continued_in:
             continue
         if want and not _same_path(m.cwd, want):
             continue
-        t = _title(m)
-        if q and q not in t.lower() and q not in m.session_id.lower():
+        lb = names.get(m.session_id) or {}
+        t = _title(m, lb)
+        if q and q not in t.lower() and q not in str(lb.get("name") or "").lower() and q not in m.session_id.lower():
             continue
         out.append({"session_id": m.session_id, "title": t, "cwd": m.cwd, "last_activity": m.last_activity_at or m.ended_at,
                     "live": lifecycle._live_reason(m.session_id)})
@@ -119,7 +122,7 @@ def _item(sid: str, caller: str | None) -> dict:
     m = scanner.scan_one(sid)
     if m is None:
         return {"session_id": sid, "ok": False, "reason": "session_not_found"}
-    it = {"session_id": sid, "title": _title(m), "cwd": m.cwd, "ok": True}
+    it = {"session_id": sid, "title": _title(m, labels.get(sid)), "cwd": m.cwd, "ok": True}
     if caller and sid == caller:
         return {**it, "ok": False, "reason": "self"}
     live = lifecycle._live_reason(sid)

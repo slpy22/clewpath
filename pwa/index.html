@@ -6778,11 +6778,12 @@ const setStat={
     return {t:(j?(j.enabled?('쉬는 세션 '+st.idle_hours+'시간 뒤 정리'):'쉬는 세션 정리 꺼짐')+' · ':'')+'켜진 작업 '+on+'/'+jobs.length}; },
   trash: async()=>{ const n=((await T.api('GET','/api/owner/trash')).trash||[]).length;
     return {t:n?('세션 '+n+'개 — 30일 안에 되살리기'):'비어 있음'}; },
-  skill: (key)=>async()=>{ const st=await T.api('GET','/api/owner/skills/'+key);
-    return !st.installed?{t:'설치 안 됨 — 눌러서 설치'}:st.up_to_date?{t:'설치됨 · 최신'}:{t:'새 내용 있음 — 눌러서 갱신', warn:true}; },
-  plugin: async()=>{ const st=await T.api('GET','/api/owner/plugin');
-    return st.unknown?{t:'상태를 읽지 못함 — 눌러서 확인',warn:true}:!st.installed?{t:'설치 안 됨 — 눌러서 설치'}
-      :st.up_to_date?{t:'설치됨 · 최신'}:{t:'새 판 있음 — 눌러서 갱신', warn:true}; },
+  plugin: async()=>{ const st=await T.api('GET','/api/owner/plugin'); const its=st.items||[];
+    if(st.unknown) return {t:'상태를 읽지 못함 — 눌러서 확인',warn:true};
+    const on=its.filter(x=>x.installed), old=its.filter(x=>x.old_skill).length;
+    if(on.some(x=>!x.up_to_date)) return {t:'새 판 있음 — 눌러서 갱신',warn:true};
+    if(old) return {t:'옛 방식 스킬 '+old+'개 — 눌러서 옮기기',warn:true};
+    return on.length?{t:on.length+'/'+its.length+'개 설치 · 최신'}:{t:'설치 안 됨 — 눌러서 고르기'}; },
   names: async()=>{ const n=((await T.api('GET','/api/owner/names/agent-mismatch')).sessions||[]).length;
     return n?{t:n+'개 세션의 통신 이름이 화면 이름과 다름 — 눌러서 맞추기', warn:true}:{t:'모두 같음'}; },
   services: async()=>{ const l=((await T.api('GET','/api/owner/services')).services||[]).filter(s=>s.status!=='revoked');
@@ -6846,10 +6847,8 @@ function showSettings(){
   row('📈','API 사용량','토큰 · 환산 비용 통계',showUsage);
   row('🔌','외부 서비스','서비스 토큰 · 원본 · 오늘 사용량 · 정지/재발급/폐기',showServices,{local:true,status:setStat.services});
 
-  sec('스킬 (이 PC 의 claude 에 설치)');
-  row('📦','워커 스킬','여러 세션이 한 팀으로 일하는 규칙 · /clewpath-workers',installWorkersSkill,{local:true,status:setStat.skill('workers')});
-  row('📦','비서 스킬','개인 비서 세션 규칙 · /clewpath-assistant',()=>installBundledSkill('assistant'),{local:true,status:setStat.skill('assistant')});
-  row('📦','세션 제어 플러그인','프롬프트로 세션 찾기·만들기·이름·옮기기·지우기',installSessionPlugin,{local:true,status:setStat.plugin});
+  sec('플러그인 (이 PC 의 claude 에 설치)');
+  row('📦','ClewPath 플러그인','세션 제어 · 워커 규칙 · 비서 규칙 — 골라서 설치',showPluginSheet,{local:true,status:setStat.plugin});
 
   sec('시스템');
   if(!VERSTATE.latest) row('⬆','업데이트','v'+(VERSTATE.cur||'?')+' · 최신인지 확인 · 재설치',()=>checkUpdateNow(VERSTATE.cur));
@@ -7741,46 +7740,44 @@ async function showNameSync(){
 
 // ---- 🧑‍💼 사장님 프로필(A-8) — 비서가 제안, 사장님이 승인으로 확정·거절·수정·삭제 ----
 const PROFILE_STATUS={proposed:'제안', confirmed:'확정'};
-// 동봉 스킬 설치(v0.9.0) — claude 가 읽는 ~/.claude/skills 에 새 파일을 만드는 행위라 반드시
-// 확인창을 거친다(불가침 원칙 예외, 2026-09-23). 이미 있으면 덮어쓰기를 다시 묻는다.
-const BUNDLED_SKILLS={
-  workers:{name:'clewpath-workers', title:'워커 스킬', desc:'여러 세션이 한 팀으로 일하는 운영 규칙(clewpath-workers 스킬)을 설치합니다. 관리 세션에서 /clewpath-workers 로 부릅니다.'},
-  assistant:{name:'clewpath-assistant', title:'비서 스킬', desc:'개인 비서 세션의 규칙(clewpath-assistant 스킬)을 설치합니다. 비서 세션에서 /clewpath-assistant 로 부릅니다.'}};
-function installWorkersSkill(){ return installBundledSkill('workers'); }
-async function installBundledSkill(key){
-  const k=BUNDLED_SKILLS[key]; if(!k) return;
-  let st={}; try{ st=await T.api('GET','/api/owner/skills/'+key); }catch(e){ toast('상태 조회 실패: '+e.message); return; }
-  const body=el('div');
-  body.appendChild(el('p',null,k.desc));
-  const why=el('div','cwd'); why.style.whiteSpace='pre-line';
-  why.textContent='설치 위치: '+(st.path||('~/.claude/skills/'+k.name+'/SKILL.md'))
-    +'\n· claude 가 읽는 폴더에 파일 1개를 새로 만듭니다(다른 파일은 건드리지 않음)'
-    +(st.installed?('\n· 이미 설치돼 있습니다'+(st.up_to_date?' (최신)':' (동봉본과 다름 — 덮어씁니다)')):'');
-  body.appendChild(why);
-  const ok=el('button','btn', st.installed?'📦 덮어쓰기 설치':'📦 설치');
-  ok.onclick=async()=>{ ok.disabled=true;
-    try{ await T.api('POST','/api/owner/skills/'+key+'/install',{body:{overwrite:!!st.installed}});
-         closeModal(); toast('스킬 설치됨 — 새 claude 세션부터 /'+k.name+' 사용 가능'); }
-    catch(e){ ok.disabled=false; toast('설치 실패: '+e.message); } };
-  openModal('📦 '+k.title+' 설치', body, [ok]);
-}
-// 세션 제어 플러그인(불가침 예외 N1, 2026-11-07) — Claude 설정을 쓰는 동작이라 반드시 확인창을 거친다. 제거는 명령만 안내.
-async function installSessionPlugin(){
+// ClewPath 플러그인(불가침 예외 N1, 2026-11-07) — Claude 설정을 쓰는 동작이라 항목을 설명하고 체크한 대로만, 적용을 눌러야 바꾼다.
+// 항목 하나 = 플러그인 하나(claude 는 플러그인 일부만 설치하지 못한다). 체크 해제 = 제거.
+async function showPluginSheet(){
   let st={}; try{ st=await T.api('GET','/api/owner/plugin'); }catch(e){ toast('상태 조회 실패: '+e.message); return; }
-  const body=el('div');
-  body.appendChild(el('p',null,'Claude 세션에서 프롬프트로 세션을 찾고 만들고 이름을 바꾸고 옮기고 지울 수 있게 합니다. 옮기기·지우기는 폰/2차 인증 승인을 거칩니다.'));
-  const why=el('div','cwd'); why.style.whiteSpace='pre-line';
-  why.textContent='· Claude 설정(settings.json 의 플러그인 항목, plugins 폴더)을 claude 명령으로 바꿉니다'
-    +'\n· 모든 Claude 세션에 도구 7개와 스킬 1개가 생깁니다'
-    +'\n· 떠 있는 세션은 /reload-plugins 또는 다음 세션부터 적용됩니다'
-    +(st.installed?('\n· 지금 판 '+(st.version||'?')+(st.up_to_date?' (최신)':' → '+(st.want||'?')+' 로 갱신')):'')
-    +'\n· 지우려면: '+((st.remove_commands||[]).join(' · '));
+  if(st.unknown) { toast('claude 명령을 읽지 못했습니다: '+(st.error||'')); }
+  const its=st.items||[], body=el('div'), boxes={};
+  body.appendChild(el('p',null,'이 PC 의 Claude 세션에서 쓸 기능을 고르세요. 체크한 것만 설치되고, 설치돼 있던 것을 끄면 제거됩니다.'));
+  const note=el('div','cwd');
+  const refresh=()=>{ const add=its.filter(x=>boxes[x.key].checked&&!x.installed), del=its.filter(x=>!boxes[x.key].checked&&x.installed);
+    note.textContent=(add.length?'설치: '+add.map(x=>x.title).join(', ')+' ':'')+(del.length?'제거: '+del.map(x=>x.title).join(', '):'')
+      ||'바뀌는 항목 없음(설치된 것은 최신 판으로 맞춥니다)'; };
+  its.forEach(x=>{
+    const lab=el('label','tcheck'); const cb=el('input'); cb.type='checkbox';
+    cb.checked=!!(x.installed||x.old_skill||x.key==='sessions'); cb.onchange=refresh; boxes[x.key]=cb;
+    lab.appendChild(cb); lab.appendChild(el('b',null,x.title)); body.appendChild(lab);
+    body.appendChild(el('div','cwd',x.desc));
+    body.appendChild(el('div','diag','부르는 법: '+x.command+' 또는 말로 · '+(x.installed?('설치됨 '+(x.version||'?')+(x.up_to_date?' (최신)':' → '+(st.want||'?')+' 로 갱신')):'설치 안 됨')));
+  });
+  const olds=its.filter(x=>x.old_skill); let mv=null;
+  if(olds.length){
+    body.appendChild(el('div','setsec','옛 방식 스킬'));
+    const lab=el('label','tcheck'); mv=el('input'); mv.type='checkbox'; mv.checked=true; lab.appendChild(mv);
+    lab.appendChild(el('span',null,'체크한 항목의 옛 스킬을 ClewPath 데이터 폴더로 옮기기(권장)')); body.appendChild(lab);
+    body.appendChild(el('div','diag','같은 스킬이 둘이면 말로 부를 때 옛것이 골립니다. 지우지 않고 옮깁니다: '+olds.map(x=>x.old_skill).join(', ')));
+  }
+  body.appendChild(el('div','setsec','바뀌는 것'));
+  body.appendChild(note); refresh();
+  const why=el('div','diag'); why.style.whiteSpace='pre-line';
+  why.textContent='Claude 설정(settings.json 의 플러그인 항목, plugins 폴더)을 claude 명령으로 바꿉니다.'
+    +'\n떠 있는 세션은 /reload-plugins 또는 다음 세션부터 적용됩니다.'
+    +'\n직접 지우려면: '+((st.remove_commands||[]).join(' · '));
   body.appendChild(why);
-  const ok=el('button','btn', st.installed?'📦 갱신':'📦 설치');
-  ok.onclick=async()=>{ ok.disabled=true; toast('설치 중… (몇 초 걸립니다)');
-    try{ await T.api('POST','/api/owner/plugin/install',{body:{}}); closeModal(); toast('플러그인 설치됨 — 다음 세션 또는 /reload-plugins 부터'); }
-    catch(e){ ok.disabled=false; toast('설치 실패: '+e.message); } };
-  openModal('📦 세션 제어 플러그인', body, [ok]);
+  const ok=el('button','btn','📦 적용');
+  ok.onclick=async()=>{ ok.disabled=true; toast('적용 중… (몇 초 걸립니다)');
+    try{ const r=await T.api('POST','/api/owner/plugin/install',{body:{items:its.filter(x=>boxes[x.key].checked).map(x=>x.key),move_old:!!(mv&&mv.checked)}});
+         const n=Object.keys((r&&r.moved)||{}).length; closeModal(); toast('적용했습니다'+(n?' · 옛 스킬 '+n+'개 옮김':'')+' — 다음 세션 또는 /reload-plugins 부터'); }
+    catch(e){ ok.disabled=false; toast('적용 실패: '+e.message); } };
+  openModal('📦 ClewPath 플러그인', body, [ok]);
 }
 // ---- 터미널 관리 프로세스(PTY 브로커, docs/designs/pty-broker.md) ----
 // 상태를 보여 주고, 업데이트 대기·재시작은 확인창으로(D2: 열린 터미널이 있으면 그 수와 '종료됨' 을 먼저 알린다)

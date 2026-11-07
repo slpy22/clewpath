@@ -111,13 +111,49 @@ test("권한을 넓히는 새 세션 승인 시트: 넓히는 항목·옵션·�
   assert.ok(t.includes("allowed_tools: Bash, Edit") && t.includes("모든 파일을 고쳐라"));
 });
 
-test("세션 제어 플러그인 시트: Claude 설정을 바꾼다고 알리고, 확인을 눌러야 설치한다", async () => {
-  const ctx = await boot(true, { "GET /api/owner/plugin": { installed: false, want: "0.36.0", remove_commands: ["claude plugin uninstall clewpath@clewpath"] },
-                                 "POST /api/owner/plugin/install": { installed: true } });
-  await ev(ctx, "installSessionPlugin()");
+const PLUGIN = { want: "0.36.1", remove_commands: ["claude plugin uninstall clewpath@clewpath"], items: [
+  { key: "sessions", title: "세션 제어", desc: "프롬프트로 세션 다루기", command: "/clewpath:sessions", installed: false },
+  { key: "workers", title: "워커 규칙", desc: "팀 운영 규칙", command: "/clewpath-workers:workers", installed: true, version: "0.36.1", up_to_date: true },
+  { key: "assistant", title: "비서 규칙", desc: "비서 세션 규칙", command: "/clewpath-assistant:assistant", installed: false, old_skill: "C:/u/.claude/skills/clewpath-assistant" }] };
+function boxes(node, out = []) {
+  if (!node) return out;
+  if (node.tagName === "INPUT" && node.type === "checkbox") out.push(node);
+  (node.children || []).forEach((c) => boxes(c, out));
+  return out;
+}
+
+test("플러그인 시트: 항목을 설명하고, 열기만 해서는 바꾸지 않으며, 체크한 대로 적용한다", async () => {
+  const ctx = await boot(true, { "GET /api/owner/plugin": PLUGIN, "POST /api/owner/plugin/install": { moved: { assistant: "x" } } });
+  await ev(ctx, "showPluginSheet()");
   const m = modals(ctx).at(-1);
-  assert.ok(m.body.text.includes("Claude 설정") && m.body.text.includes("claude plugin uninstall clewpath@clewpath"));
-  assert.equal(ev(ctx, "globalThis.__calls.filter(c=>c[0]==='POST').length"), 0, "열기만 해서는 설치하지 않는다");
+  const t = m.body.text;
+  for (const w of ["세션 제어", "프롬프트로 세션 다루기", "/clewpath-workers:workers", "비서 세션 규칙", "Claude 설정", "claude plugin uninstall clewpath@clewpath"]) assert.ok(t.includes(w), w);
+  assert.ok(t.includes("옛 방식 스킬") && t.includes("C:/u/.claude/skills/clewpath-assistant"));
+  assert.equal(ev(ctx, "globalThis.__calls.filter(c=>c[0]==='POST').length"), 0, "열기만 해서는 바꾸지 않는다");
+  const [ses, wrk, asst, mv] = boxes(m.body);
+  assert.deepEqual([ses.checked, wrk.checked, asst.checked, mv.checked], [true, true, true, true], "설치됨·옛 스킬·세션 제어는 기본 체크");
+  wrk.checked = false;
+  asst.checked = false;
   await m.foot[0].onclick();
-  assert.equal(ev(ctx, "globalThis.__calls.filter(c=>c[0]==='POST' && c[1]==='/api/owner/plugin/install').length"), 1);
+  const call = ev(ctx, "globalThis.__calls.find(c=>c[0]==='POST')");
+  assert.equal(call[1], "/api/owner/plugin/install");
+  assert.deepEqual(JSON.parse(JSON.stringify(call[2].body)), { items: ["sessions"], move_old: true });
+});
+
+test("플러그인 시트: 체크를 끄면 무엇이 제거되는지 적용 전에 보인다", async () => {
+  const ctx = await boot(true, { "GET /api/owner/plugin": PLUGIN });
+  await ev(ctx, "showPluginSheet()");
+  const m = modals(ctx).at(-1);
+  const [, wrk] = boxes(m.body);
+  wrk.checked = false;
+  wrk.onchange();
+  assert.ok(m.body.text.includes("제거: 워커 규칙"));
+});
+
+test("플러그인 시트: 옛 스킬이 없으면 옮기기 칸이 없다", async () => {
+  const items = PLUGIN.items.map((x) => ({ ...x, old_skill: null }));
+  const ctx = await boot(true, { "GET /api/owner/plugin": { ...PLUGIN, items } });
+  await ev(ctx, "showPluginSheet()");
+  const m = modals(ctx).at(-1);
+  assert.ok(!m.body.text.includes("옛 방식 스킬") && boxes(m.body).length === 3);
 });

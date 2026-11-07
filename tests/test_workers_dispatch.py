@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from session_manager import monitor, monwatch, mongroups, peers, skillinstall, webterm
+from session_manager import monitor, monwatch, mongroups, peers, webterm
 from tests.conftest import write_session
 
 M = "aaaaaaaa-1111-2222-3333-444444444444"
@@ -239,34 +239,3 @@ def test_monwatch_sendmessage_failure_push(fake_claude_home):
                   _use_sendmsg("t3", "stranger"), _res("t3", '{"success":false,"message":"x"}')):
             f.write(json.dumps(o, ensure_ascii=False) + "\n")
     assert w.poll() == 1 and got[0][0] == W and "not reachable" not in got[0][1] and "reachable" in got[0][1]
-
-
-# ---------------------------------------------------------------- 스킬 설치 가드
-
-def test_skill_install_only_on_explicit_call(fake_claude_home):
-    dst = skillinstall.target_path()
-    assert skillinstall.bundled_path().is_file()
-    assert not dst.exists() and skillinstall.status()["installed"] is False
-    r = skillinstall.install()
-    assert r["installed"] and dst.is_file() and "clewpath-workers" in dst.read_text(encoding="utf-8")
-    assert skillinstall.status()["up_to_date"] is True
-    dst.write_text("user edited", encoding="utf-8")
-    assert skillinstall.install()["exists"] is True and dst.read_text(encoding="utf-8") == "user edited"   # 무단 덮어쓰기 없음
-    assert skillinstall.install(overwrite=True)["installed"] is True
-
-
-def test_no_skill_install_on_startup(fake_claude_home, monkeypatch):
-    from fastapi.testclient import TestClient
-    for k in ("SM_RELAY_URL", "SM_RELAY_ROOM", "SM_RELAY_AGENT_TOKEN", "SM_CP_URL"):
-        monkeypatch.delenv(k, raising=False)
-    monkeypatch.setenv("SM_HOST", "127.0.0.1")
-    from session_manager import server as _srv
-    from session_manager.server import create_app
-    with TestClient(create_app()) as c:
-        assert c.get("/api/owner/skills/workers").json()["installed"] is False
-        assert not skillinstall.target_path().exists()          # 기동·상태 조회는 파일을 만들지 않는다
-        assert c.post("/api/owner/skills/workers/install").status_code == 403   # 원격에서는 설치 불가
-        monkeypatch.setattr(_srv, "_is_local", lambda r: True)
-        r = c.post("/api/owner/skills/workers/install")
-        assert r.status_code == 200 and skillinstall.target_path().is_file()
-        assert c.post("/api/owner/skills/workers/install").status_code == 409

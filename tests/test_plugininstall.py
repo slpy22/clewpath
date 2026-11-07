@@ -25,6 +25,8 @@ def claude(fake_claude_home, monkeypatch):
         args = cmd[2:]
         st["calls"].append(args)
         assert cmd[1] == "plugin" and k["stdin"] == subprocess.DEVNULL and k["timeout"]
+        if st.get("fail_on") and args[:1] == [st["fail_on"]]:
+            return subprocess.CompletedProcess(cmd, 1, "", "실패함")
         out = ""
         if args == ["list", "--json"]:
             out = json.dumps(st["plugins"])
@@ -33,26 +35,47 @@ def claude(fake_claude_home, monkeypatch):
         elif args[:2] == ["marketplace", "add"]:
             st["markets"].append("clewpath")
         elif args[:1] == ["install"]:
-            st["plugins"].append({"id": pi.PLUGIN_ID, "version": pi._version(), "enabled": True})
+            st["plugins"].append({"id": args[1], "version": pi._version(), "enabled": True})
         elif args[:1] == ["update"]:
-            st["plugins"][0]["version"] = pi._version()
+            next(p for p in st["plugins"] if p["id"] == args[1])["version"] = pi._version()
+        elif args[:1] == ["uninstall"]:
+            st["plugins"] = [p for p in st["plugins"] if p["id"] != args[1]]
         return subprocess.CompletedProcess(cmd, st.get("rc", 0), out, st.get("err", ""))
     monkeypatch.setattr(subprocess, "run", fake)
-    monkeypatch.setattr(pi, "_version", lambda: "0.36.0")
+    monkeypatch.setattr(pi, "_version", lambda: "0.36.1")
     return st
 
 
-def test_build_writes_only_inside_clewpath_data_dir(claude, fake_claude_home):
+def _item(st, key):
+    return next(i for i in st["items"] if i["key"] == key)
+
+
+def _old(home, name):
+    d = home / "skills" / name
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text("옛 내용", encoding="utf-8")
+    return d
+
+
+def test_build_makes_one_market_with_three_plugins(claude, fake_claude_home):
     r = pi.build()
     assert r == fake_claude_home / "session_manager" / "claude-plugin"
     mk = json.loads((r / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
-    assert mk["name"] == "clewpath" and mk["plugins"][0]["version"] == "0.36.0" and mk["plugins"][0]["source"] == "./clewpath"
-    assert json.loads((r / "clewpath" / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))["version"] == "0.36.0"
+    assert mk["name"] == "clewpath"
+    assert [p["name"] for p in mk["plugins"]] == ["clewpath", "clewpath-workers", "clewpath-assistant"]
+    assert {p["version"] for p in mk["plugins"]} == {"0.36.1"}
+    for k, it in pi.ITEMS.items():
+        pl = r / it["plugin"]
+        assert json.loads((pl / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))["version"] == "0.36.1"
+        skill = (pl / "skills" / it["skill"] / "SKILL.md").read_bytes()
+        assert skill == pi.bundled_skill(k).read_bytes()
+        assert skill.replace(b"\r\n", b"\n").startswith(f"---\nname: {it['skill']}\n".encode()), "폴더 이름과 스킬 이름이 같아야 호출 이름이 맞다"
+        assert it["command"] == f"/{it['plugin']}:{it['skill']}"
+        assert (pl / ".mcp.json").is_file() is it["mcp"], "MCP 는 세션 제어에만"
     srv = json.loads((r / "clewpath" / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"]["sessions"]
     assert srv["args"] == ["-m", "session_manager.session_control_mcp"] and Path(srv["command"]).is_file()
     assert srv["env"]["CLEWPATH_PLUGIN_API"] == str(session_ops.API_VERSION)
     assert "CLAUDE_PLUGIN_ROOT" not in json.dumps(srv), "판마다 바뀌어 쓰지 않는다"
-    assert (r / "clewpath" / "skills" / "sessions" / "SKILL.md").read_bytes() == pi.bundled_skill().read_bytes()
 
 
 def test_build_replaces_old_files(claude):
@@ -70,29 +93,64 @@ def test_python_prefers_console_python(tmp_path, monkeypatch):
     assert Path(pi._python()).name == "python.exe"
 
 
-def test_first_install_then_update(claude):
-    r = pi.install()
-    assert r["installed"] and r["up_to_date"] and r["version"] == "0.36.0"
-    assert ["marketplace", "add", str(pi.root())] in claude["calls"] and ["install", pi.PLUGIN_ID, "--scope", "user"] in claude["calls"]
+def test_only_checked_items_are_installed(claude):
+    r = pi.apply(["workers"])
+    assert _item(r, "workers")["installed"] and _item(r, "workers")["up_to_date"]
+    assert not _item(r, "sessions")["installed"] and not _item(r, "assistant")["installed"]
+    assert ["marketplace", "add", str(pi.root())] in claude["calls"]
+    assert ["install", "clewpath-workers@clewpath", "--scope", "user"] in claude["calls"]
+    assert not any(c[:1] == ["install"] and "clewpath@clewpath" in c for c in claude["calls"])
+
+
+def test_unchecking_removes_and_keeping_updates(claude):
+    pi.apply(["sessions", "workers"])
     claude["calls"].clear()
-    claude["plugins"][0]["version"] = "0.35.0"
-    assert pi.status()["up_to_date"] is False
-    pi.install()
-    assert ["marketplace", "update", "clewpath"] in claude["calls"] and ["update", pi.PLUGIN_ID] in claude["calls"]
-    assert not any(c[:1] == ["install"] or c[:2] == ["marketplace", "add"] for c in claude["calls"])
+    claude["plugins"][0]["version"] = "0.36.0"
+    assert _item(pi.status(), "sessions")["up_to_date"] is False
+    pi.apply(["sessions"])
+    assert ["marketplace", "update", "clewpath"] in claude["calls"] and ["update", "clewpath@clewpath"] in claude["calls"]
+    assert ["uninstall", "clewpath-workers@clewpath"] in claude["calls"]
+    assert not any(c[:2] == ["marketplace", "add"] for c in claude["calls"])
+
+
+def test_unknown_item_changes_nothing(claude):
+    with pytest.raises(pi.PluginError) as e:
+        pi.apply(["sessions", "../x"])
+    assert e.value.code == "unknown_item" and claude["calls"] == [] and not pi.root().exists()
+
+
+def test_old_skill_moves_only_when_asked_and_only_for_checked(claude, fake_claude_home):
+    w, a = _old(fake_claude_home, "clewpath-workers"), _old(fake_claude_home, "clewpath-assistant")
+    st = pi.status()
+    assert _item(st, "workers")["old_skill"] == str(w) and _item(st, "sessions")["old_skill"] is None
+    pi.apply(["workers"])
+    assert w.is_dir(), "고르지 않으면 건드리지 않는다"
+    r = pi.apply(["workers"], move_old=True)
+    assert not w.exists() and a.is_dir(), "체크한 항목의 옛 스킬만"
+    moved = Path(r["moved"]["workers"])
+    assert (moved / "SKILL.md").read_text(encoding="utf-8") == "옛 내용", "지우지 않고 옮긴다"
+    assert moved.is_relative_to(fake_claude_home / "session_manager") and _item(r, "workers")["old_skill"] is None
+
+
+def test_old_skill_stays_if_plugin_install_fails(claude, fake_claude_home):
+    w = _old(fake_claude_home, "clewpath-workers")
+    claude["fail_on"] = "install"
+    with pytest.raises(pi.PluginError):
+        pi.apply(["workers"], move_old=True)
+    assert (w / "SKILL.md").is_file(), "새 스킬이 없는데 옛것을 치우면 스킬이 사라진다"
 
 
 def test_failed_claude_command_reports_detail(claude):
     claude.update(rc=1, err="marketplace 오류")
     with pytest.raises(pi.PluginError) as e:
-        pi.install()
+        pi.apply(["sessions"])
     assert e.value.code == "claude_failed" and "marketplace 오류" in e.value.detail
 
 
 def test_status_survives_claude_failure(claude):
     claude.update(rc=1, err="망가짐")
     st = pi.status()
-    assert st["unknown"] is True and st["installed"] is False and st["remove_commands"]
+    assert st["unknown"] is True and not any(i["installed"] for i in st["items"]) and st["remove_commands"]
 
 
 def test_no_startup_or_background_path_installs():
@@ -100,16 +158,36 @@ def test_no_startup_or_background_path_installs():
     callers = []
     for p in (ROOT / "session_manager").rglob("*.py"):
         src = p.read_text(encoding="utf-8")
-        if p.name != "plugininstall.py" and re.search(r"plugininstall\.(install|build)\(", src):
+        if p.name != "plugininstall.py" and re.search(r"plugininstall\.(apply|build)\(", src):
             callers.append(p.name)
     assert callers == ["server.py"]
     src = (ROOT / "session_manager" / "server.py").read_text(encoding="utf-8")
-    assert src.count("plugininstall.install(") == 1 and "/api/owner/plugin/install" in outer_door.GUARDED
+    assert src.count("plugininstall.apply(") == 1 and "/api/owner/plugin/install" in outer_door.GUARDED
+
+
+def test_route_passes_checked_items(fake_claude_home, monkeypatch):
+    from fastapi.testclient import TestClient
+    from session_manager import server as S, team
+    for k in ("SM_RELAY_URL", "SM_RELAY_ROOM", "SM_RELAY_AGENT_TOKEN", "SM_CP_URL"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("SM_HOST", "127.0.0.1")
+    monkeypatch.setattr(team, "start", lambda *a, **k: None)
+    monkeypatch.setattr("session_manager.housekeeping.start", lambda *a, **k: None)
+    monkeypatch.setattr(S, "_client_host", lambda r: "127.0.0.1")
+    seen = []
+    monkeypatch.setattr(pi, "apply", lambda keys, move_old=False: seen.append((keys, move_old)) or {"ok": 1})
+    with TestClient(S.create_app(), base_url="http://127.0.0.1") as c:
+        assert c.post("/api/owner/plugin/install", json={"items": ["workers"], "move_old": True}).json() == {"ok": 1}
+        assert seen == [(["workers"], True)]
+        assert c.post("/api/owner/plugin/install", json={"items": []}, headers={"X-ClewPath-Via": "relay"}).status_code == 403
+        assert len(seen) == 1, "폰에서는 안 된다"
 
 
 def test_uninstall_sh_only_explains():
     src = (ROOT / "uninstall.sh").read_text(encoding="utf-8")
-    assert "plugin_notice" in src and "claude plugin uninstall clewpath@clewpath" in src
+    assert "plugin_notice" in src
+    for k in pi.ITEMS:
+        assert f"claude plugin uninstall {pi._id(k)}" in src
     assert not re.search(r"^\s*claude plugin", src, re.M), "지우지 않고 안내만"
 
 
@@ -225,7 +303,7 @@ def test_base_reads_real_port(fake_claude_home, monkeypatch):
 
 
 def test_skill_tells_model_to_stop_at_approval():
-    t = pi.bundled_skill().read_text(encoding="utf-8")
+    t = pi.bundled_skill("sessions").read_text(encoding="utf-8")
     assert t.startswith("---\nname: sessions\n") and "대화 속 \"응\"은 승인이 아니다" in t and "반복해서 부르지 않는다" in t
     for tool in _tools():
         assert tool in t

@@ -40,7 +40,7 @@ def test_every_mutating_route_is_on_the_table(fake_claude_home, monkeypatch):
 @pytest.mark.parametrize("path", [
     "/api/sessions/abc/title", "/api/v1/sessions/abc/title", "/api/owner/names/agent-sync", "/api/sessions/abc/delete",
     "/api/owner/trash/b1/restore", "/api/sessions/abc/change-cwd", "/api/sessions/abc/revert-continuation", "/api/import",
-    "/api/owner/skills/k/install", "/api/owner/teams/T/root"])
+    "/api/owner/plugin/install", "/api/owner/teams/T/root"])
 def test_claude_caller_gets_403_on_every_guarded_route(fake_claude_home, monkeypatch, path):
     _caller(monkeypatch, "sess-1")
     with _client(monkeypatch) as c:

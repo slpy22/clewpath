@@ -125,7 +125,7 @@ DEVICE_HEADER = "X-ClewPath-Device"
 # 그 요청이 E2EE 봉투로 왔다 — 사람 증명 헤더와 함께만 붙인다. pclink 관리의 '켜는' 동작은 폰에서 이것 + 2차 인증이 필요(D11)
 E2EE_HEADER = "X-ClewPath-E2EE"
 _LOCAL_ONLY_API = re.compile(
-    r"^/api/(owner/(devices(/|$|\?)|services(/|$|\?)|2fa/(provision|toggle)|skills/[^/]+/install|trash/)"
+    r"^/api/(owner/(devices(/|$|\?)|services(/|$|\?)|2fa/(provision|toggle)|plugin(/|$|\?)|trash/)"
     r"|sessions/[^/]+/terminal/start|v1/team(/|$|\?)|v1/pclink(/|$|\?)|services/)")
 # update/apply 는 0.10.5 부터 로컬 전용이 아니라 특권(2FA) — 원격에서 Host 업데이트(사장님 2026-09-30).
 # 실행되는 코드는 CP 가 서명한 패키지뿐(Host 가 서명·해시 검증)이라 원격 트리거의 위험은 '재기동' 에 국한된다.

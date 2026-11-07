@@ -450,9 +450,10 @@ autostart_remove() {   # 8. [mac] 자동 시작(launchd) — 등록 파일이 �
 plugin_notice() {   # 세션 제어 플러그인도 지우지 않는다(claude 설정 무접촉) — 지우는 법만
   _pj="$(dirname "$DATA_DIR")/settings.json"
   [ -f "$_pj" ] || return 0
-  grep -q -F 'clewpath@clewpath' "$_pj" 2>/dev/null || return 0
-  warn "Claude 설정에 ClewPath 세션 제어 플러그인이 남아 있습니다(지우지 않았습니다)"
-  say "         지우려면: claude plugin uninstall clewpath@clewpath ; claude plugin marketplace remove clewpath"
+  grep -q -F '@clewpath"' "$_pj" 2>/dev/null || return 0
+  warn "Claude 설정에 ClewPath 플러그인이 남아 있습니다(지우지 않았습니다)"
+  say "         지우려면: claude plugin uninstall clewpath@clewpath ; claude plugin uninstall clewpath-workers@clewpath ;"
+  say "                   claude plugin uninstall clewpath-assistant@clewpath ; claude plugin marketplace remove clewpath"
 }
 
 hooks_notice() {   # 13. 훅은 지우지 않는다(claude 파일 무접촉) — 남은 개수와 지우는 법만

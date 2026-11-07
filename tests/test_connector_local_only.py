@@ -30,8 +30,8 @@ def _conn():
     ("/api/owner/2fa/provision", "POST", True),
     ("/api/owner/2fa/toggle", "POST", True),
     ("/api/owner/2fa/status", "GET", False),          # 원격 ensurePriv 가 쓴다
-    ("/api/owner/skills/workers/install", "POST", True),
-    ("/api/owner/skills/workers", "GET", False),
+    ("/api/owner/plugin/install", "POST", True),
+    ("/api/owner/plugin", "GET", False),               # 상태 조회는 라우트가 로컬만 받는다
     ("/api/owner/trash/sessions/restore", "POST", True),
     ("/api/owner/update/apply", "POST", False),         # 0.10.5: 원격 업데이트는 2FA 특권(덴리스트 아님)
     ("/api/owner/update/status", "GET", False),
@@ -126,7 +126,7 @@ def test_local_only_endpoints_403_via_relay_header(fake_claude_home, monkeypatch
         assert c.post("/api/owner/devices", json={"name": "폰"}, headers=via).status_code == 403
         assert c.post("/api/owner/devices/nope/delete", headers=via).status_code == 403
         assert c.post("/api/owner/2fa/toggle", json={"on": False}, headers=via).status_code == 403
-        assert c.post("/api/owner/skills/workers/install", json={}, headers=via).status_code == 403
+        assert c.post("/api/owner/plugin/install", json={"items": []}, headers=via).status_code == 403
         # 헤더 없는 진짜 로컬은 그대로(2fa 토글은 비밀 유무에 따라 200)
         assert c.post("/api/owner/2fa/toggle", json={"on": False}).status_code == 200
 
