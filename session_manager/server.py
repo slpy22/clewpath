@@ -475,6 +475,9 @@ def create_app() -> FastAPI:
 
     # ---- 인증(비밀번호 게이트 + API 토큰) ----
     # 순수 ASGI 미들웨어: 바디를 읽지 않아 POST body 파싱을 깨지 않는다.
+    # 바깥문 B: 나중에 더한 미들웨어가 바깥이다 — 인증을 먼저 통과한 요청만 소유자를 추적한다.
+    from session_manager import outer_door as _outer_door
+    app.add_middleware(_outer_door.OuterDoorMiddleware, base_path=BASE_PATH)
     app.add_middleware(AuthASGIMiddleware, base_path=BASE_PATH)
     from session_manager.pclink import routes as _pclink_routes
     _pclink_routes.register(app)                 # PC 사이 세션 통신(묻는 쪽 로컬 API·관리 API)
@@ -1829,7 +1832,10 @@ def create_app() -> FastAPI:
         if not _is_local(request):
             return JSONResponse({"error": "이 PC(로컬)에서만 워커를 만들 수 있습니다."}, status_code=403)
         try:
-            return webterm.start_new(cwd, prompt, skip_permissions=skip, session_id=session_id)
+            r = webterm.start_new(cwd, prompt, skip_permissions=skip, session_id=session_id)
+            if skip and r.get("status") == "started":
+                _outer_door.audit_auto_session(request, r["session_id"], cwd)      # 통과시키되 기록·폰 알림(사장님 결정 D1 C)
+            return r
         except webterm.TermStartError as e:
             status = {"cap": 409, "exists": 409, "no_cwd": 404}.get(e.code, 400 if e.code.startswith("bad_") else 500)
             return JSONResponse({"error": e.code, "message": str(e)}, status_code=status)
