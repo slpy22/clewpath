@@ -35,11 +35,12 @@ dependencies = [
     "pywebpush>=2.0.0",
     # 살아 있는 claude 프로세스의 출처(어디서 띄웠나)·강제 종료 판정 — 레지스트리 pid 를 읽기만 한다
     "psutil>=5.9.0",
+    # 프롬프트로 세션 다루기 — 플러그인의 전용 MCP 서버(session_control_mcp). 설치본에 있어야 플러그인이 뜬다.
+    # mcp 2.x 에는 mcp.server.fastmcp 가 없어 1.x 로 묶는다(2.x 대응 전까지)
+    "mcp>=1.0.0,<2",
 ]
 
 [project.optional-dependencies]
-# mcp 2.x 에는 mcp.server.fastmcp 가 없어 mcp_server 가 안 뜬다 — 1.x 로 묶는다(2.x 대응 전까지)
-mcp = ["mcp>=1.0.0,<2"]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",   # @pytest.mark.asyncio 테스트(webterm·connector)

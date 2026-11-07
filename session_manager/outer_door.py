@@ -27,7 +27,7 @@ GUARDED = frozenset({
     "/api/sessions/{session_id}/title", "/api/v1/sessions/{session_id}/title", "/api/owner/names/agent-sync",
     "/api/sessions/{session_id}/delete", "/api/owner/trash/{bucket}/restore",
     "/api/sessions/{session_id}/change-cwd", "/api/sessions/{session_id}/revert-continuation",
-    "/api/import", "/api/owner/skills/{key}/install", "/api/owner/teams/{team_id}/root",
+    "/api/import", "/api/owner/skills/{key}/install", "/api/owner/plugin/install", "/api/owner/teams/{team_id}/root",
 })
 
 # 막지 않는 변경 라우트. ClewPath 자체 데이터, 자체 인증·승인이 있는 것, 스킬·훅이 쓰는 것.

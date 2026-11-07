@@ -110,3 +110,14 @@ test("권한을 넓히는 새 세션 승인 시트: 넓히는 항목·옵션·�
   assert.ok(t.includes("폴더: F:/w") && t.includes("⚠ 넓히는 항목: permission_mode=bypassPermissions, allowed_tools"));
   assert.ok(t.includes("allowed_tools: Bash, Edit") && t.includes("모든 파일을 고쳐라"));
 });
+
+test("세션 제어 플러그인 시트: Claude 설정을 바꾼다고 알리고, 확인을 눌러야 설치한다", async () => {
+  const ctx = await boot(true, { "GET /api/owner/plugin": { installed: false, want: "0.36.0", remove_commands: ["claude plugin uninstall clewpath@clewpath"] },
+                                 "POST /api/owner/plugin/install": { installed: true } });
+  await ev(ctx, "installSessionPlugin()");
+  const m = modals(ctx).at(-1);
+  assert.ok(m.body.text.includes("Claude 설정") && m.body.text.includes("claude plugin uninstall clewpath@clewpath"));
+  assert.equal(ev(ctx, "globalThis.__calls.filter(c=>c[0]==='POST').length"), 0, "열기만 해서는 설치하지 않는다");
+  await m.foot[0].onclick();
+  assert.equal(ev(ctx, "globalThis.__calls.filter(c=>c[0]==='POST' && c[1]==='/api/owner/plugin/install').length"), 1);
+});

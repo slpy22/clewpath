@@ -6780,6 +6780,9 @@ const setStat={
     return {t:n?('세션 '+n+'개 — 30일 안에 되살리기'):'비어 있음'}; },
   skill: (key)=>async()=>{ const st=await T.api('GET','/api/owner/skills/'+key);
     return !st.installed?{t:'설치 안 됨 — 눌러서 설치'}:st.up_to_date?{t:'설치됨 · 최신'}:{t:'새 내용 있음 — 눌러서 갱신', warn:true}; },
+  plugin: async()=>{ const st=await T.api('GET','/api/owner/plugin');
+    return st.unknown?{t:'상태를 읽지 못함 — 눌러서 확인',warn:true}:!st.installed?{t:'설치 안 됨 — 눌러서 설치'}
+      :st.up_to_date?{t:'설치됨 · 최신'}:{t:'새 판 있음 — 눌러서 갱신', warn:true}; },
   names: async()=>{ const n=((await T.api('GET','/api/owner/names/agent-mismatch')).sessions||[]).length;
     return n?{t:n+'개 세션의 통신 이름이 화면 이름과 다름 — 눌러서 맞추기', warn:true}:{t:'모두 같음'}; },
   services: async()=>{ const l=((await T.api('GET','/api/owner/services')).services||[]).filter(s=>s.status!=='revoked');
@@ -6846,6 +6849,7 @@ function showSettings(){
   sec('스킬 (이 PC 의 claude 에 설치)');
   row('📦','워커 스킬','여러 세션이 한 팀으로 일하는 규칙 · /clewpath-workers',installWorkersSkill,{local:true,status:setStat.skill('workers')});
   row('📦','비서 스킬','개인 비서 세션 규칙 · /clewpath-assistant',()=>installBundledSkill('assistant'),{local:true,status:setStat.skill('assistant')});
+  row('📦','세션 제어 플러그인','프롬프트로 세션 찾기·만들기·이름·옮기기·지우기',installSessionPlugin,{local:true,status:setStat.plugin});
 
   sec('시스템');
   if(!VERSTATE.latest) row('⬆','업데이트','v'+(VERSTATE.cur||'?')+' · 최신인지 확인 · 재설치',()=>checkUpdateNow(VERSTATE.cur));
@@ -7759,6 +7763,24 @@ async function installBundledSkill(key){
          closeModal(); toast('스킬 설치됨 — 새 claude 세션부터 /'+k.name+' 사용 가능'); }
     catch(e){ ok.disabled=false; toast('설치 실패: '+e.message); } };
   openModal('📦 '+k.title+' 설치', body, [ok]);
+}
+// 세션 제어 플러그인(불가침 예외 N1, 2026-11-07) — Claude 설정을 쓰는 동작이라 반드시 확인창을 거친다. 제거는 명령만 안내.
+async function installSessionPlugin(){
+  let st={}; try{ st=await T.api('GET','/api/owner/plugin'); }catch(e){ toast('상태 조회 실패: '+e.message); return; }
+  const body=el('div');
+  body.appendChild(el('p',null,'Claude 세션에서 프롬프트로 세션을 찾고 만들고 이름을 바꾸고 옮기고 지울 수 있게 합니다. 옮기기·지우기는 폰/2차 인증 승인을 거칩니다.'));
+  const why=el('div','cwd'); why.style.whiteSpace='pre-line';
+  why.textContent='· Claude 설정(settings.json 의 플러그인 항목, plugins 폴더)을 claude 명령으로 바꿉니다'
+    +'\n· 모든 Claude 세션에 도구 7개와 스킬 1개가 생깁니다'
+    +'\n· 떠 있는 세션은 /reload-plugins 또는 다음 세션부터 적용됩니다'
+    +(st.installed?('\n· 지금 판 '+(st.version||'?')+(st.up_to_date?' (최신)':' → '+(st.want||'?')+' 로 갱신')):'')
+    +'\n· 지우려면: '+((st.remove_commands||[]).join(' · '));
+  body.appendChild(why);
+  const ok=el('button','btn', st.installed?'📦 갱신':'📦 설치');
+  ok.onclick=async()=>{ ok.disabled=true; toast('설치 중… (몇 초 걸립니다)');
+    try{ await T.api('POST','/api/owner/plugin/install',{body:{}}); closeModal(); toast('플러그인 설치됨 — 다음 세션 또는 /reload-plugins 부터'); }
+    catch(e){ ok.disabled=false; toast('설치 실패: '+e.message); } };
+  openModal('📦 세션 제어 플러그인', body, [ok]);
 }
 // ---- 터미널 관리 프로세스(PTY 브로커, docs/designs/pty-broker.md) ----
 // 상태를 보여 주고, 업데이트 대기·재시작은 확인창으로(D2: 열린 터미널이 있으면 그 수와 '종료됨' 을 먼저 알린다)

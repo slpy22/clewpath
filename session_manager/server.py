@@ -1994,6 +1994,24 @@ def create_app() -> FastAPI:
             return JSONResponse(r, status_code=409)
         return r
 
+    # 세션 제어 플러그인(불가침 예외 N1): 설치·갱신은 설정 화면 버튼 + 확인창으로만, 이 PC 에서만.
+    @app.get("/api/owner/plugin")
+    def plugin_status(request: Request):
+        from session_manager import plugininstall
+        if not _is_local(request):
+            return JSONResponse({"error": "local_only"}, status_code=403)
+        return plugininstall.status()
+
+    @app.post("/api/owner/plugin/install")
+    def plugin_install(request: Request):
+        from session_manager import plugininstall
+        if not _is_local(request):
+            return JSONResponse({"error": "이 PC(로컬)에서만 설치할 수 있습니다."}, status_code=403)
+        try:
+            return plugininstall.install()
+        except plugininstall.PluginError as e:
+            return JSONResponse({"error": e.code, "detail": e.detail}, status_code=500)
+
     @app.post("/api/owner/push/test")
     def push_test():
         # 전달 경로(브라우저/OS 알림 설정 포함)를 사용자가 즉석 검증하는 용도.

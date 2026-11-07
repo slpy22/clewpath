@@ -447,6 +447,14 @@ autostart_remove() {   # 8. [mac] 자동 시작(launchd) — 등록 파일이 �
   ok "자동 시작(launchd) 해제: $LD_PLIST"
 }
 
+plugin_notice() {   # 세션 제어 플러그인도 지우지 않는다(claude 설정 무접촉) — 지우는 법만
+  _pj="$(dirname "$DATA_DIR")/settings.json"
+  [ -f "$_pj" ] || return 0
+  grep -q -F 'clewpath@clewpath' "$_pj" 2>/dev/null || return 0
+  warn "Claude 설정에 ClewPath 세션 제어 플러그인이 남아 있습니다(지우지 않았습니다)"
+  say "         지우려면: claude plugin uninstall clewpath@clewpath ; claude plugin marketplace remove clewpath"
+}
+
 hooks_notice() {   # 13. 훅은 지우지 않는다(claude 파일 무접촉) — 남은 개수와 지우는 법만
   _cs="$(dirname "$DATA_DIR")/settings.json"   # 데이터 폴더의 부모 = Host 가 훅을 적은 클로드 폴더
   [ -f "$_cs" ] || return 0
@@ -682,6 +690,7 @@ main() {
   fi                                            # (표식은 9 의 끝에서 거뒀다)
   # 12. ~/.claude/projects 는 어떤 경우에도 건드리지 않는다
   hooks_notice                                  # 13.
+  plugin_notice
 
   # 14. 남은 것 — 설치 폴더의 우리 항목을 쓰는 프로세스(남긴 남의 파일을 연 프로그램은 빼고), 정지 전 runtime.json·
   #     ptyd.json 이 가리키던 Host·브로커, 우리 항목, (purge 때) 데이터·uv·파이썬
