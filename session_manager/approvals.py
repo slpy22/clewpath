@@ -28,8 +28,8 @@ from session_manager import config, team
 TTL_S = 30 * 60
 KINDS = ("team_create", "team_import", "team_archive", "team_delete", "team_purge", "assistant_set", "delegate", "task_decide", "profile_decide",
          "session_send", "service_register", "pclink_pair", "pclink_contact",
-         "sessions_move", "sessions_delete", "session_create_auto")
-_SESSION_OPS = ("sessions_move", "sessions_delete", "session_create_auto")   # 인자·요약은 session_ops.prepare 가 서버에서 다시 만든다
+         "sessions_move", "sessions_delete", "session_create_auto", "team_root")
+_SESSION_OPS = ("sessions_move", "sessions_delete", "session_create_auto", "team_root")   # 인자·요약은 session_ops.prepare 가 서버에서 다시 만든다
 _ALIAS_ASSISTANT = "비서"
 _PORTFOLIO_CODE = "ASSIST"
 ASSISTANT_TITLE = "개인비서"      # 비서 세션 이름 고정(2026-10-13 사장님)
@@ -76,7 +76,8 @@ def _validate(kind: str, a: dict) -> None:
             "delegate": ("team", "goal"), "task_decide": ("team", "task", "action"), "profile_decide": ("id", "decision"),
             "session_send": ("session_id", "message"), "service_register": ("request", "service", "folder", "bases"),
             "pclink_pair": ("action",), "pclink_contact": ("peer", "session_id"),
-            "sessions_move": ("items", "new_cwd"), "sessions_delete": ("items",), "session_create_auto": ("cwd", "session_id")}
+            "sessions_move": ("items", "new_cwd"), "sessions_delete": ("items",), "session_create_auto": ("cwd", "session_id"),
+            "team_root": ("team", "root")}
     if kind not in KINDS:
         raise team.TeamError("bad_kind")
     for k in need[kind]:
@@ -315,6 +316,10 @@ def _x_session_create_auto(a: dict, aid: str, by: str | None) -> dict:
     return session_ops.run_create(a, aid)
 
 
+def _x_team_root(a: dict, aid: str, by: str | None) -> dict:
+    return team.set_root(a["team"], a["root"])
+
+
 def _x_pclink_contact(a: dict, aid: str, by: str | None) -> dict:
     """첫 연락 승인 — 짝 PC 가 그 세션의 지금·앞으로 대화 전체를 30일 동안 물을 수 있게(D13)."""
     from session_manager.pclink import service
@@ -325,7 +330,8 @@ _EXEC = {"team_create": _x_team_create, "team_import": _x_team_import, "team_arc
          "assistant_set": _x_assistant_set, "delegate": _x_delegate, "task_decide": _x_task_decide,
          "profile_decide": _x_profile_decide, "session_send": _x_session_send,
          "service_register": _x_service_register, "pclink_pair": _x_pclink_pair, "pclink_contact": _x_pclink_contact,
-         "sessions_move": _x_sessions_move, "sessions_delete": _x_sessions_delete, "session_create_auto": _x_session_create_auto}
+         "sessions_move": _x_sessions_move, "sessions_delete": _x_sessions_delete, "session_create_auto": _x_session_create_auto,
+         "team_root": _x_team_root}
 
 
 # ---------------------------------------------------------------- 비서(A-7)

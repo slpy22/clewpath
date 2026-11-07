@@ -1535,6 +1535,11 @@ def create_app() -> FastAPI:
     def session_ops_delete_request(request: Request, body: dict = Body(...)):
         return _ops(request, _session_ops.request, "sessions_delete", {"ids": body.get("ids")}, _ops_caller(request))
 
+    @app.post("/api/v1/session-ops/team-root/request")
+    def session_ops_team_root(request: Request, body: dict = Body(...)):
+        return _ops(request, _session_ops.request, "team_root", {"team": body.get("team"), "root": body.get("root")},
+                    _ops_caller(request))
+
     @app.post("/api/v1/session-ops/finish/{aid}")
     def session_ops_finish(request: Request, aid: str):
         return _ops(request, _session_ops.finish, aid)

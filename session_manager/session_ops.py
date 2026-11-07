@@ -28,7 +28,7 @@ from session_manager import launch_options, lifecycle, native_title, scanner, st
 from session_manager.team import TeamError
 
 API_VERSION = 1
-KINDS = ("sessions_move", "sessions_delete", "session_create_auto")
+KINDS = ("sessions_move", "sessions_delete", "session_create_auto", "team_root")
 MAX_ITEMS = 100              # 한 승인에 세션 수(폰 화면에 다 보여 줄 수 있는 양)
 FIND_MAX = 50
 CREATE_PER_HOUR = 20         # 승인 없이 만드는 새 세션 상한(잘못 도는 루프 방지)
@@ -178,6 +178,12 @@ def prepare(kind: str, args: dict, caller: str | None = None) -> tuple[dict, str
         wide = launch_options.widenings(spec)
         return ({"cwd": cwd, "prompt": prompt, "options": spec.as_dict(), "session_id": sid, "widens": wide},
                 f"새 세션({', '.join(wide) or '권한 넓힘'}): {spec.name or Path(cwd).name} · {cwd}")
+    if kind == "team_root":                     # 쓰기 범위의 기준이라 Claude 세션은 승인으로만(바깥문이 원시 라우트를 막는다)
+        t = team.get_team(str(args.get("team") or ""))
+        root = _target(args.get("root"))
+        if not os.path.isdir(root):
+            raise TeamError("root_not_found", 404)
+        return {"team": t["id"], "root": root, "before": t.get("root")}, f"팀 폴더 변경 [{t['code']}]: {t.get('root') or '(없음)'} → {root}"
     raise TeamError("bad_kind")
 
 

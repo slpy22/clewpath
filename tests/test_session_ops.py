@@ -364,3 +364,43 @@ def test_routes_work_for_claude_caller_and_refuse_phone(home, monkeypatch, tmp_p
         assert c.post("/api/sessions/" + A + "/delete", json={"dry_run": False}).status_code == 403, "원시 길은 막힌다"
         assert c.get("/api/v1/session-ops/find", headers={"X-ClewPath-Via": "relay"}).status_code == 403, "폰에서는 안 된다"
         assert c.post("/api/v1/session-ops/move/request", json={"ids": [A], "new_cwd": "상대"}).json()["error"] == "target_not_absolute"
+
+
+# ---------------------------------------------------------------- 팀 폴더(원시 라우트는 바깥문이 막는다 — Claude 세션은 승인으로)
+def test_team_root_change_goes_through_approval(home, tmp_path):
+    old, new = tmp_path / "old", tmp_path / "new"
+    new.mkdir()
+    t = team.create_team("Law", root=str(old), manager_session="s-m")
+    a = ops.request("team_root", {"team": t["code"], "root": str(new)})["approval"]
+    assert t["code"] in a["summary"] and str(old) in a["summary"] and str(new) in a["summary"]
+    assert ops.finish(a["id"])["status"] == "pending" and team.get_team(t["id"])["root"] == str(old), "승인 전엔 안 바뀐다"
+    _approve(a)
+    r = ops.finish(a["id"])
+    assert r["status"] == "executed" and r["result"]["root"] == str(new) and team.get_team(t["id"])["root"] == str(new)
+
+
+@pytest.mark.parametrize("root,code", [("상대경로", "target_not_absolute"), (None, "target_not_absolute")])
+def test_team_root_refuses_relative(home, root, code):
+    t = team.create_team("Law", manager_session="s-m")
+    with pytest.raises(team.TeamError) as e:
+        ops.request("team_root", {"team": t["code"], "root": root})
+    assert e.value.code == code
+
+
+def test_team_root_refuses_missing_folder_and_team(home, tmp_path):
+    t = team.create_team("Law", manager_session="s-m")
+    with pytest.raises(team.TeamError) as e:
+        ops.request("team_root", {"team": t["code"], "root": str(tmp_path / "없음")})
+    assert e.value.code == "root_not_found"
+    with pytest.raises(team.TeamError):
+        ops.request("team_root", {"team": "없는팀", "root": str(tmp_path)})
+
+
+def test_team_root_route_for_claude_caller(home, monkeypatch, tmp_path):
+    from session_manager.pclink import sender
+    monkeypatch.setattr(sender, "caller_session", lambda *a: C)
+    t = team.create_team("Law", manager_session="s-m")
+    with _client(monkeypatch) as c:
+        assert c.post(f"/api/owner/teams/{t['code']}/root", json={"root": str(tmp_path)}).status_code == 403
+        r = c.post("/api/v1/session-ops/team-root/request", json={"team": t["code"], "root": str(tmp_path)})
+        assert r.status_code == 200 and r.json()["approval"]["kind"] == "team_root"

@@ -47,6 +47,7 @@ OPEN = frozenset({
     "/api/v1/session-ops/rename", "/api/v1/session-ops/create", "/api/v1/session-ops/restore",
     "/api/v1/session-ops/move/preview", "/api/v1/session-ops/move/request",
     "/api/v1/session-ops/delete/preview", "/api/v1/session-ops/delete/request", "/api/v1/session-ops/finish/{aid}",
+    "/api/v1/session-ops/team-root/request",
     # 묻기·단발 실행(토큰·한도가 따로 있음)
     "/api/v1/sessions/{session_id}/ask", "/api/v1/oneshot", "/api/v1/pclink/ask", "/api/v1/pclink/poll",
     # 팀 명부(에이전트 경로·사장님 화면)
