@@ -10,7 +10,7 @@ const DATA = {
   "GET /api/owner/devices": { active: 2, total: 3, devices: [] },
   "GET /api/owner/housekeeping": { idle_hours: 4, jobs: [{ id: "idle_sessions", enabled: true }, { id: "models", enabled: true }] },
   "GET /api/owner/trash": { trash: [{ bucket: "b1", session_id: "s1", items: 1 }] },
-  "GET /api/owner/plugin": { want: "0.36.1", items: [{ key: "sessions", title: "세션 제어", installed: true, up_to_date: false }, { key: "workers", title: "워커 규칙", installed: false }] },
+  "GET /api/owner/plugin": { want: "0.36.2", installed: true, version: "0.36.1", up_to_date: false, legacy: [], skills: [{ name: "sessions" }], tools: [] },
   "GET /api/owner/ptyd": { enabled: true, running: true, sessions: 3 },
 };
 async function boot() {

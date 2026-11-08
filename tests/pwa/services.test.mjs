@@ -111,49 +111,36 @@ test("권한을 넓히는 새 세션 승인 시트: 넓히는 항목·옵션·�
   assert.ok(t.includes("allowed_tools: Bash, Edit") && t.includes("모든 파일을 고쳐라"));
 });
 
-const PLUGIN = { want: "0.36.1", remove_commands: ["claude plugin uninstall clewpath@clewpath"], items: [
-  { key: "sessions", title: "세션 제어", desc: "프롬프트로 세션 다루기", command: "/clewpath:sessions", installed: false },
-  { key: "workers", title: "워커 규칙", desc: "팀 운영 규칙", command: "/clewpath-workers:workers", installed: true, version: "0.36.1", up_to_date: true },
-  { key: "assistant", title: "비서 규칙", desc: "비서 세션 규칙", command: "/clewpath-assistant:assistant", installed: false, old_skill: "C:/u/.claude/skills/clewpath-assistant" }] };
-function boxes(node, out = []) {
-  if (!node) return out;
-  if (node.tagName === "INPUT" && node.type === "checkbox") out.push(node);
-  (node.children || []).forEach((c) => boxes(c, out));
-  return out;
-}
+const PLUGIN = { want: "0.36.2", installed: false, legacy: ["clewpath-workers@clewpath"], remove_commands: ["claude plugin uninstall clewpath@clewpath"],
+  skills: [{ name: "sessions", command: "/clewpath:sessions", desc: "세션 찾기·만들기" },
+           { name: "workers", command: "/clewpath:workers", desc: "팀 운영 규칙", old_skill: "C:/u/.claude/skills/clewpath-workers" },
+           { name: "assistant", command: "/clewpath:assistant", desc: "비서 세션 규칙" }],
+  tools: [{ name: "sessions_find", summary: "이름·폴더로 세션 찾기", guard: "읽기만" },
+          { name: "sessions_delete_request", summary: "세션을 휴지통으로 보내기 요청", guard: "폰/2차 인증 승인 뒤에만 실행" }] };
 
-test("플러그인 시트: 항목을 설명하고, 열기만 해서는 바꾸지 않으며, 체크한 대로 적용한다", async () => {
-  const ctx = await boot(true, { "GET /api/owner/plugin": PLUGIN, "POST /api/owner/plugin/install": { moved: { assistant: "x" } } });
+test("플러그인 시트: 들어 있는 스킬·도구를 전부 설명하고, 버튼 하나로 한 번에 설치한다", async () => {
+  const ctx = await boot(true, { "GET /api/owner/plugin": PLUGIN, "POST /api/owner/plugin/install": { moved: { workers: "x" } } });
   await ev(ctx, "showPluginSheet()");
   const m = modals(ctx).at(-1);
   const t = m.body.text;
-  for (const w of ["세션 제어", "프롬프트로 세션 다루기", "/clewpath-workers:workers", "비서 세션 규칙", "Claude 설정", "claude plugin uninstall clewpath@clewpath"]) assert.ok(t.includes(w), w);
-  assert.ok(t.includes("옛 방식 스킬") && t.includes("C:/u/.claude/skills/clewpath-assistant"));
+  for (const w of ["스킬 3개", "/clewpath:sessions — 세션 찾기·만들기", "/clewpath:workers — 팀 운영 규칙", "/clewpath:assistant — 비서 세션 규칙",
+                   "도구 2개", "sessions_find — 이름·폴더로 세션 찾기", "안전장치: 읽기만", "안전장치: 폰/2차 인증 승인 뒤에만 실행",
+                   "Claude 설정", "제거: clewpath-workers@clewpath", "C:/u/.claude/skills/clewpath-workers", "claude plugin uninstall clewpath@clewpath"]) {
+    assert.ok(t.includes(w), w);
+  }
   assert.equal(ev(ctx, "globalThis.__calls.filter(c=>c[0]==='POST').length"), 0, "열기만 해서는 바꾸지 않는다");
-  const [ses, wrk, asst, mv] = boxes(m.body);
-  assert.deepEqual([ses.checked, wrk.checked, asst.checked, mv.checked], [true, true, true, true], "설치됨·옛 스킬·세션 제어는 기본 체크");
-  wrk.checked = false;
-  asst.checked = false;
+  assert.equal(m.foot.length, 1);
   await m.foot[0].onclick();
   const call = ev(ctx, "globalThis.__calls.find(c=>c[0]==='POST')");
   assert.equal(call[1], "/api/owner/plugin/install");
-  assert.deepEqual(JSON.parse(JSON.stringify(call[2].body)), { items: ["sessions"], move_old: true });
+  assert.ok(ev(ctx, "globalThis.__toasts").some((x) => x.includes("옛 스킬 1개 옮김")));
 });
 
-test("플러그인 시트: 체크를 끄면 무엇이 제거되는지 적용 전에 보인다", async () => {
-  const ctx = await boot(true, { "GET /api/owner/plugin": PLUGIN });
+test("플러그인 시트: 설치돼 있으면 판과 갱신 버튼, 옛 스킬·따로 설치본이 없으면 그 안내도 없다", async () => {
+  const ctx = await boot(true, { "GET /api/owner/plugin": { ...PLUGIN, installed: true, version: "0.36.1", up_to_date: false, legacy: [],
+    skills: PLUGIN.skills.map((x) => ({ ...x, old_skill: null })) } });
   await ev(ctx, "showPluginSheet()");
   const m = modals(ctx).at(-1);
-  const [, wrk] = boxes(m.body);
-  wrk.checked = false;
-  wrk.onchange();
-  assert.ok(m.body.text.includes("제거: 워커 규칙"));
-});
-
-test("플러그인 시트: 옛 스킬이 없으면 옮기기 칸이 없다", async () => {
-  const items = PLUGIN.items.map((x) => ({ ...x, old_skill: null }));
-  const ctx = await boot(true, { "GET /api/owner/plugin": { ...PLUGIN, items } });
-  await ev(ctx, "showPluginSheet()");
-  const m = modals(ctx).at(-1);
-  assert.ok(!m.body.text.includes("옛 방식 스킬") && boxes(m.body).length === 3);
+  assert.ok(m.body.text.includes("지금 판 0.36.1 → 0.36.2 로 갱신") && !m.body.text.includes("옛 방식 스킬") && !m.body.text.includes("하나로 합칩니다"));
+  assert.ok(String(m.foot[0].text || m.foot[0].textContent).includes("갱신"));
 });

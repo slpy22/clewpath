@@ -21,6 +21,12 @@ from mcp.server.fastmcp import FastMCP
 from session_manager import config, launch_options
 
 ASK_USER = {"anthropic/requiresUserInteraction": True}
+SUMMARY = "com.clewpath/summary"      # 설치 화면에 보여 줄 한 줄(사람용). Claude 는 모르는 메타 키를 무시한다
+GUARD = "com.clewpath/guard"          # 안전장치 한 줄(사람용)
+
+
+def _ui(summary: str, guard: str, **extra) -> dict:
+    return {SUMMARY: summary, GUARD: guard, **extra}
 TIMEOUT_S = 60
 
 mcp = FastMCP("sessions")
@@ -64,13 +70,13 @@ def _call(method: str, path: str, *, params: dict | None = None, body: dict | No
     return d
 
 
-@mcp.tool()
+@mcp.tool(meta=_ui("이름·폴더로 세션 찾기", "읽기만"))
 def sessions_find(query: str = "", cwd: str = "") -> dict:
     """이 PC 의 Claude 세션을 이름·폴더로 찾는다(읽기만). query = 이름 일부, cwd = 작업 폴더 전체 경로. 최대 50개, live 가 있으면 실행 중."""
     return _call("GET", "/api/v1/session-ops/find", params={"q": query, "cwd": cwd})
 
 
-@mcp.tool(meta=ASK_USER)
+@mcp.tool(meta=_ui("세션 이름 바꾸기", "Claude 확인창을 거친다(자동 허용 세션도) · 실행 중 세션은 거절", **ASK_USER))
 def session_rename(session_id: str, name: str) -> dict:
     """세션 이름을 바꾼다. 실행 중인 세션은 거절한다. 지금 이 세션의 이름은 /rename 으로 바꾼다. 사람 확인창이 뜬다."""
     return _call("POST", "/api/v1/session-ops/rename", body={"session_id": session_id, "name": name})
@@ -81,7 +87,8 @@ def session_rename(session_id: str, name: str) -> dict:
 permission_mode: 바로 되는 것 {', '.join(launch_options.NARROW_MODES)} / 사람 승인이 필요한 것 {', '.join(launch_options.WIDE_MODES)}.
 effort: {', '.join(launch_options.EFFORTS)}. allowed_tools·add_dirs·agent 도 권한을 넓히므로 사람 승인이다 — 그때는 세션이 바로 안 만들어지고
 status=pending_approval 과 approval.id 가 온다(사장님 폰/2FA 승인 뒤 request_finish). 비용 상한은 대화형 세션에 걸 수 없다.
-needs_trust=true 면 처음 쓰는 폴더라 사람이 터미널에서 신뢰를 골라야 한다.""")
+needs_trust=true 면 처음 쓰는 폴더라 사람이 터미널에서 신뢰를 골라야 한다.""",
+          meta=_ui("새 세션 만들기(모델·effort·도구 제한 등 옵션)", "권한 확인 모드가 기본 · 권한을 넓히는 옵션은 폰/2차 인증 승인 · 시간당 20개"))
 def session_create(cwd: str, name: str = "", prompt: str = "", options: dict | None = None) -> dict:
     return _call("POST", "/api/v1/session-ops/create", body={"cwd": cwd, "name": name or None, "prompt": prompt, "options": options})
 
@@ -98,27 +105,27 @@ def _request(what: str, preview_body: dict) -> dict:
             "next": "사장님이 폰 또는 PC 2차 인증으로 승인한 뒤 request_finish 를 부른다. 승인을 기다리며 반복해서 부르지 않는다."}
 
 
-@mcp.tool()
+@mcp.tool(meta=_ui("세션 기록을 다른 폴더로 옮기기 요청(미리보기 포함)", "폰/2차 인증 승인 뒤에만 실행 · 작업 폴더 파일은 안 옮김 · 실행 중 세션은 빠짐"))
 def sessions_move_request(ids: list[str], new_cwd: str) -> dict:
     """세션 기록을 다른 폴더로 옮기는 승인을 요청한다(미리보기 포함). new_cwd = 전체 경로만. 실행 중·자기 세션은 빠진다.
     작업 폴더 파일은 옮기지 않는다(그건 화면 전용). 이 도구만으로는 아무것도 옮겨지지 않는다 — 사람 승인 뒤 request_finish."""
     return _request("move", {"ids": ids, "new_cwd": new_cwd})
 
 
-@mcp.tool()
+@mcp.tool(meta=_ui("세션을 휴지통으로 보내기 요청(미리보기 포함)", "폰/2차 인증 승인 뒤에만 실행 · 30일 안 복구 · 실행 중 세션은 빠짐"))
 def sessions_delete_request(ids: list[str]) -> dict:
     """세션을 휴지통으로 옮기는 승인을 요청한다(미리보기 포함, 30일 복구). 실행 중·자기 세션은 빠진다.
     이 도구만으로는 아무것도 지워지지 않는다 — 사람 승인 뒤 request_finish."""
     return _request("delete", {"ids": ids})
 
 
-@mcp.tool()
+@mcp.tool(meta=_ui("승인된 옮기기·지우기·새 세션 실행하고 결과 받기", "승인되지 않았으면 아무것도 하지 않음"))
 def request_finish(approval_id: str) -> dict:
     """승인 상태를 확인하고, 승인됐으면 실행해 항목별 결과를 돌려준다. status: pending·rejected·expired·executed. 승인을 기다리며 반복해서 부르지 않는다."""
     return _call("POST", f"/api/v1/session-ops/finish/{approval_id}", body={})
 
 
-@mcp.tool()
+@mcp.tool(meta=_ui("휴지통에서 세션 되살리기", "같은 경로에 파일이 있으면 덮어쓰지 않음"))
 def session_restore(bucket: str) -> dict:
     """휴지통에서 세션을 되살린다. bucket = 삭제 결과의 항목별 bucket 값. 같은 경로에 파일이 있으면 덮어쓰지 않는다."""
     return _call("POST", "/api/v1/session-ops/restore", body={"bucket": bucket})

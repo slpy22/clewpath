@@ -1971,7 +1971,7 @@ def create_app() -> FastAPI:
 
     # ---- 동봉 스킬 설치(워커 분배 스킬, v0.9.0) — 사용자 명시 동작(설정 버튼+확인창) 경유만 ----
     #      ~/.claude/skills 에 새 파일 생성: 불가침 원칙 예외(2026-09-23 승인). 로컬 전용.
-    # ClewPath 플러그인(불가침 예외 N1): 체크박스 + 적용 버튼으로만, 이 PC 에서만. 동봉 스킬도 플러그인 항목으로 설치한다.
+    # ClewPath 플러그인(불가침 예외 N1): 들어 있는 스킬·도구를 보여 주는 설치 화면의 버튼으로만, 이 PC 에서만. 한 번에 다 설치한다.
     @app.get("/api/owner/plugin")
     def plugin_status(request: Request):
         from session_manager import plugininstall
@@ -1980,14 +1980,14 @@ def create_app() -> FastAPI:
         return plugininstall.status()
 
     @app.post("/api/owner/plugin/install")
-    def plugin_install(request: Request, body: dict = Body(...)):
+    def plugin_install(request: Request):
         from session_manager import plugininstall
         if not _is_local(request):
             return JSONResponse({"error": "이 PC(로컬)에서만 설치할 수 있습니다."}, status_code=403)
         try:
-            return plugininstall.apply(body.get("items"), move_old=bool(body.get("move_old")))
+            return plugininstall.install()
         except plugininstall.PluginError as e:
-            return JSONResponse({"error": e.code, "detail": e.detail}, status_code=400 if e.code == "unknown_item" else 500)
+            return JSONResponse({"error": e.code, "detail": e.detail}, status_code=500)
 
     @app.post("/api/owner/push/test")
     def push_test():
