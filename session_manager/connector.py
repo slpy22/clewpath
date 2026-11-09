@@ -156,7 +156,8 @@ def _otp_error() -> str:
 # start 와 대칭이 되도록 stop 도 특권 경로로 취급한다(릴레이 경유 한정; 소유자
 # 로컬 직접 호출은 이 프록시를 안 타므로 무영향 — start 2FA 와 같은 원리).
 _PRIV_API_SUFFIXES = ("/terminal/stop", "/kill", "/update/apply", "/revert-continuation", "/ptyd/restart",
-                      "/file/download", "/owner/housekeeping", "/housekeeping/idle_sessions/run")
+                      "/file/download", "/owner/housekeeping", "/housekeeping/idle_sessions/run",
+                      "/confirm-handoff", "/handoff-2fa", "/resummary-2fa")
 # owner/housekeeping(설정 변경, POST)·idle_sessions/run(지금 정리): 원격에서 세션을 끄게 되는 조작이라 2FA(2026-10-12)
 # file/download: 📁 파일 내려받기(보기는 허용, 내려받기는 2FA — file-browser §10), kill: 세션 강제 종료, update/apply: 원격 Host 업데이트, revert-continuation: 이어하기 되돌리기 — 모두 2FA 게이트
 
@@ -327,6 +328,11 @@ class Connector:
                  local_base: str | None = None):
         self.relay_url = relay_url
         self.room = room
+        try:
+            from session_manager import push as _push
+            _push.set_room(room)
+        except Exception:  # noqa: BLE001 — 알림 표시용일 뿐, 커넥터 시작을 막지 않는다
+            pass
         self.token = token
         self.local_base = (local_base or DEFAULT_LOCAL_BASE).rstrip("/")
         self.ws = None                       # 릴레이 연결
@@ -1147,6 +1153,8 @@ class Connector:
                         cp_client.log(f"[cp] room 채택: {self.room} -> {cp_room}")
                         params["room"] = cp_room
                         self.room = cp_room
+                        from session_manager import push as _push
+                        _push.set_room(cp_room)
                     elif cp_room and cp_room != self.room:
                         # 기존 room 유지(무중단). P1b 릴레이 검증 전에 room 정합 필요.
                         cp_client.log(f"[cp] [!] CP room({cp_room[:12]})과 현재 room 이 다름 -> "

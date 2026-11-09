@@ -115,7 +115,7 @@ test("sw push: 페이로드 → 알림(title 기본값·tag·data{sid,kind,gid})
   const { calls, fire } = bootSw("/relay/sw.js");
   await fire("push", { data: { json: () => ({ title: "T", body: "b", tag: "x:ready", sid: A, kind: "ready" }) } });
   const n = calls.shown[0];
-  assert.equal(n.title, "T"); assert.equal(n.tag, "x:ready"); same(n.data, { sid: A, kind: "ready", gid: "", approval: "" });
+  assert.equal(n.title, "T"); assert.equal(n.tag, "x:ready"); same(n.data, { sid: A, kind: "ready", gid: "", approval: "", handoff: "", room: "" });
   await fire("push", { data: { json: () => { throw new Error("bad"); } } });
   assert.equal(calls.shown[1].title, "ClewPath");
   await fire("push", { data: null });
@@ -143,6 +143,16 @@ test("sw notificationclick: 열린 창이 있으면 focus + postMessage(open-ses
   await fire("notificationclick", { notification: { close } });
   await fire("notificationclick", { notification: { close, data: { approval: "ap 2" } } });
   same(calls.opened.slice(1), ["/relay/app#monitor=g%201", "/relay/app", "/relay/app#approval=ap%202"]);
+  // 갈아타기 알림(E9): #handoff= 진입, 다른 PC 면 room 이 함께. 프래그먼트가 없으면 room 도 붙지 않는다
+  await fire("notificationclick", { notification: { close, data: { handoff: "ho_1", room: "r 1" } } });
+  await fire("notificationclick", { notification: { close, data: { room: "r1" } } });
+  same(calls.opened.slice(4), ["/relay/app#handoff=ho_1&room=r%201", "/relay/app"]);
+  self.__wins = [win("https://test.local/relay/app", calls)];
+  calls.posted.length = 0;
+  await fire("notificationclick", { notification: { close, data: { handoff: "ho_2", sid: A, room: "r2" } } });
+  await fire("notificationclick", { notification: { close, data: { sid: A, room: "r2" } } });
+  same(calls.posted, [{ type: "open-handoff", id: "ho_2", room: "r2" }, { type: "open-session", sid: A, room: "r2" }]);
+  self.__wins = [];
   // 로컬 배치(/sw.js) → 루트
   const loc = bootSw("/sw.js");
   await loc.fire("notificationclick", { notification: { close, data: { sid: B } } });

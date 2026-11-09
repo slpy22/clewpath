@@ -120,10 +120,12 @@ def _item(sid: str, caller: str | None) -> dict:
     m = scanner.scan_one(sid)
     if m is None:
         return {"session_id": sid, "ok": False, "reason": "session_not_found"}
-    it = {"session_id": sid, "title": _title(m), "cwd": m.cwd, "ok": True}
+    it = {"session_id": sid, "title": _title(m), "cwd": m.cwd, "ok": True, "agent": team.current_agent_name(sid)}
     if caller and sid == caller:
         return {**it, "ok": False, "reason": "self"}
     live = lifecycle._live_reason(sid)
+    if live == "handoff":
+        return {**it, "ok": False, "reason": "handoff_in_progress"}
     if live:
         return {**it, "ok": False, "reason": "session_live", "live": live}
     return it
@@ -150,10 +152,15 @@ def preview_delete(ids, caller: str | None = None) -> dict:
 
 
 def _need_ok(pv: dict) -> list[dict]:
-    ok = [{k: i.get(k) for k in ("session_id", "title", "cwd")} for i in pv["items"] if i["ok"]]
+    ok = [{k: i.get(k) for k in ("session_id", "title", "cwd", "agent")} for i in pv["items"] if i["ok"]]
     if not ok:
         raise TeamError("nothing_to_do", 409)
     return ok
+
+
+def _agent_note(items: list[dict]) -> str:
+    who = [i["agent"] for i in items if i.get("agent")]
+    return f" · 에이전트 {', '.join(who)} 의 지금 세션 포함" if who else ""
 
 
 def prepare(kind: str, args: dict, caller: str | None = None) -> tuple[dict, str]:
@@ -162,12 +169,12 @@ def prepare(kind: str, args: dict, caller: str | None = None) -> tuple[dict, str
         pv = preview_move(args.get("ids") or [i.get("session_id") for i in args.get("items") or []], args.get("new_cwd"), caller)
         items = _need_ok(pv)
         names = ", ".join(i["title"] for i in items[:3]) + (f" 외 {len(items) - 3}개" if len(items) > 3 else "")
-        return {"items": items, "new_cwd": pv["new_cwd"]}, f"세션 {len(items)}개 이동 → {pv['new_cwd']}: {names}"
+        return {"items": items, "new_cwd": pv["new_cwd"]}, f"세션 {len(items)}개 이동 → {pv['new_cwd']}: {names}{_agent_note(items)}"
     if kind == "sessions_delete":
         pv = preview_delete(args.get("ids") or [i.get("session_id") for i in args.get("items") or []], caller)
         items = _need_ok(pv)
         names = ", ".join(i["title"] for i in items[:3]) + (f" 외 {len(items) - 3}개" if len(items) > 3 else "")
-        return {"items": items}, f"세션 {len(items)}개 휴지통으로(30일 복구): {names}"
+        return {"items": items}, f"세션 {len(items)}개 휴지통으로(30일 복구): {names}{_agent_note(items)}"
     if kind == "session_create_auto":
         cwd = _target(args.get("cwd"))
         if not os.path.isdir(cwd):

@@ -50,6 +50,12 @@ def session_status(session_id: str) -> str | None:
 def set_native_title(session_id: str, title: str,
                      allow_live: bool = False) -> dict:
     """세션 JSONL 에 custom-title 을 append 해 네이티브 이름을 설정한다."""
+    try:
+        from session_manager import handoff
+        if handoff.in_progress(session_id):
+            return {"error": "handoff_in_progress", "session_id": session_id}
+    except Exception:  # noqa: BLE001
+        pass
     title = (title or "").strip()
     if not title:
         return {"error": "empty_title"}

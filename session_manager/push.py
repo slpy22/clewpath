@@ -199,6 +199,14 @@ def _webpush_send(sub: dict, body: str) -> None:
         print(f"[push] 발송 오류: {e}", flush=True)
 
 
+_room: str | None = None        # 이 Host 의 릴레이 방 — 폰이 어느 PC 의 알림인지 안다(E9). 커넥터가 알려 준다
+
+
+def set_room(room: str | None) -> None:
+    global _room
+    _room = room or None
+
+
 def send(kind: str, session_id: str, title: str, body: str, extra: dict | None = None) -> int:
     """모든 구독 기기에 발송(스레드, 논블로킹). 반환: 시도한 구독 수.
 
@@ -219,6 +227,8 @@ def send(kind: str, session_id: str, title: str, body: str, extra: dict | None =
         return 0
     p = {"title": title, "body": body, "kind": kind,
          "sid": session_id, "tag": f"{session_id}:{kind}"}
+    if _room:
+        p["room"] = _room
     if isinstance(extra, dict):
         for k, v in extra.items():
             if isinstance(k, str) and isinstance(v, (str, int)) and k not in p:

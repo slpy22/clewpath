@@ -1141,6 +1141,8 @@ def watch_once() -> dict:
         repair_uids()
         for aid in _active_agent_ids():
             follow_continuations(aid)
+        from session_manager import handoff
+        handoff.tick()
     except Exception as e:  # noqa: BLE001
         print(f"[team] 에이전트 감시 실패: {type(e).__name__}: {e}", flush=True)
     n = 0
@@ -1255,6 +1257,42 @@ def _agent(c, ref: str):
     if not r:
         raise TeamError("agent_not_found", 404)
     return r
+
+
+def current_agent_name(session_id: str) -> str | None:
+    """이 세션을 '지금 세션'으로 가진 에이전트 이름(삭제·이동 확인에 보여 준다)."""
+    try:
+        c = _read()
+    except TeamError:
+        return None
+    try:
+        r = c.execute("SELECT a.alias FROM agent_sessions s JOIN agents a ON a.id=s.agent_id WHERE s.session_id=? AND s.ended IS NULL", (session_id,)).fetchone()
+        return r["alias"] if r else None
+    finally:
+        c.close()
+
+
+def bind_in(c, agent_id: str, session_id: str, reason: str) -> bool:
+    """열린 트랜잭션 안에서 묶기(handoff 가 상태 변경과 한 트랜잭션으로 부른다, D14)."""
+    ok = _bind(c, agent_id, session_id, reason)
+    if ok:
+        _touch(c, agent_id)
+        _agent_event(c, agent_id, "session_bound", {"session_id": session_id, "reason": reason})
+    return ok
+
+
+def sync_agent_teams(agent_id: str) -> None:
+    """에이전트가 속한 팀의 관제를 맞춘다(세션이 바뀐 뒤). 실패해도 흐름을 막지 않는다 — 감시가 다시 맞춘다."""
+    c = _read()
+    try:
+        ids = [r["team_id"] for r in c.execute("SELECT team_id FROM memberships WHERE agent_id=? AND left_at IS NULL", (agent_id,))]
+    finally:
+        c.close()
+    for t in ids:
+        try:
+            sync_group(t)
+        except Exception as e:  # noqa: BLE001
+            print(f"[team] 팀 맞추기 실패 {t}: {type(e).__name__}", flush=True)
 
 
 def _agent_event(c, agent_id: str, kind: str, payload: dict | None = None) -> None:
@@ -1413,6 +1451,13 @@ def agents_overview() -> dict:
                                            "detached": r["detached"] is not None}
         agents = [_agent_view(a, opens.get(a["id"]), counts.get(a["id"], 0), teams.get(a["id"], []), ast_id)
                   for a in c.execute("SELECT * FROM agents ORDER BY created DESC, rowid DESC")]
+        try:
+            from session_manager import handoff
+            for old, new in handoff.replaced_map().items():
+                if old in by_session:
+                    by_session[old]["replaced_by"] = new
+        except Exception as e:  # noqa: BLE001
+            print(f"[team] 갈아타기 표시 실패: {type(e).__name__}", flush=True)
         return {"agents": agents, "by_session": by_session}
     finally:
         c.close()
@@ -1430,6 +1475,7 @@ def agent_detail(ref: str) -> dict:
                  "detached": r["detached"] is not None}
                 for r in c.execute("SELECT * FROM agent_sessions WHERE agent_id=? ORDER BY (ended IS NULL) DESC, started DESC, rowid DESC", (a["id"],))]
         open_sid = next((h["session_id"] for h in hist if h["ended"] is None), None)
-        return {**_agent_view(a, open_sid, len(hist), teams, ast["agent_id"] if ast else None), "history": hist}
+        last = c.execute("SELECT id FROM agent_handoffs WHERE agent_id=? AND status='done' ORDER BY state_at DESC LIMIT 1", (a["id"],)).fetchone()
+        return {**_agent_view(a, open_sid, len(hist), teams, ast["agent_id"] if ast else None), "history": hist, "last_handoff": last["id"] if last else None}
     finally:
         c.close()

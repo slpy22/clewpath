@@ -49,6 +49,17 @@ def _related_paths(session_id: str) -> list[Path]:
 
 
 def _live_reason(session_id: str) -> str | None:
+    """삭제·이동·이름 변경 쪽 판정: 살아 있거나 갈아타기가 진행 중이면 사유. 갈아타기 자신은 _live_reason_raw 를 쓴다."""
+    try:
+        from session_manager import handoff
+        if handoff.in_progress(session_id):
+            return "handoff"
+    except Exception:  # noqa: BLE001
+        pass
+    return _live_reason_raw(session_id)
+
+
+def _live_reason_raw(session_id: str) -> str | None:
     """살아 있는 세션이면 사유('terminal' = 우리 PTY, 'busy'/'idle'/… = claude 레지스트리), 아니면 None."""
     try:
         from session_manager import webterm

@@ -487,6 +487,20 @@
   .dsumbody .dstat{margin:4px 0 10px;padding-top:10px;border-top:1px solid var(--line)}
   .dnote{background:var(--surface);border:1px solid var(--line);border-radius:12px;margin-bottom:12px;overflow:hidden}
   .dnote.warn{padding:10px 14px;color:#e8a03c;font-size:.84rem;border-color:#e8a03c55}
+  .hostage{display:flex;flex-direction:column;gap:10px;padding-bottom:calc(72px + env(safe-area-inset-bottom))}
+  .hostage .hotitle,.hostage .hotitle:focus{font-size:1.1rem;margin:0;outline:none}
+  .hotext{color:var(--ink2);font-size:.9rem;line-height:1.5}
+  .hocost,.hocnt,.hosave{color:var(--muted);font-size:.84rem}
+  .horow{display:flex;justify-content:space-between;align-items:center;gap:8px}
+  .hota{width:100%;min-height:42vh;box-sizing:border-box;font-size:16px;line-height:1.5;padding:10px 12px;background:var(--surface);color:inherit;border:1px solid var(--line);border-radius:10px;resize:vertical}
+  .hoset{min-height:44px;text-align:left;color:var(--ink2);font-size:.86rem;background:none;border:none;padding:6px 0;cursor:pointer;overflow-wrap:anywhere}
+  .hosetbox.hidden{display:none}
+  .hosetbox .field input,.hosetbox .field select{width:100%;box-sizing:border-box;font-size:16px}
+  .hobanner{padding:10px 14px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:.86rem}
+  .hofoot{position:sticky;bottom:0;display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;padding:10px 0 calc(10px + env(safe-area-inset-bottom));background:var(--bg)}
+  .hofoot .btn{min-height:44px}
+  .hodoc{white-space:pre-wrap;overflow-wrap:anywhere;font-size:.86rem;max-height:60vh;overflow:auto}
+  .schip.agho.bad{color:#e8a03c}
   .dnotebody{padding:0 14px 14px}
   .dmorebox{margin:4px 0 14px}
   .dmorebtn{width:100%;text-align:left;padding:11px 4px;color:var(--ink2);font-size:.86rem}
@@ -1736,6 +1750,7 @@ function navTicket(){ const n=++NAV_SEQ, g=PANE_NOW.gen, pc=pcNow(); return ()=>
 // 화면 누름이 조용히 버려졌다(검토 3회차)
 function navPassive(){ const n=NAV_SEQ, g=PANE_NOW.gen, pc=pcNow(); return ()=>n===NAV_SEQ&&g===PANE_NOW.gen&&pc===pcNow(); }
 function paneEnter(kind, ref){
+  hoLeave();                                                    // 갈아타기 화면을 떠나면 고치던 글을 저장하고 폴링을 멈춘다
   const p=paneDetail(), r=ref||{};
   homeSeenSet(PANE_NOW.sid); if(r.session_id) homeSeenSet(r.session_id);   // 🏠 완료 칸의 '새로'를 이 기기가 이미 본 것에서 뗀다(보다가 끝난 것도)
   if(kind!=='terminal'&&(p.classList.contains('term-mode')||termView.main)) leaveTerminalView();   // 연결·탭 배지를 닫는다 — 재연결·화면 복귀가 떠난 터미널로 끌고 가지 않게(T2)
@@ -1905,7 +1920,7 @@ async function loadList(q){
     // 받는 사이 릴레이로 PC 를 바꿨다 — 늦게 온 옛 PC 목록은 버린다(새 PC 의 loadList 가 따로 돈다). 옛 목록으로 새 PC 의
     // 탭 기억을 복원하면 하나도 맞지 않아 빈 탭 목록이 새 PC 키에 덮어써진다(3단계)
     if(pc!==pcNow()) return;
-    SESSIONS=data.sessions||[]; LIST_READY=true; LIST_AT=at; LIST_FAIL=false;
+    SESSIONS=data.sessions||[]; HANDOFFS=data.handoffs||[]; LIST_READY=true; LIST_AT=at; LIST_FAIL=false;
     if(typeof data.now==='number') CLOCK_SKEW=data.now-Date.now()/1000;
     rerender();
     fbRetryAfterList();            // 목록 전에 연 파일 탭의 '세션을 찾지 못했습니다'를 굳히지 않는다(quick-switch §4-2)
@@ -1914,6 +1929,7 @@ async function loadList(q){
     restoreTabsOnce();             // 저장된 터미널 탭 워킹셋 복원(1회, 화면 탈취 없이 목록만)
     consumePendingMonitor();       // 관제 알림 클릭으로 진입한 경우 그 그룹 오버레이 열기
     if(PENDING_APPROVAL){ const a=PENDING_APPROVAL; PENDING_APPROVAL=''; openApprovalById(a); }
+    if(PENDING_HANDOFF){ const h=PENDING_HANDOFF; PENDING_HANDOFF=''; openHandoff(h); }
     renderQuickSoon();             // 바로가기 단추 켜기(준비 중 → 기억대로) — 첫 목록 뒤 복원 순서의 마지막(quick-switch §6-2)
     LIST_CTX={rerender};
     refreshTodo();                 // 🔔 배지(승인 요청 수는 서버에서, 권한·입력 대기는 방금 받은 목록에서)           // 자동 갱신(뱃지 실시간화)이 쓸 컨텍스트
@@ -1931,7 +1947,7 @@ async function listTick(){
   try{
     const pc=pcNow(), at=Date.now(), d=await T.list({limit:0});
     if(pc!==pcNow()) return;       // 받는 사이 PC 를 바꿨다 — 이전 PC 목록으로 새 PC 의 SESSIONS 를 덮지 않는다(새 PC 첫 목록이 다시 그린다)
-    SESSIONS=d.sessions||[]; LIST_AT=at;
+    SESSIONS=d.sessions||[]; HANDOFFS=d.handoffs||[]; LIST_AT=at;
     if(typeof d.now==='number') CLOCK_SKEW=d.now-Date.now()/1000;
     let skipList=false;
     if(LIST_VIEW==='sessions'){
@@ -1975,6 +1991,8 @@ let _verResumeAt=0;
 function verOnResume(){ const n=Date.now(); if(n-_verResumeAt<60000) return; _verResumeAt=n; try{ refreshVer(); }catch(e){} }
 
 // ---- 알림 클릭 -> 세션 열기 (푸시에서 sid 전달) ----
+// 알림이 다른 PC 것이면 그 PC 로 바꿔 연다(E9) — 해시가 지워지기 전에 읽어 둔다. 페어링 링크의 #room= 과 섞이지 않게 알림 형식일 때만
+const PUSH_ROOM = /^#(open|monitor|approval|handoff)=/.test(location.hash) ? decodeURIComponent((location.hash.match(/&room=([^&]+)/)||[])[1]||'') : '';
 let PENDING_OPEN_SID = (location.hash.match(/#open=([^&]+)/)||[])[1] || '';
 if(PENDING_OPEN_SID){ try{ history.replaceState(null,'',location.pathname); }catch(e){} }
 // 관제 알림 클릭 → #monitor=<gid>: 목록이 준비되면 그 그룹의 관제 오버레이를 연다(consumePendingMonitor)
@@ -1982,6 +2000,9 @@ let PENDING_OPEN_GID = (location.hash.match(/#monitor=([^&]+)/)||[])[1] || '';
 // 승인 요청 알림 클릭 → #approval=<id>: 목록이 준비되면 승인 화면(개인 비서 단계 3)
 let PENDING_APPROVAL = (location.hash.match(/#approval=([^&]+)/)||[])[1] || '';
 if(PENDING_APPROVAL){ try{ history.replaceState(null,'',location.pathname); }catch(e){} }
+// 갈아타기 알림 클릭 → #handoff=<id>: 목록이 준비되면 그 단계 화면
+let PENDING_HANDOFF = decodeURIComponent((location.hash.match(/#handoff=([^&]+)/)||[])[1] || '');
+if(PENDING_HANDOFF){ try{ history.replaceState(null,'',location.pathname); }catch(e){} }
 if(PENDING_OPEN_GID){ try{ history.replaceState(null,'',location.pathname); }catch(e){} }
 let CURRENT_TERM_SID=null;   // 지금 터미널 화면으로 보고 있는 세션(알림 클릭 시 화면 보존용)
 // 알림 클릭 → 세션으로 점프(v0.8.6). 탭이 있으면 그 탭, 우리 PTY 가 살아 있으면(live_terminal)
@@ -2088,6 +2109,8 @@ function consumePendingOpen(){
 }
 if('serviceWorker' in navigator){
   navigator.serviceWorker.addEventListener('message',(e)=>{
+    if(e.data && e.data.room && !swOpenHere(e.data)) return;              // 다른 PC 의 알림이면 그 PC 로 다시 연다(E9)
+    if(e.data && e.data.type==='open-handoff') openHandoff(e.data.id);
     if(e.data && e.data.type==='open-session') openSessionById(e.data.sid);
     if(e.data && e.data.type==='open-monitor') openMonitorGroupById(e.data.gid);
     if(e.data && e.data.type==='open-approval') openApprovalById(e.data.id);   // 단계 3: 승인 요청 알림
@@ -2617,8 +2640,12 @@ async function showModelPicker(s){
 }
 
 // ---- 재개 방식 선택 (웹/터미널 x YOLO/일반) - 기본: 웹+YOLO, 마지막 선택 기억 ----
-function showResumeChooser(s){
+function showResumeChooser(s,force){
   if(s.live_terminal){ loadTerminal(s); return; }   // 이미 돌고 있으면 그냥 돌아간다
+  const _ab=force?null:agentOf(s);
+  if(_ab&&!_ab.current&&_ab.replaced_by){ const t=agentNow(_ab);      // 옛 세션을 되살리면 같은 이름이 둘이 된다(U11·X4)
+    confirmSheet({title:'이미 갈아탄 옛 세션',main:'이미 갈아탄 옛 세션입니다.',sub:'같은 이름이 둘이면 이름으로 메시지를 보낼 수 없게 됩니다.',action:'그래도 재개',alt:t?{label:'지금 세션 열기',run:()=>showResumeChooser(continuedTarget(t))}:null}).then(ok=>{ if(ok) showResumeChooser(s,true); });
+    return; }
   // [사전 확인] 픽커 미표시 세션(에이전트/포크 산물)은 재개 옵션을 고르기 전에
   // 먼저 성격을 알린다 - 승인해야 옵션 모달로 넘어간다(사용자 요청 순서).
   if(s.picker_hidden && !skipsResumeNotice(s)){
@@ -2772,7 +2799,7 @@ function continuedTarget(s){
 // 팀 목록에서도 세션 목록과 같은 정보). repr = 폴더 머리의 대표 경로(같으면 경로 줄 생략, 하위 폴더면 상대경로, 팀은 s.cwd 라 늘 생략)
 function sessRowInfo(srow,s,repr,opt){
   if(s.session_id===SELECTED_ID) srow.classList.add('sel');
-  if((s.picker_hidden && !skipsResumeNotice(s)) || s.headless) srow.classList.add('dim');  // 픽커 미표시·자동 실행 = 흐리게
+  if((s.picker_hidden && !skipsResumeNotice(s)) || s.headless || (agentOf(s)&&agentOf(s).replaced_by&&!agentOf(s).current)) srow.classList.add('dim');  // 픽커 미표시·자동 실행 = 흐리게
   // 탭 영역(정보) → 상세
   const info=el('button','sinfo');
   const r1=el('div','sr1');
@@ -2946,7 +2973,11 @@ const AGENT_ERR={agent_name_taken:'같은 이름의 에이전트가 이미 있�
 function agentErrText(m){ m=String(m||''); return AGENT_ERR[m]||m; }
 function agentOf(s){ return s&&AGENTS_BY[s.session_id]||null; }
 function sessById(id){ return (SESSIONS||[]).find(x=>x.session_id===id)||null; }
-function agentChip(s){ const a=agentOf(s); if(!a||!a.current) return null;
+function agentNow(b){ const a=(AGENTS||[]).find(x=>x.id===b.agent_id); return sessById((a&&a.session_id)||b.replaced_by)||null; }     // 그 뒤로 또 갈아탔어도 지금 세션으로
+function agentChip(s){ const a=agentOf(s);
+  if(a&&!a.current&&a.replaced_by){ const g=el('button','schip agnext','⏭ 갈아탐'); g.title='새 세션으로 갈아탔습니다 — 누르면 지금 세션으로'; g.setAttribute('aria-label','갈아탐 — 지금 세션으로');
+    g.onclick=(e)=>{ if(e&&e.stopPropagation) e.stopPropagation(); const t=agentNow(a); if(t) loadDetail(t); else toast('지금 세션이 목록에 없습니다'); }; return g; }
+  if(!a||!a.current) return null;
   const same=a.name===sessLabel(s), g=el('button','schip agentu',same?'🪪':'🪪 '+a.name);
   g.title='에이전트 '+a.name; g.setAttribute('aria-label','에이전트 '+a.name);
   g.onclick=(e)=>{ if(e&&e.stopPropagation) e.stopPropagation(); loadAgentDetail(a.agent_id); }; return g; }
@@ -2973,6 +3004,7 @@ function agentMenu(a,s,anchor){ const box=el('div');
   if(s) box.appendChild(popItem(rowResumeIcon(s),'지금 세션 열기',null,()=>showResumeChooser(continuedTarget(s))));
   box.appendChild(popItem('✎','에이전트 이름','세션 이름은 따로입니다',()=>agentRename(a)));
   box.appendChild(popItem('ℹ','에이전트 상세',null,()=>loadAgentDetail(a.id)));
+  if(!a.assistant&&a.status==='active'&&a.session_id) box.appendChild(popItem('🔁','새 세션으로 갈아타기','먼저 비용·막힌 이유를 보여 줍니다',()=>{ const h=hoOf(a.id); return h?openHandoff(h.id):openHandoffStart(a.id); }));
   if(!a.assistant){ box.appendChild(el('div','popsep'));
     if(a.status==='active'){ if(a.session_id) box.appendChild(popItem('✂','지금 세션 떼기',"이 에이전트는 '지금 세션 없음'이 됩니다",()=>agentDetach(a),'danger'));
       box.appendChild(popItem('💤','쉬게 하기','세션은 그대로, 목록에서 접힙니다',()=>agentRetire(a,true),'danger')); }
@@ -2986,6 +3018,7 @@ function agentBlock(wrap,a,q){
   const gt=el('button','gtext agname'); gt.appendChild(el('div','gbase',(a.assistant?'🧑‍💼 ':'🪪 ')+a.name)); gt.onclick=()=>loadAgentDetail(a.id); head.appendChild(gt);
   const bd=s?sessionBadge(s):null;
   if(bd){ const t=el('span','sstate',bd.text); t.style.setProperty('--c',bd.c); if(bd.text==='권한 대기'){ t.style.cursor='pointer'; t.onclick=()=>showApprove(s); } head.appendChild(t); }
+  const ho=hoOf(a.id); if(ho){ const c=el('button','schip agho'+(ho.status==='failed'?' bad':''),HO_CHIP[ho.status]); c.onclick=(e)=>{ if(e&&e.stopPropagation) e.stopPropagation(); openHandoff(ho.id); }; head.appendChild(c); }
   const more=el('button','gopen more','⋯'); more.setAttribute('aria-label',a.name+' 메뉴'); more.setAttribute('aria-haspopup','menu');
   more.onclick=(e)=>{ if(e&&e.stopPropagation) e.stopPropagation(); return agentMenu(a,s,more); }; head.appendChild(more);
   wrap.appendChild(head); wrap.appendChild(agentSub(a,s));
@@ -3070,6 +3103,8 @@ async function loadAgentDetail(id){
   const act=el('div','agact');
   if(s){ const b=el('button','btn','🖥 지금 세션 열기'); b.onclick=()=>showResumeChooser(continuedTarget(s)); act.appendChild(b); }
   else act.appendChild(el('div','dnote warn','지금 세션이 없습니다. 세션 ⋯ 메뉴에서 이 에이전트에 붙일 수 있습니다.'));
+  if(!a.assistant&&a.status==='active'&&a.session_id){ const h=hoOf(a.id), b=el('button','btn ghost',h?HO_CHIP[h.status]+' — 이어서 보기':'🔁 새 세션으로 갈아타기'); b.onclick=()=>h?openHandoff(h.id):openHandoffStart(a.id); act.appendChild(b); }
+  if(a.last_handoff){ const b=el('button','btn ghost','📄 마지막 인수인계서'); b.onclick=()=>hoShowDoc(a.last_handoff); act.appendChild(b); }
   box.appendChild(act);
   box.appendChild(el('h3','agh3','세션 이력'));
   const list=el('div','aghist');
@@ -3085,6 +3120,222 @@ async function loadAgentDetail(id){
     else{ const r=el('button','btn ghost','☀ 되살리기'); r.onclick=()=>agentRetire(a,false); dz.appendChild(r); }
     box.appendChild(dz); }
 }
+
+// ---- 세션 갈아타기 화면(docs/designs/agent-unit.md '화면 확정' U5~U10·'재검토 확정') — 상태와 규칙의 주인은 서버(handoff.py), 화면은 사본만 갖는다 ----
+let HANDOFFS=[], HO_BOX=null, HO_FLUSH=null;
+const HO_CHIP={preparing:'🔁 준비 중',ready:'🔁 검토 대기',starting:'🔁 띄우는 중',failed:'⚠ 갈아타기 실패'};
+const HO_WIDE=['acceptEdits','auto','bypassPermissions'];
+const HO_ERR={agent_retired:'쉬는 에이전트입니다 — 되살린 뒤 갈아탈 수 있습니다', assistant_uses_reassign:'비서 바꾸기는 🧑‍💼 비서 설정의 재지정으로 합니다',
+  no_current_session:'지금 세션이 없어 갈아탈 수 없습니다', cmd_wrapper_unsupported:'이 설치본(claude.cmd)은 인수인계서를 넘길 수 없습니다 — 네이티브 설치로 바꾼 뒤 다시 하세요',
+  session_generating:'지금 세션이 답을 만드는 중입니다 — 끝난 뒤 다시 하세요', live_elsewhere:'바깥 터미널이나 백그라운드에서 돌고 있습니다 — 그쪽을 끝낸 뒤 다시 하세요',
+  handoff_in_progress:'이 세션의 갈아타기가 진행 중입니다', job_running:'다시 요약이 이미 돌고 있습니다', not_ready:'지금 상태에서는 할 수 없습니다 — 화면을 다시 여세요',
+  cannot_cancel:'이미 새 세션을 띄우기 시작해 취소할 수 없습니다', draft_empty:'인수인계서가 비어 있습니다', draft_too_long:'인수인계서가 너무 깁니다 — 줄여 주세요',
+  no_cwd:'그 폴더가 없습니다', target_not_absolute:'폴더는 전체 경로로 적으세요', client_too_old:'화면이 옛 버전입니다 — 새로 고치세요',
+  handoff_not_found:'이 갈아타기를 찾을 수 없습니다', clone_failed:'복제본이 인수인계서를 쓰지 못했습니다', prepare_lost:'만드는 도중 Host 가 다시 시작되어 끊겼습니다',
+  session_exited:'새 세션이 뜨지 못했습니다 — 신뢰 질문에서 거절했거나 곧바로 꺼졌습니다', resummary_failed:'다시 요약에 실패했습니다 — 지금 글은 그대로입니다',
+  old_session_not_stopped:'옛 세션을 끝내지 못했습니다 — 직접 닫아 주세요', bad_option:'고른 설정을 쓸 수 없습니다', draft_rev_conflict:'다른 기기에서 먼저 고쳤습니다', target_changed:'지금 세션이 그사이 바뀌었습니다'};
+const HO_DIFF={end_size:'대화가 더 진행됨',cwd:'작업 폴더가 바뀜',agent_rev:'에이전트 정보가 바뀜',agent_name:'에이전트 이름이 바뀜',session_id:'지금 세션이 바뀜'};
+function hoErrText(c){ c=String(c||''); return HO_ERR[c]||agentErrText(c)||'처리하지 못했습니다'; }
+function hoCode(e){ return (e&&e.json&&e.json.error)||(e&&e.message)||''; }
+function hoPath(id,tail){ return '/api/owner/handoffs/'+encodeURIComponent(id)+(tail||''); }
+function hoOf(agentId){ return HANDOFFS.find(h=>h.agent_id===agentId)||null; }
+function hoTodo(){ return HANDOFFS.filter(h=>h.status==='ready'||h.status==='failed'); }
+function hoUsd(v){ return '$'+Number(v||0).toFixed(2); }
+function hoRound(v){ return Math.round(Number(v)*100)/100; }
+const HO_BUSY='이 세션의 갈아타기가 진행 중입니다 — 끝나거나 취소한 뒤 다시 하세요';
+function hoBusy(sid){ return HANDOFFS.some(h=>h.session_id===sid&&h.status!=='failed'); }
+function hoAgentNote(s){ const b=agentOf(s); return b&&b.current?'\n\n에이전트 「'+b.name+'」의 지금 세션입니다.':''; }
+function hoSync(st){ HANDOFFS=HANDOFFS.filter(x=>x.id!==st.id);
+  if(HO_CHIP[st.status]) HANDOFFS.unshift({id:st.id,agent_id:st.agent_id,agent_name:st.agent_name,status:st.status,at:st.state_at,session_id:st.from_session});
+  renderTodoBadge(); agentRerender(); }
+function hoLeave(){ if(!HO_BOX) return; const f=HO_FLUSH; HO_BOX=null; HO_FLUSH=null; if(f){ try{ f(); }catch(e){} } }     // 다른 화면으로 — 고치던 글은 저장하고 놓는다
+function hoFrame(){
+  SELECTED_ID=null; highlightSelected(); AG_DETAIL=null; paneEnter('empty'); const main=paneDetail(); closeInlineMonitor(); main.classList.remove('term-mode','fb-mode','mon-mode'); main.innerHTML=''; $('#head').textContent='갈아타기';
+  main.appendChild(backbar('목록',()=>showListPane(),'tolist')); showDetailPane();
+  const box=el('div','detail hostage'); main.appendChild(box); HO_BOX=box; return box; }
+function hoTitle(box,text,sub){ const h=el('h2','hotitle',text); h.tabIndex=-1; box.appendChild(h); if(sub) box.appendChild(el('div','dpath',sub)); try{ h.focus(); }catch(e){} return h; }
+function hoBtn(text,cls,fn){ const b=el('button','btn'+(cls?' '+cls:''),text); b.onclick=fn; return b; }
+function hoFoot(box,btns){ const f=el('div','hofoot'); for(const b of btns) f.appendChild(b); box.appendChild(f); return f; }
+async function hoClose(agentId){ const f=HO_FLUSH; if(f&&!(await f())){ toast('저장하지 못해 닫지 않았습니다 — 입력은 그대로입니다'); return; } HO_FLUSH=null; loadAgentDetail(agentId); }
+function hoKeys(box,agentId,paid){ box.onkeydown=(e)=>{ if(e.key==='Escape'){ if(e.preventDefault) e.preventDefault(); hoClose(agentId); }
+  else if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)&&paid){ if(e.preventDefault) e.preventDefault(); paid.focus(); } }; }   // 돈 드는 단추·[갈아타기]는 포커스만
+function hoRender(box,st){ if(HO_BOX!==box) return; hoSync(st); box.innerHTML=''; HO_FLUSH=null; box.onkeydown=null;
+  (({preparing:hoPreparing,ready:hoReview,starting:hoStarting,done:hoDone,failed:hoFailed})[st.status]||hoCancelled)(box,st); }
+function hoPoll(box,id,ms,fn){ const pc=pcNow(), go=async()=>{ if(HO_BOX!==box||pc!==pcNow()) return; let st=null; try{ st=await T.api('GET',hoPath(id)); }catch(e){}
+  if(HO_BOX!==box||pc!==pcNow()) return; if(st&&fn(st)===false) return; setTimeout(go,ms); }; setTimeout(go,ms); }
+// 돈이 드는 요청: 누적 어림 확인·폰 하루 기준(2FA)을 화면에서 풀고 다시 보낸다. 사람이 그만두면 null
+async function hoPaid(path,body){ let b=body, two=false, cred={};
+  for(let i=0;i<4;i++){
+    try{ return await T.api('POST',path+(two?'-2fa':''),{body:b,...cred}); }
+    catch(e){ const c=hoCode(e), j=e.json||{};
+      if(c==='cost_confirm_required'){ const amt=j.cumulative_usd;
+        const ok=await confirmSheet({title:'비용 확인',main:amt<0?'이번 비용을 어림할 수 없습니다':'이번까지 합쳐 약 '+hoUsd(amt)+' (어림 — 상한 아님)',sub:'지금 세션 크기로 복제본을 한 번 돌리는 값입니다.',action:'진행'});
+        if(!ok) return null; b={...b,confirm_usd:amt}; continue; }
+      if(c==='phone_daily_limit'&&!two){
+        const ok=await confirmSheet({title:'2차 인증 필요',main:'오늘 폰에서 쓴 준비 비용이 기준을 넘었습니다',sub:'계속하려면 2차 인증을 거칩니다.',action:'계속'}); if(!ok) return null;
+        cred=await ensurePriv(); if(cred===null) return null; two=true; continue; }
+      if(two&&(c==='2fa_invalid'||c==='2fa_required')) clearGrace();
+      throw e; } }
+  return null; }
+// ① 시작 — 돈이 들기 전에 막힌 이유·어림을 다 보여 준다
+async function openHandoffStart(agentId){
+  const box=hoFrame(), pc=pcNow(); box.appendChild(el('div','spin'));
+  let p; try{ p=await T.api('GET','/api/owner/agents/'+encodeURIComponent(agentId)+'/handoff'); }
+  catch(e){ if(HO_BOX===box&&pc===pcNow()){ box.innerHTML=''; hoTitle(box,'새 세션으로 갈아타기'); box.appendChild(el('div','dnote warn',hoErrText(hoCode(e)))); hoFoot(box,[hoBtn('닫기','ghost',()=>loadAgentDetail(agentId))]); } return; }
+  if(HO_BOX!==box||pc!==pcNow()) return;
+  if(p.active) return openHandoff(p.active);
+  box.innerHTML=''; const s=sessById(p.session_id); hoTitle(box,'새 세션으로 갈아타기',p.name+(s?' · 지금 세션 「'+sessLabel(s)+'」':''));
+  const close=hoBtn('닫기','ghost',()=>loadAgentDetail(agentId));
+  if(p.blocked){ box.appendChild(el('div','dnote warn',hoErrText(p.blocked))); hoFoot(box,[close,hoBtn('다시 확인','ghost',()=>openHandoffStart(agentId))]); hoKeys(box,agentId); return; }
+  box.appendChild(el('div','hotext','인수인계서를 지금 세션의 도구 없는 복제본이 씁니다. 검토해서 고친 뒤 [갈아타기]를 눌러야 새 세션이 뜹니다. 옛 세션은 새 세션이 뜬 뒤에 끝납니다.'));
+  const est=p.est_usd, need=est==null||est>p.cost_confirm_usd, want=est==null?-1:hoRound(est);
+  box.appendChild(el('div','hocost',est==null?'비용을 어림할 수 없습니다':'예상 '+hoUsd(est)+' (어림 — 상한 아님)'));
+  let ack=null; const err=el('div','err');
+  if(need){ const lb=el('label','sheet-ack'); ack=el('input'); ack.type='checkbox'; ack.checked=false; lb.appendChild(ack); lb.appendChild(el('span',null,est==null?'금액을 모르는 채로 진행합니다':hoUsd(est)+' 쓰는 것을 확인했습니다')); box.appendChild(lb); }
+  box.appendChild(err);
+  const path='/api/owner/agents/'+encodeURIComponent(agentId)+'/handoff';
+  const reset=()=>{ man.disabled=false; go.disabled=!!(ack&&!ack.checked); };
+  const run=async(mode)=>{ if(go.disabled&&mode==='clone') return; go.disabled=man.disabled=true; err.textContent='';
+    try{ const b={mode}; if(mode==='clone'&&need) b.confirm_usd=want;
+      const r=mode==='clone'?await hoPaid(path,b):await T.api('POST',path,{body:b});
+      if(HO_BOX!==box||pc!==pcNow()) return; if(!r){ reset(); return; } hoRender(box,r); }
+    catch(e){ if(HO_BOX!==box||pc!==pcNow()) return; const c=hoCode(e); if(c==='handoff_in_progress') return openHandoffStart(agentId); err.textContent=hoErrText(c); reset(); } };
+  const go=hoBtn('인수인계서 만들기',null,()=>run('clone')), man=hoBtn('직접 쓰기 (비용 없음)','ghost',()=>run('manual'));
+  if(ack){ go.disabled=true; ack.onchange=()=>{ go.disabled=!ack.checked; }; }
+  hoFoot(box,[close,man,go]); hoKeys(box,agentId,go);
+}
+async function openHandoff(id){
+  const box=hoFrame(), pc=pcNow(); box.appendChild(el('div','spin'));
+  let st; try{ st=await T.api('GET',hoPath(id)); }
+  catch(e){ if(HO_BOX===box&&pc===pcNow()){ box.innerHTML=''; hoTitle(box,'갈아타기'); box.appendChild(el('div','dnote warn',hoErrText(hoCode(e)))); } return; }
+  if(HO_BOX===box&&pc===pcNow()) hoRender(box,st);
+}
+// ② 만드는 중
+function hoPreparing(box,st){
+  hoTitle(box,'인수인계서 만드는 중',st.agent_name); const at=el('div','hocost'), tick=()=>{ const d=Math.max(0,Math.floor(Date.now()/1000+CLOCK_SKEW-st.state_at)); at.textContent=Math.floor(d/60)+':'+String(d%60).padStart(2,'0'); }; tick(); box.appendChild(at);
+  box.appendChild(el('div','hotext','보통 1~3분 걸립니다. 화면을 닫아도 계속 만듭니다. 끝나면 알림을 보냅니다.'));
+  const err=el('div','err'); box.appendChild(err);
+  const stop=hoBtn('준비 취소','ghost',async()=>{ stop.disabled=true; try{ const r=await T.api('POST',hoPath(st.id,'/cancel'),{body:{}}); hoRender(box,r); }catch(e){ err.textContent=hoErrText(hoCode(e)); stop.disabled=false; } });
+  hoFoot(box,[stop,hoBtn('닫기 (계속 만듦)','ghost',()=>loadAgentDetail(st.agent_id))]); hoKeys(box,st.agent_id);
+  hoPoll(box,st.id,3000,(n)=>{ if(n.status!=='preparing'){ hoRender(box,n); return false; } tick(); });
+}
+// ③ 검토
+function hoReview(box,st){
+  const pc=pcNow(), id=st.id, max=st.body_max; let rev=st.draft_rev, token=st.snapshot_token, dirty=false, saving=null, timer=null, conflict=null, p=null, pendingShown=false, spent=st.spent_usd||0;
+  hoTitle(box,'인수인계서 검토',st.agent_name);
+  const bnC=el('div'), bnP=el('div'), bnN=el('div'); box.appendChild(bnC); box.appendChild(bnP); box.appendChild(bnN);
+  const ta=el('textarea','hota'); ta.value=st.draft||''; ta.setAttribute('aria-label','인수인계서'); ta.placeholder='새 세션에 넘길 내용을 적으세요'; box.appendChild(ta);
+  const row=el('div','horow'), cnt=el('span','hocnt'), sv=el('span','hosave',st.draft?'저장됨 ✓':''); cnt.setAttribute('aria-live','polite'); row.appendChild(cnt); row.appendChild(sv); box.appendChild(row);
+  const over=el('div','err'), err=el('div','err');
+  const len=()=>Array.from(String(ta.value||'').trim()).length;
+  const draw=()=>{ const n=len(); cnt.textContent=n.toLocaleString()+' / '+max.toLocaleString(); over.textContent=n>max?(n-max).toLocaleString()+'자 넘음 — 줄여 주세요':''; go.disabled=n>max||n===0||!!conflict; };
+  const adopt=(r)=>{ rev=r.draft_rev; token=r.snapshot_token; spent=r.spent_usd||spent; drawCost(); };
+  const showConflict=(cur)=>{ conflict=cur; bnC.innerHTML=''; const n=el('div','dnote warn hobanner','다른 기기에서 먼저 고쳤습니다. 지금 입력은 그대로입니다.');
+    n.appendChild(hoBtn('내 글로 덮어쓰기','ghost',()=>{ adopt(cur); conflict=null; bnC.innerHTML=''; dirty=true; draw(); save(); }));
+    n.appendChild(hoBtn('저쪽 글 받기','ghost',()=>{ ta.value=cur.draft||''; adopt(cur); conflict=null; bnC.innerHTML=''; dirty=false; sv.textContent='저장됨 ✓'; draw(); }));
+    bnC.appendChild(n); draw(); };
+  const doSave=async()=>{ clearTimeout(timer); if(conflict) return false; if(!dirty) return true; const text=ta.value; sv.textContent='저장 중…';
+    try{ const r=await T.api('POST',hoPath(id,'/draft'),{body:{text,draft_rev:rev}}); adopt(r); if(ta.value===text){ dirty=false; sv.textContent='저장됨 ✓'; } else sched(); return !dirty; }
+    catch(e){ const c=hoCode(e), j=e.json||{}; if(c==='draft_rev_conflict'&&j.current) showConflict(j.current); else sv.textContent='저장 실패 — 입력은 그대로입니다'; return false; } };
+  const save=()=>{ if(saving) return saving.then(()=>dirty?save():!conflict); saving=doSave().finally(()=>{ saving=null; }); return saving; };
+  const sched=()=>{ clearTimeout(timer); timer=setTimeout(save,2000); };
+  HO_FLUSH=save;
+  ta.oninput=()=>{ dirty=true; sv.textContent=''; draw(); sched(); };
+  box.appendChild(over);
+  const rs=hoBtn('다시 요약(더 짧게)','ghost',async()=>{ if(rs.disabled) return; const est=p?p.est_usd:null;
+    const ok=await confirmSheet({title:'다시 요약',main:est==null?'더 짧게 다시 요약합니다 (비용 어림 불가)':'더 짧게 다시 요약합니다 · 예상 +'+hoUsd(est)+' (어림 — 상한 아님)',sub:'고친 글을 덮어쓰지 않습니다. 그사이 고치면 바꿀지 물어봅니다.',action:'다시 요약'}); if(!ok||HO_BOX!==box) return;
+    rs.disabled=true; err.textContent=''; if(!(await save())){ rs.disabled=false; return; }
+    const b={}; if(p&&(est==null||spent+est>p.cost_confirm_usd)) b.confirm_usd=est==null?-1:hoRound(spent+est);
+    try{ const r=await hoPaid(hoPath(id,'/resummary'),b); if(HO_BOX!==box) return; if(!r){ rs.disabled=false; return; } adopt(r); bnN.innerHTML=''; sv.textContent='요약 중…'; }
+    catch(e){ err.textContent=hoErrText(hoCode(e)); rs.disabled=false; } });
+  rs.disabled=!!st.job_running; const rsw=el('div','horow'); rsw.appendChild(rs); box.appendChild(rsw);
+  // 실행 설정: 접힌 한 줄, 누르면 펼친다
+  const setBtn=el('button','hoset',''), setBox=el('div','hosetbox'); setBox.classList.add('hidden'); setBtn.setAttribute('aria-expanded','false'); let open=false;
+  setBtn.onclick=()=>{ open=!open; setBox.classList.toggle('hidden',!open); setBtn.setAttribute('aria-expanded',open?'true':'false'); drawSet(); };
+  const field=(label,node)=>{ const lb=el('label','field'); lb.appendChild(el('span',null,label)); lb.appendChild(node); setBox.appendChild(lb); return node; };
+  const fCwd=field('작업 폴더',el('input')), fModel=field('모델',el('input')), fPerm=field('권한',el('select'));
+  ['','manual','plan','dontAsk','acceptEdits','auto','bypassPermissions'].forEach(v=>{ const o=el('option',null,v||'(옛 세션 그대로)'); o.value=v; fPerm.appendChild(o); });
+  const setNote=el('div','hosetnote'); setBox.appendChild(setNote); box.appendChild(setBtn); box.appendChild(setBox);
+  const changed=()=>p&&fCwd.value.trim()&&fCwd.value.trim()!==(p.cwd||'');
+  const drawSet=()=>{ if(!p){ setBtn.textContent=(open?'▾':'▸')+' 실행 설정'; return; }
+    setBtn.textContent=(open?'▾':'▸')+' 📁 '+(baseName(fCwd.value.trim())||'?')+' · 🧠 '+(fModel.value.trim()||'기본')+' · 🔒 '+(fPerm.value||p.permission_mode||'터미널 기본');
+    setNote.innerHTML=''; const a=(AGENTS||[]).find(x=>x.id===st.agent_id);
+    if(changed()){ setNote.appendChild(el('div','dnote warn','다른 폴더로 가면 Claude 메모리는 따라오지 않습니다 — 필요한 내용은 인수인계서에 적으세요.'));
+      setNote.appendChild(el('div','dnote warn','처음 쓰는 폴더면 신뢰 질문에서 멈춥니다 — 터미널을 열어 고르세요.'));
+      if(a&&a.teams&&a.teams.length) setNote.appendChild(el('div','dnote warn','팀 폴더 밖으로 가면 팀 쓰기 범위 판정이 어긋날 수 있습니다 — 팀 폴더 변경도 함께 보세요.')); }
+    if(fPerm.value&&HO_WIDE.includes(fPerm.value)&&!HO_WIDE.includes(p.permission_mode||'')) setNote.appendChild(el('div','dnote warn','옛 세션보다 권한이 넓어집니다.')); };
+  fCwd.oninput=fModel.oninput=fPerm.onchange=drawSet;
+  const costEl=el('div','hocost'), oldEl=el('div','hocost'); box.appendChild(costEl); box.appendChild(oldEl); box.appendChild(err);
+  const drawCost=()=>{ costEl.textContent='이미 쓴 인수인계 비용 '+hoUsd(spent); };
+  const s0=sessById(st.from_session); oldEl.textContent=s0&&s0.live_terminal?'옛 세션: 클루패스 터미널을 끝냅니다':'옛 세션: 떠 있지 않아 끝낼 것이 없습니다';
+  const options=()=>{ const o={}; if(p){ const m=fModel.value.trim(); if(m&&m!==(p.model||'')) o.model=m; if(fPerm.value) o.permission_mode=fPerm.value; } return o; };
+  const go=hoBtn('갈아타기',null,async()=>{ if(go.disabled) return; go.disabled=true; err.textContent=''; const orig=go.textContent; go.textContent='띄우는 중…'; const back=()=>{ go.textContent=orig; draw(); };
+    try{ if(!(await save())){ err.textContent='저장되지 않아 갈아탈 수 없습니다 — 입력은 그대로입니다'; back(); return; }
+      let cred={}; if(MODE==='relay'){ cred=await ensurePriv(); if(cred===null){ err.textContent='2차 인증이 필요합니다'; back(); return; } }     // 취소하면 ready·초안 그대로(U9)
+      for(let i=0;i<3;i++){
+        const body={draft_rev:rev,snapshot_token:token,options:options()}; if(changed()) body.cwd=fCwd.value.trim();
+        try{ const r=await T.api('POST',hoPath(id,'/confirm-handoff'),{body,...cred}); HO_FLUSH=null; hoRender(box,r); return; }
+        catch(e){ const c=hoCode(e), j=e.json||{};
+          if(c==='target_changed'){ const what=(j.diff||[]).map(k=>HO_DIFF[k]||k).join(', ');
+            const ok=await confirmSheet({title:'지금 세션이 바뀌었습니다',main:'검토한 뒤 지금 세션이 달라졌습니다: '+what,sub:'인수인계서에 최근 내용이 빠졌을 수 있습니다. 그대로 갈아탈까요?',action:'그대로 갈아타기'});
+            if(HO_BOX!==box) return; token=j.snapshot_token; if(ok) continue; back(); return; }
+          if(c==='draft_rev_conflict'&&j.current){ showConflict(j.current); back(); return; }
+          if(c==='2fa_invalid'||c==='2fa_required') clearGrace();
+          err.textContent=c==='2fa_invalid'||c==='2fa_required'?otpErrMsg(c):hoErrText(c); back(); return; } }
+      back(); }
+    catch(e){ err.textContent=hoErrText(hoCode(e)); back(); } });
+  const quit=hoBtn('취소','ghost',()=>confirmSheet({title:'갈아타기 취소',main:'이 갈아타기를 취소할까요?',sub:'새 세션을 띄우지 않고, 고친 인수인계서는 쓰지 않게 됩니다. 지금 세션은 그대로입니다.',action:'취소하기',danger:true,
+    run:async()=>{ try{ const r=await T.api('POST',hoPath(id,'/cancel'),{body:{}}); HO_FLUSH=null; hoRender(box,r); }catch(e){ throw new Error(hoErrText(hoCode(e))); } }}));
+  hoFoot(box,[quit,go]); drawCost(); drawSet(); draw(); hoKeys(box,st.agent_id,go);
+  const showPending=(text)=>{ pendingShown=true; bnP.innerHTML=''; const n=el('div','dnote hobanner','새 요약이 도착했습니다 ('+Array.from(text).length.toLocaleString()+'자). 고친 글을 바꿀까요?');
+    const act=async(accept)=>{ try{ if(accept&&!(await save())) return; const r=await T.api('POST',hoPath(id,'/pending'),{body:{accept,draft_rev:rev}}); adopt(r); if(accept){ ta.value=r.draft||''; dirty=false; sv.textContent='저장됨 ✓'; draw(); } bnP.innerHTML=''; pendingShown=false; }catch(e){ const j=e.json||{}; if(hoCode(e)==='draft_rev_conflict'&&j.current) showConflict(j.current); else err.textContent=hoErrText(hoCode(e)); } };
+    n.appendChild(hoBtn('바꾸기','ghost',()=>act(true))); n.appendChild(hoBtn('버리기','ghost',()=>act(false))); bnP.appendChild(n); };
+  if(st.pending) showPending(st.pending);
+  const note=(code)=>{ bnN.innerHTML=''; if(code) bnN.appendChild(el('div','dnote warn',hoErrText(code))); };
+  if(st.error) note(st.error);
+  T.api('GET','/api/owner/agents/'+encodeURIComponent(st.agent_id)+'/handoff').then(d=>{ if(HO_BOX!==box||pc!==pcNow()) return; p=d;
+    fCwd.value=d.cwd||''; fModel.value=d.model||''; rs.textContent='다시 요약(더 짧게)'+(d.est_usd==null?'':' · 예상 +'+hoUsd(d.est_usd)); drawSet();
+    if(d.blocked) note(d.blocked); else if(d.trusted===false) note('');
+    if(d.trusted===false) setNote.appendChild(el('div','dnote warn','처음 쓰는 폴더면 신뢰 질문에서 멈춥니다 — 터미널을 열어 고르세요.')); }).catch(()=>{});
+  hoPoll(box,id,4000,(n)=>{ if(n.status!=='ready'){ HO_FLUSH=null; hoRender(box,n); return false; }
+    rs.disabled=!!n.job_running; if(!n.job_running&&sv.textContent==='요약 중…') sv.textContent='저장됨 ✓';
+    if(n.pending&&!pendingShown) showPending(n.pending); if(n.error==='resummary_failed') note(n.error);
+    if(!dirty&&!saving&&!conflict&&n.draft_rev!==rev){ ta.value=n.draft||''; adopt(n); sv.textContent='새 내용으로 바꿨습니다'; draw(); } });
+}
+function hoOpenTerm(st){ const s=sessById(st.to_session)||{session_id:st.to_session,title:st.agent_name,cwd:''}; return loadTerminal(s); }
+// ④ 기동 중
+function hoStarting(box,st){
+  hoTitle(box,'새 세션을 띄우는 중…',st.agent_name); box.appendChild(el('div','hotext','연결이 끊겨도 다시 띄우지 않습니다. 새 세션이 뜨면 옛 세션을 끝냅니다.'));
+  if(st.needs_trust) box.appendChild(el('div','dnote warn','처음 쓰는 폴더라 Claude 신뢰 질문에서 멈춰 있습니다. 터미널을 열어 아래 화살표로 Yes 를 고른 뒤 Enter 를 누르세요(그냥 Enter 는 종료).'));
+  hoFoot(box,[hoBtn('닫기 (계속 진행)','ghost',()=>loadAgentDetail(st.agent_id)),hoBtn('🖥 새 세션 터미널 열기',null,()=>hoOpenTerm(st))]); hoKeys(box,st.agent_id);
+  hoPoll(box,st.id,2000,(n)=>{ if(n.status!=='starting'){ hoRender(box,n); return false; } });
+}
+// ⑤ 완료
+function hoDone(box,st){
+  hoTitle(box,'갈아탔습니다',st.agent_name); box.appendChild(el('div','hotext','옛 세션은 ⏭ 로 목록에 남습니다.'));
+  if(st.error) box.appendChild(el('div','dnote warn',hoErrText(st.error)));
+  const open=hoBtn('🖥 새 세션 터미널 열기',null,()=>hoOpenTerm(st));
+  hoFoot(box,[hoBtn('에이전트 보기','ghost',()=>loadAgentDetail(st.agent_id)),open]); hoKeys(box,st.agent_id,open);
+  loadList(); agentReload();
+}
+// 실패 — 어느 단계에서 왜, 그리고 다음 길. 실패 기록은 닫아야 🔔 에서 빠진다
+function hoFailed(box,st){
+  hoTitle(box,'갈아타기를 못 했습니다 — '+(st.to_session?'새 세션 띄우기':'인수인계서 만들기'),st.agent_name);
+  box.appendChild(el('div','dnote warn',hoErrText(st.error))); box.appendChild(el('div','hotext','지금 세션은 그대로입니다.'));
+  const err=el('div','err'); box.appendChild(err);
+  const dismiss=async()=>{ const r=await T.api('POST',hoPath(st.id,'/cancel'),{body:{}}); hoSync(r); };
+  const after=(fn)=>async()=>{ err.textContent=''; try{ await dismiss(); await fn(); }catch(e){ err.textContent=hoErrText(hoCode(e)); } };
+  const again=hoBtn('다시',null,after(()=>openHandoffStart(st.agent_id)));
+  const manual=hoBtn('직접 쓰기','ghost',after(async()=>{ const r=await T.api('POST','/api/owner/agents/'+encodeURIComponent(st.agent_id)+'/handoff',{body:{mode:'manual'}}); hoRender(box,r); }));
+  hoFoot(box,[hoBtn('닫기','ghost',after(()=>loadAgentDetail(st.agent_id))),manual,again]);
+}
+function hoCancelled(box,st){ hoTitle(box,'취소했습니다',st.agent_name); box.appendChild(el('div','hotext','지금 세션은 그대로입니다.')); hoFoot(box,[hoBtn('에이전트 보기','ghost',()=>loadAgentDetail(st.agent_id))]); }
+async function hoShowDoc(id){ try{ const st=await T.api('GET',hoPath(id)); const b=el('div'); b.appendChild(el('pre','hodoc',st.draft||'(내용 없음)')); const c=hoBtn('닫기','ghost',()=>closeModal()); openModal('📄 마지막 인수인계서',b,[c]); }catch(e){ toast(hoErrText(hoCode(e))); } }
+// 알림을 누른 PC 가 지금 보던 PC 와 다르면 그 PC 로 바꿔서 연다(E9). 폰은 PC 를 릴레이 방으로 안다
+function swOpenHere(d){ if(!d.room||MODE!=='relay'||d.room===LS.getItem('sm_room')) return true;
+  if(!pcsLoad().some(x=>x.room===d.room)){ toast('이 기기에 짝지어지지 않은 PC 의 알림입니다'); return false; }
+  const f=d.type==='open-handoff'?'#handoff='+encodeURIComponent(d.id):d.type==='open-approval'?'#approval='+encodeURIComponent(d.id):d.type==='open-monitor'?'#monitor='+encodeURIComponent(d.gid):'#open='+encodeURIComponent(d.sid);
+  location.hash=f+'&room='+encodeURIComponent(d.room); location.reload(); return false; }
 
 // ---- 상세: 태그 보기·설정 — ClewPath 자체 저장소만 쓴다(claude 파일 무접촉) ----
 function allTagNames(){ const m=new Map(); for(const x of (SESSIONS||[])) for(const l of sessTags(x)) m.set(l,(m.get(l)||0)+1);
@@ -4332,7 +4583,8 @@ async function renameNative(s){
   }
 }
 async function doDelete(s){
-  if(!confirm('이 세션을 휴지통으로 보낼까요?\n영구 삭제가 아니라 복구할 수 있습니다(🗑 휴지통에서 되살리기).'))return;
+  if(hoBusy(s.session_id)){ toast(HO_BUSY); return; }
+  if(!confirm('이 세션을 휴지통으로 보낼까요?\n영구 삭제가 아니라 복구할 수 있습니다(🗑 휴지통에서 되살리기).'+hoAgentNote(s)))return;
   try{ const r=await T.api('POST',`/api/sessions/${s.session_id}/delete`,{body:{dry_run:false}});
     toast(r&&r.recoverable ? '휴지통으로 이동됨 (복구 가능)' : '삭제됨');
     // 지금 그 세션을 상세 칸에서 보고 있을 때만 칸을 비운다 — 전엔 마지막으로 연 상세(SELECTED_ID) 기준이라 그 뒤 다른 화면을 보는 중에도
@@ -6579,7 +6831,8 @@ function changeCwd(s){
   save.onclick=async()=>{
     const nc=inp.value.trim(); if(!nc){ toast('경로를 입력하세요'); return; }
     const mc=ck.checked;
-    var _base='세션을 "'+nc+'" 로 이사시킬까요? (세션 기록이 새 폴더로 옮겨집니다)';
+    if(hoBusy(s.session_id)){ toast(HO_BUSY); return; }
+    var _base='세션을 "'+nc+'" 로 이사시킬까요? (세션 기록이 새 폴더로 옮겨집니다)'+hoAgentNote(s);
     var _full='세션 이사 + 실제 작업 폴더 내용 이동을 진행할까요?\n\n원본 "'+(s.cwd||'?')+'" 의 모든 파일이 "'+nc+'" 로 실제 이동합니다. 되돌리기 어렵습니다.';
     if(!confirm(mc?_full:_base)) return;
     save.disabled=true; save.textContent='이동 중…';
@@ -7352,7 +7605,7 @@ function todoSessions(){
 }
 // 숫자 = 사람이 손대야 풀리는 것 + 3일 안에 claude 가 지울 세션(7일 안은 목록에만 보인다)
 function todoCount(){ const t=todoSessions();
-  return TODO_APPROVALS.length+t.perm.length+t.wait.length+t.gone.filter(s=>cleanupLeft(s)<=CLEANUP_ALERT).length; }
+  return TODO_APPROVALS.length+hoTodo().length+t.perm.length+t.wait.length+t.gone.filter(s=>cleanupLeft(s)<=CLEANUP_ALERT).length; }
 function renderTodoBadge(){
   const b=$('#btn-todo'); if(!b) return;
   const n=todoCount(), bd=b.querySelector('.tbadge');
@@ -7387,6 +7640,8 @@ async function showTodo(){
     for(const a of TODO_APPROVALS){ const left=a.expires?(a.expires-(Date.now()/1000+CLOCK_SKEW)):1e9;
       box.appendChild(todoItem('approve','📝',a.summary||APPROVAL_KIND[a.kind]||a.kind,APPROVAL_KIND[a.kind]||a.kind,
         todoLeft(a.expires),()=>showApprovalSheet(a),left<600)); } }
+  if(hoTodo().length){ sec('handoff','갈아타기',hoTodo().length);
+    for(const h of hoTodo()) box.appendChild(todoItem('handoff',h.status==='ready'?'🔁':'⚠',h.agent_name,h.status==='ready'?'인수인계서 검토 대기':'갈아타기 실패 — 눌러서 이유 보기',todoAgo(h.at),()=>openHandoff(h.id))); }
   if(t.perm.length){ sec('perm','권한 대기',t.perm.length);
     for(const s of t.perm) box.appendChild(todoItem('perm','✋',sessLabel(s),fold(s)+' · 도구 사용 허락 필요',todoAgo(rt(s,'permission_at')),()=>showApprove(s))); }
   if(t.wait.length){ sec('wait','입력 대기',t.wait.length);
@@ -8530,6 +8785,7 @@ if(_pcexport){
   if(cs&&cpid){ LS.setItem('sm_cs',cs); LS.setItem('sm_cp',cpid); LS.removeItem('sm_cjwt'); }
   if(p.get('room')) pcsUpsert({room:p.get('room'), cs:cs||'', cp:cpid||'', dev:dev||''});
   // ?switch=room : 로컬 페이지에서 고른 PC. 저장돼 있으면(자격 포함) 그 방을 활성화해 자동 접속.
+  if(PUSH_ROOM&&PUSH_ROOM!==LS.getItem('sm_room')&&!pcsActivate(PUSH_ROOM)) setTimeout(()=>toast('이 기기에 짝지어지지 않은 PC 의 알림입니다'),1500);
   const swRoom=p.get('switch');
   if(swRoom){ const spc=pcsLoad().find(x=>x.room===swRoom); if(spc) pcsActivate(spc.room); }
   const room=p.get('room')||LS.getItem('sm_room')||'';

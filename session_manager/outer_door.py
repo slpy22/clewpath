@@ -28,6 +28,10 @@ GUARDED = frozenset({
     "/api/sessions/{session_id}/delete", "/api/owner/trash/{bucket}/restore",
     "/api/sessions/{session_id}/change-cwd", "/api/sessions/{session_id}/revert-continuation",
     "/api/import", "/api/owner/plugin/install", "/api/owner/teams/{team_id}/root",
+    # 갈아타기: 복제본 비용·새 세션 기동·옛 세션 종료 — Claude 세션이 스스로 부르면 G2(늘 수동)가 깨진다(2FA 는 릴레이에만 걸림)
+    "/api/owner/agents/{agent_id}/handoff", "/api/owner/agents/{agent_id}/handoff-2fa", "/api/owner/handoffs/{hid}/draft",
+    "/api/owner/handoffs/{hid}/pending", "/api/owner/handoffs/{hid}/resummary", "/api/owner/handoffs/{hid}/resummary-2fa",
+    "/api/owner/handoffs/{hid}/cancel", "/api/owner/handoffs/{hid}/confirm-handoff",
 })
 
 # 막지 않는 변경 라우트. ClewPath 자체 데이터, 자체 인증·승인이 있는 것, 스킬·훅이 쓰는 것.

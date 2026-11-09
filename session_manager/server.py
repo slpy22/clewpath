@@ -651,7 +651,7 @@ def create_app() -> FastAPI:
     def set_native_title_web(session_id: str, body: TitleReq):
         r = native_title.set_native_title(session_id, body.title,
                                           allow_live=body.force)
-        code = 200 if r.get("ok") else (409 if r.get("error") == "session_live" else 400)
+        code = 200 if r.get("ok") else (409 if r.get("error") in ("session_live", "handoff_in_progress") else 400)
         return JSONResponse(r, status_code=code)
 
     # ---- 통신 이름 맞추기(2026-10-19 사장님 승인): 제목은 있는데 agent-name 이 비어 피어 이름이 떠도는 세션 ----
@@ -2127,7 +2127,8 @@ def create_app() -> FastAPI:
             out = out[:limit]
         # now: 클라이언트가 runtime 타임스탬프의 신선도를 판정할 때 서버 시계
         # 기준으로 보정하게 한다(폰과 PC 시계가 어긋나도 뱃지가 안 깨지게).
-        return {"total": len(out), "sessions": out, "now": int(time.time()), "agents_ok": occupancy_ok}
+        from session_manager import handoff as _handoff
+        return {"total": len(out), "sessions": out, "now": int(time.time()), "agents_ok": occupancy_ok, "handoffs": _handoff.summary()}
 
     # ---- 외부 API v1: 일회성 fork 질의 (원본 불변, fork 자동삭제) ----
     @app.post("/api/v1/sessions/{session_id}/ask")
