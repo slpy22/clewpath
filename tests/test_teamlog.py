@@ -327,7 +327,7 @@ def test_continuation_middle_sessions_bound(fake_claude_home, monkeypatch):
     monkeypatch.setattr(team, "_peer_by_session", lambda: {})
     t = team.create_team("C")
     a = team.add_member(t["id"], "w", session_id="s1")
-    assert team.current_session(a["agent_id"]) == "s3"
+    assert team.follow_continuations(a["agent_id"]) == "s3"     # 이력은 감시 경로가 적는다
     h = teamlog.member_history(t["id"], "w")
     assert [s["session_id"] for s in h["sessions"]] == ["s1", "s2", "s3"], "중간 세션도 이력에(C2-3)"
 

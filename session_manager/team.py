@@ -30,6 +30,7 @@ import sqlite3
 import subprocess
 import threading
 import time
+import uuid
 from pathlib import Path
 
 from session_manager import store
@@ -465,7 +466,7 @@ def _bind(c, agent_id: str, session_id: str, reason: str, team_id: str | None = 
         now = _now()
         c.execute("UPDATE agent_sessions SET ended=? WHERE agent_id=? AND ended IS NULL AND session_id<>?",
                   (now, agent_id, session_id))
-        c.execute("UPDATE agent_sessions SET ended=NULL, started=?, reason=? WHERE session_id=?", (now, reason, session_id))
+        c.execute("UPDATE agent_sessions SET ended=NULL, detached=NULL WHERE session_id=?", (session_id,))   # 처음 기록은 그대로(D3)
         return True
     now = _now()
     if not team_id:
@@ -674,23 +675,42 @@ def _peer_by_session() -> dict:
         return {}
 
 
+def _top_binding(c, agent_id: str):
+    return c.execute("SELECT session_id, detached FROM agent_sessions WHERE agent_id=?"
+                     " ORDER BY (ended IS NULL) DESC, started DESC, rowid DESC LIMIT 1", (agent_id,)).fetchone()
+
+
 def current_session(agent_id: str) -> str | None:
-    """에이전트의 지금 세션. 마지막으로 붙인 세션에서 continued-in 사슬을 따라가고,
-    새 세션이 나오면 agent_sessions 에 'continued' 로 적는다(eng E-3: 워커 교체도 추적)."""
+    """에이전트의 지금 세션(읽기만 — D13). 마지막으로 붙인 세션에서 continued-in 사슬을 따라가되 쓰지 않는다.
+    이력에 적는 일은 감시의 follow_continuations 가 한다. 떼어 낸 뒤면 지금 세션 없음(None, D3)."""
     c = _read()
     try:
-        r = c.execute("SELECT session_id FROM agent_sessions WHERE agent_id=? ORDER BY (ended IS NULL) DESC, started DESC, rowid DESC LIMIT 1",
-                      (agent_id,)).fetchone()
+        r = _top_binding(c, agent_id)
+        if not r or r["detached"] is not None:
+            return None
+        cur = r["session_id"]
+        for nxt in _continuation_hops(cur):
+            own = c.execute("SELECT agent_id FROM agent_sessions WHERE session_id=?", (nxt,)).fetchone()
+            if own and own["agent_id"] != agent_id:
+                break                                # 다른 에이전트가 이미 가진 세션 — 거기서 멈춤
+            cur = nxt
+        return cur
     finally:
         c.close()
-    if not r:
+
+
+def follow_continuations(agent_id: str) -> str | None:
+    """continued-in 으로 생긴 새 세션을 agent_sessions 에 'continued' 로 적는다(eng E-3: 워커 교체도 추적). 감시 경로 전용."""
+    c = _read()
+    try:
+        r = _top_binding(c, agent_id)
+    finally:
+        c.close()
+    if not r or r["detached"] is not None:
         return None
     sid = r["session_id"]
-    hops = _continuation_hops(sid)
-    if not hops:
-        return sid
     cur = sid
-    for nxt in hops:                                 # 중간 세션도 이력에 남긴다(Codex C2-3)
+    for nxt in _continuation_hops(sid):              # 중간 세션도 이력에 남긴다(Codex C2-3)
         try:
             with _Tx() as w:
                 if _bind(w, agent_id, nxt, "continued"):
@@ -1117,6 +1137,12 @@ def watch_once() -> dict:
         print(f"[team] 그룹 옮기기 실패: {type(e).__name__}: {e}", flush=True)
     if not db_path().exists():
         return {"teams": 0, "overdue": 0}
+    try:
+        repair_uids()
+        for aid in _active_agent_ids():
+            follow_continuations(aid)
+    except Exception as e:  # noqa: BLE001
+        print(f"[team] 에이전트 감시 실패: {type(e).__name__}: {e}", flush=True)
     n = 0
     for t in list_teams():
         try:
@@ -1219,3 +1245,191 @@ def owner_detail(team_id: str) -> dict:
         c.close()
     return {**t, "archived": bool(arch), "tasks": list_tasks(t["id"], None, 100), "usage": usage,
             "violations": vio, "notify": _notify_of(t["monitor_group_id"])}
+
+
+# ---------------------------------------------------------------- 에이전트(팀 밖까지, docs/designs/agent-unit.md 6-2·'0.37.0 대조')
+# 에이전트는 자기 이름을 가진다(사장님 G4): agents.alias 가 정본, 세션 이름과 서로 자동으로 바꾸지 않는다.
+
+def _agent(c, ref: str):
+    r = c.execute("SELECT * FROM agents WHERE id=? OR uid=?", (str(ref), str(ref))).fetchone()
+    if not r:
+        raise TeamError("agent_not_found", 404)
+    return r
+
+
+def _agent_event(c, agent_id: str, kind: str, payload: dict | None = None) -> None:
+    """이력은 덧붙이기만(D3). 팀이 없는 에이전트는 team_id 빈 값."""
+    tm = c.execute("SELECT team_id FROM memberships WHERE agent_id=? AND left_at IS NULL ORDER BY joined DESC LIMIT 1", (agent_id,)).fetchone()
+    _event(c, tm["team_id"] if tm else "", kind, agent_id=agent_id, payload=payload)
+
+
+def _touch(c, agent_id: str) -> None:
+    c.execute("UPDATE agents SET rev=rev+1, updated=? WHERE id=?", (_now(), agent_id))
+
+
+def _check_name(c, name: str, me: str | None = None) -> str:
+    """쉬지 않는 에이전트끼리 겹치지 않게 — 새로 만들거나 고칠 때만(팀 경로 add_member·이미 겹친 이름은 그대로, G4)."""
+    name = _clean(name, 40)
+    if not name:
+        raise TeamError("name_required")
+    if c.execute("SELECT 1 FROM agents WHERE alias=? AND status='active' AND id<>?", (name, me or "")).fetchone():
+        raise TeamError("agent_name_taken", 409)
+    return name
+
+
+def repair_uids() -> int:
+    """빈 uid 채우기(멱등 — 옛 판으로 되돌린 동안 만든 행 대비, D4). 이미 있는 uid 는 바꾸지 않는다."""
+    c = _read()
+    try:
+        ids = [r["id"] for r in c.execute("SELECT id FROM agents WHERE uid IS NULL")]
+    finally:
+        c.close()
+    if ids:
+        with _Tx() as w:
+            for aid in ids:
+                w.execute("UPDATE agents SET uid=? WHERE id=? AND uid IS NULL", (str(uuid.uuid4()), aid))
+    return len(ids)
+
+
+def _active_agent_ids() -> list[str]:
+    c = _read()
+    try:
+        return [r["id"] for r in c.execute("SELECT id FROM agents WHERE status='active'")]
+    finally:
+        c.close()
+
+
+def create_agent(session_id: str, name: str, role: str = "", tags=None) -> dict:
+    """세션 하나로 에이전트를 만든다(이유 created). 팀 소속은 선택. 이미 다른 에이전트의 세션이면 409."""
+    sid = str(session_id or "").strip().lower()
+    if not sid:
+        raise TeamError("session_required")
+    from session_manager import scanner
+    m = scanner.scan_one(sid)
+    if m is None:
+        raise TeamError("session_not_found", 404)
+    if m.headless:
+        raise TeamError("session_headless", 409)
+    with _Tx() as c:
+        if c.execute("SELECT 1 FROM agent_sessions WHERE session_id=?", (sid,)).fetchone():
+            raise TeamError("session_owned_by_other_agent", 409)
+        alias = _check_name(c, name)
+        aid = "ag_" + secrets.token_hex(4)
+        now = _now()
+        c.execute("INSERT INTO agents(id,alias,role,tags_json,created,uid,updated) VALUES(?,?,?,?,?,?,?)",
+                  (aid, alias, _clean(role, 120), _j(list(tags or [])), now, str(uuid.uuid4()), now))
+        _bind(c, aid, sid, "created")
+        _agent_event(c, aid, "agent_created", {"session_id": sid, "name": alias})
+    return agent_detail(aid)
+
+
+def rename_agent(ref: str, name: str, agent_rev: int | None = None) -> dict:
+    """에이전트 이름만 바꾼다(ClewPath 데이터 — 세션 이름은 안 건드림, G4)."""
+    with _Tx() as c:
+        a = _agent(c, ref)
+        if agent_rev is not None and int(agent_rev) != int(a["rev"]):
+            raise TeamError("agent_rev_conflict", 409)
+        new = _check_name(c, name, a["id"])
+        c.execute("UPDATE agents SET alias=? WHERE id=?", (new, a["id"]))
+        _touch(c, a["id"])
+        _agent_event(c, a["id"], "agent_renamed", {"from": a["alias"], "to": new})
+    return agent_detail(a["id"])
+
+
+def attach_session(ref: str, session_id: str, replace: bool = False) -> dict:
+    """세션을 붙인다(이유 imported). 세션은 평생 한 에이전트 — 다른 에이전트 것이면 _bind 가 409. 떼어 낸 세션은 원래 에이전트로만 돌아온다."""
+    sid = str(session_id or "").strip().lower()
+    if not sid:
+        raise TeamError("session_required")
+    from session_manager import scanner
+    if scanner.scan_one(sid) is None:
+        raise TeamError("session_not_found", 404)
+    with _Tx() as c:
+        a = _agent(c, ref)
+        if a["status"] != "active":
+            raise TeamError("agent_retired", 409)
+        cur = c.execute("SELECT session_id FROM agent_sessions WHERE agent_id=? AND ended IS NULL", (a["id"],)).fetchone()
+        if cur and cur["session_id"] != sid and not replace:
+            raise TeamError("has_current_session", 409)
+        if _bind(c, a["id"], sid, "imported"):
+            _touch(c, a["id"])
+            _agent_event(c, a["id"], "session_attached", {"session_id": sid, "replaced": cur["session_id"] if cur else None})
+    return agent_detail(a["id"])
+
+
+def detach_session(ref: str, session_id: str | None = None) -> dict:
+    """지금 세션을 뗀다: ended·detached 를 함께 채우고 행은 남긴다(옛 판은 '끝난 세션'으로 읽는다, D3)."""
+    with _Tx() as c:
+        a = _agent(c, ref)
+        cur = c.execute("SELECT session_id FROM agent_sessions WHERE agent_id=? AND ended IS NULL", (a["id"],)).fetchone()
+        if not cur or (session_id and str(session_id).strip().lower() != cur["session_id"]):
+            raise TeamError("not_current_session", 409)
+        now = _now()
+        c.execute("UPDATE agent_sessions SET ended=?, detached=? WHERE session_id=?", (now, now, cur["session_id"]))
+        _touch(c, a["id"])
+        _agent_event(c, a["id"], "session_detached", {"session_id": cur["session_id"]})
+    return agent_detail(a["id"])
+
+
+def retire_agent(ref: str, on: bool = True) -> dict:
+    """쉬게 하기(세션은 그대로, 화면에서 접힘). on=False 면 되살리기 — 그사이 같은 이름이 생겼으면 409."""
+    with _Tx() as c:
+        a = _agent(c, ref)
+        if on:
+            c.execute("UPDATE agents SET status='retired', retired=? WHERE id=?", (_now(), a["id"]))
+        else:
+            _check_name(c, a["alias"], a["id"])
+            c.execute("UPDATE agents SET status='active', retired=NULL WHERE id=?", (a["id"],))
+        _touch(c, a["id"])
+        _agent_event(c, a["id"], "agent_retired" if on else "agent_revived")
+    return agent_detail(a["id"])
+
+
+def _agent_view(a, open_sid, n_sessions: int, teams: list, assistant_id) -> dict:
+    return {"id": a["id"], "uid": a["uid"], "name": a["alias"], "role": a["role"] or "", "tags": _uj(a["tags_json"], []),
+            "status": a["status"], "rev": a["rev"], "created": a["created"], "session_id": open_sid, "sessions": n_sessions,
+            "teams": teams, "assistant": a["id"] == assistant_id}
+
+
+def agents_overview() -> dict:
+    """목록(읽기만, DB 만 — D13). by_session = 세션 줄 칩용. 지금 세션은 감시가 맞춰 둔 값이다."""
+    c = _read()
+    try:
+        ast = c.execute("SELECT agent_id FROM assistant WHERE id=1").fetchone()
+        ast_id = ast["agent_id"] if ast else None
+        teams: dict = {}
+        for r in c.execute("SELECT m.agent_id, t.code, t.name FROM memberships m JOIN teams t ON t.id=m.team_id"
+                           " WHERE m.left_at IS NULL AND t.archived IS NULL AND t.deleted IS NULL"):
+            teams.setdefault(r["agent_id"], []).append({"code": r["code"], "name": r["name"]})
+        opens: dict = {}
+        counts: dict = {}
+        by_session: dict = {}
+        names = {r["id"]: r["alias"] for r in c.execute("SELECT id, alias FROM agents")}
+        for r in c.execute("SELECT agent_id, session_id, ended, detached FROM agent_sessions"):
+            counts[r["agent_id"]] = counts.get(r["agent_id"], 0) + 1
+            if r["ended"] is None:
+                opens[r["agent_id"]] = r["session_id"]
+            by_session[r["session_id"]] = {"agent_id": r["agent_id"], "name": names.get(r["agent_id"]), "current": r["ended"] is None,
+                                           "detached": r["detached"] is not None}
+        agents = [_agent_view(a, opens.get(a["id"]), counts.get(a["id"], 0), teams.get(a["id"], []), ast_id)
+                  for a in c.execute("SELECT * FROM agents ORDER BY created DESC, rowid DESC")]
+        return {"agents": agents, "by_session": by_session}
+    finally:
+        c.close()
+
+
+def agent_detail(ref: str) -> dict:
+    c = _read()
+    try:
+        a = _agent(c, ref)
+        ast = c.execute("SELECT agent_id FROM assistant WHERE id=1").fetchone()
+        teams = [{"code": r["code"], "name": r["name"]} for r in c.execute(
+            "SELECT t.code, t.name FROM memberships m JOIN teams t ON t.id=m.team_id"
+            " WHERE m.agent_id=? AND m.left_at IS NULL AND t.archived IS NULL AND t.deleted IS NULL", (a["id"],))]
+        hist = [{"session_id": r["session_id"], "started": r["started"], "ended": r["ended"], "reason": r["reason"],
+                 "detached": r["detached"] is not None}
+                for r in c.execute("SELECT * FROM agent_sessions WHERE agent_id=? ORDER BY (ended IS NULL) DESC, started DESC, rowid DESC", (a["id"],))]
+        open_sid = next((h["session_id"] for h in hist if h["ended"] is None), None)
+        return {**_agent_view(a, open_sid, len(hist), teams, ast["agent_id"] if ast else None), "history": hist}
+    finally:
+        c.close()

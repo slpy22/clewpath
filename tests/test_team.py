@@ -60,6 +60,7 @@ def test_current_session_follows_continued_in_and_records(T):
     t, a, b = _mk(T)
     T.chain["s-be"] = "s-be-c2"
     assert T.member(t["id"], "백엔드")["session_id"] == "s-be-c2"
+    T.follow_continuations(a["agent_id"])                # 읽기 경로는 쓰지 않는다 — 이력은 감시가 적는다(D13)
     import sqlite3
     c = sqlite3.connect(str(T.db_path()))
     rows = c.execute("SELECT session_id, reason, ended IS NULL FROM agent_sessions WHERE agent_id=? ORDER BY rowid",

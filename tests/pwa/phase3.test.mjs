@@ -72,7 +72,7 @@ test("renderRows: 폴더 그룹(최신순)·상태 점/문구·🔗 피어 칩(�
   assert.ok(b.children[0].children[1].children.map((k) => k.textContent).includes("5시간 전"));
   // C: 🤖 배경 에이전트 + ⚙(피커 미표시) + dim
   const c = byId[C];
-  same(chipsOf(c), ["🤖 bg-1", "⚙ 에이전트"]);
+  same(chipsOf(c), ["🤖 bg-1 점유 중", "⚙ 재개 목록 밖"]);
   assert.ok(c.classList.contains("dim"));
   // D: picker_expose → ⚙/dim 없음, 선택 행 sel
   const d = byId[D];

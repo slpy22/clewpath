@@ -59,6 +59,9 @@ OPEN = frozenset({
     "/api/v1/team/{team_id}/tasks/{task_id}/{action}",
     "/api/owner/teams/{team_id}/manager", "/api/owner/teams/{team_id}/members",
     "/api/owner/teams/{team_id}/members/{agent}/leave", "/api/owner/teams/{team_id}/notify", "/api/owner/teams/{team_id}/rename",
+    # 에이전트 명부(ClewPath 데이터, claude 파일 무접촉 — 갈아타기 경로는 GUARDED 로, agent-unit.md '0.37.0 대조' 3)
+    "/api/owner/agents", "/api/owner/agents/{agent_id}/rename", "/api/owner/agents/{agent_id}/attach",
+    "/api/owner/agents/{agent_id}/detach", "/api/owner/agents/{agent_id}/retire",
     # 관제·정기 작업·저장소
     "/api/owner/monitor/groups", "/api/owner/monitor/groups/{gid}/delete", "/api/owner/monitor/groups/{gid}/notify",
     "/api/owner/housekeeping", "/api/owner/housekeeping/{job}/run", "/api/owner/store/notices/clear",

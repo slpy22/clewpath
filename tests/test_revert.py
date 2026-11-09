@@ -213,7 +213,7 @@ def test_execute_rolls_team_back_to_original(fake_claude_home, quiet):
     _bg_pair(fake_claude_home)
     t = team.create_team("KP", manager_session="s-mgr")
     m = team.add_member(t["id"], "논문", session_id=A)
-    assert team.current_session(m["agent_id"]) == B, "← 사본이 명부를 가로챈 상태(실사고 재현)"
+    assert team.follow_continuations(m["agent_id"]) == B, "← 사본이 명부를 가로챈 상태(실사고 재현)"
     with team._Tx() as c:   # 사본 수집으로 두 번 잡힌 사용량(실사고 116건)
         c.execute("INSERT INTO usage(session_id, message_id, agent_id) VALUES(?,?,?)", (B, "msg_1", m["agent_id"]))
     r = revert.execute(A)
@@ -237,7 +237,7 @@ def test_marker_only_when_copy_is_already_in_trash(fake_claude_home, quiet):
     _bg_pair(fake_claude_home)
     t = team.create_team("KP", manager_session="s-mgr")
     m = team.add_member(t["id"], "논문", session_id=A)
-    assert team.current_session(m["agent_id"]) == B
+    assert team.follow_continuations(m["agent_id"]) == B
     d = lifecycle.delete_session(B, dry_run=False)
     assert d.get("trash") and scanner.scan_one(B) is None
     pa = Path(scanner.scan_one(A).jsonl_path)

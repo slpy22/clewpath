@@ -504,6 +504,8 @@ def create_app() -> FastAPI:
     app.add_middleware(AuthASGIMiddleware, base_path=BASE_PATH)
     from session_manager.pclink import routes as _pclink_routes
     _pclink_routes.register(app)                 # PC 사이 세션 통신(묻는 쪽 로컬 API·관리 API)
+    from session_manager import agent_routes as _agent_routes
+    _agent_routes.register(app)                  # 에이전트 명부(docs/designs/agent-unit.md)
 
     @app.get("/login")
     def login_page():

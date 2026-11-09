@@ -31,7 +31,7 @@ from typing import Any, Callable
 from session_manager import config
 
 LOCAL_PC = "local"
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 _lock = threading.RLock()          # 쓰기 직렬화(프로세스 안). team._lock 은 이것의 별명
 _w: sqlite3.Connection | None = None
 _w_path: str | None = None
@@ -106,6 +106,30 @@ CREATE TABLE IF NOT EXISTS launch_settings(pc_id TEXT NOT NULL DEFAULT 'local', 
   permission_mode TEXT, effort TEXT, model TEXT, body_json TEXT NOT NULL, source TEXT, created INTEGER,
   PRIMARY KEY(pc_id, session_id));
 """
+# v8(에이전트 단위, 2026-11-09): 더하기만 — 옛 판은 모르는 열·표를 무시한다. 단계 2 표까지 한 번에(store.py 를 R2 전에 한 번만).
+# uid 는 옛 판이 만든 행이 비어 있을 수 있어 team.repair_uids 가 정기 작업에서 채운다. 지금 세션 하나 색인 전에 어긋난 행을 먼저 닫는다.
+_SCHEMA_V8 = """
+ALTER TABLE agents ADD COLUMN uid TEXT;
+ALTER TABLE agents ADD COLUMN home TEXT NOT NULL DEFAULT 'local';
+ALTER TABLE agents ADD COLUMN rev INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE agents ADD COLUMN updated INTEGER;
+ALTER TABLE agent_sessions ADD COLUMN detached INTEGER;
+UPDATE agent_sessions SET ended=started WHERE ended IS NULL AND rowid NOT IN (
+  SELECT rid FROM (SELECT rowid AS rid, ROW_NUMBER() OVER (PARTITION BY agent_id ORDER BY started DESC, rowid DESC) AS rn
+                   FROM agent_sessions WHERE ended IS NULL) WHERE rn=1);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_agent_uid ON agents(uid) WHERE uid IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_agent_current ON agent_sessions(agent_id) WHERE ended IS NULL;
+CREATE TABLE IF NOT EXISTS agent_handoffs(
+  id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, from_pc TEXT NOT NULL DEFAULT 'local', from_session TEXT,
+  to_pc TEXT NOT NULL DEFAULT 'local', to_session TEXT, kind TEXT NOT NULL, doc_path TEXT, status TEXT NOT NULL,
+  draft_rev INTEGER NOT NULL DEFAULT 0, exec_rev INTEGER, snapshot_json TEXT, gen INTEGER NOT NULL DEFAULT 0, run_id TEXT,
+  error TEXT, created INTEGER NOT NULL, state_at INTEGER NOT NULL, created_by TEXT);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_handoff_inflight ON agent_handoffs(agent_id) WHERE status IN ('preparing','ready','starting');
+CREATE TABLE IF NOT EXISTS agent_handoff_attempts(
+  handoff_id TEXT NOT NULL, n INTEGER NOT NULL, kind TEXT NOT NULL, est_usd REAL, actual_usd REAL, unknown INTEGER NOT NULL DEFAULT 0,
+  origin TEXT NOT NULL, gen INTEGER NOT NULL, created INTEGER NOT NULL, PRIMARY KEY(handoff_id, n));
+CREATE INDEX IF NOT EXISTS ix_handoff_attempts_day ON agent_handoff_attempts(origin, created);
+"""
 # 세션 표 기본키는 지금 session_id 만으로도 유일하다(이 PC 행뿐). 허브가 다른 PC 행을 들여올 때 (pc_id, session_id) 로
 # 바꾼다(TODOS 데이터 저장 정리 T3). session_meta 등 새 표는 처음부터 (pc_id, session_id).
 
@@ -120,7 +144,7 @@ def _migrate(c: sqlite3.Connection) -> None:
         _pre_store_backup(c, v)
     steps: list[tuple[int, str]] = [
         (1, team._SCHEMA), (2, team._SCHEMA_V2 + team._fts_sql()), (3, team._SCHEMA_V3),
-        (4, team._SCHEMA_V4), (5, team._SCHEMA_V5), (6, _SCHEMA_V6), (7, _SCHEMA_V7),
+        (4, team._SCHEMA_V4), (5, team._SCHEMA_V5), (6, _SCHEMA_V6), (7, _SCHEMA_V7), (8, _SCHEMA_V8),
     ]
     for ver, sql in steps:
         if v < ver:
