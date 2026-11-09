@@ -64,12 +64,12 @@ def test_clewpath_db_name_wins_when_present(home):
 def test_local_pc_row_and_host_id_change(home):
     (_dd() / "pclink").mkdir(parents=True)
     (_dd() / "pclink" / "identity.json").write_text(json.dumps({"host_id": "h-111"}), encoding="utf-8")
-    from session_manager import labels
-    labels.set_record("s-pc", name="이름")
+    from session_manager import session_meta
+    session_meta.set_record("s-pc", model="이름")
     assert store.local_host_id() == "h-111"
     (_dd() / "pclink" / "identity.json").write_text(json.dumps({"host_id": "h-222"}), encoding="utf-8")
     store.close()
-    assert labels.get("s-pc")["name"] == "이름"                  # 세션 행은 그대로
+    assert session_meta.get("s-pc")["model"] == "이름"                  # 세션 행은 그대로
     assert store.local_host_id() == "h-222"                     # pcs 한 칸만 바뀜
     r = store.reader()
     try:
@@ -110,21 +110,21 @@ def test_old_host_style_sql_still_works_on_v6(home):
 
 # ---------------------------------------------------------------- 거울(D5)
 def test_mirror_written_in_old_format(home):
-    from session_manager import labels
-    labels.set_record("s1", name="가", labels=["x"])
+    from session_manager import session_meta
+    session_meta.set_record("s1", model="가", tags=["x"])
     raw = json.loads(config.labels_file().read_text(encoding="utf-8"))
-    assert raw["version"] == 1 and raw["sessions"]["s1"]["name"] == "가"
+    assert raw["version"] == 1 and raw["sessions"]["s1"]["model"] == "가"
     assert [p.name for p in _dd().iterdir() if p.name.endswith(".tmp")] == []
 
 
 def test_old_reader_sees_mirror_after_every_write(home):
     """되돌림 흉내: 옛 판은 labels.json 을 직접 읽는다 — 쓸 때마다 같은 값이어야 한다."""
-    from session_manager import labels, profiles
-    labels.set_record("s1", name="하나")
+    from session_manager import session_meta, profiles
+    session_meta.set_record("s1", model="하나")
     profiles.set_record("s1", model="fable")
-    labels.set_record("s1", labels=["a", "b"])
+    session_meta.set_record("s1", tags=["a", "b"])
     old = json.loads(config.labels_file().read_text(encoding="utf-8"))["sessions"]["s1"]
-    assert old == labels.get("s1")
+    assert old == session_meta.raw("s1")
     oldp = json.loads((_dd() / "profiles.json").read_text(encoding="utf-8"))["sessions"]["s1"]
     assert oldp == profiles.get("s1")
 
@@ -139,66 +139,66 @@ def _meta(name):
 
 def test_old_version_wrote_file_is_imported(home):
     """거울 뒤 파일이 바뀌었다 = 되돌아간 옛 판이 쓴 최신 값 → 그 파일 기준으로 다시 채우고 사고 기록."""
-    from session_manager import labels
-    labels.set_record("s1", name="새판")
+    from session_manager import session_meta
+    session_meta.set_record("s1", model="새판")
     store.close()                                                # 새 판 종료 → 옛 판이 씀
     p = config.labels_file()
     d = json.loads(p.read_text(encoding="utf-8"))
-    d["sessions"]["s1"]["name"] = "옛판에서 바꿈"
+    d["sessions"]["s1"]["model"] = "옛판에서 바꿈"
     d["sessions"]["s2"] = {"labels": ["옛"], "updated_at": "x"}
     p.write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
-    assert labels.get("s1")["name"] == "옛판에서 바꿈"
-    assert labels.get("s2")["labels"] == ["옛"]
+    assert session_meta.get("s1")["model"] == "옛판에서 바꿈"
+    assert session_meta.get("s2")["tags"] == ["옛"]
     inc = (_dd() / "incidents.jsonl").read_text(encoding="utf-8")
     assert "mirror_imported" in inc
 
 
 def test_crash_after_json_replace_before_clearing_marker(home):
     """③ 전에 죽음: 표식이 남았지만 파일 = 새 해시 → 정상(표식만 지움), 값 그대로."""
-    from session_manager import labels
-    labels.set_record("s1", name="가")
+    from session_manager import session_meta
+    session_meta.set_record("s1", model="가")
     m = _meta("labels")
     with store.tx() as c:                                        # 표식만 되살린다
         c.execute("UPDATE doc_meta SET pending_hash=hash, prev_hash='old' WHERE name='labels'")
     store.close()
-    assert labels.get("s1")["name"] == "가"
+    assert session_meta.get("s1")["model"] == "가"
     assert _meta("labels")["pending_hash"] is None and _meta("labels")["hash"] == m["hash"]
 
 
 def test_crash_after_db_commit_before_json_is_ambiguous(home):
     """② 전에 죽음: 표식 있음 + 파일 = 직전 해시 → 애매함. 자동으로 덮지 않고 양쪽 보존(파일 사본) + DB 로 거울 다시 + 알림."""
-    from session_manager import labels
-    labels.set_record("s1", name="가")
+    from session_manager import session_meta
+    session_meta.set_record("s1", model="가")
     before = config.labels_file().read_bytes()
     with store.tx() as c:                                        # ① 만 된 상태를 만든다(DB 는 '나', 파일은 '가')
         d = json.loads(before)
-        d["sessions"]["s1"]["name"] = "나"
+        d["sessions"]["s1"]["model"] = "나"
         store._db_write_doc(c, store.docs()["labels"], d)
         c.execute("UPDATE doc_meta SET prev_hash=hash, pending_hash='new-hash-never-written' WHERE name='labels'")
     store.close()
-    assert labels.get("s1")["name"] == "나"                      # DB 값 유지
-    assert json.loads(config.labels_file().read_text(encoding="utf-8"))["sessions"]["s1"]["name"] == "나"   # 거울 다시
+    assert session_meta.get("s1")["model"] == "나"                      # DB 값 유지
+    assert json.loads(config.labels_file().read_text(encoding="utf-8"))["sessions"]["s1"]["model"] == "나"   # 거울 다시
     kept = list((_dd() / "backups" / "mirror").glob("labels.json.ambiguous.*"))
     assert kept and kept[0].read_bytes() == before                # 파일 값도 보존
     assert any(n["event"] == "mirror_ambiguous" for n in store.notices())
 
 
 def test_corrupt_mirror_keeps_db_and_rewrites(home):
-    from session_manager import labels
-    labels.set_record("s1", name="가")
+    from session_manager import session_meta
+    session_meta.set_record("s1", model="가")
     store.close()
     config.labels_file().write_text("{깨짐", encoding="utf-8")
-    assert labels.get("s1")["name"] == "가"
-    assert json.loads(config.labels_file().read_text(encoding="utf-8"))["sessions"]["s1"]["name"] == "가"
+    assert session_meta.get("s1")["model"] == "가"
+    assert json.loads(config.labels_file().read_text(encoding="utf-8"))["sessions"]["s1"]["model"] == "가"
     assert list((_dd() / "backups" / "mirror").glob("labels.json.corrupt.*"))
 
 
 def test_missing_mirror_is_rewritten_from_db(home):
-    from session_manager import labels
-    labels.set_record("s1", name="가")
+    from session_manager import session_meta
+    session_meta.set_record("s1", model="가")
     store.close()
     config.labels_file().unlink()
-    assert labels.get("s1")["name"] == "가"
+    assert session_meta.get("s1")["model"] == "가"
     assert config.labels_file().exists()
 
 
@@ -206,7 +206,7 @@ def test_missing_mirror_is_rewritten_from_db(home):
 def _legacy_fixture(dd):
     dd.mkdir(parents=True, exist_ok=True)
     (dd / "labels.json").write_text(json.dumps({"version": 1, "sessions": {
-        "s1": {"labels": ["일"], "name": "첫째", "keep": "1", "updated_at": "t"},
+        "s1": {"labels": ["일"], "model": "첫째", "keep": "1", "updated_at": "t"},
         "s2": {"labels": [], "model": "fable", "updated_at": "t"}},
         "folders": {"f:/a": {"standalone": True, "cwd": "F:/a", "updated_at": "t"}}}, ensure_ascii=False), encoding="utf-8")
     (dd / "profiles.json").write_text(json.dumps({"version": 1, "sessions": {"s1": {"model": "opus", "denied_tools": ["Bash"]}}}),
@@ -241,8 +241,8 @@ def _legacy_fixture(dd):
 
 
 def _snapshot():
-    from session_manager import housekeeping, labels, lifecycle, mongroups, policy, profiles, services, worklog
-    return {"labels": labels.all_records(), "folders": sorted(labels.standalone_folders()), "profiles": profiles.all_records(),
+    from session_manager import housekeeping, session_meta, lifecycle, mongroups, policy, profiles, services, worklog
+    return {"labels": session_meta.all_records(), "folders": sorted(session_meta.standalone_folders()), "profiles": profiles.all_records(),
             "services": services._load(), "usage": policy._load_usage(), "hk": housekeeping._load(),
             "hidden": sorted(housekeeping.hidden_session_ids()), "fork": lifecycle._fork_pending_load(),
             "groups": mongroups._load(), "turns": worklog.session_turns("gone1")}
@@ -254,7 +254,7 @@ def test_legacy_import_same_values_and_idempotent(home):
     hooks._STATUS.clear()
     hooks._persist_loaded = False
     a = _snapshot()
-    assert a["labels"]["s1"]["name"] == "첫째" and a["folders"] == ["f:/a"]
+    assert a["labels"]["s1"]["model"] == "첫째" and a["folders"] == ["f:/a"]
     assert a["profiles"]["s1"]["denied_tools"] == ["Bash"]
     assert a["usage"]["svc:nk:2026-11-05"]["calls"] == 3 and a["usage"]["abc:2026-11-04"]["calls"] == 1
     assert a["hk"]["idle_hours"] == 4 and a["hidden"] == ["p1"] and a["fork"] == {"f1": {"since": 1, "tries": 2}}
@@ -364,21 +364,21 @@ def test_every_session_table_is_registered(home):
 
 
 def test_delete_and_restore_session_rows(home):
-    from session_manager import hooks, labels, lifecycle, profiles
+    from session_manager import hooks, session_meta, lifecycle, profiles
     from tests.conftest import write_session
     sid = "aaaaaaaa-1111-2222-3333-444444444444"
     write_session(home, "F--x", sid, [{"type": "user", "cwd": "F:\\x", "message": {"role": "user", "content": "hi"},
                                         "timestamp": "2026-06-01T00:00:00.000Z"}])
     hooks._persist_loaded = True
-    labels.set_record(sid, name="지울 세션", labels=["태그"])
+    session_meta.set_record(sid, model="지울 세션", tags=["태그"])
     profiles.set_record(sid, model="fable")
     hooks.update_from_event({"session_id": sid, "hook_event_name": "Stop"})
     r = lifecycle.delete_session(sid, dry_run=False, force=True)
     assert r["deleted"]
-    assert labels.get(sid) == {} and profiles.get(sid) == {} and hooks.status_of(sid) is None
+    assert session_meta.get(sid) == {} and profiles.get(sid) == {} and hooks.status_of(sid) is None
     bucket = r["trash"].replace("\\", "/").rsplit("/", 1)[-1]
     lifecycle.restore_session(bucket)
-    assert labels.get(sid)["name"] == "지울 세션" and profiles.get(sid)["model"] == "fable"
+    assert session_meta.get(sid)["model"] == "지울 세션" and profiles.get(sid)["model"] == "fable"
 
 
 # ---------------------------------------------------------------- 훅 쓰기(D2)
@@ -448,7 +448,7 @@ def test_restore_kept_value_via_api(home, monkeypatch):
     """애매한 거울에서 보존한 파일 값으로 사장님이 되돌린다(D5 — 설정 화면)."""
     test_crash_after_db_commit_before_json_is_ambiguous(home)
     from fastapi.testclient import TestClient
-    from session_manager import labels, server
+    from session_manager import session_meta, server
     st = store.status()
     assert st["kept"] and st["db"] == "team.db" and any(n["event"] == "mirror_ambiguous" for n in st["notices"])
     monkeypatch.setattr(server, "_is_local_request", lambda *a, **k: True, raising=False)
@@ -457,4 +457,4 @@ def test_restore_kept_value_via_api(home, monkeypatch):
         assert r.status_code == 200, r.text
         assert client.post("/api/owner/store/restore-kept", json={"kept": "../labels.json"}).status_code == 400
         assert client.get("/api/owner/store").json()["schema"] == 7
-    assert labels.get("s1")["name"] == "가"                      # 보존본(옛 파일) 값
+    assert session_meta.get("s1")["model"] == "가"                      # 보존본(옛 파일) 값

@@ -493,8 +493,8 @@ def _claude_argv(session_id: str, skip_permissions: bool = True,
         # (fork 는 새 세션이라 제외). claude 파일 무수정 - 런치 플래그만 추가.
         # 사람이 라벨로 고른 모델 → 만들 때 정한 모델(launch_settings) 순서.
         try:
-            from session_manager import labels as _labels
-            _mdl = _labels.model_of(session_id) or launch_options.stored_model(session_id)
+            from session_manager import session_meta as _session_meta
+            _mdl = _session_meta.model_of(session_id) or launch_options.stored_model(session_id)
         except Exception:  # noqa: BLE001
             _mdl = None
         if _mdl:

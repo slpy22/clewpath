@@ -20,15 +20,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 
-class LabelReq(BaseModel):
-    """라벨 설정 요청 바디. 제공한 필드만 갱신된다."""
-    labels: list[str] | None = None
-    name: str | None = None
-    color: str | None = None
-    note: str | None = None
+class TagReq(BaseModel):
+    """태그 설정 요청 바디."""
+    tags: list[str] | None = None
 
-    def to_fields(self) -> dict:
-        return {k: v for k, v in self.model_dump().items() if v is not None}
+
+class LabelReq(BaseModel):
+    """옛 경로(/labels) 요청 바디. 폰 앱·외부 호출이 넘어올 때까지 받는다. name·color·note 는 무시된다(2026-11-09 제거)."""
+    labels: list[str] | None = None
 
 
 class AskReq(BaseModel):
@@ -91,7 +90,7 @@ class ProfileReq(BaseModel):
 
 from session_manager import (
     scanner, viewer, search, stats, lifecycle, exporter, importer, resume,
-    webterm, webapi, webmonitor, auth, labels, policy, profiles, native_title,
+    webterm, webapi, webmonitor, auth, session_meta, policy, profiles, native_title,
     owner2fa, devices, appconfig, config, connector, services,
 )
 
@@ -155,17 +154,31 @@ def resume_from_human(query: dict, token) -> bool:
     return False
 
 
-def _display_title(md: dict, rec: dict | None = None) -> str:
-    """표시 이름. claude 이름(custom-title/AI제목) 우선, 없으면 우리 라벨명,
-    그다음 slug → id.
+def _meta_fields(rec: dict) -> dict:
+    """세션 응답에 싣는 ClewPath 값. labels·picker_expose 는 옛 이름 별칭 — 재빌드 전 폰 앱과 외부 호출이 읽는다."""
+    tags = rec.get("tags", [])
+    skip = bool(rec.get("skip_resume_notice"))
+    return {"tags": tags, "labels": tags, "skip_resume_notice": skip, "picker_expose": skip,
+            "model_override": rec.get("model")}
 
-    claude 파일의 이름이 있으면 그걸 존중한다(우리는 claude 파일을 안 건드림).
-    claude 이름이 없을 때만 사이드카 라벨명(rec.name)을 제목으로 승격 - 사용자가
-    ClewPath 에서 붙인 이름이 ID 로 가려지지 않게(에이전트/헤드리스 세션 등).
-    """
+
+def _save_tags(session_id: str, tags: list[str] | None) -> dict:
+    fields = {} if tags is None else {"tags": tags}
+    return {"session_id": session_id, "record": session_meta.set_record(session_id, **fields)}
+
+
+def _old_record(r: dict) -> dict:
+    return {**r, "record": {**r["record"], "labels": r["record"].get("tags", [])}} if r["record"] else r
+
+
+def _old_counts() -> dict:
+    return {"labels": [{"label": x["tag"], "count": x["count"]} for x in session_meta.tag_counts()]}
+
+
+def _display_title(md: dict) -> str:
+    """표시 이름. claude 이름(custom-title/AI제목) → slug → id. ClewPath 가 따로 이름을 두지 않는다(2026-11-09 사장님)."""
     return (md.get("custom_title")
             or md.get("ai_title")
-            or (rec.get("name") if rec else None)
             or md.get("slug")
             or md["session_id"][:8])
 
@@ -541,15 +554,12 @@ def create_app() -> FastAPI:
     def health():
         return {"status": "ok"}
 
-    def _with_labels(meta_dict: dict, recs: dict) -> dict:
-        """세션 dict 에 라벨 레코드를 머지한다(labels/name/color/note). recs 는 1회 로드본."""
+    def _with_meta(meta_dict: dict, recs: dict) -> dict:
+        """세션 dict 에 ClewPath 레코드를 머지한다. recs 는 1회 로드본."""
         rec = recs.get(meta_dict["session_id"], {})
-        meta_dict["labels"] = rec.get("labels", [])
-        meta_dict["label_name"] = rec.get("name")
-        meta_dict["label_color"] = rec.get("color")
-        # 피커 미표시 세션의 노출 정책(사용자 승격 여부) - 배지/은닉 유지 판단에 사용
-        meta_dict["picker_expose"] = rec.get("picker") == "expose"
-        meta_dict["title"] = _display_title(meta_dict, rec)
+        meta_dict.update(_meta_fields(rec))
+        meta_dict["resume_model"] = rec.get("model") or meta_dict.get("last_model")
+        meta_dict["title"] = _display_title(meta_dict)
         # 재개 모델: 오버라이드(설정값) 있으면 그것, 없으면 감지(마지막 실사용).
         # last_model 은 to_dict() 에 이미 포함(스캐너).
         meta_dict["model_override"] = rec.get("model")
@@ -564,8 +574,8 @@ def create_app() -> FastAPI:
         hidden = _hk.hidden_session_ids()            # 모델 목록 읽기용으로 잠깐 띄운 claude 의 빈 기록
         sessions = [m for m in scanner.scan_all()
                     if (include_headless or not m.headless) and m.session_id not in hidden]
-        recs = labels.all_records()  # 라벨은 1회만 로드(세션마다 파일 읽지 않음)
-        solo = labels.standalone_folders()            # 별도 프로젝트로 둔 폴더(하위여도 상위 묶음에 넣지 않음)
+        recs = session_meta.all_records()  # 라벨은 1회만 로드(세션마다 파일 읽지 않음)
+        solo = session_meta.standalone_folders()            # 별도 프로젝트로 둔 폴더(하위여도 상위 묶음에 넣지 않음)
         groups = scanner.group_by_project(sessions)
         project_list = []
         for folder, items in groups.items():
@@ -576,8 +586,8 @@ def create_app() -> FastAPI:
                 "session_count": len(items),
                 "total_size_bytes": sum(s.size_bytes for s in items),
                 "latest_mtime": max(s.mtime for s in items),
-                "sessions": [dict(_with_labels(s.to_dict(), recs),
-                                  standalone=bool(s.cwd) and labels.folder_key(s.cwd) in solo)
+                "sessions": [dict(_with_meta(s.to_dict(), recs),
+                                  standalone=bool(s.cwd) and session_meta.folder_key(s.cwd) in solo)
                              for s in items_sorted],
             })
         project_list.sort(key=lambda p: p["latest_mtime"], reverse=True)
@@ -609,23 +619,30 @@ def create_app() -> FastAPI:
         body = await request.json()
         model = (body or {}).get("model")
         if model in (None, "", "default", "auto"):
-            labels.set_record(session_id, model=None)   # 해제 → 감지값(마지막 모델) 사용
+            session_meta.set_record(session_id, model=None)   # 해제 → 감지값(마지막 모델) 사용
             return {"ok": True, "model_override": None}
         model = str(model).strip()
         if not _MODEL_TOKEN_RE.match(model):
             return JSONResponse({"error": "잘못된 모델 값"}, status_code=400)
-        labels.set_record(session_id, model=model)
+        session_meta.set_record(session_id, model=model)
         return {"ok": True, "model_override": model}
 
     # ---- 라벨 (웹, 쿠키 인증) ----
-    @app.get("/api/labels")
-    def get_label_counts():
-        return {"labels": labels.label_counts()}
+    @app.get("/api/tags")
+    def get_tag_counts():
+        return {"tags": session_meta.tag_counts()}
 
-    @app.post("/api/sessions/{session_id}/labels")
+    @app.post("/api/sessions/{session_id}/tags")
+    def set_session_tags(session_id: str, body: TagReq):
+        return _save_tags(session_id, body.tags)
+
+    @app.get("/api/labels")                               # 옛 이름 — 폰 앱·외부 호출용 별칭
+    def get_label_counts():
+        return _old_counts()
+
+    @app.post("/api/sessions/{session_id}/labels")        # 옛 이름
     def set_session_labels(session_id: str, body: LabelReq):
-        rec = labels.set_record(session_id, **body.to_fields())
-        return {"session_id": session_id, "record": rec}
+        return _old_record(_save_tags(session_id, body.labels))
 
     # 네이티브 이름(Ctrl+R custom-title) 설정 — JSONL 에 append + 사이드카 미러
     @app.post("/api/sessions/{session_id}/title")
@@ -1042,13 +1059,13 @@ def create_app() -> FastAPI:
         meta = scanner.scan_one(session_id)
         if meta is None or not meta.cwd:
             return JSONResponse({"error": "no_cwd"}, status_code=404)
-        labels.set_standalone(meta.cwd, on)
+        session_meta.set_standalone(meta.cwd, on)
         return {"session_id": session_id, "cwd": meta.cwd, "standalone": on}
 
     @app.post("/api/sessions/{session_id}/keep")
     def set_keep(session_id: str, keep: bool = Body(..., embed=True)):
         """「항상 켜 두기」 — 쉬는 세션 정리에서 제외(ClewPath 자체 저장소에만 기록)."""
-        labels.set_record(session_id, keep=("1" if keep else None))
+        session_meta.set_record(session_id, keep=("1" if keep else None))
         return {"session_id": session_id, "keep": keep}
 
     # ---- 정기 작업(housekeeping) ----
@@ -1094,17 +1111,21 @@ def create_app() -> FastAPI:
         except ValueError as e:
             return JSONResponse({"error": str(e)}, status_code=400)
 
-    @app.post("/api/sessions/{session_id}/picker-expose")
-    def picker_expose(session_id: str, expose: bool = Body(..., embed=True)):
-        """피커 미표시 세션(에이전트/포크 산물)의 재개 전 알림 설정 토글.
+    @app.post("/api/sessions/{session_id}/resume-notice")
+    def resume_notice(session_id: str, skip: bool = Body(..., embed=True)):
+        """⚙ 세션(claude 재개 목록에 없는 세션)의 재개 전 알림 끄기.
 
         [원칙] ClewPath 는 claude 세션 파일을 수정하지 않는다. 대화형 재개 시
         claude 가 자동 제목을 붙여 자기 `--resume` 목록에 넣는 것은 claude 의
         정상 동작이고, 우리는 그 사실을 재개 직전에 고지할지만 정한다.
-        expose=True: 사용자가 인지함 - 경고 없이 재개. False(기본): 재개 전 확인.
-        이 플래그는 ClewPath 자체 저장소(labels)에만 기록된다.
+        skip=True: 사용자가 인지함 - 경고 없이 재개. False(기본): 재개 전 확인.
         """
-        labels.set_record(session_id, picker=("expose" if expose else None))
+        session_meta.set_record(session_id, skip_resume_notice=skip)
+        return {"session_id": session_id, "skip_resume_notice": skip}
+
+    @app.post("/api/sessions/{session_id}/picker-expose")  # 옛 이름
+    def picker_expose(session_id: str, expose: bool = Body(..., embed=True)):
+        session_meta.set_record(session_id, skip_resume_notice=expose)
         return {"session_id": session_id, "picker_expose": expose}
 
     @app.get("/api/owner/trash")
@@ -1999,8 +2020,9 @@ def create_app() -> FastAPI:
         return {"ok": True, "sent": n}
 
     @app.get("/api/v1/sessions")
-    def api_v1_sessions(q: str | None = None, label: str | None = None,
+    def api_v1_sessions(q: str | None = None, tag: str | None = None, label: str | None = None,
                         limit: int = 0, include_headless: bool = False):
+        tag = tag or label                                 # label = 옛 이름(외부 서비스가 원본을 찾을 때 쓴다)
         from session_manager import agents, bgtasks, hooks, peers, termprompt, webterm
         runtime = hooks.status_map()   # 훅이 채운 세션별 '지금' 상태
         # claude 공식 실시간 점유(대화형·bg) - 재개 잠금 예고/동시재개 판정의 1차 근거
@@ -2009,8 +2031,8 @@ def create_app() -> FastAPI:
         # 피어 레지스트리(~/.claude/sessions): 우리 PTY 가 아닌 대화형 세션도 '떠 있음'(이름·idle/busy)
         peer_of = peers.peer_map()
         sessions = scanner.scan_all()
-        recs = labels.all_records()  # 라벨 1회 로드
-        solo = labels.standalone_folders()            # 별도 프로젝트로 둔 폴더(2026-11-03)
+        recs = session_meta.all_records()  # 라벨 1회 로드
+        solo = session_meta.standalone_folders()            # 별도 프로젝트로 둔 폴더(2026-11-03)
         from session_manager import housekeeping as _hk
         hidden = _hk.hidden_session_ids()            # 모델 목록 읽기용으로 잠깐 띄운 claude 의 빈 기록(숨김)
         out = []
@@ -2026,7 +2048,7 @@ def create_app() -> FastAPI:
                 if q.lower() not in hay:
                     continue
             rec = recs.get(s.session_id, {})
-            if label and label not in rec.get("labels", []):
+            if tag and tag not in rec.get("tags", []):
                 continue
             md = {"session_id": s.session_id, "custom_title": s.custom_title,
                   "ai_title": s.ai_title, "slug": s.slug}
@@ -2049,9 +2071,9 @@ def create_app() -> FastAPI:
                 rt_out = dict(rt_out, choices=True)    # ClewPath 터미널에 선택 창이 보인다 → 🔔 에서 그 선택지로 고를 수 있음
             # claude -p 단발 기록(자동 실행)은 목록에 싣지 않는다(2026-10-12 사장님: claude --resume 에도 안 나오는
             # 것이라 ClewPath 에서도 볼 필요 없음). 지금 살아 돌고 있는 것만 예외로 보인다.
-            # 라벨로 찾을 때도 예외(0.24.1): 서빙 원본은 -p 로 만들어야 첫 턴부터 가드레일이 걸린다(NKBOT-7 실측) —
-            # 외부 서비스는 라벨로 원본을 찾는다.
-            if s.headless and not include_headless and not label and not (
+            # 태그로 찾을 때도 예외(0.24.1): 서빙 원본은 -p 로 만들어야 첫 턴부터 가드레일이 걸린다(NKBOT-7 실측) —
+            # 외부 서비스는 태그로 원본을 찾는다.
+            if s.headless and not include_headless and not tag and not (
                     live_term or peer_of.get(s.session_id) or occupancy.get(s.session_id)):
                 continue
             out.append({
@@ -2066,7 +2088,7 @@ def create_app() -> FastAPI:
                 "continued_in": s.continued_in,
                 "picker_hidden": s.picker_hidden,   # ⚙ 배지 - v1(폰·릴레이) 누락 버그 수정
                 "headless": s.headless,             # claude -p 단발 기록(평소엔 목록에서 빠짐)
-                "title": _ap.ASSISTANT_TITLE if s.session_id == assistant_sid else _display_title(md, rec),
+                "title": _ap.ASSISTANT_TITLE if s.session_id == assistant_sid else _display_title(md),
                 "git_branch": s.git_branch,
                 "message_count": s.message_count,
                 "size_bytes": s.size_bytes,
@@ -2075,16 +2097,14 @@ def create_app() -> FastAPI:
                 "mtime": s.mtime,
                 # claude 가 이 기록을 지울 즈음(epoch 초, 마지막 수정 + cleanupPeriodDays). 알 수 없으면 None
                 "cleanup_at": retention.delete_at(s.mtime, keep_days),
-                "labels": rec.get("labels", []),
-                "label_name": rec.get("name"),
+                **_meta_fields(rec),
+                "resume_model": rec.get("model") or s.last_model,
                 "keep": bool(rec.get("keep")),      # 항상 켜 두기(쉬는 세션 정리 제외)
                 # 별도 프로젝트 폴더 — 하위 폴더여도 목록·파일 보기에서 상위 폴더 묶음에 넣지 않는다(2026-11-03)
-                "standalone": bool(s.cwd) and labels.folder_key(s.cwd) in solo,
+                "standalone": bool(s.cwd) and session_meta.folder_key(s.cwd) in solo,
                 # 재개 모델: 오버라이드 있으면 그것, 없으면 감지(마지막 실사용).
                 "last_model": s.last_model,
                 "last_effort": s.last_effort,       # 마지막 응답의 effort(표시용, 재개 때 넘기지 않음)
-                "model_override": rec.get("model"),
-                "resume_model": rec.get("model") or s.last_model,
                 # 훅 기반 실시간 상태(없으면 None). 신선도 판정은 화면 쪽 책임.
                 # 쉘·모니터가 남아 있으면 턴이 끝나도 '완료' 가 아니다(2026-10-12 사장님) → phase 'background'
                 "runtime": rt_out,
@@ -2205,9 +2225,13 @@ def create_app() -> FastAPI:
                       **{k: True for k in ("isolation_breach", "persisted") if r.get(k)}})
         return r
 
-    @app.get("/api/v1/labels")
+    @app.get("/api/v1/tags")
+    def api_v1_tags():
+        return {"tags": session_meta.tag_counts()}
+
+    @app.get("/api/v1/labels")                            # 옛 이름
     def api_v1_labels():
-        return {"labels": labels.label_counts()}
+        return _old_counts()
 
     # ---- 서비스 대장 S2: 서비스 토큰의 자기 정보 ----
     @app.get("/api/v1/service/me")
@@ -2300,12 +2324,17 @@ def create_app() -> FastAPI:
         rec = profiles.set_record(session_id, **body.to_fields())
         return {"session_id": session_id, "profile": rec}
 
-    @app.post("/api/v1/sessions/{session_id}/labels")
+    @app.post("/api/v1/sessions/{session_id}/tags")
+    def api_v1_set_tags(session_id: str, body: TagReq, request: Request):
+        if not _is_local(request):
+            return JSONResponse({"error": "local_only"}, status_code=403)
+        return _save_tags(session_id, body.tags)
+
+    @app.post("/api/v1/sessions/{session_id}/labels")     # 옛 이름
     def api_v1_set_labels(session_id: str, body: LabelReq, request: Request):
         if not _is_local(request):
             return JSONResponse({"error": "local_only"}, status_code=403)
-        rec = labels.set_record(session_id, **body.to_fields())
-        return {"session_id": session_id, "record": rec}
+        return _old_record(_save_tags(session_id, body.labels))
 
     @app.post("/api/v1/sessions/{session_id}/title")
     def api_v1_set_title(session_id: str, body: TitleReq, request: Request):

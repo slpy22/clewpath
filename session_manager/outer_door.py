@@ -41,6 +41,7 @@ OPEN = frozenset({
     "/api/sessions/{session_id}/resume-launch", "/api/sessions/{session_id}/kill", "/api/owner/sessions/{session_id}/respond",
     # 세션 덧붙임 정보(ClewPath 저장소)
     "/api/sessions/{session_id}/labels", "/api/v1/sessions/{session_id}/labels", "/api/sessions/{session_id}/model",
+    "/api/sessions/{session_id}/tags", "/api/v1/sessions/{session_id}/tags", "/api/sessions/{session_id}/resume-notice",
     "/api/sessions/{session_id}/keep", "/api/sessions/{session_id}/standalone", "/api/sessions/{session_id}/picker-expose",
     "/api/sessions/{session_id}/profile", "/api/v1/sessions/{session_id}/profile", "/api/sessions/{session_id}/file/download",
     # 프롬프트 세션 제어: 판단·승인은 session_ops 가 한다(이 문을 막으면 도구가 못 돈다)

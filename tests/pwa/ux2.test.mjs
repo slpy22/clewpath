@@ -19,7 +19,7 @@ function seed(ctx, extra = "") {
     {session_id:${JSON.stringify(H1)}, project_folder:'E--p', cwd:'E:/p', ended_at:${JSON.stringify(iso(5))}, headless:true, picker_hidden:true},
     {session_id:${JSON.stringify(H2)}, project_folder:'E--p-cache', cwd:'E:/p/cache', ended_at:${JSON.stringify(iso(1))}, headless:true, picker_hidden:true},
     {session_id:${JSON.stringify(H3)}, project_folder:'E--p-cache', cwd:'E:/p/cache', ended_at:${JSON.stringify(iso(2))}, headless:true, picker_hidden:true}
-  ]; SELECTED_ID=null; ACTIVE_LABEL=''; COLLAPSED.clear(); ${extra}`);
+  ]; SELECTED_ID=null; ACTIVE_TAG=''; COLLAPSED.clear(); ${extra}`);
 }
 const flat = (pop) => [pop.children[0], ...pop.children[1].children];   // 팝 = [제목, 내용]
 const deep = (n) => [n, ...((n && n.children) || []).flatMap(deep)];      // 제목 없는 팝(🔔 할 일)은 통째로 훑는다
@@ -160,7 +160,7 @@ test("파일 탐색기 뿌리: 자동 실행 기록 폴더는 올리지 않는�
 
 test("쉘·모니터: 목록 줄에 🐚 쉘 n · 📡 모니터 m 칩, phase background 는 '백그라운드'(완료 아님), #라벨 칩 없음", async () => {
   const ctx = await load();
-  seed(ctx, `SESSIONS[1].bg={shells:2, monitors:1}; SESSIONS[1].labels=['북한법']; SESSIONS[1].runtime={phase:'background', ready_at:Date.now()/1000-5};
+  seed(ctx, `SESSIONS[1].bg={shells:2, monitors:1}; SESSIONS[1].tags=['북한법']; SESSIONS[1].runtime={phase:'background', ready_at:Date.now()/1000-5};
     SESSIONS[0].bg={shells:0, monitors:0};`);
   const wrap = render(ctx);
   const rs = rowsOf(wrap.children.filter((k) => cls(k) === "glist").find((g) => rowsOf(g).some((r) => r.dataset.sid === A)));
@@ -190,7 +190,7 @@ test("쉘·모니터: 목록 줄에 🐚 쉘 n · 📡 모니터 m 칩, phase ba
 
 test("상세 태그: 이름 아래 #태그 칩(× 로 빼기) + ＋ 태그 → 입력·기존 태그 골라 저장, 목록 필터도 갱신", async () => {
   const ctx = await load();
-  seed(ctx, `SESSIONS[0].labels=['북한법']; SESSIONS[1].labels=['논문','북한법'];
+  seed(ctx, `SESSIONS[0].tags=['북한법']; SESSIONS[1].tags=['논문','북한법'];
     globalThis.__c=[]; T.api=async(m,p,o)=>{ __c.push([m,p,o&&o.body]); return {}; }; toast=()=>{};
     globalThis.__rr=0; LIST_CTX={rerender(){ __rr++; }}; setListView('sessions');
     globalThis.__modal=null; openModal=(t,b,f)=>{ __modal={t,b,f}; }; closeModal=()=>{};`);
@@ -199,8 +199,8 @@ test("상세 태그: 이름 아래 #태그 칩(× 로 빼기) + ＋ 태그 → �
   same(wrap.children.map((k) => k.children.length ? k.children[0].textContent : k.textContent), ["#논문", "#북한법", "＋ 태그"]);
   // × → 그 태그만 빼고 저장
   await wrap.children[0].children[1].onclick();
-  same(ev(ctx, "__c").at(-1), ["POST", `/api/sessions/${B}/labels`, { labels: ["북한법"] }]);
-  same(ev(ctx, "SESSIONS[1].labels"), ["북한법"]);
+  same(ev(ctx, "__c").at(-1), ["POST", `/api/sessions/${B}/tags`, { tags: ["북한법"] }]);
+  same(ev(ctx, "SESSIONS[1].tags"), ["북한법"]);
   assert.ok(ev(ctx, "__rr") >= 1, "목록(태그 필터) 다시 그림");
   same(wrap.children.map((k) => k.children.length ? k.children[0].textContent : k.textContent), ["#북한법", "＋ 태그"]);
   // ＋ 태그 → 입력 '#연구, 메모' + 기존 '북한법' 눌러 빼기 → 저장
@@ -211,7 +211,7 @@ test("상세 태그: 이름 아래 #태그 칩(× 로 빼기) + ＋ 태그 → �
   ed.box.children[0].onclick();
   ed.inp.value = "#연구, 메모";
   await ed.save.onclick();
-  same(ev(ctx, "__c").at(-1)[2], { labels: ["연구", "메모"] });
+  same(ev(ctx, "__c").at(-1)[2], { tags: ["연구", "메모"] });
   // 상세(loadDetail) 머리에 태그 줄이 들어간다
   const pd = stubEl("div"); ctx.document._register("paneDetail", pd);
   ev(ctx, "T.api=async()=>({})");
@@ -296,4 +296,20 @@ test("⋯ → ⏹ 중지(2026-10-29 사장님): 클루패스 터미널은 확인
   await ev(ctx, "stopFromMenu")(p);
   assert.deepEqual([...ev(ctx, "__kill")], ["p"]);
   assert.equal(stop({ session_id: "z", title: "꺼짐" }), undefined, "살아 있지 않으면 중지 없음");
+});
+
+
+test("옛 Host: 옛 이름 응답을 읽고, 새 경로가 404 면 옛 경로로 저장한다", async () => {
+  const ctx = await load();
+  seed(ctx, `globalThis.__c=[]; globalThis.__st=404;
+    T.api=async(m,p,o)=>{ __c.push([p,o&&o.body]); if(p.endsWith('/tags')){ const e=new Error('HTTP '+__st); e.status=__st; throw e; } return {}; };`);
+  same(ev(ctx, "sessTags({labels:['옛']})"), ["옛"]);
+  same(ev(ctx, "sessTags({tags:['새'],labels:['옛']})"), ["새"]);
+  assert.equal(ev(ctx, "skipsResumeNotice({picker_expose:true})"), true);
+  assert.equal(ev(ctx, "skipsResumeNotice({skip_resume_notice:false,picker_expose:true})"), false);
+  await ev(ctx, "postOrOld('/x/tags',{tags:['a']},'/x/labels',{labels:['a']})");
+  same(ev(ctx, "__c"), [["/x/tags", { tags: ["a"] }], ["/x/labels", { labels: ["a"] }]]);
+  ev(ctx, "__c.length=0; __st=500");
+  await assert.rejects(ev(ctx, "postOrOld('/x/tags',{tags:['a']},'/x/labels',{labels:['a']})"));
+  same(ev(ctx, "__c").length, 1, "404 가 아니면 옛 경로로 다시 보내지 않는다");
 });

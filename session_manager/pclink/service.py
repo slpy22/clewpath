@@ -12,13 +12,9 @@ from session_manager.pclink import policy as POL
 
 def session_title(sid: str) -> str:
     try:
-        from session_manager import labels
         from session_manager.scanner import scan_one
         m = scan_one(sid)
-        name = (labels.get(sid) or {}).get("name")
-        if m:
-            return str(m.custom_title or name or m.ai_title or sid[:8])
-        return str(name or sid[:8])
+        return str((m.custom_title or m.ai_title or sid[:8]) if m else sid[:8])
     except Exception:  # noqa: BLE001
         return sid[:8]
 

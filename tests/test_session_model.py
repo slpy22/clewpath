@@ -5,7 +5,7 @@ ClewPath 는 사이드카에 세션별 모델을 저장하고 재개 시 --model
 """
 from __future__ import annotations
 
-from session_manager import scanner, labels, webterm, webapi
+from session_manager import scanner, session_meta, webterm, webapi
 from tests.conftest import write_session
 
 SID = "aaaaaaaa-1111-2222-3333-444444444444"
@@ -72,19 +72,19 @@ def test_scanner_last_effort_none_when_absent(fake_claude_home):
 # ---- 저장: labels 오버라이드 ----
 
 def test_labels_model_override_set_get_clear(fake_claude_home):
-    assert labels.model_of(SID) is None
-    labels.set_record(SID, model="claude-opus-5")
-    assert labels.model_of(SID) == "claude-opus-5"
+    assert session_meta.model_of(SID) is None
+    session_meta.set_record(SID, model="claude-opus-5")
+    assert session_meta.model_of(SID) == "claude-opus-5"
     # 라벨 없이 모델만 있어도 레코드가 살아있어야(프루닝 예외)
-    assert labels.get(SID).get("model") == "claude-opus-5"
-    labels.set_record(SID, model=None)              # 해제
-    assert labels.model_of(SID) is None
+    assert session_meta.get(SID).get("model") == "claude-opus-5"
+    session_meta.set_record(SID, model=None)              # 해제
+    assert session_meta.model_of(SID) is None
 
 
 # ---- 재개 argv 에 --model 주입 ----
 
 def test_webterm_argv_injects_override(fake_claude_home):
-    labels.set_record(SID, model="claude-opus-5")
+    session_meta.set_record(SID, model="claude-opus-5")
     argv = webterm._claude_argv(SID, skip_permissions=True)
     assert "--model" in argv and argv[argv.index("--model") + 1] == "claude-opus-5"
     assert "--resume" in argv and SID in argv
@@ -97,20 +97,20 @@ def test_webterm_argv_no_override_no_flag(fake_claude_home):
 
 def test_webterm_argv_fork_ignores_override(fake_claude_home):
     # fork 는 새 세션이라 원본의 모델 오버라이드를 적용하지 않는다
-    labels.set_record(SID, model="claude-opus-5")
+    session_meta.set_record(SID, model="claude-opus-5")
     argv = webterm._claude_argv(SID, skip_permissions=True, fork_id="fork-1")
     assert "--model" not in argv
 
 
 def test_webapi_argv_injects_override(fake_claude_home):
-    labels.set_record(SID, model="claude-opus-5")
+    session_meta.set_record(SID, model="claude-opus-5")
     argv = webapi._claude_argv(SID, skip_permissions=True)
     assert "--model" in argv and argv[argv.index("--model") + 1] == "claude-opus-5"
 
 
 def test_webapi_argv_guardrail_model_wins(fake_claude_home):
     # 가드레일(정책) 모델이 세션 오버라이드보다 우선
-    labels.set_record(SID, model="claude-opus-5")
+    session_meta.set_record(SID, model="claude-opus-5")
     argv = webapi._claude_argv(SID, skip_permissions=True,
                                guardrails={"model": "claude-haiku-4-5-20251001"})
     assert argv.count("--model") == 1
@@ -144,10 +144,10 @@ def test_api_set_and_clear_model(fake_claude_home, monkeypatch):
     with _client(fake_claude_home, monkeypatch) as c:
         r = c.post(f"/api/sessions/{SID}/model", json={"model": "claude-opus-5"})
         assert r.status_code == 200 and r.json()["model_override"] == "claude-opus-5"
-        assert labels.model_of(SID) == "claude-opus-5"
+        assert session_meta.model_of(SID) == "claude-opus-5"
         r = c.post(f"/api/sessions/{SID}/model", json={"model": None})
         assert r.status_code == 200 and r.json()["model_override"] is None
-        assert labels.model_of(SID) is None
+        assert session_meta.model_of(SID) is None
 
 
 def test_api_set_model_rejects_bad_token(fake_claude_home, monkeypatch):
@@ -163,7 +163,7 @@ def test_v1_sessions_exposes_resume_model(fake_claude_home, monkeypatch):
          "message": {"role": "user", "content": "hi"}, "timestamp": "t0"},
         _asst("a", "claude-opus-4-8", "t1"),
     ])
-    labels.set_record(SID, model="claude-opus-5")
+    session_meta.set_record(SID, model="claude-opus-5")
     with _client(fake_claude_home, monkeypatch) as c:
         r = c.get("/api/sessions")   # 로컬 PWA 가 쓰는 경로(외부 API 토큰 불필요)
         allsess = [x for p in r.json()["projects"] for x in p["sessions"]]

@@ -247,9 +247,9 @@ def _claude_argv(session_id: str, skip_permissions: bool = True,
     # 지정하지 않았을 때만 적용(가드레일 모델이 우선). claude 파일 무수정.
     if not fork_id and "--model" not in argv:
         try:
-            from session_manager import labels as _labels
+            from session_manager import session_meta as _session_meta
             from session_manager import launch_options as _lo
-            _mdl = _labels.model_of(session_id) or _lo.stored_model(session_id)
+            _mdl = _session_meta.model_of(session_id) or _lo.stored_model(session_id)
         except Exception:  # noqa: BLE001
             _mdl = None
         if _mdl:

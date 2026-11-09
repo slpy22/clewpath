@@ -49,7 +49,7 @@ def terms(fake_claude_home, monkeypatch):
 
 
 def test_idle_rules(terms, monkeypatch):
-    from session_manager import bgtasks, labels
+    from session_manager import bgtasks, session_meta
     now = time.time()
     terms("idle1")                                     # 6시간 무활동 → 대상
     terms("recent", last_input=now - 600)              # 10분 전 입력
@@ -58,7 +58,7 @@ def test_idle_rules(terms, monkeypatch):
     terms("perm")
     _RT["perm"] = {"phase": "permission", "permission_at": now - 5 * 3600}
     terms("kept")
-    labels.set_record("kept", keep="1")
+    session_meta.set_record("kept", keep="1")
     terms("fork", persist=False)                       # 일회용 포크는 대상 아님
     terms("hookrecent")
     _RT["hookrecent"] = {"phase": "ready", "ready_at": now - 1800}
@@ -148,7 +148,7 @@ def test_api_and_remote_privilege(fake_claude_home, monkeypatch):
     monkeypatch.setenv("SM_HOST", "127.0.0.1")
     monkeypatch.setattr(hk, "start", lambda *a, **k: None)
     from session_manager.server import create_app
-    from session_manager import labels
+    from session_manager import session_meta
     with TestClient(create_app()) as c:
         st = c.get("/api/owner/housekeeping").json()
         assert {j["id"] for j in st["jobs"]} == {"idle_sessions", "models", "worklog", "serve_keep", "cleanup_watch", "fork_cleanup"} and st["idle_hours"] == 4
@@ -158,9 +158,9 @@ def test_api_and_remote_privilege(fake_claude_home, monkeypatch):
         assert c.post("/api/owner/housekeeping/models/run").json() == {"queued": "models"}
         assert c.post("/api/owner/housekeeping/zzz/run").status_code == 404
         assert c.post("/api/sessions/abc/keep", json={"keep": True}).json()["keep"] is True
-        assert labels.get("abc").get("keep") == "1"
+        assert session_meta.get("abc").get("keep") == "1"
         c.post("/api/sessions/abc/keep", json={"keep": False})
-        assert not labels.get("abc").get("keep")
+        assert not session_meta.get("abc").get("keep")
         hk.refresh_models([], probe=False)
         assert c.get("/api/models").json()["source"] == "merged"
     assert "models" in hk._forced, "「지금 실행」 API 는 강제로 세운다"

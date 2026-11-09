@@ -1815,7 +1815,7 @@ function fmtBytes(b){ if(!b)return'0'; const u=['B','KB','MB','GB']; let i=0;
   while(b>=1024&&i<3){b/=1024;i++;} return b.toFixed(b<10&&i>0?1:0)+u[i]; }
 
 // ---- 목록 ----
-let ACTIVE_LABEL='';  // 선택된 라벨 필터('' = 전체)
+let ACTIVE_TAG='';  // 선택된 태그 필터('' = 전체)
 // 목록 보기: 'sessions'(폴더별 세션) | 'groups'(👥 팀 — 키는 옛 이름 그대로, 기기에 기억된 값 호환) | 'files'
 const LIST_VIEWS=['sessions','groups','files'];
 let LIST_VIEW=(()=>{ try{ const v=LS.getItem('sm_list_view'); return LIST_VIEWS.includes(v)?v:'sessions'; }catch(e){ return 'sessions'; } })();
@@ -2133,15 +2133,15 @@ async function togglePush(){
 }
 function renderChips(wrap,rerender){
   const counts=new Map();
-  for(const s of SESSIONS) for(const l of (s.labels||[])) counts.set(l,(counts.get(l)||0)+1);
+  for(const s of SESSIONS) for(const l of sessTags(s)) counts.set(l,(counts.get(l)||0)+1);
   wrap.innerHTML='';
   if(!counts.size){ wrap.classList.add('hidden'); return; }
   wrap.classList.remove('hidden');
   const mk=(label,txt,active)=>{ const c=el('button','fchip'+(active?' on':''),txt);
-    c.onclick=()=>{ ACTIVE_LABEL=(ACTIVE_LABEL===label)?'':label; rerender(); }; return c; };
-  wrap.appendChild(mk('','전체',!ACTIVE_LABEL));
+    c.onclick=()=>{ ACTIVE_TAG=(ACTIVE_TAG===label)?'':label; rerender(); }; return c; };
+  wrap.appendChild(mk('','전체',!ACTIVE_TAG));
   for(const [l,n] of [...counts.entries()].sort((a,b)=>b[1]-a[1]))
-    wrap.appendChild(mk(l,`${l} ${n}`,ACTIVE_LABEL===l));
+    wrap.appendChild(mk(l,`${l} ${n}`,ACTIVE_TAG===l));
 }
 const COLLAPSED=new Set();  // 접힌 그룹 키(project_folder)
 function baseName(p){ if(!p)return''; const parts=p.split(/[\\/]/).filter(Boolean);
@@ -2325,7 +2325,7 @@ async function revertContinuation(s){
 async function killSession(s){
   const ways=[]; if(s.live_terminal) ways.push('클루패스 터미널');
   if(s.peer) ways.push(peerOriginLabel(s.peer).text+(s.peer.name?'('+s.peer.name+')':''));
-  const ok=await confirmSheet({title:'세션 강제 종료', main:'"'+(s.title||s.label_name||s.slug||s.session_id.slice(0,8))+'" 을(를) 지금 강제로 끝낼까요?',
+  const ok=await confirmSheet({title:'세션 강제 종료', main:'"'+(s.title||s.slug||s.session_id.slice(0,8))+'" 을(를) 지금 강제로 끝낼까요?',
     sub:'살아 있는 경로: '+(ways.join(', ')||'알 수 없음')+'. 진행 중인 작업은 중단되고 저장되지 않은 응답은 사라집니다. 대화 기록(jsonl)은 그대로 남아 다시 재개할 수 있습니다.',
     action:'강제 종료', danger:true, busyText:'종료 중…',
     run: async()=>{
@@ -2590,7 +2590,7 @@ function showResumeChooser(s){
   if(s.live_terminal){ loadTerminal(s); return; }   // 이미 돌고 있으면 그냥 돌아간다
   // [사전 확인] 픽커 미표시 세션(에이전트/포크 산물)은 재개 옵션을 고르기 전에
   // 먼저 성격을 알린다 - 승인해야 옵션 모달로 넘어간다(사용자 요청 순서).
-  if(s.picker_hidden && !s.picker_expose){
+  if(s.picker_hidden && !skipsResumeNotice(s)){
     var _msg='⚙ 이 세션은 claude 재개 목록(피커)에 없는 세션입니다. 백그라운드 에이전트·포크·헤드리스 실행으로 만들어져 대화형으로 연 적이 없으며, 이어서 재개하면 claude 가 자동 제목을 붙여 이후 피커 목록에도 나타나게 됩니다. 계속해서 재개 방식을 선택할까요?';
     if(!confirm(_msg)) return;
   }
@@ -2741,13 +2741,13 @@ function continuedTarget(s){
 // 팀 목록에서도 세션 목록과 같은 정보). repr = 폴더 머리의 대표 경로(같으면 경로 줄 생략, 하위 폴더면 상대경로, 팀은 s.cwd 라 늘 생략)
 function sessRowInfo(srow,s,repr){
   if(s.session_id===SELECTED_ID) srow.classList.add('sel');
-  if((s.picker_hidden && !s.picker_expose) || s.headless) srow.classList.add('dim');  // 픽커 미표시·자동 실행 = 흐리게
+  if((s.picker_hidden && !skipsResumeNotice(s)) || s.headless) srow.classList.add('dim');  // 픽커 미표시·자동 실행 = 흐리게
   // 탭 영역(정보) → 상세
   const info=el('button','sinfo');
   const r1=el('div','sr1');
   const bd=sessionBadge(s);
   if(bd){ const d=el('span','sdot'+(bd.pulse?' pulse':'')); d.style.setProperty('--c',bd.c); r1.appendChild(d); }
-  r1.appendChild(el('span','sname',s.title||s.label_name||s.slug||s.session_id.slice(0,8)));
+  r1.appendChild(el('span','sname',s.title||s.slug||s.session_id.slice(0,8)));
   // 상태 문구·칩은 이름 줄이 아니라 오른쪽 칸(이름 줄 + 메시지·용량·시간 줄 두 줄 높이)에 세운다 — 이름이 덜 잘린다(2026-10-28 사장님)
   const side=el('div','sside'), chips=el('div','schips');   // 오른쪽 칸: 위 상태 문구 · 아래 칩들
   if(bd){ const t=el('span','sstate',bd.text); t.style.setProperty('--c',bd.c);
@@ -2764,7 +2764,7 @@ function sessRowInfo(srow,s,repr){
     const g=el('span','schip gear','🤖 자동 실행');
     g.title='claude -p(비대화형) 단발 실행 — 다른 세션·스크립트가 맡긴 일감. 끝나면 목록에서 사라집니다';
     chips.appendChild(g);
-  } else if(s.picker_hidden&&!s.picker_expose){
+  } else if(s.picker_hidden&&!skipsResumeNotice(s)){
     const g=el('span','schip gear','⚙ 에이전트');
     g.title='claude 재개 목록(피커)에 없는 세션 - 에이전트/포크 산물. 상세에서 설명 보기';
     chips.appendChild(g);
@@ -2818,12 +2818,12 @@ function groupCount(list){
 function renderRows(wrap,q){
   q=(q||'').toLowerCase().trim();
   const rows=SESSIONS.filter(s=>{
-    if(ACTIVE_LABEL && !(s.labels||[]).includes(ACTIVE_LABEL)) return false;
+    if(ACTIVE_TAG && !sessTags(s).includes(ACTIVE_TAG)) return false;
     if(!q)return true;
-    return ((s.cwd||'')+(s.title||'')+(s.slug||'')+(s.label_name||'')+(s.project_folder||'')).toLowerCase().includes(q); });
+    return ((s.cwd||'')+(s.title||'')+(s.slug||'')+(s.project_folder||'')).toLowerCase().includes(q); });
   wrap.innerHTML='';
   if(!rows.length){ wrap.appendChild(el('div','empty',
-    (q||ACTIVE_LABEL)?'해당 세션 없음':'세션 없음')); return; }
+    (q||ACTIVE_TAG)?'해당 세션 없음':'세션 없음')); return; }
   // 폴더(project_folder)별 그룹핑
   const groups=new Map();
   for(const s of rows){ const k=s.project_folder||'(기타)';
@@ -2882,46 +2882,46 @@ function renderRows(wrap,q){
   }
 }
 
-// ---- 상세: 태그(라벨) 보기·설정 — ClewPath 자체 저장소(labels)만 쓴다(claude 파일 무접촉) ----
-function allLabelNames(){ const m=new Map(); for(const x of (SESSIONS||[])) for(const l of (x.labels||[])) m.set(l,(m.get(l)||0)+1);
+// ---- 상세: 태그 보기·설정 — ClewPath 자체 저장소만 쓴다(claude 파일 무접촉) ----
+function allTagNames(){ const m=new Map(); for(const x of (SESSIONS||[])) for(const l of sessTags(x)) m.set(l,(m.get(l)||0)+1);
   return [...m.entries()].sort((a,b)=>b[1]-a[1]||a[0].localeCompare(b[0])).map(e=>e[0]); }
-async function saveSessionLabels(s,next){
+async function saveSessionTags(s,next){
   const clean=[...new Set((next||[]).map(x=>String(x).trim().replace(/^#/,'')).filter(Boolean))];
-  try{ await T.api('POST','/api/sessions/'+s.session_id+'/labels',{body:{labels:clean}}); }
+  try{ await postOrOld('/api/sessions/'+s.session_id+'/tags',{tags:clean},'/api/sessions/'+s.session_id+'/labels',{labels:clean}); }
   catch(e){ toast('태그 저장 실패: '+e.message); return false; }
-  s.labels=clean;
-  const o=(SESSIONS||[]).find(x=>x.session_id===s.session_id); if(o&&o!==s) o.labels=clean.slice();
-  if(ACTIVE_LABEL&&!allLabelNames().includes(ACTIVE_LABEL)) ACTIVE_LABEL='';
+  s.tags=clean;
+  const o=(SESSIONS||[]).find(x=>x.session_id===s.session_id); if(o&&o!==s) o.tags=clean.slice();
+  if(ACTIVE_TAG&&!allTagNames().includes(ACTIVE_TAG)) ACTIVE_TAG='';
   if(LIST_CTX&&LIST_VIEW==='sessions') LIST_CTX.rerender();      // 위 태그 필터 칩도 함께
   return true;
 }
 function renderDetailTags(wrap,s){
   wrap.innerHTML='';
-  for(const l of (s.labels||[])){
+  for(const l of sessTags(s)){
     const c=el('span','dtag'); c.appendChild(el('span',null,'#'+l));
     const x=el('button','dtagx','×'); x.title='태그 빼기: '+l; x.setAttribute('aria-label','태그 빼기 '+l);
-    x.onclick=async()=>{ if(await saveSessionLabels(s,(s.labels||[]).filter(v=>v!==l))) renderDetailTags(wrap,s); };
+    x.onclick=async()=>{ if(await saveSessionTags(s,sessTags(s).filter(v=>v!==l))) renderDetailTags(wrap,s); };
     c.appendChild(x); wrap.appendChild(c);
   }
-  const add=el('button','dtagadd',(s.labels&&s.labels.length)?'＋ 태그':'＋ 태그 달기');
+  const add=el('button','dtagadd',sessTags(s).length?'＋ 태그':'＋ 태그 달기');
   add.title='태그를 달면 목록 위 태그 필터로 모아 볼 수 있습니다';
   add.onclick=()=>editSessionTags(s,()=>renderDetailTags(wrap,s));
   wrap.appendChild(add);
 }
 function editSessionTags(s,onDone){
-  const body=el('div'); const cur=new Set(s.labels||[]);
+  const body=el('div'); const cur=new Set(sessTags(s));
   body.appendChild(el('div','cwd','새 태그를 적거나(쉼표로 여러 개), 아래에서 눌러 고르세요.'));
   const inp=el('input','inp dtaginp'); inp.placeholder='예: 북한법, 논문'; inp.setAttribute('autocapitalize','off'); body.appendChild(inp);
   const box=el('div','dtagpick'); body.appendChild(box);
   const draw=()=>{ box.innerHTML='';
-    const names=[...new Set([...cur,...allLabelNames()])];
+    const names=[...new Set([...cur,...allTagNames()])];
     if(!names.length) box.appendChild(el('div','cwd','아직 다른 태그가 없습니다.'));
     for(const l of names){ const b=el('button','fchip'+(cur.has(l)?' on':''),'#'+l);
       b.onclick=()=>{ if(cur.has(l)) cur.delete(l); else cur.add(l); draw(); }; box.appendChild(b); } };
   draw();
   const save=el('button','btn','저장');
   save.onclick=async()=>{ for(const t of String(inp.value||'').split(/[,，\s]+/)) { const v=t.trim().replace(/^#/,''); if(v) cur.add(v); }
-    if(await saveSessionLabels(s,[...cur])){ closeModal(); toast('태그를 저장했습니다'); if(onDone) onDone(); } };
+    if(await saveSessionTags(s,[...cur])){ closeModal(); toast('태그를 저장했습니다'); if(onDone) onDone(); } };
   inp.onkeydown=(e)=>{ if(e.key==='Enter'){ e.preventDefault&&e.preventDefault(); save.onclick(); } };
   const cancel=el('button','btn ghost','취소'); cancel.onclick=()=>closeModal();
   openModal('🏷 태그 — '+sessLabel(s), body, [cancel, save]);
@@ -3028,7 +3028,7 @@ async function loadDetail(s){
   // 1. 머리: 이름(✎ 바로 옆) · 상태 · 경로
   const hd=el('div','dhead');
   const t1=el('div','dtitle');
-  t1.appendChild(el('h2',null,s.title||s.label_name||s.slug||'세션'));
+  t1.appendChild(el('h2',null,s.title||s.slug||'세션'));
   const ren=el('button','dren','✎ 이름'); ren.title='이름 바꾸기'; ren.setAttribute('aria-label','이름 바꾸기'); ren.onclick=()=>renameNative(s);
   t1.appendChild(ren);
   const bd=sessionBadge(s);
@@ -3064,7 +3064,7 @@ async function loadDetail(s){
   const kv=el('div','kv');
   const add=(k,v)=>{kv.appendChild(el('div','k',k));kv.appendChild(el('div','v',v));};
   add('세션 ID',s.session_id);
-  if(s.agent_name&&s.agent_name!==(s.title||s.label_name||s.slug)) add('에이전트 이름',s.agent_name);
+  if(s.agent_name&&s.agent_name!==(s.title||s.slug)) add('에이전트 이름',s.agent_name);
   add('메시지',(s.message_count||0)+''); add('크기',fmtBytes(s.size_bytes));
   { const ct=absTime(s.started_at); if(ct)add('생성',ct); }
   { const rt=relFrom(s), at=absTime(s.ended_at)||absTime(s.mtime);
@@ -3104,7 +3104,7 @@ async function loadDetail(s){
     // claude 가 스스로 자동 제목을 붙여 자기 목록에 넣는 것은 claude 의 정상
     // 동작이며, 우리는 그 사실을 '재개 전에 알리고 승인받는' 것까지만 한다.
     const renderPol=()=>{
-      if(s.picker_expose){
+      if(skipsResumeNotice(s)){
         pol.textContent='현재 설정: 알고 있음(경고 안 함) - 터미널(대화형)로 재개하면 claude 가 '
           +'자동 제목을 붙여, 이후 claude 재개 목록에도 이 세션이 나타납니다.';
         bTog.textContent='🔔 재개 전에 다시 알려주기 (기본으로)';
@@ -3118,9 +3118,9 @@ async function loadDetail(s){
     };
     bTog.onclick=async()=>{
       try{
-        const next=!s.picker_expose;
-        await T.api('POST',`/api/sessions/${s.session_id}/picker-expose`,{body:{expose:next}});
-        s.picker_expose=next; renderPol();
+        const next=!skipsResumeNotice(s);
+        await postOrOld(`/api/sessions/${s.session_id}/resume-notice`,{skip:next},`/api/sessions/${s.session_id}/picker-expose`,{expose:next});
+        s.skip_resume_notice=next; renderPol();
         toast(next?'이 세션은 경고 없이 재개됩니다':'재개 전 알림이 다시 표시됩니다');
       }catch(e){ toast('변경 실패: '+e.message); }
     };
@@ -3375,7 +3375,14 @@ function removeTab(key){ TABS.list=TABS.list.filter(t=>t.key!==key); if(TABS.act
 
 // ---- 멀티탭 동작: 탭 스트립·전환·닫기·추가·저장/복원·재접속 ----
 const TAB_SOFT_CAP=6;   // 클라 경고선. 서버 하드 상한(SM_MAX_TERMINALS, 기본 15)은 webterm 이 따로 막는다.
-function sessLabel(s){ return s.title||s.label_name||s.slug||(s.session_id||'').slice(0,8); }
+// 옛 Host(0.36.2 이하, 다른 PC 에 남아 있을 수 있다)는 tags·skip_resume_notice 없이 옛 이름으로 답하고 새 경로는 404 다
+function sessTags(s){ return s.tags||s.labels||[]; }
+function skipsResumeNotice(s){ return s.skip_resume_notice===undefined ? Boolean(s.picker_expose) : Boolean(s.skip_resume_notice); }
+async function postOrOld(path,body,oldPath,oldBody){
+  try{ return await T.api('POST',path,{body}); }
+  catch(e){ if(e.status!==404) throw e; return await T.api('POST',oldPath,{body:oldBody}); }
+}
+function sessLabel(s){ return s.title||s.slug||(s.session_id||'').slice(0,8); }
 // 서버(webterm.TAKEOVER_NOTE)가 밀려나는 화면에 보내는 인계 통지 문구 — 스트림에서 감지해 탭을 taken 으로
 const TAKEOVER_NOTE='다른 화면이 이 세션을 가져갔습니다';
 // 다른 화면이 붙어 있는 세션을 가져오기 전 확인(v0.9.4). t0 = 이 페이지의 탭(있으면), s.screen = 목록의 참고값.
@@ -4422,7 +4429,7 @@ function pairRow(r){
   return row;
 }
 // ---- 오케스트레이션 관제(멀티 세션 실시간 관전) ----
-function monSessName(s){ return s.title||s.label_name||s.slug||s.session_id.slice(0,8); }
+function monSessName(s){ return s.title||s.slug||s.session_id.slice(0,8); }
 
 // ---- 저장된 관제 그룹(Host 사이드카) — 앱이 닫혀 있어도 관제 알림을 받는 근거 ----
 // 그룹은 Host 의 monitor_groups.json 에 산다. 알림 소스는 훅(관리 Stop/하위 Stop/하위 시작),
@@ -5757,7 +5764,7 @@ function openMonitor(ids, manager, labels, opts){
     if(m.type==='group'){
       if(m.action==='add' && m.session_id && !group[m.session_id]){
         const nm=(SESSIONS.find(s=>s.session_id===m.session_id)||{});
-        group[m.session_id]={label:(nm.title||nm.label_name||nm.slug||m.session_id.slice(0,8)),
+        group[m.session_id]={label:(nm.title||nm.slug||m.session_id.slice(0,8)),
                              color:null, role:'sub'};
         renderLegend(); toast(m.origin==='sync'?'팀 구성원 추가됨':'세션 추가됨');
       } else if(m.action==='remove' && m.session_id){
@@ -7679,7 +7686,7 @@ async function openAssistant(){
   const a=r&&r.assistant;
   if(a && a.session_id){
     const s=(typeof SESSIONS!=='undefined'&&SESSIONS.find(x=>x.session_id===a.session_id))
-      || {session_id:a.session_id, title:'🧑‍💼 비서', label_name:'🧑‍💼 비서'};
+      || {session_id:a.session_id, title:'🧑‍💼 비서'};
     return loadTerminal(s);
   }
   const body=el('div');
@@ -7722,7 +7729,6 @@ async function showNameSync(){
     picks.set(s.session_id, cb); r.appendChild(cb);
     const t=el('span',null,s.title+'  ← '+(s.agent_name?('지금 「'+s.agent_name+'」'):'지금 이름 없음(자동 이름)'));
     r.appendChild(t);
-    if(s.source==='label') r.appendChild(el('small',null,' · ClewPath 이름 — claude 이름도 같이 적음'));
     if(s.conflict) r.appendChild(el('small',null,' ⚠ 같은 이름이 이미 있음'));
     if(s.status==='busy') r.appendChild(el('small',null,' ⏳ 답 쓰는 중'));
     else if(s.status) r.appendChild(el('small',null,' · 떠 있음(다시 뜰 때 적용)'));
@@ -8199,7 +8205,7 @@ function showUpdateInfo(cur,latest){
 function updateImpact(list){
   const open=(list||[]).filter(s=>s&&s.live_terminal);
   const busy=open.filter(s=>{ const b=sessionBadge(s); return !!(b&&b.text!=='완료'); });
-  const name=(s)=>s.title||s.label_name||s.slug||String(s.session_id||'').slice(0,8);
+  const name=(s)=>s.title||s.slug||String(s.session_id||'').slice(0,8);
   return {open:open.map(name), busy:busy.map(name)};
 }
 async function showUpdateApply(cur,latest){

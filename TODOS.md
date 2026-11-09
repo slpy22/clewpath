@@ -19,6 +19,8 @@
 
 ## 기획: 데이터 저장 정리 — docs/designs/data-store.md (2026-11-05 사장님 요청·설계 검토, 설계서는 아직 미커밋)
 사장님 결정: team.db 를 상태 DB 로 합침 · PC 키(pc_id) 지금 넣음 · worklog 는 캐시로 내리기로 했으나 설계 검토(크로스체크 위임)에서 **영구 저장으로 바뀜**(캐시가 깨지면 원본 없는 세션 요약이 사라짐). 출시는 R1(새 DB 정본 + 옛 JSON 거울) → R2(거울 중단, 되돌림 대상이 R1 이상일 때만).
+
+- [ ] R2 때 함께: 세션 저장 키 `labels`·`picker` → `tags`·`skip_resume_notice`, 안 읽는 `name`·`color`·`note` 정리, 옛 API 별칭(`/labels`·`/picker-expose`·응답 `labels`·`picker_expose`·`?label=`·MCP `list_labels`·`set_session_labels`) 제거 — 폰 앱 재빌드와 외부 서비스 호출 전환 뒤(0.37.0, 2026-11-09)
 ### Phase 1 (이번 사이클) — 구현 과제는 설계서 끝 'Implementation Tasks'
 ### Deferred (설계 검토 2026-11-05, 크로스체크로 TODOS 추가 결정)
 - [ ] T1 pclink 상태 파일(state.json·seen.sqlite·identity.json)을 상태 DB 로 흡수 — 왜: 짝 상태도 운영 상태라 백업·삭제 묶음에 넣으면 정리가 끝난다. 착수 조건: pclink 상태의 수명·쓰기 주기 확인. 시작점: `session_manager/pclink/policy.py`

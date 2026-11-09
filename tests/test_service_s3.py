@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from conftest import write_session
-from session_manager import server as S, approvals, connector, config, profiles, services, servicereg, labels
+from session_manager import server as S, approvals, connector, config, profiles, services, servicereg, session_meta
 
 PROF = {"system_prompt": "북한 법령만 답한다", "allowed_tools": ["ToolSearch"]}
 
@@ -69,7 +69,7 @@ def test_full_flow_claim_once(env):
     tok, svc = c.json()["token"], c.json()["service"]
     base = made[0][0]
     assert svc["bases"] == {"chat": base} and made[0][1]["permission_mode"] == "dontAsk"
-    assert labels.get(base)["labels"] == ["서비스: 북한법"]
+    assert session_meta.get(base)["tags"] == ["서비스: 북한법"]
     assert services.get("nklaw")["folder"].endswith("svc/nklaw_chatbot")
     # 받은 토큰으로 자기 원본 질의(원격처럼)
     S._is_local = lambda x: False

@@ -156,23 +156,26 @@ Content-Type: application/json
 
 ## 라벨 (HTTP)
 
-세션에 태그/표시이름을 붙인다. 원본 jsonl 은 건드리지 않고 별도 JSON 사이드카에 저장된다.
+세션에 태그를 붙인다. 원본 jsonl 은 건드리지 않고 ClewPath 저장소에 따로 저장된다.
 
 ```
-POST http://127.0.0.1:5100/api/v1/sessions/{session_id}/labels
+POST http://127.0.0.1:5100/api/v1/sessions/{session_id}/tags
 Authorization: Bearer <토큰>
 Content-Type: application/json
 
-{"labels": ["북한법", "중요"], "name": "북한법 사이트 SEO"}   # 제공한 필드만 갱신
+{"tags": ["북한법", "중요"]}
 ```
-- `labels` 를 `[]` 로 보내고 name 도 없으면 라벨 레코드가 삭제된다.
-- 응답: `{"session_id": "...", "record": {"labels": [...], "name": "...", "updated_at": "..."}}`
+- `tags` 를 `[]` 로 보내면 태그가 모두 지워진다.
+- 응답: `{"session_id": "...", "record": {"tags": [...], "updated_at": "..."}}`
 
 ```
-GET  /api/v1/labels                         # 사용 중인 라벨과 횟수(많은 순)
-GET  /api/v1/sessions?label=<라벨>           # 그 라벨이 붙은 세션만
+GET  /api/v1/tags                           # 사용 중인 태그와 횟수(많은 순) {"tags": [{"tag": "...", "count": 1}]}
+GET  /api/v1/sessions?tag=<태그>             # 그 태그가 붙은 세션만
 ```
-세션 목록 응답의 각 항목에는 `labels`, `label_name` 이 함께 포함된다.
+세션 목록 응답의 각 항목에는 `tags` 가 포함된다.
+
+옛 이름(0.36 까지): `POST …/labels {"labels": [...]}`, `GET /api/v1/labels`, `?label=`, 응답의 `labels` 는 별칭으로 계속 동작한다.
+ClewPath 표시 이름(`name`·`label_name`)·색(`color`)·메모(`note`)는 0.37.0 에서 없어졌다. 옛 경로로 보내도 무시된다.
 
 ## 메시지 프로토콜 (재개 WebSocket)
 

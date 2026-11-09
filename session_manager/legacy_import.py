@@ -158,7 +158,7 @@ def mirror_needed() -> bool:
 
 def register_all() -> bool:
     """거울 문서를 쓰는 모듈을 모두 불러 문서를 등록한다(기동 때 대조 전에). 몇몇 모듈은 처음 쓸 때 등록하므로 여기서 깨운다."""
-    from session_manager import hooks, housekeeping, labels, lifecycle, mongroups, policy, profiles, services, webterm  # noqa: F401
+    from session_manager import hooks, housekeeping, session_meta, lifecycle, mongroups, policy, profiles, services, webterm  # noqa: F401
     hooks._doc()
     housekeeping._docs()
     lifecycle._fork_doc()

@@ -267,7 +267,7 @@ def make_base(folder: str, prof: dict, timeout: int = 240) -> str:
 
 def provision(args: dict, aid: str) -> dict:
     """service_register 실행기 — claim 문맥에서만(토큰을 그 응답으로만 건넨다)."""
-    from session_manager import labels, team
+    from session_manager import session_meta, team
     ctx = getattr(_TL, "ctx", None)
     if not ctx or ctx.get("approval") != aid:
         raise team.TeamError("claim_required", 409)      # 화면의 '실행' 으로는 토큰이 사라지므로 막는다
@@ -290,7 +290,7 @@ def provision(args: dict, aid: str) -> dict:
                 _note(rid, provisioned=done, error=f"{purpose} 원본 만들기 실패")
                 raise team.TeamError("base_create_failed", 502)
         _note(rid, provisioned=done)
-        labels.set_record(done[purpose], labels=[f"서비스: {args['name']}"], name=f"{args['name']} 원본({purpose})")
+        session_meta.set_record(done[purpose], tags=[f"서비스: {args['name']}"])
     try:
         _, token = create(sid, args["name"], done, args.get("limits"),
                           extra={"folder": folder, "purpose": args.get("purpose", ""), "approval": aid,

@@ -107,6 +107,7 @@ def test_service_token_scope(env, monkeypatch):
     # 목록·라벨·남의 원본은 안 된다
     assert client.get("/api/v1/sessions", headers=_h(tok)).status_code == 403
     assert client.get("/api/v1/labels", headers=_h(tok)).status_code == 403
+    assert client.get("/api/v1/tags", headers=_h(tok)).status_code == 403
     assert client.post(f"/api/v1/sessions/{OTHER}/ask", json={"prompt": "q"}, headers=_h(tok)).status_code == 403
     assert client.get(f"/api/v1/sessions/{OTHER}/profile", headers=_h(tok)).status_code == 403
     assert client.post(f"/api/v1/sessions/{BASE}/profile", json={}, headers=_h(tok)).status_code == 403

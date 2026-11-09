@@ -852,7 +852,7 @@ def reconcile_all() -> dict:
 
 # ---------------------------------------------------------------- 세션 표 등록(T8)
 # 세션 삭제(휴지통) 때 같이 지울 표 / 남길 표(장부·이력). session_id 열이 있는 표는 모두 둘 중 하나에 있어야 한다(시험이 검사).
-# 지울 표는 lifecycle.delete_session 이 주인 모듈(labels·profiles·hooks)로 지우고 사본을 휴지통 버킷에 둔다(복구 때 되살림).
+# 지울 표는 lifecycle.delete_session 이 주인 모듈(session_meta·profiles·hooks)로 지우고 사본을 휴지통 버킷에 둔다(복구 때 되살림).
 # 남길 표: 팀 장부·작업 장부(경력·기록 — 세션이 지워져도 남는 것이 목적), 등록부·숨김 목록(주인 모듈이 스스로 정리).
 SESSION_TABLES_DELETE = ("session_meta", "session_policy", "session_runtime", "launch_settings")
 SESSION_TABLES_KEEP = ("agent_sessions", "ingest", "usage", "addresses", "pending_sends", "web_prompts",

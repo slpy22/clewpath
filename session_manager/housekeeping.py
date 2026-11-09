@@ -165,10 +165,10 @@ def _ts_max(*vals) -> float:
 
 def idle_candidates(now: float | None = None, hours: int | None = None) -> list[dict]:
     """끌 후보(조건을 모두 만족). 실제 끄기는 reap_idle 이 세션 잠금 안에서 다시 확인한 뒤."""
-    from session_manager import bgtasks, hooks, labels, peers, scanner, webterm
+    from session_manager import bgtasks, hooks, session_meta, peers, scanner, webterm
     now = now or time.time()
     limit = (hours or idle_hours()) * 3600
-    recs = labels.all_records()
+    recs = session_meta.all_records()
     pmap = peers.peer_map()
     out = []
     for key in list(webterm._ACTIVE.keys()):
@@ -179,7 +179,7 @@ def idle_candidates(now: float | None = None, hours: int | None = None) -> list[
         if reason:
             continue
         meta = scanner.scan_one(key)
-        out.append({"session_id": key, "title": _title(key, meta, recs),
+        out.append({"session_id": key, "title": _title(key, meta),
                     "idle_s": int(now - _last_activity(key, a, meta, hooks))})
     return out
 
@@ -209,14 +209,13 @@ def _skip_reason(sid, a, now, limit, recs, pmap, scanner, hooks, bgtasks) -> str
     return None
 
 
-def _title(sid, meta, recs) -> str:
-    rec = recs.get(sid) or {}
-    return (rec.get("name") or getattr(meta, "custom_title", None) or getattr(meta, "ai_title", None)
+def _title(sid, meta) -> str:
+    return (getattr(meta, "custom_title", None) or getattr(meta, "ai_title", None)
             or getattr(meta, "slug", None) or sid[:8])
 
 
 def reap_idle(now: float | None = None) -> dict:
-    from session_manager import bgtasks, hooks, labels, peers, scanner, webterm
+    from session_manager import bgtasks, hooks, session_meta, peers, scanner, webterm
     hours = idle_hours()
     limit = hours * 3600
     stopped, kept = [], 0
@@ -225,7 +224,7 @@ def reap_idle(now: float | None = None) -> dict:
 
         def still_idle(a, _sid=sid):
             t = time.time()
-            return _skip_reason(_sid, a, t, limit, labels.all_records(), peers.peer_map(),
+            return _skip_reason(_sid, a, t, limit, session_meta.all_records(), peers.peer_map(),
                                 scanner, hooks, bgtasks) is None
         r = webterm.stop_if(sid, still_idle)
         if r == "stopped":

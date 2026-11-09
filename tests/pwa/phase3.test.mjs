@@ -32,12 +32,12 @@ test("renderRows: 폴더 그룹(최신순)·상태 점/문구·🔗 피어 칩(�
   const iso = (secAgo) => new Date(Date.now() - secAgo * 1000).toISOString();
   ev(ctx, `SESSIONS = [
     {session_id:${JSON.stringify(A)}, title:'알파', project_folder:'F--p1', cwd:'F:/p1', ended_at:${JSON.stringify(iso(60))}, message_count:3, size_bytes:2048,
-     runtime:{phase:'thinking', thinking_at:${now - 30}}, peer:{name:'w1', status:'busy'}, live_terminal:false, labels:['팀'], resume_model:'claude-opus-5', model_override:true},
+     runtime:{phase:'thinking', thinking_at:${now - 30}}, peer:{name:'w1', status:'busy'}, live_terminal:false, tags:['팀'], resume_model:'claude-opus-5', model_override:true},
     {session_id:${JSON.stringify(B)}, slug:'beta-slug', project_folder:'F--p1', cwd:'F:/p1/sub', ended_at:${JSON.stringify(iso(3600 * 5))}, message_count:0,
      runtime:{phase:'permission', permission_at:${now - 10}}, peer:{name:'w2'}, live_terminal:true},
     {session_id:${JSON.stringify(C)}, title:'감마', project_folder:'F--p2', cwd:'F:/p2', ended_at:${JSON.stringify(iso(10))}, agent:{kind:'background', name:'bg-1'}, picker_hidden:true},
     {session_id:${JSON.stringify(D)}, title:'델타', project_folder:'F--p2', cwd:'F:/p2', ended_at:${JSON.stringify(iso(20))}, picker_hidden:true, picker_expose:true}
-  ]; SELECTED_ID = ${JSON.stringify(D)}; ACTIVE_LABEL = ''; COLLAPSED.clear()`);
+  ]; SELECTED_ID = ${JSON.stringify(D)}; ACTIVE_TAG = ''; COLLAPSED.clear()`);
   const wrap = stubEl("div"); ctx.__wrap = wrap;
   ev(ctx, "renderRows(globalThis.__wrap, '')");
   // 그룹: p2(최신 10초 전)가 p1(60초 전)보다 앞
@@ -86,11 +86,11 @@ test("renderRows: 폴더 그룹(최신순)·상태 점/문구·🔗 피어 칩(�
   ev(ctx, "renderRows(globalThis.__wrap, 'p1/sub')");
   same(rows(wrap).map((x) => x.dataset.sid), [B], "경로로도 검색");
   // 라벨 필터 / 빈 결과 문구
-  ev(ctx, "COLLAPSED.clear(); ACTIVE_LABEL = '팀'; renderRows(globalThis.__wrap, '')");
+  ev(ctx, "COLLAPSED.clear(); ACTIVE_TAG = '팀'; renderRows(globalThis.__wrap, '')");
   same(rows(wrap).map((x) => x.dataset.sid), [A]);
   ev(ctx, "renderRows(globalThis.__wrap, '없는것')");
   assert.equal(wrap.children[0].textContent, "해당 세션 없음");
-  ev(ctx, "ACTIVE_LABEL = ''; SESSIONS = []; renderRows(globalThis.__wrap, '')");
+  ev(ctx, "ACTIVE_TAG = ''; SESSIONS = []; renderRows(globalThis.__wrap, '')");
   assert.equal(wrap.children[0].textContent, "세션 없음");
 });
 
@@ -169,7 +169,7 @@ test("renderRows: 옛 줄은 ⏩ 이어받음 칩+dim, 열기/재개는 이어�
     {session_id:${JSON.stringify(OLD)}, title:'총괄', project_folder:'F--p', cwd:'F:/p', continued_in:${JSON.stringify(NEW)}, ended_at:'2026-09-29T00:00:00Z'},
     {session_id:${JSON.stringify(NEW)}, title:'총괄', project_folder:'F--p', cwd:'F:/p', agent_name:'dbcommon', ended_at:'2026-09-29T01:00:00Z'},
     {session_id:'dddddddd-1111-2222-3333-444444444444', title:'고아', project_folder:'F--p', cwd:'F:/p', continued_in:${JSON.stringify(MISS)}, ended_at:'2026-09-29T00:30:00Z'}
-  ]; SELECTED_ID=null; ACTIVE_LABEL=''; COLLAPSED.clear(); globalThis.__calls=[];
+  ]; SELECTED_ID=null; ACTIVE_TAG=''; COLLAPSED.clear(); globalThis.__calls=[];
   jumpToSession = (s) => globalThis.__calls.push(['detail', s.session_id]); showResumeChooser = (s) => globalThis.__calls.push(['resume', s.session_id]);`);
   const wrap = stubEl("div"); ctx.__wrap = wrap;
   ev(ctx, "renderRows(globalThis.__wrap, '')");
@@ -200,7 +200,7 @@ test("🧠 칩에 마지막 응답의 에포트도 — 'Opus 5.5 · high'(없으
     {session_id:${JSON.stringify(A)}, title:'알파', project_folder:'F--p1', cwd:'F:/p1', ended_at:'2026-10-28T00:00:00Z', resume_model:'claude-opus-5-5', last_effort:'high'},
     {session_id:${JSON.stringify(B)}, title:'베타', project_folder:'F--p1', cwd:'F:/p1', ended_at:'2026-10-27T00:00:00Z', resume_model:'claude-sonnet-5-5', model_override:true, last_effort:'xhigh'},
     {session_id:${JSON.stringify(C)}, title:'감마', project_folder:'F--p1', cwd:'F:/p1', ended_at:'2026-10-26T00:00:00Z', resume_model:'claude-opus-5'}
-  ]; ACTIVE_LABEL = ''; COLLAPSED.clear()`);
+  ]; ACTIVE_TAG = ''; COLLAPSED.clear()`);
   const wrap = stubEl("div"); ctx.__wrap = wrap;
   ev(ctx, "renderRows(globalThis.__wrap, '')");
   const byId = Object.fromEntries(rows(wrap).map((row) => [row.dataset.sid, row]));

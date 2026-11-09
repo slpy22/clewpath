@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from session_manager import labels, launch_options as lo, lifecycle, resume, store, webapi, webterm
+from session_manager import session_meta, launch_options as lo, lifecycle, resume, store, webapi, webterm
 
 SID = "11111111-2222-3333-4444-555555555555"
 
@@ -168,17 +168,17 @@ def test_guardrail_permission_mode_still_wins_on_web_resume(home):
 
 def test_label_model_beats_stored_model(home):
     lo.save(SID, lo.parse({"model": "sonnet"}), "mcp")
-    labels.set_record(SID, model="opus")
+    session_meta.set_record(SID, model="opus")
     argv = webterm._claude_argv(SID, skip_permissions=True)
     assert argv[argv.index("--model") + 1] == "opus", "사람이 고른 모델이 먼저"
 
 
 def test_clearing_labels_keeps_launch_settings(home):
     """라벨을 다 지워도 권한 모드는 남는다 — 같은 레코드에 뒀다면 재개가 자동 허용으로 떴다(설계 검토 F4)."""
-    labels.set_record(SID, name="가", model="opus")
+    session_meta.set_record(SID, tags=["가"], model="opus")
     lo.save(SID, lo.parse({"permission_mode": "manual"}), "mcp")
-    labels.set_record(SID, name=None, model=None)
-    assert labels.get(SID) == {} or not labels.get(SID).get("name")
+    session_meta.set_record(SID, tags=[], model=None)
+    assert session_meta.get(SID) == {}
     assert lo.resume_flags(SID, True) == ["--permission-mode", "manual"]
 
 

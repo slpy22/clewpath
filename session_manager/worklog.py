@@ -130,17 +130,15 @@ def _fold(c, sid: str, path: Path, budget: int) -> int:
     return len(done)
 
 
-def _title(m, recs) -> str:
-    rec = recs.get(m.session_id) or {}
-    return rec.get("name") or m.custom_title or m.ai_title or m.slug or m.session_id[:8]
+def _title(m) -> str:
+    return m.custom_title or m.ai_title or m.slug or m.session_id[:8]
 
 
 def collect(metas=None, run_budget: int = PER_RUN_BYTES, per_session: int = PER_SESSION_BYTES) -> dict:
     """정기 작업 본체. 최근에 바뀐 세션부터 이어 접고, 사라진 파일은 gone_at 으로 표시(장부는 남김)."""
-    from session_manager import housekeeping, labels, scanner
+    from session_manager import housekeeping, scanner
     metas = metas if metas is not None else scanner.scan_all()
     hidden = housekeeping.hidden_session_ids()
-    recs = labels.all_records()
     live = [m for m in metas if not getattr(m, "headless", False) and m.session_id not in hidden]
     live.sort(key=lambda m: m.mtime or 0, reverse=True)
     read = touched = 0
@@ -157,7 +155,7 @@ def collect(metas=None, run_budget: int = PER_RUN_BYTES, per_session: int = PER_
                 p = Path(m.jsonl_path)
                 if not p.exists():
                     continue
-                w.execute("UPDATE worklog_ws SET cwd=?, title=? WHERE session_id=?", (m.cwd, _title(m, recs), m.session_id))
+                w.execute("UPDATE worklog_ws SET cwd=?, title=? WHERE session_id=?", (m.cwd, _title(m), m.session_id))
                 if m.session_id in known and known[m.session_id] == p.stat().st_size:
                     continue                                   # 그대로(줄어들었으면 _fold 가 처음부터 다시 접는다)
                 todo.append((m, p))
@@ -167,7 +165,7 @@ def collect(metas=None, run_budget: int = PER_RUN_BYTES, per_session: int = PER_
                 continue
             with store.tx() as w:                              # 세션 하나 = 짧은 트랜잭션 하나(다른 쓰기를 오래 막지 않게)
                 got = _fold(w, m.session_id, p, min(per_session, run_budget - read))
-                w.execute("UPDATE worklog_ws SET cwd=?, title=? WHERE session_id=?", (m.cwd, _title(m, recs), m.session_id))
+                w.execute("UPDATE worklog_ws SET cwd=?, title=? WHERE session_id=?", (m.cwd, _title(m), m.session_id))
                 k2 = w.execute("SELECT off FROM worklog_ws WHERE session_id=?", (m.session_id,)).fetchone()
             read += got
             touched += 1 if got else 0

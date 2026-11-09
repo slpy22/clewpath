@@ -11,11 +11,11 @@ API 토큰으로 호출하는 **어댑터**다. 따라서 LLM 클라이언트가
 
 | 도구 | 설명 |
 |---|---|
-| `list_sessions(query="", label="", limit=30)` | 세션 목록 조회. `query`(부분일치)·`label`(라벨) 필터 |
+| `list_sessions(query="", tag="", limit=30)` | 세션 목록 조회. `query`(부분일치)·`tag`(태그) 필터 |
 | `resume_session(session_id, prompt, skip_permissions=True, timeout_sec=300)` | 세션 재개 + 프롬프트 1턴 → 어시스턴트 응답 반환 |
 | `ask_session(session_id, prompt, ...)` | **원본을 fork 해서 1턴 질의 후 fork 자동삭제**(원본 불변, 일회성 질의) |
-| `list_labels()` | 사용 중인 라벨과 횟수 조회 |
-| `set_session_labels(session_id, labels=[...], name=None)` | 세션에 라벨/표시이름 설정(원본 불변) |
+| `list_tags()` | 사용 중인 태그와 횟수 조회(옛 이름 `list_labels`) |
+| `set_session_tags(session_id, tags=[...])` | 세션에 태그 설정(원본 불변, 옛 이름 `set_session_labels`) |
 | `get_session_profile(session_id)` | 세션 가드레일 프로파일 + 실효 정책 조회 |
 | `set_session_profile(session_id, permission_mode, allowed_tools, denied_tools, model, max_budget_usd, system_prompt, deny_patterns, ...)` | 세션에 추가 가드레일(조이기) 설정 |
 

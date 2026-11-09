@@ -226,7 +226,7 @@ test("loadDetail(재배치): 머리(이름·✎·상태·경로) → 주 동작 
         + "globalThis.__calls = []; renameNative = (s) => __calls.push(['rename', s.session_id]); doDelete = (s) => __calls.push(['delete', s.session_id]);"
         + "killSession = (s) => __calls.push(['kill', s.session_id]); showResumeChooser = (s) => __calls.push(['resume', s.session_id]);");
   const s = { session_id: A, title: "알파", project_folder: "F--p1", message_count: 4, size_bytes: 3 * 1024 * 1024, cwd: "F:/p1",
-              started_at: "2026-09-01T00:00:00Z", ended_at: new Date(Date.now() - 120000).toISOString(), picker_hidden: true, picker_expose: false, live_terminal: false };
+              started_at: "2026-09-01T00:00:00Z", ended_at: new Date(Date.now() - 120000).toISOString(), picker_hidden: true, skip_resume_notice: false, live_terminal: false };
   await ctx.loadDetail(s);
   assert.equal(ev(ctx, "SELECTED_ID"), A); assert.equal(ev(ctx, "CURRENT_TERM_SID"), null, "상세로 나오면 터미널 화면 표시 해제");
   assert.ok(!pd.classList.contains("term-mode"));
@@ -252,17 +252,17 @@ test("loadDetail(재배치): 머리(이름·✎·상태·경로) → 주 동작 
   assert.ok(kv["생성"] && kv["마지막"].endsWith("(2분 전)"));
   const st = kvOf(body.children[1].children[0]);
   assert.equal(st["모델"], "claude-opus-5"); assert.equal(st["입력토큰"], (12345).toLocaleString()); assert.equal(st["환산비용"], "$0.12");
-  // ⚙ 알림 띠: 한 줄, 자세히 펼치면 설명+토글 → API POST {expose:true} → 문구 반전
+  // ⚙ 알림 띠: 한 줄, 자세히 펼치면 설명+토글 → API POST {skip:true} → 문구 반전
   const [nline, nbody] = note.children;
   assert.ok(nbody.classList.contains("hidden"));
   nline.onclick();
   const tog = nbody.children.find((k) => String(k.className) === "btn ghost");
   assert.ok(tog.textContent.startsWith("👌"));
   await tog.onclick();
-  same(ev(ctx, "globalThis.__api").find((c) => c[1].includes("picker-expose")), ["POST", `/api/sessions/${A}/picker-expose`, { expose: true }]);
-  assert.equal(s.picker_expose, true); assert.ok(tog.textContent.startsWith("🔔"));
+  same(ev(ctx, "globalThis.__api").find((c) => c[1].includes("resume-notice")), ["POST", `/api/sessions/${A}/resume-notice`, { skip: true }]);
+  assert.equal(s.skip_resume_notice, true); assert.ok(tog.textContent.startsWith("🔔"));
   assert.ok(ev(ctx, "globalThis.__toasts").at(-1).includes("경고 없이"));
-  await tog.onclick(); assert.equal(s.picker_expose, false);
+  await tog.onclick(); assert.equal(s.skip_resume_notice, false);
   // 더 보기: 접혀 있음, 가끔 쓰는 4개
   const act = more.children[1];
   assert.ok(act.classList.contains("hidden"));
@@ -304,7 +304,7 @@ test("showResumeChooser: 실행 중이면 바로 터미널 / ⚙ 사전 확인 /
   ctx.showResumeChooser({ session_id: A, picker_hidden: true });
   same(asked, ["⚙ "]); assert.equal(ev(ctx, "globalThis.__modal"), null);
   ctx.confirm = () => true;
-  ctx.showResumeChooser({ session_id: A, picker_hidden: true, picker_expose: true });  // 알고 있음 → 안 묻는다
+  ctx.showResumeChooser({ session_id: A, picker_hidden: true, skip_resume_notice: true });  // 알고 있음 → 안 묻는다
   assert.equal(asked.length, 1); assert.ok(ev(ctx, "globalThis.__modal"));
   // 기본 선택(web + YOLO) → ▶ 재개 → loadResume(s, true, safe=false), 선택은 LS 에 저장
   ev(ctx, "globalThis.__modal.f[0].onclick()");

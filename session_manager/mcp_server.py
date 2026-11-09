@@ -41,25 +41,26 @@ def _auth_headers() -> dict:
 
 
 @mcp.tool()
-def list_sessions(query: str = "", label: str = "", limit: int = 30) -> dict:
+def list_sessions(query: str = "", tag: str = "", limit: int = 30, label: str = "") -> dict:
     """로컬 PC의 Claude Code 세션 목록을 조회한다.
 
     Args:
         query: cwd/슬러그/프로젝트명에 대한 부분일치 필터(비우면 전체).
-        label: 이 라벨이 붙은 세션만(비우면 무시).
+        tag: 이 태그가 붙은 세션만(비우면 무시).
         limit: 최대 개수(0이면 제한 없음).
+        label: tag 의 옛 이름.
 
     Returns:
         {"total": N, "sessions": [{session_id, cwd, project_folder, slug,
          git_branch, message_count, size_bytes, started_at, ended_at,
-         labels, label_name}, ...]}
+         tags}, ...]}
         ended_at 최신순 정렬. 재개하려면 session_id 를 resume_session 에 넘긴다.
     """
     params: dict = {"limit": limit}
     if query:
         params["q"] = query
-    if label:
-        params["label"] = label
+    if tag or label:
+        params["tag"] = tag or label
     r = httpx.get(f"{API_BASE}/api/v1/sessions", params=params,
                   headers=_auth_headers(), timeout=30)
     r.raise_for_status()
@@ -67,35 +68,45 @@ def list_sessions(query: str = "", label: str = "", limit: int = 30) -> dict:
 
 
 @mcp.tool()
-def list_labels() -> dict:
-    """현재 사용 중인 라벨과 각 사용 횟수를 조회한다.
+def list_tags() -> dict:
+    """현재 사용 중인 태그와 각 사용 횟수를 조회한다.
 
-    Returns: {"labels": [{"label": "북한법", "count": 3}, ...]} (많은 순)
+    Returns: {"tags": [{"tag": "북한법", "count": 3}, ...]} (많은 순)
     """
+    r = httpx.get(f"{API_BASE}/api/v1/tags", headers=_auth_headers(), timeout=30)
+    r.raise_for_status()
+    return r.json()
+
+
+@mcp.tool()
+def list_labels() -> dict:
+    """list_tags 의 옛 이름. Returns: {"labels": [{"label": "북한법", "count": 3}, ...]}"""
     r = httpx.get(f"{API_BASE}/api/v1/labels", headers=_auth_headers(), timeout=30)
     r.raise_for_status()
     return r.json()
 
 
 @mcp.tool()
-def set_session_labels(session_id: str, labels: list[str] | None = None,
-                       name: str | None = None) -> dict:
-    """세션에 라벨(태그)과 표시 이름을 설정한다. 원본 세션은 건드리지 않는다.
+def set_session_tags(session_id: str, tags: list[str]) -> dict:
+    """세션에 태그를 설정한다. 원본 세션은 건드리지 않는다.
 
     Args:
         session_id: 대상 세션 UUID.
-        labels: 라벨 목록. 빈 리스트면 라벨 제거.
-        name: 표시 이름(선택).
+        tags: 태그 목록. 빈 리스트면 태그 제거.
 
-    Returns: {"session_id", "record": {labels, name, ...}}
+    Returns: {"session_id", "record": {tags, ...}}
     """
-    body: dict = {}
-    if labels is not None:
-        body["labels"] = labels
-    if name is not None:
-        body["name"] = name
+    r = httpx.post(f"{API_BASE}/api/v1/sessions/{session_id}/tags",
+                   json={"tags": tags}, headers=_auth_headers(), timeout=30)
+    r.raise_for_status()
+    return r.json()
+
+
+@mcp.tool()
+def set_session_labels(session_id: str, labels: list[str] | None = None) -> dict:
+    """set_session_tags 의 옛 이름."""
     r = httpx.post(f"{API_BASE}/api/v1/sessions/{session_id}/labels",
-                   json=body, headers=_auth_headers(), timeout=30)
+                   json={"labels": labels}, headers=_auth_headers(), timeout=30)
     r.raise_for_status()
     return r.json()
 

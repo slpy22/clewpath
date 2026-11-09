@@ -256,15 +256,15 @@ ROWS_FILE = "clewpath_rows.json"
 
 
 def _drop_session_rows(session_id: str, bucket: Path) -> None:
-    """세션 덧붙임 정보(labels·profiles·hooks 상태)를 지우고, 되살릴 것(이름·라벨·가드레일)은 버킷에 사본으로."""
+    """세션 덧붙임 정보(session_meta·profiles·hooks 상태)를 지우고, 되살릴 것(태그·가드레일)은 버킷에 사본으로(저장된 모양 그대로)."""
     try:
-        from session_manager import hooks, labels as _labels, launch_options, profiles
-        rows = {"labels": _labels.get(session_id), "profiles": profiles.get(session_id),
+        from session_manager import hooks, session_meta as _session_meta, launch_options, profiles
+        rows = {"labels": _session_meta.raw(session_id), "profiles": profiles.get(session_id),
                 "launch": launch_options.dump(session_id)}
         if any(rows.values()):
             (bucket / ROWS_FILE).write_text(json.dumps({"session_id": session_id, **rows}, ensure_ascii=False, indent=1),
                                             encoding="utf-8")
-        _labels.delete(session_id)
+        _session_meta.delete(session_id)
         profiles.delete(session_id)
         launch_options.delete(session_id)
         hooks.forget(session_id)
@@ -274,16 +274,16 @@ def _drop_session_rows(session_id: str, bucket: Path) -> None:
 
 
 def _restore_session_rows(bucket: Path) -> bool:
-    """버킷의 사본으로 이름·라벨·가드레일을 되살린다. 그 사이 새로 붙인 값이 있으면 덮지 않는다."""
+    """버킷의 사본으로 태그·가드레일을 되살린다. 그 사이 새로 붙인 값이 있으면 덮지 않는다."""
     f = bucket / ROWS_FILE
     if not f.is_file():
         return False
     try:
         d = json.loads(f.read_text(encoding="utf-8"))
         sid = d.get("session_id")
-        from session_manager import labels as _labels, profiles
+        from session_manager import session_meta as _session_meta, profiles
         done = False
-        for mod, key in ((_labels, "labels"), (profiles, "profiles")):
+        for mod, key in ((_session_meta, "labels"), (profiles, "profiles")):
             rec = d.get(key)
             if not sid or not isinstance(rec, dict) or not rec:
                 continue
