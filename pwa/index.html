@@ -3304,11 +3304,17 @@ function hoReview(box,st){
 }
 function hoOpenTerm(st){ const s=sessById(st.to_session)||{session_id:st.to_session,title:st.agent_name,cwd:''}; return loadTerminal(s); }
 // ④ 기동 중
+const HO_TRUST_HINT_S=15;     // 새 세션 기록이 이만큼 없으면 판정과 상관없이 터미널 확인을 권한다 — ~/.claude.json 으로 본 신뢰 판정이 Claude 의 실제 질문과 다른 폴더가 있다(실측)
+function hoTrustNote(st){ const how='터미널을 열어 아래 화살표로 Yes 를 고른 뒤 Enter 를 누르세요(그냥 Enter 는 종료).';
+  if(st.needs_trust) return '처음 쓰는 폴더라 Claude 신뢰 질문에서 멈춰 있습니다. '+how;
+  return Date.now()/1000+CLOCK_SKEW-st.state_at>=HO_TRUST_HINT_S ? '아직 새 세션 기록이 없습니다. Claude 신뢰 질문에서 멈췄을 수 있습니다. 질문이 보이면 '+how : ''; }
 function hoStarting(box,st){
   hoTitle(box,'새 세션을 띄우는 중…',st.agent_name); box.appendChild(el('div','hotext','연결이 끊겨도 다시 띄우지 않습니다. 새 세션이 뜨면 옛 세션을 끝냅니다.'));
-  if(st.needs_trust) box.appendChild(el('div','dnote warn','처음 쓰는 폴더라 Claude 신뢰 질문에서 멈춰 있습니다. 터미널을 열어 아래 화살표로 Yes 를 고른 뒤 Enter 를 누르세요(그냥 Enter 는 종료).'));
+  const slot=el('div'); slot.setAttribute('role','status'); box.appendChild(slot); let shown='';
+  const note=(n)=>{ const t=hoTrustNote(n); if(t===shown) return; shown=t; slot.innerHTML=''; if(t) slot.appendChild(el('div','dnote warn',t)); };
+  note(st);
   hoFoot(box,[hoBtn('닫기 (계속 진행)','ghost',()=>loadAgentDetail(st.agent_id)),hoBtn('🖥 새 세션 터미널 열기',null,()=>hoOpenTerm(st))]); hoKeys(box,st.agent_id);
-  hoPoll(box,st.id,2000,(n)=>{ if(n.status!=='starting'){ hoRender(box,n); return false; } });
+  hoPoll(box,st.id,2000,(n)=>{ if(n.status!=='starting'){ hoRender(box,n); return false; } note(n); });
 }
 // ⑤ 완료
 function hoDone(box,st){
@@ -3316,7 +3322,7 @@ function hoDone(box,st){
   if(st.error) box.appendChild(el('div','dnote warn',hoErrText(st.error)));
   const open=hoBtn('🖥 새 세션 터미널 열기',null,()=>hoOpenTerm(st));
   hoFoot(box,[hoBtn('에이전트 보기','ghost',()=>loadAgentDetail(st.agent_id)),open]); hoKeys(box,st.agent_id,open);
-  loadList(); agentReload();
+  listTick(); agentReload();     // loadList 는 폰 화면을 목록으로 돌려 이 화면이 바로 사라진다
 }
 // 실패 — 어느 단계에서 왜, 그리고 다음 길. 실패 기록은 닫아야 🔔 에서 빠진다
 function hoFailed(box,st){

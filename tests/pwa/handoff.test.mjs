@@ -1,7 +1,7 @@
 // 갈아타기 화면(docs/designs/agent-unit.md '화면 확정' U5~U11·'재검토 확정'): 막힌 이유·비용 확인·초안 충돌·2FA·실패·옛 세션·알림 진입.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { load, ev } from "./harness.mjs";
+import { load, ev, stubEl } from "./harness.mjs";
 
 const A = "aaaaaaaa-0000-0000-0000-000000000001", B = "bbbbbbbb-0000-0000-0000-000000000002";
 const AG = { id: "ag1", uid: "u1", name: "가", role: "", tags: [], status: "active", rev: 1, created: 1, session_id: B, sessions: 2, teams: [], assistant: false };
@@ -206,6 +206,32 @@ test("④: 신뢰 질문이면 그냥 Enter 가 종료라는 것까지 알린다
   const ctx = await setup({ [ST_P]: ST({ status: "starting", to_session: A, needs_trust: true }) });
   await ev(ctx, "openHandoff('ho1')");
   assert.ok(has(ctx, "그냥 Enter 는 종료")); assert.ok(btn(ctx, "🖥 새 세션 터미널 열기"));
+});
+
+test("④: 신뢰한 폴더로 판정돼도 15초 넘게 기록이 없으면 터미널 확인을 권한다(판정은 틀릴 수 있다, 실측)", async () => {
+  const now = Math.floor(Date.now() / 1000), SKEW = -3600;   // PC 시계가 폰보다 1시간 늦다 — 폰 시계로 재면 처음부터 지난 것으로 보인다
+  const ctx = await setup({ [ST_P]: ST({ status: "starting", to_session: A, state_at: now + SKEW }) });
+  ev(ctx, `CLOCK_SKEW = ${SKEW};`);
+  const tick = async () => { await ev(ctx, "Promise.all(__t.splice(0).map((f) => f()))"); await pass(); };
+  await ev(ctx, "openHandoff('ho1')");
+  assert.ok(!has(ctx, "신뢰 질문"));
+  route(ctx, ST_P, ST({ status: "starting", to_session: A, state_at: now + SKEW - 16 }));
+  await tick();
+  assert.ok(has(ctx, "터미널을 열어")); assert.ok(has(ctx, "그냥 Enter 는 종료")); assert.ok(btn(ctx, "🖥 새 세션 터미널 열기"));
+  route(ctx, ST_P, ST({ status: "starting", to_session: A, state_at: now + SKEW, needs_trust: true }));
+  await tick();
+  assert.ok(has(ctx, "처음 쓰는 폴더라")); assert.equal(walk(ev(ctx, "HO_BOX")).filter((k) => String(k.className).includes("warn")).length, 1);
+});
+
+test("⑤: 완료 화면에 머물고(폰에서 목록으로 밀려나지 않음) 목록은 뒤에서 새로 받는다", async () => {
+  const ctx = await setup({ [ST_P]: ST({ status: "done", to_session: A }) });
+  const app = stubEl("div"); ctx.document._register("app", app); app.setAttribute("data-view", "list");
+  ev(ctx, `fetchAgents = async () => false; LIST_CTX = { rerender() { __calls.push({v:'RERENDER'}); } };
+    T.list = async () => { __calls.push({v:'LIST'}); return { sessions: SESSIONS, handoffs: [] }; };`);
+  await ev(ctx, "openHandoff('ho1')"); await pass();
+  assert.equal(app.getAttribute("data-view"), "detail");
+  assert.ok(has(ctx, "갈아탔습니다")); assert.ok(btn(ctx, "🖥 새 세션 터미널 열기"));
+  assert.equal(calls(ctx, "LIST").length, 1); assert.ok(calls(ctx, "RERENDER").length >= 1);
 });
 
 test("실패: 단계·이유를 보이고 [닫기]는 🔔 에서 뺀다, [다시]는 ①로", async () => {
