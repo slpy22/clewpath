@@ -3125,7 +3125,7 @@ async function loadAgentDetail(id){
 let HANDOFFS=[], HO_BOX=null, HO_FLUSH=null;
 const HO_CHIP={preparing:'🔁 준비 중',ready:'🔁 검토 대기',starting:'🔁 띄우는 중',failed:'⚠ 갈아타기 실패'};
 const HO_WIDE=['acceptEdits','auto','bypassPermissions'];
-const HO_ERR={agent_retired:'쉬는 에이전트입니다 — 되살린 뒤 갈아탈 수 있습니다', assistant_uses_reassign:'비서 바꾸기는 🧑‍💼 비서 설정의 재지정으로 합니다',
+const HO_ERR={agent_retired:'쉬는 에이전트입니다 — 되살린 뒤 갈아탈 수 있습니다', too_big_for_excerpt:'대화가 길거나 압축된 세션이라 그대로 옮길 수 없습니다 — 인수인계서를 만드세요',assistant_uses_reassign:'비서 바꾸기는 🧑‍💼 비서 설정의 재지정으로 합니다',
   no_current_session:'지금 세션이 없어 갈아탈 수 없습니다', cmd_wrapper_unsupported:'이 설치본(claude.cmd)은 인수인계서를 넘길 수 없습니다 — 네이티브 설치로 바꾼 뒤 다시 하세요',
   session_generating:'지금 세션이 답을 만드는 중입니다 — 끝난 뒤 다시 하세요', live_elsewhere:'바깥 터미널이나 백그라운드에서 돌고 있습니다 — 그쪽을 끝낸 뒤 다시 하세요',
   handoff_in_progress:'이 세션의 갈아타기가 진행 중입니다', job_running:'다시 요약이 이미 돌고 있습니다', not_ready:'지금 상태에서는 할 수 없습니다 — 화면을 다시 여세요',
@@ -3188,22 +3188,32 @@ async function openHandoffStart(agentId){
   const close=hoBtn('닫기','ghost',()=>loadAgentDetail(agentId));
   if(p.blocked){ box.appendChild(el('div','dnote warn',hoErrText(p.blocked))); hoFoot(box,[close,hoBtn('다시 확인','ghost',()=>openHandoffStart(agentId))]); hoKeys(box,agentId); return; }
   box.appendChild(el('div','hotext','인수인계서를 지금 세션의 도구 없는 복제본이 씁니다. 검토해서 고친 뒤 [갈아타기]를 눌러야 새 세션이 뜹니다. 옛 세션은 새 세션이 뜬 뒤에 끝납니다.'));
+  const plan=p.plan||{}, excerpt=plan.way==='excerpt', why=hoPlanText(plan);
+  if(why) box.appendChild(el('div','hotext hoplan',why));
   const est=p.est_usd, need=est==null||est>p.cost_confirm_usd, want=est==null?-1:hoRound(est);
   box.appendChild(el('div','hocost',est==null?'비용을 어림할 수 없습니다':'예상 '+hoUsd(est)+' (어림 — 상한 아님)'));
   let ack=null; const err=el('div','err');
   if(need){ const lb=el('label','sheet-ack'); ack=el('input'); ack.type='checkbox'; ack.checked=false; lb.appendChild(ack); lb.appendChild(el('span',null,est==null?'금액을 모르는 채로 진행합니다':hoUsd(est)+' 쓰는 것을 확인했습니다')); box.appendChild(lb); }
   box.appendChild(err);
   const path='/api/owner/agents/'+encodeURIComponent(agentId)+'/handoff';
-  const reset=()=>{ man.disabled=false; go.disabled=!!(ack&&!ack.checked); };
-  const run=async(mode)=>{ if(go.disabled&&mode==='clone') return; go.disabled=man.disabled=true; err.textContent='';
+  const reset=()=>{ man.disabled=false; if(ex) ex.disabled=false; go.disabled=!!(ack&&!ack.checked); };
+  const run=async(mode)=>{ if(go.disabled&&mode==='clone') return; go.disabled=man.disabled=true; if(ex) ex.disabled=true; err.textContent='';
     try{ const b={mode}; if(mode==='clone'&&need) b.confirm_usd=want;
       const r=mode==='clone'?await hoPaid(path,b):await T.api('POST',path,{body:b});
       if(HO_BOX!==box||pc!==pcNow()) return; if(!r){ reset(); return; } hoRender(box,r); }
     catch(e){ if(HO_BOX!==box||pc!==pcNow()) return; const c=hoCode(e); if(c==='handoff_in_progress') return openHandoffStart(agentId); err.textContent=hoErrText(c); reset(); } };
-  const go=hoBtn('인수인계서 만들기',null,()=>run('clone')), man=hoBtn('직접 쓰기 (비용 없음)','ghost',()=>run('manual'));
+  const go=hoBtn('인수인계서 만들기',excerpt?'ghost':null,()=>run('clone')), man=hoBtn('직접 쓰기 (비용 없음)','ghost',()=>run('manual'));
+  const ex=excerpt?hoBtn('대화 그대로 옮기기 (비용 없음)',null,()=>run('excerpt')):null;
   if(ack){ go.disabled=true; ack.onchange=()=>{ go.disabled=!ack.checked; }; }
-  hoFoot(box,[close,man,go]); hoKeys(box,agentId,go);
+  hoFoot(box,ex?[close,man,go,ex]:[close,man,go]); hoKeys(box,agentId,ex||go);
 }
+// 크기에 따른 인계 방식(agent-unit.md '인계 연속성 보강' K1) — 왜 이 방식을 권하는지
+function hoPlanText(p){ const n=p.dialog_chars;
+  return ({small:'작은 첫 세션이라 대화를 그대로 옮기길 권합니다'+(n?' (대화 글 '+n.toLocaleString()+'자)':'')+'. 요약을 만들 수도 있습니다.',
+    medium:'짧은 요약을 만듭니다(압축 없음, 지난 세션 '+(p.prior|0)+'개).',
+    compacted:'대화가 압축된 세션이라 자세한 요약을 만듭니다. 새 세션은 압축 전 대화도 찾아볼 수 있습니다.',
+    big:'기록이 커서 자세한 요약을 만듭니다. 새 세션은 지난 대화를 찾아볼 수 있습니다.',
+    many_sessions:'이 에이전트의 지난 세션이 '+(p.prior|0)+'개라 자세한 요약을 만듭니다. 새 세션은 지난 대화를 찾아볼 수 있습니다.'})[p.reason]||''; }
 async function openHandoff(id){
   const box=hoFrame(), pc=pcNow(); box.appendChild(el('div','spin'));
   let st; try{ st=await T.api('GET',hoPath(id)); }

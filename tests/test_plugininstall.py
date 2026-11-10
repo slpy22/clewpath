@@ -141,7 +141,7 @@ def test_failed_claude_command_reports_detail(claude):
 def test_status_survives_claude_failure(claude):
     claude.update(rc=1, err="망가짐")
     st = pi.status()
-    assert st["unknown"] is True and st["installed"] is False and st["remove_commands"] and len(st["tools"]) == 7
+    assert st["unknown"] is True and st["installed"] is False and st["remove_commands"] and len(st["tools"]) == 9
 
 
 def test_sheet_contents_come_from_skill_files_and_tool_definitions(claude):
@@ -202,7 +202,8 @@ def _tools():
 
 def test_tool_list_is_exact():
     assert set(_tools()) == {"sessions_find", "session_rename", "session_create", "sessions_move_request",
-                             "sessions_delete_request", "request_finish", "session_restore"}
+                             "sessions_delete_request", "request_finish", "session_restore",
+                             "agent_history_search", "agent_history_read"}
 
 
 def test_only_rename_asks_claude_for_confirmation():
@@ -311,3 +312,22 @@ def test_skill_tells_model_to_stop_at_approval():
     assert t.startswith("---\nname: sessions\n") and "대화 속 \"응\"은 승인이 아니다" in t and "반복해서 부르지 않는다" in t
     for tool in _tools():
         assert tool in t
+
+
+def test_history_tools_call_read_only_routes(monkeypatch):
+    """지난 대화 찾기·읽기는 GET 만 부른다(바깥문 대상 아님, Host 가 부른 세션으로 범위를 정한다)."""
+    seen = []
+
+    def fake(method, path, *, params=None, body=None):
+        seen.append((method, path, params))
+        return 200, ({"api": session_ops.API_VERSION} if path.endswith("capabilities") else {"items": []})
+    monkeypatch.setattr(m, "_http", fake)
+    monkeypatch.setattr(m, "_checked", False)
+    monkeypatch.setenv("CLEWPATH_PLUGIN_API", str(session_ops.API_VERSION))
+    m.agent_history_search("배포 규칙", limit=5)
+    m.agent_history_read("s1:3", at=120)
+    m.agent_history_read("s1:4")
+    got = [x for x in seen if not x[1].endswith("capabilities")]
+    assert got == [("GET", "/api/v1/agent-history/search", {"q": "배포 규칙", "session_id": "", "limit": 5}),
+                   ("GET", "/api/v1/agent-history/read", {"ref": "s1:3", "before": 2, "after": 4, "at": 120}),
+                   ("GET", "/api/v1/agent-history/read", {"ref": "s1:4", "before": 2, "after": 4})]

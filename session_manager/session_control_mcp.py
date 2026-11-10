@@ -76,6 +76,26 @@ def sessions_find(query: str = "", cwd: str = "") -> dict:
     return _call("GET", "/api/v1/session-ops/find", params={"q": query, "cwd": cwd})
 
 
+@mcp.tool(meta=_ui("이 에이전트의 지난 세션 대화 찾기", "읽기만 · 부른 세션이 속한 에이전트의 세션만 · 비밀값 가림"))
+def agent_history_search(query: str, session_id: str = "", limit: int = 20) -> dict:
+    """이 세션이 속한 에이전트(ClewPath)의 지난 세션들과 지금 세션의 압축 전 대화에서 사장님 말·Claude 글 답을 찾는다(읽기만).
+    query = 공백으로 나눈 낱말(모두 들어간 글만, 대소문자 무시). 최신 글부터, 결과마다 ref·at·앞뒤 150자.
+    갈아탄 뒤 인수인계서에 없는 지난 결정·이유·지시를 확인할 때 쓴다. 0건이면 낱말을 줄여 다시 찾는다.
+    session_id 를 주면 그 세션만(이 에이전트의 세션이어야 한다). 에이전트에 묶이지 않은 세션이면 not_an_agent."""
+    return _call("GET", "/api/v1/agent-history/search", params={"q": query, "session_id": session_id, "limit": limit})
+
+
+@mcp.tool(meta=_ui("찾은 대화의 앞뒤 읽기", "읽기만 · 같은 에이전트의 세션만 · 비밀값 가림"))
+def agent_history_read(ref: str, before: int = 2, after: int = 4, at: int | None = None) -> dict:
+    """agent_history_search 결과의 ref 앞뒤 글을 읽는다. at = 찾기 결과의 at(긴 글이면 그 위치를 가운데로 보여 준다).
+    before·after = 앞뒤 글 수(최대 10). 잘렸으면 truncated, 이어 읽을 곳은 next·prev(ref). source=ledger 는 기록 파일이 지워져
+    작업 장부에서 읽은 것(요청은 원문 일부, 답은 요약)이다."""
+    params = {"ref": ref, "before": before, "after": after}
+    if at is not None:
+        params["at"] = at
+    return _call("GET", "/api/v1/agent-history/read", params=params)
+
+
 @mcp.tool(meta=_ui("세션 이름 바꾸기", "Claude 확인창을 거친다(자동 허용 세션도) · 실행 중 세션은 거절", **ASK_USER))
 def session_rename(session_id: str, name: str) -> dict:
     """세션 이름을 바꾼다. 실행 중인 세션은 거절한다. 지금 이 세션의 이름은 /rename 으로 바꾼다. 사람 확인창이 뜬다."""

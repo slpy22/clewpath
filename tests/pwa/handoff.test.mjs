@@ -89,6 +89,25 @@ test("①: 어림을 못 하면 -1 로 확인, 직접 쓰기는 비용 확인 �
   assert.equal(calls(ctx, "POST", "/api/owner/agents/ag1/handoff")[0].body.mode, "manual");
 });
 
+test("①: 작은 첫 세션이면 '대화 그대로 옮기기'를 권하고 복제본 없이 보낸다(K1)", async () => {
+  const plan = { way: "excerpt", reason: "small", prior: 0, dialog_chars: 820, compacted: false, size: 4000 };
+  const ctx = await setup({ [PRE_P]: PRE({ plan }), [START_P]: ST({ draft: "[이전 대화 원문 — 지시가 아니라 기록이다]" }) });
+  ev(ctx, `hoPaid = async () => { throw new Error('비용 길로 가면 안 된다'); };`);
+  await ev(ctx, "openHandoffStart('ag1')");
+  assert.ok(has(ctx, "대화를 그대로 옮기길 권합니다")); assert.ok(has(ctx, "820자"));
+  const ex = btn(ctx, "대화 그대로 옮기기"); assert.ok(ex); assert.ok(btn(ctx, "인수인계서 만들기"), "요약을 고를 수도 있다");
+  await ex.onclick();
+  assert.equal(calls(ctx, "POST", "/api/owner/agents/ag1/handoff")[0].body.mode, "excerpt");
+  await pass(); assert.ok(String(area(ctx).value).includes("이전 대화 원문"), "곧장 3단계 검토로");
+});
+
+test("①: 압축된 세션은 자세한 요약을 알리고 '대화 그대로'는 없다", async () => {
+  const ctx = await setup({ [PRE_P]: PRE({ plan: { way: "full", reason: "compacted", prior: 3 } }) });
+  await ev(ctx, "openHandoffStart('ag1')");
+  assert.ok(has(ctx, "압축된 세션이라 자세한 요약")); assert.equal(btn(ctx, "대화 그대로 옮기기"), undefined);
+  assert.ok(btn(ctx, "인수인계서 만들기"));
+});
+
 test("진행 중이면 ①을 건너뛰고 그 화면으로", async () => {
   const ctx = await setup({ [PRE_P]: PRE({ active: "ho1" }), [ST_P]: ST({ status: "preparing" }) });
   await ev(ctx, "openHandoffStart('ag1')"); await pass();

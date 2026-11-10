@@ -1,4 +1,4 @@
-"""ClewPath 플러그인 설치 — 플러그인 하나(`clewpath`)에 스킬 3개(세션 제어·워커·비서)와 세션 제어 MCP 도구 7개를 한 번에 설치한다.
+"""ClewPath 플러그인 설치 — 플러그인 하나(`clewpath`)에 스킬 3개(세션 제어·워커·비서)와 세션 제어 MCP 도구 9개(2026-11-10 지난 대화 찾기·읽기 2개 추가)를 한 번에 설치한다.
 
 불가침 원칙 예외 N1(2026-11-07 사장님 승인, 범위 확대 포함, docs/designs/session-control.md 5·7 절): Claude 설정(`settings.json` 의
 enabledPlugins·extraKnownMarketplaces, `plugins/`)을 claude 명령이 쓴다. 반드시 사용자의 명시 동작(설정 화면에서 들어 있는 스킬·도구를
@@ -31,7 +31,7 @@ PLUGIN = "clewpath"
 PLUGIN_ID = f"{PLUGIN}@{MARKET}"
 LEGACY_IDS = ("clewpath-workers@clewpath", "clewpath-assistant@clewpath")      # 0.36.1 의 따로 설치본
 TIMEOUT_S = 90
-DESC = "ClewPath: 프롬프트로 세션 다루기(찾기·만들기·이름·옮기기·지우기, 옮기기·지우기는 승인) + 워커 팀 규칙 + 비서 규칙"
+DESC = "ClewPath: 프롬프트로 세션 다루기(찾기·만들기·이름·옮기기·지우기, 옮기기·지우기는 승인) + 에이전트 지난 대화 찾기 + 워커 팀 규칙 + 비서 규칙"
 
 # 스킬 이름 → (동봉 폴더, 옛 방식 스킬 폴더 이름)
 SKILLS = {"sessions": ("clewpath-sessions", None), "workers": ("clewpath-workers", "clewpath-workers"),
