@@ -2980,7 +2980,7 @@ function agentBusyUI(){ if(POP) return true; const a=document.activeElement; ret
 const AGENT_ERR={agent_name_taken:'같은 이름의 에이전트가 이미 있습니다', name_required:'이름을 적으세요', session_owned_by_other_agent:'이 세션은 다른 에이전트의 세션입니다(세션은 한 에이전트에만 속합니다)',
   session_headless:'자동 실행 기록은 에이전트로 만들 수 없습니다', session_not_found:'세션을 찾을 수 없습니다', has_current_session:'이 에이전트에 이미 지금 세션이 있습니다',
   agent_retired:'쉬는 에이전트입니다 — 먼저 되살리세요', not_current_session:'지금 세션이 아닙니다', agent_rev_conflict:'다른 기기에서 바뀌었습니다 — 다시 시도하세요', agent_not_found:'에이전트를 찾을 수 없습니다'};
-function agentErrText(m){ m=String(m||''); return AGENT_ERR[m]||m; }
+function agentErrText(m){ m=String(m||''); return AGENT_ERR[m]||m; }     // 거절(409 등)의 사유는 응답 본문 error 에 있다 — 부르는 쪽은 hoCode(e) 로 꺼내 넘긴다
 function agentOf(s){ return s&&AGENTS_BY[s.session_id]||null; }
 function sessById(id){ return (SESSIONS||[]).find(x=>x.session_id===id)||null; }
 function agentNow(b){ const a=(AGENTS||[]).find(x=>x.id===b.agent_id); return sessById((a&&a.session_id)||b.replaced_by)||null; }     // 그 뒤로 또 갈아탔어도 지금 세션으로
@@ -3066,11 +3066,11 @@ function renderAgentRows(wrap,qraw){
 }
 async function agentReload(id){ await fetchAgents(); if(LIST_CTX&&SESSIONS&&agListOn()) LIST_CTX.rerender(); if(id&&AG_DETAIL===id) loadAgentDetail(id); }
 async function agentPost(path,body,id,okMsg){ try{ const r=await T.api('POST',path,{body:body||{}}); if(r&&r.error) throw new Error(r.error); if(okMsg) toast(okMsg); await agentReload(id); return r; }
-  catch(e){ toast(agentErrText(e.message)); return null; } }
+  catch(e){ toast(agentErrText(hoCode(e))); return null; } }
 function agentRename(a){ const n=prompt('에이전트 이름 (세션 이름은 따로입니다 — 다음 갈아타기 때 새 세션이 이 이름으로 뜹니다):',a.name); if(n==null) return; const t=n.trim(); if(!t||t===a.name) return;
   return agentPost('/api/owner/agents/'+a.id+'/rename',{name:t,agent_rev:a.rev},a.id,'이름을 바꿨습니다'); }
 function agentDetach(a){ return confirmSheet({title:'지금 세션 떼기',main:'"'+a.name+'" 에서 지금 세션을 뗄까요?',sub:"이 에이전트는 '지금 세션 없음'이 됩니다. 세션은 그대로 남고, 다시 붙일 때는 이 에이전트에만 붙일 수 있습니다.",action:'떼기',danger:true,
-  run:async()=>{ const r=await T.api('POST','/api/owner/agents/'+a.id+'/detach',{body:{}}); if(r&&r.error) throw new Error(agentErrText(r.error)); }}).then(ok=>{ if(ok) agentReload(a.id); }); }
+  run:async()=>{ let r; try{ r=await T.api('POST','/api/owner/agents/'+a.id+'/detach',{body:{}}); }catch(e){ throw new Error(agentErrText(hoCode(e))); } if(r&&r.error) throw new Error(agentErrText(r.error)); }}).then(ok=>{ if(ok) agentReload(a.id); }); }
 function agentRetire(a,on){ return agentPost('/api/owner/agents/'+a.id+'/retire',{on},a.id,on?'쉬게 했습니다':'되살렸습니다'); }
 function agentMakeSheet(s){
   const body=el('div'); const mk=(label,val,ph)=>{ const lb=el('label','field'); lb.appendChild(el('span',null,label)); const i=el('input'); i.value=val||''; if(ph) i.placeholder=ph; lb.appendChild(i); body.appendChild(lb); return i; };
@@ -3078,7 +3078,7 @@ function agentMakeSheet(s){
   const err=el('div','err'); body.appendChild(err);
   const go=el('button','btn','만들기'); go.onclick=async()=>{ if(go.disabled) return; go.disabled=true; err.textContent='';
     try{ const r=await T.api('POST','/api/owner/agents',{body:{session_id:s.session_id,name:name.value,role:role.value}}); if(r&&r.error) throw new Error(r.error); closeModal(); toast('에이전트를 만들었습니다'); await agentReload(); }
-    catch(e){ err.textContent=agentErrText(e.message); go.disabled=false; } };
+    catch(e){ err.textContent=agentErrText(hoCode(e)); go.disabled=false; } };
   const cand=(AGENTS||[]).filter(a=>a.status==='active'&&!a.assistant);
   if(cand.length){ body.appendChild(el('div','cwd','또는 기존 에이전트에 붙이기')); const box=el('div','agpick');
     for(const a of cand){ const b=el('button','btn ghost agpicki','🪪 '+a.name+(a.session_id?' · 지금 세션 있음':'')); b.onclick=()=>agentAttach(a,s,err); box.appendChild(b); } body.appendChild(box); }
@@ -3087,8 +3087,8 @@ function agentMakeSheet(s){
 async function agentAttach(a,s,errBox){
   const send=async(replace)=>{ const r=await T.api('POST','/api/owner/agents/'+a.id+'/attach',{body:{session_id:s.session_id,replace}}); if(r&&r.error) throw new Error(r.error); await agentReload(a.id); };
   if(a.session_id&&a.session_id!==s.session_id){ const cur=sessById(a.session_id); closeModal();
-    return confirmSheet({title:'지금 세션 바꾸기',main:'"'+a.name+'" 의 지금 세션을 이 세션으로 바꿀까요?',sub:'지금 세션 「'+(cur?sessLabel(cur):a.session_id.slice(0,8))+'」은 지난 세션이 됩니다.',action:'바꾸기',run:async()=>{ try{ await send(true); }catch(e){ throw new Error(agentErrText(e.message)); } }}); }
-  try{ await send(false); closeModal(); toast('붙였습니다'); }catch(e){ if(errBox) errBox.textContent=agentErrText(e.message); else toast(agentErrText(e.message)); }
+    return confirmSheet({title:'지금 세션 바꾸기',main:'"'+a.name+'" 의 지금 세션을 이 세션으로 바꿀까요?',sub:'지금 세션 「'+(cur?sessLabel(cur):a.session_id.slice(0,8))+'」은 지난 세션이 됩니다.',action:'바꾸기',run:async()=>{ try{ await send(true); }catch(e){ throw new Error(agentErrText(hoCode(e))); } }}); }
+  try{ await send(false); closeModal(); toast('붙였습니다'); }catch(e){ if(errBox) errBox.textContent=agentErrText(hoCode(e)); else toast(agentErrText(hoCode(e))); }
 }
 function agentMenuItems(s){ const a=agentOf(s); if(AGENTS===null||s.headless||(s.agent&&s.agent.kind==='background')) return {main:[],danger:[]};
   if(!a) return {main:[['🪪','에이전트로 만들기·붙이기…',null,()=>agentMakeSheet(s)]],danger:[]};

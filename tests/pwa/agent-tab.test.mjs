@@ -145,3 +145,29 @@ test("찾기: 0건이면 서버 안내를 보인다", async () => {
   await find(pd, "찾기").onclick(); await pass();
   assert.ok(has(pd, "낱말을 줄이거나"));
 });
+
+// ---- 거절 사유(409 등)는 응답 본문의 error 로 한국어 안내 — 'HTTP 409' 만 뜨던 결함(2026-11-11)
+test("이름 바꾸기 409: 같은 이름이면 'HTTP 409' 가 아니라 안내 문구", async () => {
+  const { ctx } = await setup({ "POST /api/owner/agents/ag1/rename": { __err: 409, json: { error: "agent_name_taken" } } });
+  ev(ctx, "prompt = () => '나'");
+  await ev(ctx, "agentRename(AGENTS[0])");
+  const t = ev(ctx, "__toasts.join('|')");
+  assert.ok(t.includes("같은 이름의 에이전트가 이미 있습니다"), t);
+  assert.ok(!t.includes("HTTP"), t);
+});
+
+test("떼기·붙이기·만들기도 거절 사유를 안내 문구로", async () => {
+  const { ctx } = await setup({ "POST /api/owner/agents/ag1/detach": { __err: 409, json: { error: "not_current_session" } },
+                                "POST /api/owner/agents/ag1/attach": { __err: 409, json: { error: "agent_retired" } },
+                                "POST /api/owner/agents": { __err: 409, json: { error: "agent_name_taken" } } });
+  ev(ctx, "globalThis.__ag = AGENTS[0]; globalThis.__s1 = SESSIONS[1]");     // 떼기 뒤 다시 불러오기가 목록을 비워도 같은 대상으로
+  await ev(ctx, "agentDetach(__ag)");
+  const m = await ev(ctx, "__sheet.run().then(() => 'ok', (e) => e.message)");
+  assert.equal(m, "지금 세션이 아닙니다");
+  await ev(ctx, `agentAttach({...__ag, session_id: null}, __s1, null)`);
+  assert.ok(ev(ctx, "__toasts.join('|')").includes("쉬는 에이전트입니다"));
+  ev(ctx, "agentMakeSheet(__s1)");
+  await ev(ctx, "__modal.foot[1].disabled = false, __modal.foot[1].onclick()");     // 가짜 DOM 은 disabled 기본값이 없다
+  const texts = walk(ev(ctx, "__modal.body")).map(label).join("|");
+  assert.ok(texts.includes("같은 이름의 에이전트가 이미 있습니다"), texts);
+});
