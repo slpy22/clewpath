@@ -42,13 +42,13 @@ test("용어(U1): 칩 문구가 새 이름으로", async () => {
   assert.ok(html.includes("점유 중") && html.includes("재개 목록 밖") && !html.includes("'⚙ 에이전트'"));
 });
 
-test("줄 순서(U3): 권한 대기가 먼저, 아래 묶음은 지금 세션 없음·쉬는·아닌 세션 순", async () => {
+test("줄 순서(U3): 권한 대기가 먼저, 아래 묶음은 지금 세션 없음·쉬는 순(에이전트 아닌 세션은 세션 탭에, K11)", async () => {
   const ctx = await setup();
   ev(ctx, `globalThis.__w = el('div'); renderAgentRows(__w, '')`);
   const heads = txt(ev(ctx, "__w"));
   assert.ok(heads[0].includes("나") && heads[0].includes("권한 대기"), heads[0]);
   assert.ok(heads[1].includes("가"), heads[1]);
-  same(heads.slice(2).map((h) => h.replace(/^[▼▶]\|/, "")), ["지금 세션 없음 1", "쉬는 에이전트 1", "에이전트 아닌 세션 2"]);
+  same(heads.slice(2).map((h) => h.replace(/^[▼▶]\|/, "")), ["지금 세션 없음 1", "쉬는 에이전트 1"]);
 });
 
 test("지금 세션 줄: 이름 같으면 '지금 세션', 다르면 세션 이름 보조", async () => {
@@ -68,7 +68,7 @@ test("검색·빈 상태·오류(U4)", async () => {
   ev(ctx, `AGENTS = []; AGENTS_BY = {}; renderAgentRows(__w, '')`);
   assert.ok(ev(ctx, "__w").children.some((k) => cls(k).includes("agempty")));
   ev(ctx, `AGENTS = null; AGENTS_ERR = true; renderAgentRows(__w, '')`);
-  assert.ok(ev(ctx, "__w").children[0].children[0].textContent.includes("못 받았습니다"), "에이전트만 실패하면 안내 + 폴더로");
+  assert.ok(ev(ctx, "__w").children[0].children[0].textContent.includes("못 받았습니다"), "에이전트만 실패하면 안내 + 세션 탭으로");
 });
 
 test("세션 메뉴(U14·E11): 무소속 한 항목, 소속 = 보기+위험 구역 떼기, 떼어 낸 세션 = 원래 에이전트로만, 자동 실행은 없음", async () => {
@@ -96,15 +96,6 @@ test("늦은 응답(W5)·PC 전환: 나중 요청의 답만 쓴다", async () =>
   ev(ctx, `__res[1]({agents:[{id:'new'}], by_session:{}}); __res[0]({agents:[{id:'old'}], by_session:{}});`);
   await ev(ctx, "__p2"); await ev(ctx, "__p1");
   assert.equal(ev(ctx, "AGENTS[0].id"), "new");
-});
-
-test("묶기 기억은 보기 전환과 따로(sm_list_group)", async () => {
-  const ctx = await setup();
-  ev(ctx, `setAgGroup('agent')`);
-  assert.equal(ev(ctx, "LS.getItem('sm_list_group')"), "agent");
-  assert.equal(ev(ctx, "agGroupLabel()"), "🪪 에이전트");
-  ev(ctx, `setAgGroup('x')`);
-  assert.equal(ev(ctx, "AG_GROUP"), "folder");
 });
 
 test("개인비서: 맨 위 고정, 쉬게 하기·떼기 메뉴 없음(U16)", async () => {

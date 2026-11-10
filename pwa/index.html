@@ -228,7 +228,7 @@
   .lview{display:flex;gap:4px;margin:12px 14px 0;padding:3px;border-radius:11px;background:var(--surface);border:1px solid var(--line)}
   /* 보기 전환 + 검색 — 스크롤해도 위에 남는다(2026-10-14 사장님). 안의 .search 는 이 머리에 실려 함께 고정 */
   .lhead{position:sticky;top:0;z-index:5;background:var(--bg)}
-  .lview button{flex:1;padding:8px 0;border-radius:8px;color:var(--ink2);font-size:.88rem;background:transparent}
+  .lview button{flex:1 1 auto;min-width:0;white-space:nowrap;padding:8px 3px;border-radius:8px;color:var(--ink2);font-size:.88rem;background:transparent}   /* 탭 5개(에이전트 탭)라 글자 길이만큼 — 두 줄로 꺾이지 않게 */
   .lview button.on{background:var(--accent2);color:#fff;font-weight:600}
   .lview+.search{padding-top:10px}
   /* 파일 보기의 탐색기 머리(제목·정렬·찾기 칸)도 .lhead 에 실려 스크롤해도 남는다(2026-10-29 사장님) */
@@ -544,6 +544,19 @@
   .aghrow .agr{flex:none}
   .aghrow .agn{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .agnum{color:var(--muted);font-size:.8rem;margin:0 2px 12px}
+  .aghline{display:flex;gap:4px;align-items:center}
+  .aghline .aghrow{flex:1;min-width:0}
+  .aghrow .agarc{flex:none;color:var(--muted);font-size:.74rem}
+  .aglast{color:var(--muted);font-size:.74rem;white-space:nowrap;margin-left:6px}
+  .agsearch{display:flex;gap:6px;margin:0 2px 8px}
+  .agsearch .agq{flex:1;min-width:0;min-height:40px;padding:6px 10px;border-radius:9px;border:1px solid var(--line);background:var(--surface);color:var(--ink)}
+  .agres{display:flex;flex-direction:column;gap:4px;margin:0 2px 12px}
+  .aghit{display:block;text-align:left;padding:8px 10px;border-radius:9px;background:var(--surface);color:var(--ink2);font-size:.84rem;min-height:44px}
+  .aghtop{color:var(--muted);font-size:.74rem;margin-bottom:2px}
+  .aghsnip,.aghtext{white-space:pre-wrap;word-break:break-word}
+  .aghread{display:flex;flex-direction:column;gap:8px;max-height:60vh;overflow:auto}
+  .aghmsg{padding:8px 10px;border-radius:9px;background:var(--surface);font-size:.84rem}
+  .aghmsg.on{box-shadow:inset 0 0 0 2px var(--accent)}
   .search .sref{flex:none;width:42px;height:44px;border-radius:11px;background:var(--surface);border:1px solid var(--line);color:var(--ink2);font-size:1.05rem}
   /* 검색 지우기 ✕(2026-10-29 사장님) — 글자가 있을 때만. 세션 목록·파일 탐색기 공통 */
   .sbox{position:relative;flex:1;min-width:0;display:flex}
@@ -553,7 +566,7 @@
   .sclr:hover{background:var(--surface2);color:var(--ink)}
   .fbfilter .sclr{right:2px;width:28px;height:28px;font-size:.8rem}
   input[type=search]::-webkit-search-cancel-button{-webkit-appearance:none;appearance:none;display:none}
-  .lview .assist{flex:1;padding:8px 0;border-radius:8px;color:var(--ink2);font-size:.88rem;background:transparent}
+  .lview .assist{flex:1 1 auto;min-width:0;white-space:nowrap;padding:8px 3px;border-radius:8px;color:var(--ink2);font-size:.88rem;background:transparent}
   /* ---- 화면 재배치 2단계(2026-10-12): 목록 줄 ⋯ 메뉴 · 🔔 할 일 · 폰 아래 탭 막대 · 자동 실행 기록 접기 ---- */
   .sbtn.more{width:40px;font-size:1.15rem;color:var(--ink2)}
   .popbg{position:fixed;inset:0;z-index:40;background:transparent}
@@ -1100,6 +1113,7 @@
   <main id="main"><div id="paneList"></div><div id="resizer" title="드래그로 폭 조절 · 더블클릭 초기화"></div><div id="paneDetail"></div></main>
   <nav id="tabbar" aria-label="보기 전환">
     <button data-v="sessions"><span class="ti">💬</span>세션</button>
+    <button data-v="agents"><span class="ti">🪪</span>에이전트</button>
     <button data-v="groups"><span class="ti">👥</span>팀</button>
     <button data-v="files"><span class="ti">📁</span>파일</button>
     <button data-v="assist"><span class="ti">🧑‍💼</span>비서</button>
@@ -1855,8 +1869,10 @@ function fmtBytes(b){ if(!b)return'0'; const u=['B','KB','MB','GB']; let i=0;
 // ---- 목록 ----
 let ACTIVE_TAG='';  // 선택된 태그 필터('' = 전체)
 // 목록 보기: 'sessions'(폴더별 세션) | 'groups'(👥 팀 — 키는 옛 이름 그대로, 기기에 기억된 값 호환) | 'files'
-const LIST_VIEWS=['sessions','groups','files'];
-let LIST_VIEW=(()=>{ try{ const v=LS.getItem('sm_list_view'); return LIST_VIEWS.includes(v)?v:'sessions'; }catch(e){ return 'sessions'; } })();
+const LIST_VIEWS=['sessions','agents','groups','files'];
+// 옛 🪪 묶기(sm_list_group=agent)를 쓰던 사람은 처음 한 번 에이전트 탭으로 — 기억은 그 탭을 그린 뒤 지운다(K11)
+let LIST_VIEW=(()=>{ try{ const v=LS.getItem('sm_list_view'); if(LS.getItem('sm_list_group')==='agent'&&(!v||v==='sessions')) return 'agents';
+  return LIST_VIEWS.includes(v)?v:'sessions'; }catch(e){ return 'sessions'; } })();
 function setListView(v){ LIST_VIEW=LIST_VIEWS.includes(v)?v:'sessions'; try{ LS.setItem('sm_list_view',LIST_VIEW); }catch(e){} }
 let LIST_READY=false;   // 지금 PC 의 첫 목록을 받았나(PC 전환 때 false) — SESSIONS 가 이 PC 것이라 믿고 기억을 걸러도 되는가(quick-switch 3단계)
 let LIST_AT=0;          // 지금 SESSIONS 를 서버에 청한 시각(ms) — 그 뒤에 이 페이지가 본 것(방금 띄운 터미널)은 목록이 아직 모른다(tabSeenLive)
@@ -1883,14 +1899,11 @@ async function loadList(q){
   const seg=el('div','lview');
   const segBtn=(v,label)=>{ const b=el('button',LIST_VIEW===v?'on':'',label);
     b.onclick=()=>{ if(LIST_VIEW===v) return; setListView(v); loadList(inp.value); }; return b; };
-  seg.appendChild(segBtn('sessions','세션')); seg.appendChild(segBtn('groups','👥 팀')); seg.appendChild(segBtn('files','📁 파일'));
+  seg.appendChild(segBtn('sessions','세션')); seg.appendChild(segBtn('agents','🪪 에이전트')); seg.appendChild(segBtn('groups','👥 팀')); seg.appendChild(segBtn('files','📁 파일'));
   { const b=el('button','assist','🧑‍💼 비서'); b.title='개인 비서 세션 열기'; b.onclick=()=>openAssistant(); seg.appendChild(b); }
   const lhead=el('div','lhead'); lhead.appendChild(seg); main.appendChild(lhead);
   const sb=el('div','search'); const sbox=el('span','sbox'); const inp=el('input');
   inp.placeholder='검색 (경로·이름)'; inp.value=q||''; sbox.appendChild(inp); sb.appendChild(sbox);
-  if(LIST_VIEW==='sessions'){ const gb=el('button','sref aggroup',agGroupLabel()); gb.title='묶기 기준 바꾸기(폴더 / 에이전트)'; gb.setAttribute('aria-label','묶기 기준: '+agGroupLabel());
-    gb.onclick=()=>{ setAgGroup(AG_GROUP==='agent'?'folder':'agent'); gb.textContent=agGroupLabel(); gb.setAttribute('aria-label','묶기 기준: '+agGroupLabel()); if(SESSIONS) rerender();
-      fetchAgents().then(ch=>{ if(ch) agentRerender(); }); }; sb.appendChild(gb); }
   { const rb=el('button','sref','⟳'); rb.title='목록 새로고침(20초마다 자동)'; rb.setAttribute('aria-label','목록 새로고침'); rb.onclick=()=>loadList(inp.value); sb.appendChild(rb); }
   lhead.appendChild(sb);
   const chipsWrap=el('div','chips hidden'); main.appendChild(chipsWrap);
@@ -1903,10 +1916,10 @@ async function loadList(q){
     if(LIST_VIEW==='groups'){ renderTeamRows(listWrap); return; }
     // 파일 보기: 탐색기는 한 번만 그린다(20초 목록 갱신이 펼친 트리를 갈아엎지 않게)
     if(LIST_VIEW==='files'){ if(FB.wrap!==listWrap) renderFbExplorer(listWrap,fbBox); else fbRenderTree(); return; }
-    renderChips(chipsWrap,rerender); if(AG_GROUP==='agent') renderAgentRows(listWrap,inp.value); else renderRows(listWrap,inp.value); };
+    renderChips(chipsWrap,rerender); if(LIST_VIEW==='agents') renderAgentRows(listWrap,inp.value); else renderRows(listWrap,inp.value); };
   inp.oninput=()=>{ clearTimeout(inp._t); inp._t=setTimeout(rerender,200); };
   addSearchClear(sbox,inp,()=>{ clearTimeout(inp._t); rerender(); });
-  if(LIST_VIEW==='sessions'){ if(AG_GROUP==='agent') fetchAgents().then(ch=>{ if(ch) agentRerender(); }); else agentsRefreshFolder(); }
+  if(LIST_VIEW==='agents') fetchAgents().then(ch=>{ if(ch) agentRerender(); }); else if(LIST_VIEW==='sessions') agentsRefreshFolder();
   showListPane();
   // 데스크톱: 우측 안내. 단 살아있는 터미널 뷰(term-mode)는 비우지 않는다 — 재연결
   // 흐름(_scheduleReconnect→loadList)과 새로고침 버튼이 이 경로라, 여기서 pane 을
@@ -1950,10 +1963,8 @@ async function listTick(){
     SESSIONS=d.sessions||[]; HANDOFFS=d.handoffs||[]; LIST_AT=at;
     if(typeof d.now==='number') CLOCK_SKEW=d.now-Date.now()/1000;
     let skipList=false;
-    if(LIST_VIEW==='sessions'){
-      if(AG_GROUP==='agent'){ await fetchAgents(); if(pc!==pcNow()) return; skipList=agentBusyUI(); }     // 에이전트 묶기는 함께 받고 그린다
-      else agentsRefreshFolder();                                                                        // 폴더 묶기는 기다리지 않는다(칩만 나중에, U4)
-    }
+    if(LIST_VIEW==='agents'){ await fetchAgents(); if(pc!==pcNow()) return; skipList=agentBusyUI(); }    // 에이전트 탭은 함께 받고 그린다
+    else if(LIST_VIEW==='sessions') agentsRefreshFolder();                                                 // 세션 탭은 기다리지 않는다(칩만 나중에, U4)
     if(LIST_VIEW==='groups'){
       const ts=await fetchTeams();
       if(pc!==pcNow()) return;     // 받는 사이 PC 를 바꿨다 — 이전 PC 팀 목록을 새 PC 의 받아 둔 팀 목록으로 쓰지 않는다
@@ -2943,11 +2954,10 @@ function sessRowEl(s,repr,opt){
 }
 
 // ---- 🪪 에이전트 묶기(목록 칸 「세션」 안) — docs/designs/agent-unit.md '화면 확정'·'0.37.0 대조'. 에이전트 이름은 세션 이름과 따로(G4) ----
-let AG_GROUP=(()=>{ try{ return LS.getItem('sm_list_group')==='agent'?'agent':'folder'; }catch(e){ return 'folder'; } })();
+
 let AGENTS=null, AGENTS_BY={}, AGENTS_ERR=false, AGENTS_PC='', AG_SIG='', AG_SEQ=0, AG_ORDER=[];
 const AG_CLOSED=new Set(), AG_PAST=new Set(), AG_SEC=new Set(['none']);   // 접은 에이전트 · 지난 세션 펼침 · 펼친 아래 묶음
-function setAgGroup(v){ AG_GROUP=v==='agent'?'agent':'folder'; try{ LS.setItem('sm_list_group',AG_GROUP); }catch(e){} }
-function agGroupLabel(){ return AG_GROUP==='agent'?'🪪 에이전트':'📂 폴더'; }
+function agListOn(){ return LIST_VIEW==='sessions'||LIST_VIEW==='agents'; }     // 에이전트 칩·줄을 그리는 두 탭
 // 달라졌으면 true. 늦게 온 응답(그사이 다시 불렀거나 PC 를 바꿈)은 버린다
 async function fetchAgents(){
   const seq=++AG_SEQ, pc=pcNow();
@@ -2965,7 +2975,7 @@ async function fetchAgents(){
 }
 // 폴더 묶기: 칩이 실제로 달라질 때만 다시 그린다(목록을 기다리게 하지 않고, 받지 못해도 화면을 건드리지 않는다)
 function agentsRefreshFolder(){ const before=JSON.stringify(AGENTS_BY); return fetchAgents().then(()=>{ if(JSON.stringify(AGENTS_BY)!==before) agentRerender(); }); }
-function agentRerender(){ if(LIST_CTX&&SESSIONS&&LIST_VIEW==='sessions'&&!agentBusyUI()) LIST_CTX.rerender(); }
+function agentRerender(){ if(LIST_CTX&&SESSIONS&&agListOn()&&!agentBusyUI()) LIST_CTX.rerender(); }
 function agentBusyUI(){ if(POP) return true; const a=document.activeElement; return !!(a&&/^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName||'')&&a.closest&&a.closest('#paneList')&&!a.closest('.search')); }
 const AGENT_ERR={agent_name_taken:'같은 이름의 에이전트가 이미 있습니다', name_required:'이름을 적으세요', session_owned_by_other_agent:'이 세션은 다른 에이전트의 세션입니다(세션은 한 에이전트에만 속합니다)',
   session_headless:'자동 실행 기록은 에이전트로 만들 수 없습니다', session_not_found:'세션을 찾을 수 없습니다', has_current_session:'이 에이전트에 이미 지금 세션이 있습니다',
@@ -3016,6 +3026,7 @@ function agentBlock(wrap,a,q){
   ch.onclick=()=>{ if(AG_CLOSED.has(a.id)) AG_CLOSED.delete(a.id); else AG_CLOSED.add(a.id); if(LIST_CTX) LIST_CTX.rerender(); };
   head.appendChild(ch);
   const gt=el('button','gtext agname'); gt.appendChild(el('div','gbase',(a.assistant?'🧑‍💼 ':'🪪 ')+a.name)); gt.onclick=()=>loadAgentDetail(a.id); head.appendChild(gt);
+  if(a.session_id) head.appendChild(el('span','aglast',(s&&relFrom(s))||'기록 없음'));      // 마지막 활동 = 지금 세션의 마지막 기록(K11)
   const bd=s?sessionBadge(s):null;
   if(bd){ const t=el('span','sstate',bd.text); t.style.setProperty('--c',bd.c); if(bd.text==='권한 대기'){ t.style.cursor='pointer'; t.onclick=()=>showApprove(s); } head.appendChild(t); }
   const ho=hoOf(a.id); if(ho){ const c=el('button','schip agho'+(ho.status==='failed'?' bad':''),HO_CHIP[ho.status]); c.onclick=(e)=>{ if(e&&e.stopPropagation) e.stopPropagation(); openHandoff(ho.id); }; head.appendChild(c); }
@@ -3037,7 +3048,7 @@ function renderAgentRows(wrap,qraw){
   const q=(qraw||'').toLowerCase().trim(); wrap.innerHTML='';
   if(AGENTS_ERR&&AGENTS===null){ const e=el('div','empty'); e.appendChild(el('div',null,'에이전트 목록을 못 받았습니다'));
     const r=el('button','btn ghost','다시'); r.onclick=()=>fetchAgents().then(()=>{ if(LIST_CTX) LIST_CTX.rerender(); });
-    const f=el('button','btn ghost','📂 폴더로'); f.onclick=()=>{ setAgGroup('folder'); loadList(); }; e.appendChild(r); e.appendChild(f); wrap.appendChild(e); return; }
+    const f=el('button','btn ghost','세션 탭으로'); f.onclick=()=>{ setListView('sessions'); loadList(); }; e.appendChild(r); e.appendChild(f); wrap.appendChild(e); return; }
   if(AGENTS===null){ wrap.appendChild(el('div','spin')); return; }
   if(AGENTS_ERR) wrap.appendChild(el('div','dnote warn','에이전트 목록을 새로 받지 못했습니다 — 조금 전 내용입니다'));
   let tagged=AGENTS;
@@ -3047,14 +3058,13 @@ function renderAgentRows(wrap,qraw){
   const pinned=active.filter(a=>a.assistant);
   for(const a of pinned) agentBlock(wrap,a,q);
   for(const a of agentOrder(active.filter(a=>!a.assistant))) agentBlock(wrap,a,q);
-  const others=SESSIONS.filter(s=>{ const b=agentOf(s); return !b||b.detached; });
+  try{ if(LS.getItem('sm_list_group')) LS.removeItem('sm_list_group'); }catch(e){}     // 에이전트 탭을 그렸다 — 옛 묶기 기억은 이제 지운다(K11)
   if(!AGENTS.length) wrap.appendChild(el('div','empty agempty','에이전트 = 세션이 바뀌어도 이어지는 작업자입니다. 세션 ⋯ → 🪪 에이전트로 만들기·붙이기'));
   else if(!seen.length&&(q||ACTIVE_TAG)) wrap.appendChild(el('div','empty',q?"'"+qraw+"' 에 맞는 에이전트가 없습니다":'이 태그의 에이전트가 없습니다'));
   agentSection(wrap,'gone','지금 세션 없음',none.length,(b)=>{ for(const a of none) agentBlock(b,a,q); });
   agentSection(wrap,'rest','쉬는 에이전트',rest.length,(b)=>{ for(const a of rest) agentBlock(b,a,q); });
-  agentSection(wrap,'none','에이전트 아닌 세션',others.length,(b)=>{ renderRows(b,q,others); });
 }
-async function agentReload(id){ await fetchAgents(); if(LIST_CTX&&SESSIONS&&LIST_VIEW==='sessions') LIST_CTX.rerender(); if(id&&AG_DETAIL===id) loadAgentDetail(id); }
+async function agentReload(id){ await fetchAgents(); if(LIST_CTX&&SESSIONS&&agListOn()) LIST_CTX.rerender(); if(id&&AG_DETAIL===id) loadAgentDetail(id); }
 async function agentPost(path,body,id,okMsg){ try{ const r=await T.api('POST',path,{body:body||{}}); if(r&&r.error) throw new Error(r.error); if(okMsg) toast(okMsg); await agentReload(id); return r; }
   catch(e){ toast(agentErrText(e.message)); return null; } }
 function agentRename(a){ const n=prompt('에이전트 이름 (세션 이름은 따로입니다 — 다음 갈아타기 때 새 세션이 이 이름으로 뜹니다):',a.name); if(n==null) return; const t=n.trim(); if(!t||t===a.name) return;
@@ -3106,20 +3116,99 @@ async function loadAgentDetail(id){
   if(!a.assistant&&a.status==='active'&&a.session_id){ const h=hoOf(a.id), b=el('button','btn ghost',h?HO_CHIP[h.status]+' — 이어서 보기':'🔁 새 세션으로 갈아타기'); b.onclick=()=>h?openHandoff(h.id):openHandoffStart(a.id); act.appendChild(b); }
   if(a.last_handoff){ const b=el('button','btn ghost','📄 마지막 인수인계서'); b.onclick=()=>hoShowDoc(a.last_handoff); act.appendChild(b); }
   box.appendChild(act);
+  agentHistSearchBox(box,a);
+  const arc=a.archive||{count:0,bytes:0,sessions:{}};
   box.appendChild(el('h3','agh3','세션 이력'));
   const list=el('div','aghist');
-  for(const h of a.history||[]){ const x=sessById(h.session_id), row=el('button','aghrow'); const d=new Date(h.started*1000);
+  for(const h of a.history||[]){ const x=sessById(h.session_id), info=(arc.sessions||{})[h.session_id]||{}, line=el('div','aghline'), row=el('button','aghrow'); const d=new Date(h.started*1000);
     row.appendChild(el('span','agd',(d.getMonth()+1)+'/'+d.getDate())); row.appendChild(el('span','agr',(AG_REASON[h.reason]||h.reason)+(h.detached?' · 떼어 냄':'')));
     row.appendChild(el('span','agn',(x?sessLabel(x):h.session_id.slice(0,8)+(x===null?' (목록에 없음)':''))+(h.ended?'':' · 지금 세션')));
-    if(x) row.onclick=()=>loadDetail(x); else row.disabled=true; list.appendChild(row); }
+    const mk=agArcMark(info); if(mk) row.appendChild(el('span','agarc',mk));
+    if(x) row.onclick=()=>loadDetail(x); else row.disabled=true; line.appendChild(row);
+    const more=el('button','gopen more aghmore','⋯'); more.setAttribute('aria-label','세션 메뉴'); more.setAttribute('aria-haspopup','menu');
+    more.onclick=(e)=>{ if(e&&e.stopPropagation) e.stopPropagation(); return agentHistMenu(a,h,x,info,more); }; line.appendChild(more);
+    list.appendChild(line); }
   box.appendChild(list);
-  const days=Math.max(1,Math.ceil((Date.now()/1000-a.created)/86400)); box.appendChild(el('div','agnum','세션 '+a.sessions+' · '+days+'일째'));
+  if(!a.assistant&&agCleanable(a).length){ const b=el('button','btn ghost','🧹 지난 세션 정리'); b.onclick=()=>agentCleanup(a); box.appendChild(b); }
+  const days=Math.max(1,Math.ceil((Date.now()/1000-a.created)/86400));
+  box.appendChild(el('div','agnum','세션 '+a.sessions+' · '+days+'일째'+(arc.count?' · 보관 '+arc.count+'개 · '+fmtBytes(arc.bytes):'')));
   if(a.assistant) box.appendChild(el('div','dnote','비서 바꾸기는 🧑‍💼 비서 설정의 재지정으로 합니다.'));
   else{ const dz=el('div','agact agdanger'); dz.appendChild(el('div','agh3','위험 구역'));
     if(a.status==='active'){ if(a.session_id){ const b=el('button','btn danger','✂ 지금 세션 떼기'); b.onclick=()=>agentDetach(a); dz.appendChild(b); } const r=el('button','btn ghost','💤 쉬게 하기'); r.onclick=()=>agentRetire(a,true); dz.appendChild(r); }
     else{ const r=el('button','btn ghost','☀ 되살리기'); r.onclick=()=>agentRetire(a,false); dz.appendChild(r); }
     box.appendChild(dz); }
 }
+
+// ---- 에이전트 상세의 세션 관리·지난 대화 찾기(agent-unit.md '에이전트 탭·세션 관리·기록 보관' H7·H8, K12·K13·K16·K18) ----
+function agArcMark(i){ if(i.original===false) return i.archived?'원본 없음 · 📦 보관본으로 찾기':'원본·보관본 없음 · 장부 요약만'; return i.archived?'📦':''; }
+function agCleanable(a){ return (a.history||[]).filter(h=>h.ended&&!h.detached).map(h=>sessById(h.session_id)).filter(Boolean); }
+function agentHistMenu(a,h,x,info,anchor){ const box=el('div');
+  if(x) box.appendChild(popItem('ℹ','상세',null,()=>loadDetail(x)));
+  if(x&&info.original!==false) box.appendChild(popItem('▶','이어서 열기',null,()=>showResumeChooser(continuedTarget(x))));     // 원본이 없으면 열 수 없다(K18)
+  if(x&&h.ended&&!h.detached&&!a.assistant){ box.appendChild(el('div','popsep'));
+    box.appendChild(popItem('🗑','휴지통으로','보관본은 남아 지난 대화 찾기는 계속됩니다',()=>agentTrashOne(a,x),'danger')); }
+  if(!box.children.length) box.appendChild(el('div','dnote','이 세션은 목록에 없습니다(지난 대화 찾기로 볼 수 있습니다)'));
+  return openPop(anchor,box,x?sessLabel(x):h.session_id.slice(0,8)); }
+function agentTrashOne(a,x){
+  return confirmSheet({title:'휴지통으로',main:'「'+sessLabel(x)+'」을 휴지통으로 보낼까요?',sub:'보관본은 남아 지난 대화 찾기는 계속됩니다. 30일 안에는 설정 → 휴지통에서 되살릴 수 있습니다.',action:'휴지통으로'})
+    .then(ok=>{ if(ok) return agentTrashRun(a,[x]); }); }
+function agentCleanup(a){ const cand=agCleanable(a), body=el('div'), pick=new Set();
+  body.appendChild(el('div','dnote','고른 지난 세션을 휴지통으로 보냅니다. 보관본은 남아 지난 대화 찾기는 계속됩니다. 30일 안에는 설정 → 휴지통에서 되살릴 수 있습니다.'));
+  const go=el('button','btn danger','휴지통으로 (0)'); go.disabled=true;
+  for(const x of cand){ const lb=el('label','sheet-ack'), cb=el('input'); cb.type='checkbox'; cb.checked=false;
+    cb.onchange=()=>{ if(cb.checked) pick.add(x); else pick.delete(x); go.textContent='휴지통으로 ('+pick.size+')'; go.disabled=!pick.size; };
+    lb.appendChild(cb); lb.appendChild(el('span',null,sessLabel(x)+(relFrom(x)?' · '+relFrom(x):''))); body.appendChild(lb); }
+  go.onclick=async()=>{ if(!pick.size||go.dataset.busy) return; go.dataset.busy='1'; go.disabled=true; closeModal(); await agentTrashRun(a,[...pick]); };
+  const cancel=el('button','btn ghost','취소'); cancel.onclick=()=>closeModal();
+  openModal('🧹 지난 세션 정리',body,[cancel,go]); }
+// 지우기 전에 보관을 확인하고(K13) 보관된 것만 기존 휴지통 경로로 — 실행 중이면 서버가 409 로 거절한다
+async function agentTrashRun(a,list){
+  let arc=null; try{ arc=await T.api('POST','/api/owner/agents/'+encodeURIComponent(a.id)+'/archive-now',{body:{session_ids:list.map(x=>x.session_id)}}); }
+  catch(e){ toast('보관을 확인하지 못해 지우지 않았습니다 — '+(agentErrText(hoCode(e))||e.message)); return; }
+  let ok=0; const bad=[];
+  for(const x of list){ const it=((arc&&arc.items)||{})[x.session_id]||{};
+    if(!it.ok){ bad.push(sessLabel(x)+': 보관을 확인하지 못해 지우지 않았습니다'); continue; }
+    if(hoBusy(x.session_id)){ bad.push(sessLabel(x)+': '+HO_BUSY); continue; }
+    try{ await T.api('POST','/api/sessions/'+x.session_id+'/delete',{body:{dry_run:false}}); ok++; if(PANE_NOW.sid===x.session_id) detailPlaceholder('삭제됨'); }
+    catch(e){ bad.push(sessLabel(x)+': '+(e.status===409?'실행 중이라 지우지 않았습니다':e.message)); } }
+  toast('휴지통으로 '+ok+'개'+(bad.length?' · 못 함 '+bad.length:''));
+  if(bad.length){ const body=el('div'); for(const t of bad) body.appendChild(el('div','dnote warn',t)); const c=el('button','btn','닫기'); c.onclick=()=>closeModal(); openModal('정리 결과',body,[c]); }
+  listTick(); if(AG_DETAIL===a.id) loadAgentDetail(a.id); }
+const AG_SRC={record:'',archive:'보관본',ledger:'장부 요약'};
+function agWhen(ts){ if(!ts) return ''; const d=new Date(ts*1000); return (d.getMonth()+1)+'/'+d.getDate()+' '+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0'); }
+function agentHistSearchBox(box,a){
+  box.appendChild(el('h3','agh3','지난 대화 찾기'));
+  const f=el('div','agsearch'), q=el('input','agq'); q.placeholder='낱말 (모두 들어간 글만)'; q.setAttribute('aria-label','지난 대화 찾기');
+  const res=el('div','agres'), b=el('button','btn ghost','찾기'), go=()=>agentHistSearch(a,q.value,res);
+  b.onclick=go; q.onkeydown=(e)=>{ if(e.key==='Enter'){ if(e.preventDefault) e.preventDefault(); go(); } };
+  f.appendChild(q); f.appendChild(b); box.appendChild(f); box.appendChild(res); }
+// 검색어는 본문으로 보낸다(K16 — 접근 기록 주소줄에 남지 않게)
+async function agentHistSearch(a,q,res){ q=String(q||'').trim(); if(!q) return; res.innerHTML=''; res.appendChild(el('div','spin'));
+  let r; try{ r=await T.api('POST','/api/owner/agents/'+encodeURIComponent(a.id)+'/history/search',{body:{q}}); }
+  catch(e){ res.innerHTML=''; res.appendChild(el('div','dnote warn','찾지 못했습니다: '+(agentErrText(hoCode(e))||e.message))); return; }
+  if(AG_DETAIL!==a.id) return;
+  res.innerHTML='';
+  if(!(r.items||[]).length){ res.appendChild(el('div','empty',r.hint||'찾은 글이 없습니다')); return; }
+  for(const it of r.items){ const b=el('button','aghit');
+    b.appendChild(el('div','aghtop',[agWhen(it.ts),it.who,AG_SRC[it.source]].filter(Boolean).join(' · '))); b.appendChild(el('div','aghsnip',it.snippet));
+    b.onclick=()=>agentHistRead(a,it.ref,it.at); res.appendChild(b); }
+  if(r.truncated||r.partial) res.appendChild(el('div','dnote','더 있을 수 있습니다 — 낱말을 늘려 좁혀 보세요'));
+  if(r.ledger_note) res.appendChild(el('div','dnote',r.ledger_note)); }
+async function agentHistRead(a,ref,at){
+  const b={ref,before:3,after:3}; if(at!=null) b.at=at;
+  let r; try{ r=await T.api('POST','/api/owner/agents/'+encodeURIComponent(a.id)+'/history/read',{body:b}); }
+  catch(e){ toast('읽지 못했습니다: '+(agentErrText(hoCode(e))||e.message)); return; }
+  const body=el('div','aghread');
+  if(r.source==='archive') body.appendChild(el('div','dnote','원본이 지워져 보관본에서 읽었습니다'));
+  else if(r.source==='ledger') body.appendChild(el('div','dnote',r.ledger_note||'작업 장부 요약입니다'));
+  for(const it of r.items||[]){ const m=el('div','aghmsg'+(it.target?' on':'')), cut=it.shown&&(it.shown[0]>0||it.len>it.shown[1]);
+    m.appendChild(el('div','aghtop',[agWhen(it.ts),it.who].filter(Boolean).join(' · '))); m.appendChild(el('div','aghtext',(it.shown&&it.shown[0]>0?'… ':'')+it.text+(cut&&it.len>it.shown[1]?' …':'')));
+    body.appendChild(m); }
+  const foot=[];
+  if(r.prev){ const p=el('button','btn ghost','◀ 앞'); p.onclick=()=>{ closeModal(); agentHistRead(a,r.prev); }; foot.push(p); }
+  if(r.next){ const n=el('button','btn ghost','뒤 ▶'); n.onclick=()=>{ closeModal(); agentHistRead(a,r.next); }; foot.push(n); }
+  const c=el('button','btn','닫기'); c.onclick=()=>closeModal(); foot.push(c);
+  openModal('지난 대화 — '+a.name,body,foot); }
 
 // ---- 세션 갈아타기 화면(docs/designs/agent-unit.md '화면 확정' U5~U10·'재검토 확정') — 상태와 규칙의 주인은 서버(handoff.py), 화면은 사본만 갖는다 ----
 let HANDOFFS=[], HO_BOX=null, HO_FLUSH=null;
@@ -3363,7 +3452,7 @@ async function saveSessionTags(s,next){
   s.tags=clean;
   const o=(SESSIONS||[]).find(x=>x.session_id===s.session_id); if(o&&o!==s) o.tags=clean.slice();
   if(ACTIVE_TAG&&!allTagNames().includes(ACTIVE_TAG)) ACTIVE_TAG='';
-  if(LIST_CTX&&LIST_VIEW==='sessions') LIST_CTX.rerender();      // 위 태그 필터 칩도 함께
+  if(LIST_CTX&&agListOn()) LIST_CTX.rerender();      // 위 태그 필터 칩도 함께
   return true;
 }
 function renderDetailTags(wrap,s){
@@ -7320,7 +7409,7 @@ function showSettings(){
   row('🖥','PC 짝(원격 묻기)','다른 PC 와 짝 · 초대 · 해제 · 모두 끄기 (조회 전용)',showPclink,{status:setStat.pclink});
 
   sec('세션');
-  row('🧹','정기 작업','쉬는 세션 정리 · 작업 장부(5분마다) · 모델 목록 갱신 · 지워질 세션 예고 · 서빙 세션 보관 · API 사본 정리',showHousekeeping,{status:setStat.housekeeping});
+  row('🧹','정기 작업','쉬는 세션 정리 · 작업 장부(5분마다) · 모델 목록 갱신 · 지워질 세션 예고 · 서빙 세션 보관 · API 사본 정리 · 에이전트 기록 보관',showHousekeeping,{status:setStat.housekeeping});
   row('🗑','휴지통','삭제한 세션 되살리기 (30일 보관)',showTrash,{local:true,status:setStat.trash});
   row('🏷','통신 이름 맞추기','다른 세션이 부르는 이름을 화면 이름과 같게',showNameSync,{local:true,status:setStat.names});
   row('📥','세션 가져오기','내보낸 세션 zip 불러오기',importSession);

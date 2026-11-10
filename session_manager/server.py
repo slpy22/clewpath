@@ -1532,16 +1532,19 @@ def create_app() -> FastAPI:
     def session_ops_find(request: Request, q: str = "", cwd: str = "", limit: int = 50):
         return _ops(request, _session_ops.find, q, cwd, limit)
 
-    # 에이전트의 지난 세션 찾기·읽기(agent-unit.md '인계 연속성 보강' H5) — 부른 Claude 세션의 에이전트로만 좁힌다(판별 실패는 거절)
-    @app.get("/api/v1/agent-history/search")
-    def agent_history_search(request: Request, q: str = "", session_id: str = "", limit: int = 20):
+    # 에이전트의 지난 세션 찾기·읽기(agent-unit.md '인계 연속성 보강' H5) — 부른 Claude 세션의 에이전트로만 좁힌다(판별 실패는 거절).
+    # 읽기지만 POST(본문): 검색어가 접근 기록 주소줄에 남지 않게(K16). 바깥문 OPEN.
+    @app.post("/api/v1/agent-history/search")
+    def agent_history_search(request: Request, body: dict = Body(...)):
         from session_manager import agent_history
-        return _ops(request, agent_history.search, _ops_caller(request), q, session_id, limit)
+        return _ops(request, agent_history.search, _ops_caller(request), str(body.get("q") or ""), str(body.get("session_id") or ""),
+                    int(body.get("limit") or 20))
 
-    @app.get("/api/v1/agent-history/read")
-    def agent_history_read(request: Request, ref: str = "", before: int = 2, after: int = 4, at: int | None = None):
+    @app.post("/api/v1/agent-history/read")
+    def agent_history_read(request: Request, body: dict = Body(...)):
         from session_manager import agent_history
-        return _ops(request, agent_history.read, _ops_caller(request), ref, before, after, at)
+        return _ops(request, agent_history.read, _ops_caller(request), str(body.get("ref") or ""), int(body.get("before", 2) or 0),
+                    int(body.get("after", 4) or 0), body.get("at"))
 
     @app.post("/api/v1/session-ops/rename")
     def session_ops_rename(request: Request, body: dict = Body(...)):

@@ -844,6 +844,8 @@ def _finish(r) -> None:
             w.execute("UPDATE agent_handoffs SET status='done', error=?, state_at=? WHERE id=? AND status='starting'",
                       (None if stopped is not False else "old_session_not_stopped", _now(), r["id"]))
     team.sync_agent_teams(r["agent_id"])
+    from session_manager import agent_archive
+    agent_archive.archive_soon(old)                  # 끝난 옛 세션을 바로 보관(K19)
 
 
 # ---------------------------------------------------------------- 조회·감시·알림

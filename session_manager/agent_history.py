@@ -29,6 +29,7 @@ BUDGET_S = 20.0              # 한 번 찾기의 시간 예산 — 넘으면 찾
 CACHE_N = 6
 LEDGER = "ledger"
 RECORD = "record"
+ARCHIVE = "archive"
 HINT_NONE = "찾은 글이 없습니다. 낱말을 줄이거나 핵심 낱말 하나로 다시 찾아 보세요(모든 낱말이 들어간 글만 찾습니다)."
 
 _cache: OrderedDict = OrderedDict()
@@ -94,15 +95,25 @@ def _ledger(sid: str) -> list[dict]:
 
 
 def _source(sid: str) -> tuple[str, list[dict]]:
-    from session_manager import scanner
+    """원본 → 보관본(K15: 원본의 앞부분 사본이라 글 번호가 같다) → 장부."""
+    from session_manager import agent_archive, scanner
     m = scanner.scan_one(sid)
     path = getattr(m, "jsonl_path", None) if m is not None else None
     if path and os.path.isfile(path):
         return RECORD, messages(path)
+    arc = agent_archive.path_for(sid)
+    if arc is not None:
+        return ARCHIVE, messages(arc)
     return LEDGER, _ledger(sid)
 
 
 # ---------------------------------------------------------------- 범위
+def _sessions_of(c, a) -> tuple[dict, list[dict]]:
+    rows = c.execute("SELECT session_id, started, ended FROM agent_sessions WHERE agent_id=? AND COALESCE(detached,0)=0 ORDER BY started, rowid",
+                     (a["id"],)).fetchall()
+    return {"id": a["id"], "name": a["alias"]}, [dict(x) for x in rows]
+
+
 def scope(caller: str | None) -> tuple[dict, list[dict]]:
     """부른 세션의 에이전트와 그 세션들(시작 순). 판별 실패·에이전트 밖이면 거절."""
     if not caller:
@@ -112,16 +123,22 @@ def scope(caller: str | None) -> tuple[dict, list[dict]]:
         r = c.execute("SELECT agent_id, detached FROM agent_sessions WHERE session_id=?", (caller,)).fetchone()
         if not r or r["detached"]:
             raise TeamError("not_an_agent", 403)
-        a = c.execute("SELECT id, alias FROM agents WHERE id=?", (r["agent_id"],)).fetchone()
-        rows = c.execute("SELECT session_id, started, ended FROM agent_sessions WHERE agent_id=? AND COALESCE(detached,0)=0 ORDER BY started, rowid",
-                         (r["agent_id"],)).fetchall()
+        return _sessions_of(c, c.execute("SELECT id, alias FROM agents WHERE id=?", (r["agent_id"],)).fetchone())
     finally:
         c.close()
-    return {"id": a["id"], "name": a["alias"]}, [dict(x) for x in rows]
 
 
-def _ids(caller: str | None, session_id: str = "") -> tuple[dict, list[dict], list[str]]:
-    a, sess = scope(caller)
+def scope_agent(agent_ref: str) -> tuple[dict, list[dict]]:
+    """사장님 화면용(H8): 그 에이전트의 세션들. 범위는 서버가 에이전트로 정한다(K16)."""
+    c = team._read()
+    try:
+        return _sessions_of(c, team._agent(c, agent_ref))
+    finally:
+        c.close()
+
+
+def _ids(caller: str | None, session_id: str = "", agent: str | None = None) -> tuple[dict, list[dict], list[str]]:
+    a, sess = scope_agent(agent) if agent else scope(caller)
     ids = [s["session_id"] for s in sess]
     if session_id:
         if session_id not in ids:
@@ -136,8 +153,8 @@ def _snippet(text: str, at: int, width: int) -> str:
     return ("…" if s else "") + text[s:e] + ("…" if e < len(text) else "")
 
 
-def search(caller: str | None, query: str, session_id: str = "", limit: int = 20) -> dict:
-    a, sess, ids = _ids(caller, session_id)
+def search(caller: str | None, query: str, session_id: str = "", limit: int = 20, agent: str | None = None) -> dict:
+    a, sess, ids = _ids(caller, session_id, agent)
     terms = [t.lower() for t in str(query or "").split() if t]
     if not terms:
         raise TeamError("empty_query", 400)
@@ -165,7 +182,8 @@ def search(caller: str | None, query: str, session_id: str = "", limit: int = 20
         if truncated:
             break
     out = {"agent": a["name"], "query": query, "items": items, "partial": partial, "truncated": truncated,
-           "sessions": [{"session_id": s["session_id"], "started": s["started"], "ended": s["ended"], "current": s["session_id"] == caller,
+           "sessions": [{"session_id": s["session_id"], "started": s["started"], "ended": s["ended"],
+                         "current": s["session_id"] == caller if caller else s["ended"] is None,
                          "source": sources.get(s["session_id"])} for s in sess],
            "read_with": "agent_history_read(ref, at=결과의 at) 로 앞뒤 글을 읽는다"}
     if any(i["source"] == LEDGER for i in items):
@@ -184,8 +202,8 @@ def _window(text: str, at, size: int) -> tuple[str, int, int]:
     return text[s:s + size], s, s + size
 
 
-def read(caller: str | None, ref: str, before: int = 2, after: int = 4, at=None) -> dict:
-    a, _sess, ids = _ids(caller)
+def read(caller: str | None, ref: str, before: int = 2, after: int = 4, at=None, agent: str | None = None) -> dict:
+    a, _sess, ids = _ids(caller, agent=agent)
     sid, _, n = str(ref or "").rpartition(":")
     if not sid or sid not in ids:
         raise TeamError("not_this_agent", 403)

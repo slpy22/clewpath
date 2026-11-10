@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
-from session_manager import handoff, team
+from session_manager import agent_archive, agent_history, handoff, team
 
 
 def _call(fn, *a, **kw):
@@ -37,7 +37,28 @@ def register(app) -> None:
 
     @app.get("/api/owner/agents/{agent_id}")
     def agent_get(agent_id: str):
-        return _call(team.agent_detail, agent_id)
+        def detail():
+            d = team.agent_detail(agent_id)
+            return {**d, "archive": agent_archive.info(d["id"])}       # 세션별 보관·원본 여부(H7)
+        return _call(detail)
+
+    # ---- 지난 대화 찾기(사장님 화면·폰, H8) — 범위는 그 에이전트. 읽기지만 POST(본문, K16)
+    @app.post("/api/owner/agents/{agent_id}/history/search")
+    async def agent_hist_search(agent_id: str, request: Request):
+        b = await _body(request)
+        return _call(agent_history.search, None, str(b.get("q") or ""), str(b.get("session_id") or ""), int(b.get("limit") or 20), agent=agent_id)
+
+    @app.post("/api/owner/agents/{agent_id}/history/read")
+    async def agent_hist_read(agent_id: str, request: Request):
+        b = await _body(request)
+        return _call(agent_history.read, None, str(b.get("ref") or ""), int(b.get("before", 2) or 0), int(b.get("after", 4) or 0), b.get("at"),
+                     agent=agent_id)
+
+    @app.post("/api/owner/agents/{agent_id}/archive-now")      # 지우기 전에 보관(K13) — ClewPath 데이터만 쓴다
+    async def agent_archive_now(agent_id: str, request: Request):
+        b = await _body(request)
+        ids = b.get("session_ids") if isinstance(b.get("session_ids"), list) else []
+        return _call(agent_archive.archive_now, agent_id, [str(x) for x in ids][:200])
 
     @app.post("/api/owner/agents")
     async def agent_create(request: Request):

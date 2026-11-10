@@ -44,6 +44,8 @@ JOBS = {
                       "desc": "claude 가 보관 기간(기본 30일)이 지난 대화 기록을 지우기 전에, 3일 안에 지워질 세션을 폰으로 한 번 알립니다"},
     "fork_cleanup": {"name": "API 사본 정리", "interval": 15 * 60, "default_on": True,
                      "desc": "외부 API 가 원본 대신 쓰고 남긴 사본(fork) 중 끝날 때 바로 못 지운 것을 휴지통으로 옮깁니다(아직 실행 중이면 다음에)"},
+    "agent_archive": {"name": "에이전트 기록 보관", "interval": 30 * 60, "default_on": True,
+                      "desc": "에이전트에 묶인 세션 기록을 ClewPath 데이터 폴더에 사본으로 이어 둡니다(읽기만). claude 가 원본을 지워도 지난 대화 찾기가 원문으로 됩니다. 여유 공간이 2GB 아래면 멈춥니다"},
 }
 # 화면에 '자동(항상)' 으로만 보여 주는 기존 주기 작업(켜고 끄는 대상 아님)
 BUILTIN_INFO = [
@@ -470,8 +472,14 @@ def _run_worklog() -> dict:
     return worklog.collect()
 
 
+def _run_agent_archive() -> dict:
+    from session_manager import agent_archive
+    return agent_archive.run()
+
+
 _RUNNERS = {"idle_sessions": reap_idle, "models": refresh_models, "serve_keep": keep_serving,
-            "cleanup_watch": watch_cleanup, "worklog": _run_worklog, "fork_cleanup": _run_fork_cleanup}
+            "cleanup_watch": watch_cleanup, "worklog": _run_worklog, "fork_cleanup": _run_fork_cleanup,
+            "agent_archive": _run_agent_archive}
 # 「지금 실행」이면 때가 아니어도 하는 작업(force=True 로 부른다) — 모델 목록: claude 버전이 같아도 화면을 다시 읽는다
 _FORCEABLE = {"models"}
 _forced: set[str] = set()

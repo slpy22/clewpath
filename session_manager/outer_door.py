@@ -66,6 +66,9 @@ OPEN = frozenset({
     # 에이전트 명부(ClewPath 데이터, claude 파일 무접촉 — 갈아타기 경로는 GUARDED 로, agent-unit.md '0.37.0 대조' 3)
     "/api/owner/agents", "/api/owner/agents/{agent_id}/rename", "/api/owner/agents/{agent_id}/attach",
     "/api/owner/agents/{agent_id}/detach", "/api/owner/agents/{agent_id}/retire",
+    # 지난 대화 찾기·읽기(읽기 전용인데 검색어를 주소줄에 안 남기려고 POST)·지우기 전 보관(ClewPath 데이터만 씀) — '에이전트 탭·기록 보관' K13·K16
+    "/api/v1/agent-history/search", "/api/v1/agent-history/read", "/api/owner/agents/{agent_id}/history/search",
+    "/api/owner/agents/{agent_id}/history/read", "/api/owner/agents/{agent_id}/archive-now",
     # 관제·정기 작업·저장소
     "/api/owner/monitor/groups", "/api/owner/monitor/groups/{gid}/delete", "/api/owner/monitor/groups/{gid}/notify",
     "/api/owner/housekeeping", "/api/owner/housekeeping/{job}/run", "/api/owner/store/notices/clear",

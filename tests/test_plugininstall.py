@@ -314,12 +314,12 @@ def test_skill_tells_model_to_stop_at_approval():
         assert tool in t
 
 
-def test_history_tools_call_read_only_routes(monkeypatch):
-    """지난 대화 찾기·읽기는 GET 만 부른다(바깥문 대상 아님, Host 가 부른 세션으로 범위를 정한다)."""
+def test_history_tools_send_query_in_body(monkeypatch):
+    """지난 대화 찾기·읽기는 본문으로 보낸다(검색어가 주소줄에 안 남게, K16). 범위는 Host 가 부른 세션으로 정한다."""
     seen = []
 
     def fake(method, path, *, params=None, body=None):
-        seen.append((method, path, params))
+        seen.append((method, path, body))
         return 200, ({"api": session_ops.API_VERSION} if path.endswith("capabilities") else {"items": []})
     monkeypatch.setattr(m, "_http", fake)
     monkeypatch.setattr(m, "_checked", False)
@@ -328,6 +328,6 @@ def test_history_tools_call_read_only_routes(monkeypatch):
     m.agent_history_read("s1:3", at=120)
     m.agent_history_read("s1:4")
     got = [x for x in seen if not x[1].endswith("capabilities")]
-    assert got == [("GET", "/api/v1/agent-history/search", {"q": "배포 규칙", "session_id": "", "limit": 5}),
-                   ("GET", "/api/v1/agent-history/read", {"ref": "s1:3", "before": 2, "after": 4, "at": 120}),
-                   ("GET", "/api/v1/agent-history/read", {"ref": "s1:4", "before": 2, "after": 4})]
+    assert got == [("POST", "/api/v1/agent-history/search", {"q": "배포 규칙", "session_id": "", "limit": 5}),
+                   ("POST", "/api/v1/agent-history/read", {"ref": "s1:3", "before": 2, "after": 4, "at": 120}),
+                   ("POST", "/api/v1/agent-history/read", {"ref": "s1:4", "before": 2, "after": 4})]

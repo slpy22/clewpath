@@ -148,11 +148,11 @@ def test_routes_use_identified_caller(E, monkeypatch):
     monkeypatch.setattr(S, "_client_host", lambda r: "127.0.0.1")
     monkeypatch.setattr(outer_door, "identify", lambda *a: ("claude", "s2"))
     with TestClient(S.create_app(), base_url="http://127.0.0.1") as c:
-        r = c.get("/api/v1/agent-history/search", params={"q": "배포"})
+        r = c.post("/api/v1/agent-history/search", json={"q": "배포"})
         assert r.status_code == 200 and r.json()["items"][0]["ref"] == "s1:2"
-        assert c.get("/api/v1/agent-history/read", params={"ref": "s1:2", "at": 0}).json()["items"]
+        assert c.post("/api/v1/agent-history/read", json={"ref": "s1:2", "at": 0}).json()["items"]
         monkeypatch.setattr(outer_door, "identify", lambda *a: ("other", "no_claude_ancestor"))
-        r = c.get("/api/v1/agent-history/search", params={"q": "배포"})
+        r = c.post("/api/v1/agent-history/search", json={"q": "배포"})
         assert (r.status_code, r.json()["error"]) == (403, "caller_unknown")
 
 
