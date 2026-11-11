@@ -23,6 +23,9 @@
   .bar button { background:#21262d; color:#e6edf3; border:1px solid var(--border);
     border-radius:6px; padding:5px 10px; font-size:12px; cursor:pointer; }
   .bar button:hover { border-color:var(--accent); }
+  .bar .fs { display:flex; align-items:center; gap:4px; }
+  .bar .fs button { padding:4px 8px; min-width:34px; }
+  .bar .fs #fsVal { color:var(--muted); min-width:22px; text-align:center; font-variant-numeric:tabular-nums; }
   #term { flex:1 1 auto; padding:6px 8px; overflow:hidden; }
   .term-wrap { width:100%; height:100%; }
 </style>
@@ -37,6 +40,9 @@
     <span id="status" style="color:var(--muted)">연결 중…</span>
     <button id="delfork" style="display:none;background:#5a1e1e;border-color:#f85149;color:#ffb4b4"
             onclick="deleteFork()">🗑 포크 삭제 후 닫기</button>
+    <span class="fs" title="글자 크기 — 터미널 위에서 Ctrl+휠로도 바꿉니다(이 브라우저에 기억)">
+      <button id="fsDown" aria-label="글자 작게">A−</button><span id="fsVal"></span><button id="fsUp" aria-label="글자 크게">A+</button>
+    </span>
     <button onclick="location.reload()">재연결</button>
   </div>
   <div id="term"><div class="term-wrap" id="termwrap"></div></div>
@@ -62,9 +68,20 @@
   const dot = document.getElementById("dot");
   const statusEl = document.getElementById("status");
 
+  // 글자 크기(2026-11-11 사장님 요청) — 머리 줄 A−/A+ 와 터미널 위 Ctrl+휠, 8~28, 이 브라우저에 기억(폰 핀치와 같은 키).
+  // Ctrl+- 같은 키는 가로채지 않는다: 터미널에선 Ctrl+_ 와 같은 글자라 claude 의 되돌리기가 막힌다.
+  const FS_KEY = "sm_term_fs", FS_MIN = 8, FS_MAX = 28, FS_DEF = 13;
+  function loadFs(){
+    try { const v = parseInt(localStorage.getItem(FS_KEY) || "", 10); if (v >= FS_MIN && v <= FS_MAX) return v; } catch(_) {}
+    return FS_DEF;
+  }
+  let fontSize = loadFs();
+  const fsVal = document.getElementById("fsVal");
+  if (fsVal) fsVal.textContent = String(fontSize);
+
   const term = new Terminal({
     fontFamily: 'ui-monospace, "Cascadia Code", "D2Coding", Consolas, monospace',
-    fontSize: 13, cursorBlink: true, scrollback: 10000,
+    fontSize: fontSize, cursorBlink: true, scrollback: 10000,
     theme: { background:"#0d1117", foreground:"#e6edf3", cursor:"#58a6ff" },
   });
   const fit = new FitAddon.FitAddon();
@@ -93,6 +110,28 @@
       e.preventDefault(); e.stopPropagation();
     }, {passive:false, capture:true});
     termwrap.addEventListener("touchend", ()=>{ ty=null; }, {passive:true, capture:true});
+  })();
+
+  function setFont(n){
+    n = Math.max(FS_MIN, Math.min(FS_MAX, Math.round(n)));
+    if (n === fontSize) return;
+    fontSize = n; term.options.fontSize = n;
+    if (fsVal) fsVal.textContent = String(n);
+    try { localStorage.setItem(FS_KEY, String(n)); } catch(_) {}
+    sendResize();                                    // 칸 수가 바뀌니 claude 화면 폭도 다시 맞춘다
+  }
+  (function(){
+    const up = document.getElementById("fsUp"), down = document.getElementById("fsDown");
+    if (up) up.onclick = () => { setFont(fontSize + 1); term.focus(); };
+    if (down) down.onclick = () => { setFont(fontSize - 1); term.focus(); };
+    // Ctrl+휠: 마우스 한 칸(100) = 한 단계, 터치패드 핀치의 작은 값은 모아서 50 마다 한 단계. 브라우저 확대는 막는다
+    let acc = 0;
+    termwrap.addEventListener("wheel", e => {
+      if (!e.ctrlKey) return;
+      e.preventDefault(); e.stopPropagation();
+      acc += e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY;
+      if (Math.abs(acc) >= 50) { setFont(fontSize + (acc < 0 ? 1 : -1)); acc = 0; }
+    }, {passive:false, capture:true});
   })();
 
   // cwd 표시(참고용)
