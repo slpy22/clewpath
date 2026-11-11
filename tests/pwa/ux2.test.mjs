@@ -1,7 +1,8 @@
 // 화면 재배치 2단계(2026-10-12): 목록 줄 ⋯ 메뉴 · 실행 중이면 바로 터미널 · 🤖 자동 실행 기록 접기 · 🔔 할 일 · 폰 아래 탭 막대.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { load, ev, stubEl } from "./harness.mjs";
+import { readFileSync } from "node:fs";
+import { load, ev, stubEl, INDEX } from "./harness.mjs";
 
 const same = (a, b, m) => assert.equal(JSON.stringify(a), JSON.stringify(b), m);
 const cls = (e) => String(e.className);
@@ -137,7 +138,7 @@ test("🔔 할 일: 배지 = 승인 요청 + 권한 대기 + 입력 대기, 시�
   assert.equal(ev(ctx, "todoCount()"), 0);
 });
 
-test("폰 아래 탭 막대: 보기 전환 · 같은 탭은 맨 위로 · 비서는 비서 열기", async () => {
+test("폰 아래 탭 막대: 보기 전환 · 같은 탭은 맨 위로 · 비서 칸은 없다(비서는 에이전트 탭 맨 위 줄)", async () => {
   const ctx = await load();
   ev(ctx, "globalThis.__c=[]; loadList=()=>__c.push(['list',LIST_VIEW]); openAssistant=()=>__c.push(['assist']); LIST_CTX={rerender(){}}; setListView('sessions');");
   const pl = stubEl("div"); pl.scrollTop = 500; ctx.document._register("paneList", pl);
@@ -147,9 +148,8 @@ test("폰 아래 탭 막대: 보기 전환 · 같은 탭은 맨 위로 · 비서
   assert.equal(app.getAttribute("data-view"), "list", "상세에서 눌러도 목록으로");
   ev(ctx, "tabbarGo('groups')");
   assert.equal(pl.scrollTop, 0, "보던 탭을 또 누르면 맨 위로");
-  ev(ctx, "tabbarGo('assist')");
-  same(ev(ctx, "__c"), [["list", "groups"], ["assist"]]);
-  assert.equal(ev(ctx, "LIST_VIEW"), "groups", "비서는 보기를 바꾸지 않는다");
+  same(ev(ctx, "__c"), [["list", "groups"]]);
+  assert.ok(!/data-v="assist"/.test(readFileSync(INDEX, "utf8")), "탭 막대 = 세션·에이전트·팀·파일 4칸");
 });
 
 test("파일 탐색기 뿌리: 자동 실행 기록 폴더는 올리지 않는다", async () => {

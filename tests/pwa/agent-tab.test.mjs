@@ -26,7 +26,7 @@ async function setup(routes = {}, opt) {
   const pd = stubEl("div"), app = stubEl("div");
   ctx.document._register("paneDetail", pd); ctx.document._register("app", app); ctx.document._register("head", stubEl("span"));
   const iso = (ago) => new Date(Date.now() - ago * 1000).toISOString();
-  ev(ctx, `CLOCK_SKEW = 0; ACTIVE_TAG = ''; AG_CLOSED.clear(); AG_PAST.clear(); POP = null; HANDOFFS = [];
+  ev(ctx, `CLOCK_SKEW = 0; ACTIVE_TAG = ''; AG_FOLD.clear(); AG_SEC.clear(); POP = null; HANDOFFS = [];
     SESSIONS = [{session_id:${JSON.stringify(A)}, title:'지금', project_folder:'p', cwd:'F:/p', ended_at:${JSON.stringify(iso(120))}, message_count:1, size_bytes:1},
                 {session_id:${JSON.stringify(B)}, title:'지난', project_folder:'p', cwd:'F:/p', ended_at:${JSON.stringify(iso(9000))}, message_count:1, size_bytes:1}];
     AGENTS = [${JSON.stringify(AG)}, ${JSON.stringify({ ...AG, id: "ag2", name: "기록없는", session_id: "zzzz" })}]; AGENTS_ERR = false;
@@ -170,4 +170,25 @@ test("떼기·붙이기·만들기도 거절 사유를 안내 문구로", async 
   await ev(ctx, "__modal.foot[1].disabled = false, __modal.foot[1].onclick()");     // 가짜 DOM 은 disabled 기본값이 없다
   const texts = walk(ev(ctx, "__modal.body")).map(label).join("|");
   assert.ok(texts.includes("같은 이름의 에이전트가 이미 있습니다"), texts);
+});
+
+test("상세(A6): 지금 세션은 세션 탭과 같은 줄(그 ⋯ 는 세션 메뉴), 지난 세션은 이력 줄 그대로", async () => {
+  const { ctx, pd } = await setup({ [DET_P]: DETAIL });
+  await ev(ctx, "loadAgentDetail('ag1')");
+  assert.ok(has(pd, "지금 세션"));
+  const cur = walk(pd).filter((k) => k.dataset && k.dataset.sid);
+  assert.equal(cur.length, 1);
+  assert.equal(cur[0].dataset.sid, A);
+  assert.equal(walk(pd).filter((k) => String(k.className).includes("aghmore")).length, 3, "이력 줄 ⋯ 는 그대로");
+  assert.equal(ev(ctx, "AG_DETAIL"), "ag1");
+  ev(ctx, "paneEnter('empty')");
+  assert.equal(ev(ctx, "AG_DETAIL"), null, "상세 칸을 떠나면 에이전트 선택도 끝");
+});
+
+test("폰 머리 제목은 보고 있는 탭 이름", async () => {
+  const { ctx } = await setup({}, { setup: (sb) => { sb.innerWidth = 400; } });
+  ev(ctx, "PANE_NOW.kind = 'list'; setListView('agents'); headList()");
+  assert.equal(ev(ctx, "$('#head').textContent"), "에이전트");
+  ev(ctx, "setListView('sessions'); headList()");
+  assert.equal(ev(ctx, "$('#head').textContent"), "세션");
 });

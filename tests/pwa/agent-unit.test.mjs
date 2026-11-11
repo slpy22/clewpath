@@ -1,20 +1,25 @@
 // 에이전트 묶기(docs/designs/agent-unit.md '화면 확정'·'0.37.0 대조'): 칩·줄 순서·아래 묶음·메뉴·상태·늦은 응답.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { load, ev, stubEl } from "./harness.mjs";
+import { readFileSync } from "node:fs";
+import { load, ev, stubEl, INDEX } from "./harness.mjs";
 
 const same = (a, b, m) => assert.equal(JSON.stringify(a), JSON.stringify(b), m);
 const A = "aaaaaaaa-0000-0000-0000-000000000001", B = "bbbbbbbb-0000-0000-0000-000000000002";
 const C = "cccccccc-0000-0000-0000-000000000003", D = "dddddddd-0000-0000-0000-000000000004";
 const cls = (e) => String(e.className);
 const txt = (w) => w.children.filter((k) => cls(k).startsWith("ghead")).map((k) => k.children.map((c) => c.text ?? c.textContent).join("|"));
+const walk = (n, out = []) => { for (const k of n.children || []) { out.push(k); walk(k, out); } return out; };
+const rows = (n) => walk(n).filter((k) => cls(k).includes("agrow"));
+const rowName = (r) => walk(r).find((k) => cls(k) === "sname").textContent;
+const rowText = (r) => walk(r).map((k) => k.textContent).join("|");
 
 const AG = (id, name, sid, x = {}) => ({ id, uid: "u-" + id, name, role: "", tags: [], status: "active", rev: 1, created: 1, session_id: sid, sessions: sid ? 1 : 0, teams: [], assistant: false, ...x });
 
 async function setup() {
   const ctx = await load();
   const now = Date.now() / 1000, iso = (ago) => new Date(Date.now() - ago * 1000).toISOString();
-  ev(ctx, `CLOCK_SKEW = 0; ACTIVE_TAG = ''; COLLAPSED.clear(); AG_CLOSED.clear(); AG_PAST.clear(); POP = null;
+  ev(ctx, `CLOCK_SKEW = 0; ACTIVE_TAG = ''; COLLAPSED.clear(); AG_FOLD.clear(); AG_SEC.clear(); POP = null;
     SESSIONS = [
       {session_id:${JSON.stringify(A)}, title:'가', project_folder:'p', cwd:'F:/p', ended_at:${JSON.stringify(iso(50))}, message_count:1, size_bytes:10},
       {session_id:${JSON.stringify(B)}, title:'세션나', project_folder:'p', cwd:'F:/p', ended_at:${JSON.stringify(iso(900))}, message_count:1, size_bytes:10, runtime:{phase:'permission', permission_at:${now - 5}}},
@@ -42,27 +47,71 @@ test("용어(U1): 칩 문구가 새 이름으로", async () => {
   assert.ok(html.includes("점유 중") && html.includes("재개 목록 밖") && !html.includes("'⚙ 에이전트'"));
 });
 
-test("줄 순서(U3): 권한 대기가 먼저, 아래 묶음은 지금 세션 없음·쉬는 순(에이전트 아닌 세션은 세션 탭에, K11)", async () => {
+test("목록(A1·A3): 세션 탭처럼 폴더 아래 에이전트 한 줄씩 — 폴더 안은 권한 대기 먼저, 지금 세션 없는 에이전트는 마지막 세션 폴더에 흐리게, 쉬는 에이전트는 아래 묶음", async () => {
   const ctx = await setup();
   ev(ctx, `globalThis.__w = el('div'); renderAgentRows(__w, '')`);
-  const heads = txt(ev(ctx, "__w"));
-  assert.ok(heads[0].includes("나") && heads[0].includes("권한 대기"), heads[0]);
-  assert.ok(heads[1].includes("가"), heads[1]);
-  same(heads.slice(2).map((h) => h.replace(/^[▼▶]\|/, "")), ["지금 세션 없음 1", "쉬는 에이전트 1"]);
+  const w = ev(ctx, "__w");
+  const heads = txt(w);
+  assert.ok(heads[0].includes("📁 q") && heads[1].includes("📁 p"), "최근 활동 폴더 먼저: " + heads.join(" / "));
+  assert.ok(heads[2].includes("💤 쉬는 에이전트 1"), heads[2]);
+  const lists = w.children.filter((k) => cls(k) === "glist");
+  same(rows(lists[1]).map(rowName), ["🪪 나", "🪪 가"]);
+  const q = rows(lists[0]);
+  same(q.map(rowName), ["🪪 빈손"]);
+  assert.ok(cls(q[0]).includes("dim") && rowText(q[0]).includes("지금 세션 없음"));
+  assert.ok(!walk(q[0]).some((k) => cls(k).includes("resume")), "지금 세션이 없으면 여는 단추도 없다");
+  assert.ok(!walk(w).some((k) => k.dataset && k.dataset.sid), "목록에 세션 줄은 그리지 않는다(세션은 상세에서)");
+  assert.ok(walk(w.children.filter((k) => cls(k) === "ghead")[1]).some((k) => k.getAttribute && k.getAttribute("aria-label") === "작업 중 0 · 열림 0 · 에이전트 2"), "폴더 수는 에이전트 기준");
 });
 
-test("지금 세션 줄: 이름 같으면 '지금 세션', 다르면 세션 이름 보조", async () => {
+test("에이전트 줄(A2): 본문 = 상세, 큰 단추 = 지금 세션 열기, 지금 세션 이름이 다르면 보조로", async () => {
   const ctx = await setup();
-  ev(ctx, `globalThis.__w = el('div'); renderAgentRows(__w, '')`);
-  const lists = ev(ctx, "__w").children.filter((k) => cls(k) === "glist");
-  const names = lists.slice(0, 2).map((l) => l.children[0].children[0].children[0].children.find((k) => cls(k) === "sname").textContent);
-  same(names, ["지금 세션 · 세션나", "지금 세션"]);
+  ev(ctx, `globalThis.__w = el('div'); renderAgentRows(__w, ''); globalThis.__seen = []; loadAgentDetail = (id) => __seen.push('detail:'+id); showResumeChooser = (s) => __seen.push('open:'+s.session_id);`);
+  const by = (n) => rows(ev(ctx, "__w")).find((r) => rowName(r) === n), na = by("🪪 나"), ga = by("🪪 가");
+  assert.ok(rowText(na).includes("지금 · 세션나") && rowText(na).includes("분석") && rowText(na).includes("대백과"));
+  assert.ok(!rowText(ga).includes("지금 ·"), "이름이 같으면 보조 없음");
+  na.children[0].onclick();
+  walk(ga).find((k) => cls(k) === "sbtn resume").onclick();
+  same(ev(ctx, "__seen"), ["detail:ag2", "open:" + A]);
+});
+
+test("폴더 접기는 에이전트 탭 따로(세션 탭 접힘과 안 섞임)", async () => {
+  const ctx = await setup();
+  ev(ctx, `LIST_CTX = {rerender(){}}; globalThis.__w = el('div'); renderAgentRows(__w, '')`);
+  ev(ctx, "__w").children.find((k) => cls(k) === "ghead").onclick();
+  assert.equal(ev(ctx, "AG_FOLD.size"), 1);
+  assert.equal(ev(ctx, "COLLAPSED.size"), 0);
+  ev(ctx, `renderAgentRows(__w, '')`);
+  same(rows(ev(ctx, "__w")).map(rowName), ["🪪 나", "🪪 가"], "접은 폴더(q)의 줄은 안 그린다");
+});
+
+test("비서(A4): 따로 있던 비서 탭·단추는 없고, 비서가 없으면 에이전트 탭 맨 위에 만들기 줄", async () => {
+  const ctx = await setup();
+  const html = readFileSync(INDEX, "utf8");
+  assert.ok(!/data-v="assist"/.test(html), "폰 아래 탭 막대에 비서 칸 없음");
+  assert.ok(!ev(ctx, "String(loadList)").includes("openAssistant"), "목록 칸 보기 전환에 비서 단추 없음");
+  ev(ctx, `globalThis.__w = el('div'); renderAgentRows(__w, ''); globalThis.__opened = 0; openAssistant = () => { __opened++; };`);
+  const first = ev(ctx, "__w").children[0];
+  assert.equal(cls(first), "agnoast");
+  first.onclick();
+  assert.equal(ev(ctx, "__opened"), 1);
+});
+
+test("⋯ 메뉴(A5): 열기·상세·갈아타기·이름·지금 세션 메뉴 → 같은 자리에 세션 메뉴", async () => {
+  const ctx = await setup();
+  ev(ctx, `globalThis.__box = null; globalThis.__rm = null; openPop = (a, box) => { __box = box; }; rowMenu = (s) => { __rm = s.session_id; };
+    agentMenu(AGENTS[0], SESSIONS[0], el('button'));`);
+  const items = walk(ev(ctx, "__box")).map((k) => k.text ?? k.textContent).join("|");
+  for (const t of ["지금 세션 열기", "에이전트 상세", "새 세션으로 갈아타기", "에이전트 이름", "지금 세션 메뉴", "지금 세션 떼기", "쉬게 하기"]) assert.ok(items.includes(t), t);
+  const it = walk(ev(ctx, "__box")).find((k) => (k.text ?? "").includes("지금 세션 메뉴"));
+  await it.onclick();
+  assert.equal(ev(ctx, "__rm"), A);
 });
 
 test("검색·빈 상태·오류(U4)", async () => {
   const ctx = await setup();
   ev(ctx, `globalThis.__w = el('div'); renderAgentRows(__w, '분석')`);
-  assert.ok(txt(ev(ctx, "__w"))[0].includes("나"));
+  same(rows(ev(ctx, "__w")).map(rowName), ["🪪 나"]);
   ev(ctx, `renderAgentRows(__w, '없는말')`);
   assert.ok(ev(ctx, "__w").children.some((k) => cls(k) === "empty" && k.textContent.includes("에 맞는 에이전트가 없습니다")));
   ev(ctx, `AGENTS = []; AGENTS_BY = {}; renderAgentRows(__w, '')`);
@@ -103,7 +152,10 @@ test("개인비서: 맨 위 고정, 쉬게 하기·떼기 메뉴 없음(U16)", a
   ev(ctx, `AGENTS.push(${JSON.stringify(AG("ast", "개인비서", C, { assistant: true }))}); AGENTS_BY[${JSON.stringify(C)}] = {agent_id:'ast', name:'개인비서', current:true, detached:false};
     globalThis.__w = el('div'); renderAgentRows(__w, ''); globalThis.__box = null; openPop = (a, box) => { __box = box; };
     agentMenu(AGENTS.find(a=>a.assistant), SESSIONS[2], el('button'));`);
-  assert.ok(txt(ev(ctx, "__w"))[0].includes("개인비서"));
+  const top = ev(ctx, "__w").children[0];
+  assert.ok(cls(top).includes("agtop") && rowName(rows(top)[0]) === "🧑‍💼 개인비서", "맨 위 고정 줄");
+  assert.equal(rows(ev(ctx, "__w")).filter((r) => rowName(r).includes("개인비서")).length, 1, "폴더 안에 다시 나오지 않는다");
+  assert.ok(!walk(ev(ctx, "__w")).some((k) => cls(k) === "agnoast"));
   const items = ev(ctx, "__box").children.map((k) => k.text ?? k.textContent);
   assert.ok(!items.some((t) => t.includes("떼기") || t.includes("쉬게")), items.join());
 });

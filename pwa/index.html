@@ -228,7 +228,7 @@
   .lview{display:flex;gap:4px;margin:12px 14px 0;padding:3px;border-radius:11px;background:var(--surface);border:1px solid var(--line)}
   /* 보기 전환 + 검색 — 스크롤해도 위에 남는다(2026-10-14 사장님). 안의 .search 는 이 머리에 실려 함께 고정 */
   .lhead{position:sticky;top:0;z-index:5;background:var(--bg)}
-  .lview button{flex:1 1 auto;min-width:0;white-space:nowrap;padding:8px 3px;border-radius:8px;color:var(--ink2);font-size:.88rem;background:transparent}   /* 탭 5개(에이전트 탭)라 글자 길이만큼 — 두 줄로 꺾이지 않게 */
+  .lview button{flex:1 1 auto;min-width:0;white-space:nowrap;padding:8px 3px;border-radius:8px;color:var(--ink2);font-size:.88rem;background:transparent}   /* 탭 4개 — 글자 길이만큼, 두 줄로 꺾이지 않게 */
   .lview button.on{background:var(--accent2);color:#fff;font-weight:600}
   .lview+.search{padding-top:10px}
   /* 파일 보기의 탐색기 머리(제목·정렬·찾기 칸)도 .lhead 에 실려 스크롤해도 남는다(2026-10-29 사장님) */
@@ -524,13 +524,10 @@
   .search .sref.aggroup{width:auto;padding:0 10px;font-size:.82rem;white-space:nowrap}
   .schip.agentu{background:transparent;cursor:pointer;max-width:6.5em;overflow:hidden;text-overflow:ellipsis}
   .schip.agteam{background:transparent;font-family:var(--sans);color:var(--muted);border-color:var(--line2)}
-  .ghead.agh{padding:6px 6px 2px;border-bottom:0}
-  .ghead.agh .agchev{min-width:44px;min-height:44px;background:transparent}
-  .ghead.agh .agname{padding:8px 0}
-  .ghead.agh .gopen.more{min-width:44px;min-height:44px}
-  .ghead.agh .sstate{flex:none;font-size:.78rem;color:var(--c,var(--muted))}
-  .agh2{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:0 14px 8px 50px;background:var(--surface);color:var(--muted);font-size:.78rem}
-  .agh2 .agpast{min-height:32px;color:var(--ink2);background:transparent;font-size:.78rem}
+  .schip.agrole{background:transparent;font-family:var(--sans);color:var(--ink2);border-color:var(--line2)}
+  .agrow .agcur{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+  .agtop{border-bottom:1px solid var(--line)}
+  .agnoast{display:block;width:100%;text-align:left;padding:12px 14px;color:var(--muted);background:var(--surface);border-bottom:1px solid var(--line);font-size:.86rem}
   .ghead.agsec .gtext{font-weight:650;color:var(--ink2)}
   .agpick{display:flex;flex-direction:column;gap:6px;margin:6px 0 10px}
   .agpicki{text-align:left}
@@ -547,7 +544,7 @@
   .aghline{display:flex;gap:4px;align-items:center}
   .aghline .aghrow{flex:1;min-width:0}
   .aghrow .agarc{flex:none;color:var(--muted);font-size:.74rem}
-  .aglast{color:var(--muted);font-size:.74rem;white-space:nowrap;margin-left:6px}
+  .aglast{white-space:nowrap}
   .agsearch{display:flex;gap:6px;margin:0 2px 8px}
   .agsearch .agq{flex:1;min-width:0;min-height:40px;padding:6px 10px;border-radius:9px;border:1px solid var(--line);background:var(--surface);color:var(--ink)}
   .agres{display:flex;flex-direction:column;gap:4px;margin:0 2px 12px}
@@ -566,7 +563,6 @@
   .sclr:hover{background:var(--surface2);color:var(--ink)}
   .fbfilter .sclr{right:2px;width:28px;height:28px;font-size:.8rem}
   input[type=search]::-webkit-search-cancel-button{-webkit-appearance:none;appearance:none;display:none}
-  .lview .assist{flex:1 1 auto;min-width:0;white-space:nowrap;padding:8px 3px;border-radius:8px;color:var(--ink2);font-size:.88rem;background:transparent}
   /* ---- 화면 재배치 2단계(2026-10-12): 목록 줄 ⋯ 메뉴 · 🔔 할 일 · 폰 아래 탭 막대 · 자동 실행 기록 접기 ---- */
   .sbtn.more{width:40px;font-size:1.15rem;color:var(--ink2)}
   .popbg{position:fixed;inset:0;z-index:40;background:transparent}
@@ -1116,7 +1112,6 @@
     <button data-v="agents"><span class="ti">🪪</span>에이전트</button>
     <button data-v="groups"><span class="ti">👥</span>팀</button>
     <button data-v="files"><span class="ti">📁</span>파일</button>
-    <button data-v="assist"><span class="ti">🧑‍💼</span>비서</button>
   </nav>
 </div>
 
@@ -1739,9 +1734,10 @@ function detailPlaceholder(txt){ paneEnter('empty'); const p=paneDetail(); close
 // PC 는 두 칸이 함께 보여 제목이 상세 칸 화면 이름을 따른다 — 목록을 새로 받을 때(⟳·보기 전환·재연결) 덮지 않는다(quick-switch 6단계).
 // 상세 칸이 비면 그 칸이 🏠 홈이라 '홈'(2026-10-28, home-dashboard.md) — 폰은 홈 화면(상세 쪽)을 보고 있을 때만
 function headList(){ const home=PANE_NOW.kind==='empty'&&(innerWidth>=880||$('#app').getAttribute('data-view')==='detail');
-  if(home) $('#head').textContent='홈'; else if(innerWidth<880) $('#head').textContent='세션'; }
+  if(home) $('#head').textContent='홈'; else if(innerWidth<880) $('#head').textContent=LIST_TITLE[LIST_VIEW]||'세션'; }
+const LIST_TITLE={sessions:'세션',agents:'에이전트',groups:'팀',files:'파일'};     // 폰 머리 제목 = 보고 있는 탭
 function highlightSelected(){ document.querySelectorAll('.srow').forEach(r=>
-  r.classList.toggle('sel', r.dataset.sid===SELECTED_ID)); }
+  r.classList.toggle('sel', r.dataset.agent?r.dataset.agent===AG_DETAIL:r.dataset.sid===SELECTED_ID)); }
 // ---- 화면 진입 기록(quick-switch §8 2단계) ----
 // 상세 칸 화면을 열 때마다 칸을 비우는 줄(closeInlineMonitor·classList.remove) '바로 앞'에서 부른다 — 클래스를 지운 뒤에는
 // 떠나는 화면이 터미널·편집기였는지 알 수 없다. 모자란 정리만 하고, 여러 번 불려도 안전하다(이미 한 정리는 다시 해도 무해).
@@ -1764,7 +1760,7 @@ function navTicket(){ const n=++NAV_SEQ, g=PANE_NOW.gen, pc=pcNow(); return ()=>
 // 화면 누름이 조용히 버려졌다(검토 3회차)
 function navPassive(){ const n=NAV_SEQ, g=PANE_NOW.gen, pc=pcNow(); return ()=>n===NAV_SEQ&&g===PANE_NOW.gen&&pc===pcNow(); }
 function paneEnter(kind, ref){
-  hoLeave();                                                    // 갈아타기 화면을 떠나면 고치던 글을 저장하고 폴링을 멈춘다
+  hoLeave(); AG_DETAIL=null;                                   // 에이전트 상세를 떠나면 목록의 에이전트 줄 선택·다시 불러오기도 끝                                                    // 갈아타기 화면을 떠나면 고치던 글을 저장하고 폴링을 멈춘다
   const p=paneDetail(), r=ref||{};
   homeSeenSet(PANE_NOW.sid); if(r.session_id) homeSeenSet(r.session_id);   // 🏠 완료 칸의 '새로'를 이 기기가 이미 본 것에서 뗀다(보다가 끝난 것도)
   if(kind!=='terminal'&&(p.classList.contains('term-mode')||termView.main)) leaveTerminalView();   // 연결·탭 배지를 닫는다 — 재연결·화면 복귀가 떠난 터미널로 끌고 가지 않게(T2)
@@ -1900,7 +1896,6 @@ async function loadList(q){
   const segBtn=(v,label)=>{ const b=el('button',LIST_VIEW===v?'on':'',label);
     b.onclick=()=>{ if(LIST_VIEW===v) return; setListView(v); loadList(inp.value); }; return b; };
   seg.appendChild(segBtn('sessions','세션')); seg.appendChild(segBtn('agents','🪪 에이전트')); seg.appendChild(segBtn('groups','👥 팀')); seg.appendChild(segBtn('files','📁 파일'));
-  { const b=el('button','assist','🧑‍💼 비서'); b.title='개인 비서 세션 열기'; b.onclick=()=>openAssistant(); seg.appendChild(b); }
   const lhead=el('div','lhead'); lhead.appendChild(seg); main.appendChild(lhead);
   const sb=el('div','search'); const sbox=el('span','sbox'); const inp=el('input');
   inp.placeholder='검색 (경로·이름)'; inp.value=q||''; sbox.appendChild(inp); sb.appendChild(sbox);
@@ -2894,7 +2889,31 @@ function renderRows(wrap,q,pool){
   wrap.innerHTML='';
   if(!rows.length){ wrap.appendChild(el('div','empty',
     (q||ACTIVE_TAG)?'해당 세션 없음':'세션 없음')); return; }
-  // 폴더(project_folder)별 그룹핑
+  for(const g of folderTops(rows)){
+    const repr=g.repr;
+    const collapsed = q ? false : COLLAPSED.has(g.k);  // 검색 중엔 항상 펼침
+    wrap.appendChild(folderHead(g,collapsed,()=>{ if(COLLAPSED.has(g.k))COLLAPSED.delete(g.k); else COLLAPSED.add(g.k);
+      renderRows(wrap,q,pool); },groupCount(g.list)));
+    if(collapsed) continue;
+    const glist=el('div','glist');
+    for(const s of g.list) glist.appendChild(sessRowEl(s,repr));
+    wrap.appendChild(glist);
+  }
+}
+// 폴더 머리(세션 탭·에이전트 탭 같은 모양)
+function folderHead(g,collapsed,onToggle,count){
+  const gh=el('button','ghead');
+  gh.appendChild(el('span','chev',collapsed?'▶':'▼'));
+  const gt=el('div','gtext');
+  gt.appendChild(el('div','gbase','📁 '+baseName(g.repr)));
+  gt.appendChild(el('div','gpath',g.repr));
+  gh.appendChild(gt);
+  if(count) gh.appendChild(count);
+  gh.onclick=onToggle;
+  return gh;
+}
+// 세션들을 폴더(project_folder) 묶음으로 — 하위 폴더는 가장 바깥 묶음에, 별도 프로젝트는 따로, 최근 활동 묶음 먼저
+function folderTops(rows){
   const groups=new Map();
   for(const s of rows){ const k=s.project_folder||'(기타)';
     if(!groups.has(k))groups.set(k,[]); groups.get(k).push(s); }
@@ -2911,25 +2930,7 @@ function renderRows(wrap,q,pool){
   for(const g of tops) g.list.sort((a,b)=>depth(a)-depth(b)||sessLabel(a).localeCompare(sessLabel(b),'ko',{numeric:true}));
   const arr=tops.map(g=>Object.assign(g,{latest:g.list.reduce((m,s)=>Math.max(m,Date.parse(s.ended_at||'')||0),0)}));
   arr.sort((a,b)=>b.latest-a.latest);
-
-  for(const g of arr){
-    const repr=g.repr;
-    const collapsed = q ? false : COLLAPSED.has(g.k);  // 검색 중엔 항상 펼침
-    const gh=el('button','ghead');
-    gh.appendChild(el('span','chev',collapsed?'▶':'▼'));
-    const gt=el('div','gtext');
-    gt.appendChild(el('div','gbase','📁 '+baseName(repr)));
-    gt.appendChild(el('div','gpath',repr));
-    gh.appendChild(gt);
-    gh.appendChild(groupCount(g.list));
-    gh.onclick=()=>{ if(COLLAPSED.has(g.k))COLLAPSED.delete(g.k); else COLLAPSED.add(g.k);
-      renderRows(wrap,q,pool); };
-    wrap.appendChild(gh);
-    if(collapsed) continue;
-    const glist=el('div','glist');
-    for(const s of g.list) glist.appendChild(sessRowEl(s,repr));
-    wrap.appendChild(glist);
-  }
+  return arr;
 }
 
 function sessRowEl(s,repr,opt){
@@ -2956,7 +2957,7 @@ function sessRowEl(s,repr,opt){
 // ---- 🪪 에이전트 묶기(목록 칸 「세션」 안) — docs/designs/agent-unit.md '화면 확정'·'0.37.0 대조'. 에이전트 이름은 세션 이름과 따로(G4) ----
 
 let AGENTS=null, AGENTS_BY={}, AGENTS_ERR=false, AGENTS_PC='', AG_SIG='', AG_SEQ=0, AG_ORDER=[];
-const AG_CLOSED=new Set(), AG_PAST=new Set(), AG_SEC=new Set(['none']);   // 접은 에이전트 · 지난 세션 펼침 · 펼친 아래 묶음
+const AG_FOLD=new Set(), AG_SEC=new Set();   // 에이전트 탭의 접은 폴더 · 펼친 아래 묶음(쉬는 에이전트)
 function agListOn(){ return LIST_VIEW==='sessions'||LIST_VIEW==='agents'; }     // 에이전트 칩·줄을 그리는 두 탭
 // 달라졌으면 true. 늦게 온 응답(그사이 다시 불렀거나 PC 를 바꿈)은 버린다
 async function fetchAgents(){
@@ -2992,58 +2993,78 @@ function agentChip(s){ const a=agentOf(s);
   g.title='에이전트 '+a.name; g.setAttribute('aria-label','에이전트 '+a.name);
   g.onclick=(e)=>{ if(e&&e.stopPropagation) e.stopPropagation(); loadAgentDetail(a.agent_id); }; return g; }
 function agentRank(s){ const t=((s&&sessionBadge(s))||{}).text; return (t==='권한 대기'||t==='입력 대기')?0:(t==='작업 중'||t==='백그라운드')?1:2; }
+function agentMatches(a,q){ if(!q) return true; const s=sessById(a.session_id);
+  return (a.name+' '+a.role+' '+a.teams.map(t=>t.name).join(' ')+' '+(s?(s.title||'')+(s.cwd||''):'')).toLowerCase().includes(q); }
+// 에이전트의 폴더 = 지금 세션의 폴더, 없으면 가장 최근 세션의 폴더(A1)
+function agentHome(a){ const s=sessById(a.session_id); if(s) return s; let best=null;
+  for(const x of SESSIONS||[]){ const b=AGENTS_BY[x.session_id]; if(!b||b.agent_id!==a.id) continue;
+    if(!best||(Date.parse(x.ended_at||'')||0)>(Date.parse(best.ended_at||'')||0)) best=x; }
+  return best; }
+function agentMenu(a,s,anchor){ const box=el('div');
+  if(a.assistant) box.appendChild(popItem('🧑‍💼','비서 열기',null,()=>openAssistant()));
+  else if(s) box.appendChild(popItem(rowResumeIcon(s),'지금 세션 열기',null,()=>showResumeChooser(continuedTarget(s))));
+  box.appendChild(popItem('ℹ','에이전트 상세','세션 이력·지난 대화 찾기',()=>loadAgentDetail(a.id)));
+  if(!a.assistant&&a.status==='active'&&a.session_id){ const h=hoOf(a.id); box.appendChild(popItem('🔁',h?HO_CHIP[h.status]+' — 이어서 보기':'새 세션으로 갈아타기',h?null:'먼저 비용·막힌 이유를 보여 줍니다',()=>h?openHandoff(h.id):openHandoffStart(a.id))); }
+  box.appendChild(popItem('✎','에이전트 이름','세션 이름은 따로입니다',()=>agentRename(a)));
+  if(s) box.appendChild(popItem('💬','지금 세션 메뉴…','대화 보기·파일·세션 이름·중지',()=>{ closePop(); return rowMenu(continuedTarget(s),anchor); }));
+  if(!a.assistant){ box.appendChild(el('div','popsep'));
+    if(a.status==='active'){ if(a.session_id) box.appendChild(popItem('✂','지금 세션 떼기',"이 에이전트는 '지금 세션 없음'이 됩니다",()=>agentDetach(a),'danger'));
+      box.appendChild(popItem('💤','쉬게 하기','세션은 그대로, 목록 아래 묶음으로',()=>agentRetire(a,true),'danger')); }
+    else box.appendChild(popItem('☀','되살리기',null,()=>agentRetire(a,false))); }
+  return openPop(anchor,box,a.name); }
+// 에이전트 한 줄(A2) — 세션 줄과 같은 모양. 본문 = 에이전트 상세, 큰 단추 = 지금 세션 열기, ⋯ = 에이전트 메뉴
+function agentRowEl(a){
+  const s=sessById(a.session_id), srow=el('div','srow agrow'); srow.dataset.agent=a.id;
+  if(AG_DETAIL===a.id) srow.classList.add('sel');
+  if(a.status!=='active'||!a.session_id) srow.classList.add('dim');
+  const info=el('button','sinfo'), r1=el('div','sr1'), bd=s?sessionBadge(s):null;
+  if(bd){ const d=el('span','sdot'+(bd.pulse?' pulse':'')); d.style.setProperty('--c',bd.c); r1.appendChild(d); }
+  r1.appendChild(el('span','sname',(a.assistant?'🧑‍💼 ':'🪪 ')+a.name)); info.appendChild(r1);
+  const meta=el('div','smeta2 one');
+  meta.appendChild(el('span',null,'세션 '+a.sessions+'개'));
+  if(a.status!=='active') meta.appendChild(el('span',null,'💤 쉬는 중'));
+  else if(!a.session_id) meta.appendChild(el('span',null,'지금 세션 없음'));
+  else meta.appendChild(el('span','aglast',(s&&relFrom(s))||'기록 없음'));      // 마지막 활동 = 지금 세션의 마지막 기록(K11)
+  if(s&&sessLabel(s)!==a.name) meta.appendChild(el('span','agcur','지금 · '+sessLabel(s)));
+  info.appendChild(meta);
+  const side=el('div','sside'), chips=el('div','schips');
+  if(bd){ const t=el('span','sstate',bd.text); t.style.setProperty('--c',bd.c);
+    if(bd.text==='권한 대기'){ t.style.cursor='pointer'; t.onclick=(e)=>{ if(e&&e.stopPropagation) e.stopPropagation(); showApprove(s); }; }
+    side.appendChild(t); }
+  const ho=hoOf(a.id); if(ho){ const c=el('button','schip agho'+(ho.status==='failed'?' bad':''),HO_CHIP[ho.status]); c.onclick=(e)=>{ if(e&&e.stopPropagation) e.stopPropagation(); openHandoff(ho.id); }; chips.appendChild(c); }
+  if(a.role) chips.appendChild(el('span','schip agrole',a.role));
+  for(const t of a.teams) chips.appendChild(el('span','schip agteam',t.name));
+  if(chips.children.length) side.appendChild(chips);
+  if(side.children.length) info.appendChild(side);
+  info.onclick=()=>loadAgentDetail(a.id);
+  srow.appendChild(info);
+  if(bd&&bd.text==='권한 대기'){ const bA=el('button','sbtn resume','✋'); bA.title='원격 승인'; bA.style.color='#e8a03c'; bA.onclick=()=>showApprove(s); srow.appendChild(bA); }
+  if(a.assistant){ const b=el('button','sbtn resume','🧑‍💼'); b.title='비서 열기'; b.setAttribute('aria-label','비서 열기'); b.onclick=()=>openAssistant(); srow.appendChild(b); }
+  else if(s){ const b=el('button','sbtn resume',rowResumeIcon(s)); b.title='지금 세션 열기 — '+rowResumeTitle(s); b.setAttribute('aria-label','지금 세션 열기'); b.onclick=()=>showResumeChooser(continuedTarget(s)); srow.appendChild(b); }
+  const bM=el('button','sbtn more','⋯'); bM.title='메뉴 — 지금 세션 열기 · 상세 · 갈아타기 · 이름 · 세션 메뉴 · 떼기 · 쉬게 하기';
+  bM.setAttribute('aria-label',a.name+' 메뉴'); bM.setAttribute('aria-haspopup','menu');
+  bM.onclick=(e)=>{ if(e&&e.stopPropagation) e.stopPropagation(); return agentMenu(a,s,bM); };
+  srow.appendChild(bM);
+  return srow;
+}
+function agentCounts(list){ const ss=list.map(a=>sessById(a.session_id)).filter(Boolean);
+  const w=groupCount(ss), c=groupCounts(ss), all=w.children[2]; all.children[0].textContent=String(list.length); all.classList.remove('zero');
+  w.title='작업 중 '+c.busy+' · 열림 '+c.open+' · 에이전트 '+list.length; w.setAttribute('aria-label',w.title); return w; }
+// 폴더 안 순서(A3): 권한·입력 대기 → 작업 중 → 최근 활동, 지금 세션 없는 줄은 끝. 조작 중엔 옮기지 않는다(U3)
 function agentOrder(list){
-  const key=(a)=>{ const s=sessById(a.session_id); return [agentRank(s),-(s?Date.parse(s.ended_at||'')||0:0)]; };
+  const key=(a)=>{ const s=sessById(a.session_id); return [a.session_id?agentRank(s):3,-(s?Date.parse(s.ended_at||'')||0:0)]; };
   const sorted=list.slice().sort((x,y)=>{ const a=key(x),b=key(y); return a[0]-b[0]||a[1]-b[1]; });
-  if(agentBusyUI()&&AG_ORDER.length){                 // 조작 중엔 줄을 옮기지 않는다(U3)
+  if(agentBusyUI()&&AG_ORDER.length){
     const at=new Map(AG_ORDER.map((id,i)=>[id,i]));
     sorted.sort((x,y)=>(at.has(x.id)?at.get(x.id):1e9)-(at.has(y.id)?at.get(y.id):1e9));
   }
-  AG_ORDER=sorted.map(a=>a.id); return sorted;
-}
-function agentMatches(a,q){ if(!q) return true; const s=sessById(a.session_id);
-  return (a.name+' '+a.role+' '+a.teams.map(t=>t.name).join(' ')+' '+(s?(s.title||'')+(s.cwd||''):'')).toLowerCase().includes(q); }
-function agentSub(a,s){ const box=el('div','agh2'); if(a.role) box.appendChild(el('span','agrole',a.role));
-  for(const t of a.teams) box.appendChild(el('span','schip agteam',t.name));
-  const past=a.sessions-(a.session_id?1:0);
-  if(past>0){ const open=AG_PAST.has(a.id), b=el('button','agpast','지난 세션 '+past+(open?' ▾':' ▸'));
-    b.setAttribute('aria-expanded',open?'true':'false');
-    b.onclick=()=>{ if(AG_PAST.has(a.id)) AG_PAST.delete(a.id); else AG_PAST.add(a.id); if(LIST_CTX) LIST_CTX.rerender(); }; box.appendChild(b); }
-  return box; }
-function agentMenu(a,s,anchor){ const box=el('div');
-  if(s) box.appendChild(popItem(rowResumeIcon(s),'지금 세션 열기',null,()=>showResumeChooser(continuedTarget(s))));
-  box.appendChild(popItem('✎','에이전트 이름','세션 이름은 따로입니다',()=>agentRename(a)));
-  box.appendChild(popItem('ℹ','에이전트 상세',null,()=>loadAgentDetail(a.id)));
-  if(!a.assistant&&a.status==='active'&&a.session_id) box.appendChild(popItem('🔁','새 세션으로 갈아타기','먼저 비용·막힌 이유를 보여 줍니다',()=>{ const h=hoOf(a.id); return h?openHandoff(h.id):openHandoffStart(a.id); }));
-  if(!a.assistant){ box.appendChild(el('div','popsep'));
-    if(a.status==='active'){ if(a.session_id) box.appendChild(popItem('✂','지금 세션 떼기',"이 에이전트는 '지금 세션 없음'이 됩니다",()=>agentDetach(a),'danger'));
-      box.appendChild(popItem('💤','쉬게 하기','세션은 그대로, 목록에서 접힙니다',()=>agentRetire(a,true),'danger')); }
-    else box.appendChild(popItem('☀','되살리기',null,()=>agentRetire(a,false))); }
-  return openPop(anchor,box,a.name); }
-function agentBlock(wrap,a,q){
-  const s=sessById(a.session_id), closed=!q&&AG_CLOSED.has(a.id), head=el('div','ghead grp agh');
-  const ch=el('button','chev agchev',closed?'▶':'▼'); ch.setAttribute('aria-label',(closed?'펼치기 ':'접기 ')+a.name);
-  ch.onclick=()=>{ if(AG_CLOSED.has(a.id)) AG_CLOSED.delete(a.id); else AG_CLOSED.add(a.id); if(LIST_CTX) LIST_CTX.rerender(); };
-  head.appendChild(ch);
-  const gt=el('button','gtext agname'); gt.appendChild(el('div','gbase',(a.assistant?'🧑‍💼 ':'🪪 ')+a.name)); gt.onclick=()=>loadAgentDetail(a.id); head.appendChild(gt);
-  if(a.session_id) head.appendChild(el('span','aglast',(s&&relFrom(s))||'기록 없음'));      // 마지막 활동 = 지금 세션의 마지막 기록(K11)
-  const bd=s?sessionBadge(s):null;
-  if(bd){ const t=el('span','sstate',bd.text); t.style.setProperty('--c',bd.c); if(bd.text==='권한 대기'){ t.style.cursor='pointer'; t.onclick=()=>showApprove(s); } head.appendChild(t); }
-  const ho=hoOf(a.id); if(ho){ const c=el('button','schip agho'+(ho.status==='failed'?' bad':''),HO_CHIP[ho.status]); c.onclick=(e)=>{ if(e&&e.stopPropagation) e.stopPropagation(); openHandoff(ho.id); }; head.appendChild(c); }
-  const more=el('button','gopen more','⋯'); more.setAttribute('aria-label',a.name+' 메뉴'); more.setAttribute('aria-haspopup','menu');
-  more.onclick=(e)=>{ if(e&&e.stopPropagation) e.stopPropagation(); return agentMenu(a,s,more); }; head.appendChild(more);
-  wrap.appendChild(head); wrap.appendChild(agentSub(a,s));
-  if(closed) return;
-  const list=el('div','glist');
-  if(s){ const same=sessLabel(s)===a.name; list.appendChild(sessRowEl(s,s.cwd,{noAgentChip:true,nameText:'지금 세션'+(same?'':' · '+sessLabel(s))})); }
-  if(AG_PAST.has(a.id)) for(const x of SESSIONS) { const b=AGENTS_BY[x.session_id]; if(b&&b.agent_id===a.id&&!b.current) list.appendChild(sessRowEl(x,x.cwd,{noAgentChip:true})); }
-  if(list.children.length) wrap.appendChild(list);
+  return sorted;
 }
 function agentSection(wrap,key,label,n,build){ if(!n) return;
   const open=AG_SEC.has(key), h=el('button','ghead agsec'); h.appendChild(el('span','chev',open?'▼':'▶')); h.appendChild(el('div','gtext',label+' '+n));
   h.setAttribute('aria-expanded',open?'true':'false');
   h.onclick=()=>{ if(AG_SEC.has(key)) AG_SEC.delete(key); else AG_SEC.add(key); if(LIST_CTX) LIST_CTX.rerender(); }; wrap.appendChild(h);
-  if(open){ const box=el('div'); build(box); wrap.appendChild(box); } }
+  if(open){ const box=el('div','glist'); build(box); wrap.appendChild(box); } }
 function renderAgentRows(wrap,qraw){
   const q=(qraw||'').toLowerCase().trim(); wrap.innerHTML='';
   if(AGENTS_ERR&&AGENTS===null){ const e=el('div','empty'); e.appendChild(el('div',null,'에이전트 목록을 못 받았습니다'));
@@ -3051,18 +3072,33 @@ function renderAgentRows(wrap,qraw){
     const f=el('button','btn ghost','세션 탭으로'); f.onclick=()=>{ setListView('sessions'); loadList(); }; e.appendChild(r); e.appendChild(f); wrap.appendChild(e); return; }
   if(AGENTS===null){ wrap.appendChild(el('div','spin')); return; }
   if(AGENTS_ERR) wrap.appendChild(el('div','dnote warn','에이전트 목록을 새로 받지 못했습니다 — 조금 전 내용입니다'));
+  try{ if(LS.getItem('sm_list_group')) LS.removeItem('sm_list_group'); }catch(e){}     // 에이전트 탭을 그렸다 — 옛 묶기 기억은 이제 지운다(K11)
   let tagged=AGENTS;
   if(ACTIVE_TAG) tagged=AGENTS.filter(a=>{ const s=sessById(a.session_id); return s&&sessTags(s).includes(ACTIVE_TAG); });
   const seen=tagged.filter(a=>agentMatches(a,q));
-  const active=seen.filter(a=>a.status==='active'&&a.session_id), none=seen.filter(a=>a.status==='active'&&!a.session_id), rest=seen.filter(a=>a.status!=='active');
-  const pinned=active.filter(a=>a.assistant);
-  for(const a of pinned) agentBlock(wrap,a,q);
-  for(const a of agentOrder(active.filter(a=>!a.assistant))) agentBlock(wrap,a,q);
-  try{ if(LS.getItem('sm_list_group')) LS.removeItem('sm_list_group'); }catch(e){}     // 에이전트 탭을 그렸다 — 옛 묶기 기억은 이제 지운다(K11)
-  if(!AGENTS.length) wrap.appendChild(el('div','empty agempty','에이전트 = 세션이 바뀌어도 이어지는 작업자입니다. 세션 ⋯ → 🪪 에이전트로 만들기·붙이기'));
+  // 비서 = 맨 위 고정 줄(A4, 따로 있던 비서 탭 대신). 아직 없으면 만들기 줄
+  const ast=seen.find(a=>a.assistant);
+  if(ast){ const top=el('div','glist agtop'); top.appendChild(agentRowEl(ast)); wrap.appendChild(top); }
+  else if(!q&&!ACTIVE_TAG&&!AGENTS.some(a=>a.assistant)){ const b=el('button','agnoast','🧑‍💼 비서 없음 — 만들기'); b.onclick=()=>openAssistant(); wrap.appendChild(b); }
+  const mine=seen.filter(a=>!a.assistant), active=mine.filter(a=>a.status==='active'), rest=mine.filter(a=>a.status!=='active');
+  const home=new Map(), orphan=[];
+  for(const a of active){ const h=agentHome(a); if(h) home.set(h.session_id,a); else orphan.push(a); }
+  const homes=(SESSIONS||[]).filter(x=>home.has(x.session_id));
+  const shown=[];
+  for(const g of folderTops(homes)){
+    const k='ag:'+g.k, list=agentOrder(g.list.map(x=>home.get(x.session_id))), collapsed=!q&&AG_FOLD.has(k);
+    shown.push(...list);
+    wrap.appendChild(folderHead(g,collapsed,()=>{ if(AG_FOLD.has(k)) AG_FOLD.delete(k); else AG_FOLD.add(k); if(LIST_CTX) LIST_CTX.rerender(); },agentCounts(list)));
+    if(collapsed) continue;
+    const gl=el('div','glist'); for(const a of list) gl.appendChild(agentRowEl(a)); wrap.appendChild(gl);
+  }
+  if(orphan.length){ const list=agentOrder(orphan); shown.push(...list); const k='ag:(none)', collapsed=!q&&AG_FOLD.has(k);
+    wrap.appendChild(folderHead({repr:'(폴더 모름)'},collapsed,()=>{ if(AG_FOLD.has(k)) AG_FOLD.delete(k); else AG_FOLD.add(k); if(LIST_CTX) LIST_CTX.rerender(); },agentCounts(list)));
+    if(!collapsed){ const gl=el('div','glist'); for(const a of list) gl.appendChild(agentRowEl(a)); wrap.appendChild(gl); } }
+  if(!agentBusyUI()) AG_ORDER=shown.map(a=>a.id);
+  if(!AGENTS.some(a=>!a.assistant)) wrap.appendChild(el('div','empty agempty','에이전트 = 세션이 바뀌어도 이어지는 작업자입니다. 세션 ⋯ → 🪪 에이전트로 만들기·붙이기'));
   else if(!seen.length&&(q||ACTIVE_TAG)) wrap.appendChild(el('div','empty',q?"'"+qraw+"' 에 맞는 에이전트가 없습니다":'이 태그의 에이전트가 없습니다'));
-  agentSection(wrap,'gone','지금 세션 없음',none.length,(b)=>{ for(const a of none) agentBlock(b,a,q); });
-  agentSection(wrap,'rest','쉬는 에이전트',rest.length,(b)=>{ for(const a of rest) agentBlock(b,a,q); });
+  agentSection(wrap,'rest','💤 쉬는 에이전트',rest.length,(b)=>{ for(const a of rest) b.appendChild(agentRowEl(a)); });
 }
 async function agentReload(id){ await fetchAgents(); if(LIST_CTX&&SESSIONS&&agListOn()) LIST_CTX.rerender(); if(id&&AG_DETAIL===id) loadAgentDetail(id); }
 async function agentPost(path,body,id,okMsg){ try{ const r=await T.api('POST',path,{body:body||{}}); if(r&&r.error) throw new Error(r.error); if(okMsg) toast(okMsg); await agentReload(id); return r; }
@@ -3098,8 +3134,8 @@ function agentMenuItems(s){ const a=agentOf(s); if(AGENTS===null||s.headless||(s
 let AG_DETAIL=null;
 const AG_REASON={created:'✨ 만듦',replaced:'🔁 갈아탐',imported:'📎 붙임',continued:'⏩ 이어받음'};
 async function loadAgentDetail(id){
-  closeLiveViewer(); SELECTED_ID=null; highlightSelected(); CURRENT_TERM_SID=null; AG_DETAIL=id;
-  paneEnter('empty'); const main=paneDetail(); closeInlineMonitor(); main.classList.remove('term-mode','fb-mode','mon-mode'); main.innerHTML=''; $('#head').textContent='에이전트';
+  closeLiveViewer(); SELECTED_ID=null; CURRENT_TERM_SID=null;
+  paneEnter('empty'); AG_DETAIL=id; highlightSelected(); const main=paneDetail(); closeInlineMonitor(); main.classList.remove('term-mode','fb-mode','mon-mode'); main.innerHTML=''; $('#head').textContent='에이전트';
   main.appendChild(backbar('목록',()=>showListPane(),'tolist')); showDetailPane();
   const box=el('div','detail'); box.appendChild(el('div','spin')); main.appendChild(box);
   const pc=pcNow(); let a; try{ a=await T.api('GET','/api/owner/agents/'+encodeURIComponent(id)); }catch(e){ a={error:e.message}; }
@@ -3111,11 +3147,14 @@ async function loadAgentDetail(id){
   if(a.status!=='active'){ const b=el('span','dbadge','💤 쉬는 중'); b.style.setProperty('--c','#8b949e'); t1.appendChild(b); }
   hd.appendChild(t1); const sub=[a.role].concat((a.teams||[]).map(x=>'['+x.name+']')).filter(Boolean).join(' · '); if(sub) hd.appendChild(el('div','dpath',sub)); box.appendChild(hd);
   const act=el('div','agact');
-  if(s){ const b=el('button','btn','🖥 지금 세션 열기'); b.onclick=()=>showResumeChooser(continuedTarget(s)); act.appendChild(b); }
-  else act.appendChild(el('div','dnote warn','지금 세션이 없습니다. 세션 ⋯ 메뉴에서 이 에이전트에 붙일 수 있습니다.'));
+  if(a.assistant){ const b=el('button','btn','🧑‍💼 비서 열기'); b.onclick=()=>openAssistant(); act.appendChild(b); }
+  else if(s){ const b=el('button','btn','🖥 지금 세션 열기'); b.onclick=()=>showResumeChooser(continuedTarget(s)); act.appendChild(b); }
+  if(!s) act.appendChild(el('div','dnote warn','지금 세션이 없습니다. 세션 탭에서 세션 ⋯ → 🪪 에이전트로 만들기·붙이기로 이 에이전트에 붙일 수 있습니다.'));
   if(!a.assistant&&a.status==='active'&&a.session_id){ const h=hoOf(a.id), b=el('button','btn ghost',h?HO_CHIP[h.status]+' — 이어서 보기':'🔁 새 세션으로 갈아타기'); b.onclick=()=>h?openHandoff(h.id):openHandoffStart(a.id); act.appendChild(b); }
   if(a.last_handoff){ const b=el('button','btn ghost','📄 마지막 인수인계서'); b.onclick=()=>hoShowDoc(a.last_handoff); act.appendChild(b); }
   box.appendChild(act);
+  if(s){ box.appendChild(el('h3','agh3','지금 세션'));                 // 세션 탭과 같은 줄 — 그 ⋯ 는 세션 메뉴(대화 보기·파일·이름·중지, A6)
+    const cur=el('div','glist agcur1'); cur.appendChild(sessRowEl(s,s.cwd,{noAgentChip:true})); box.appendChild(cur); }
   agentHistSearchBox(box,a);
   const arc=a.archive||{count:0,bytes:0,sessions:{}};
   box.appendChild(el('h3','agh3','세션 이력'));
@@ -7770,7 +7809,6 @@ function syncTabbar(){
   for(const b of document.querySelectorAll('#tabbar button')) b.classList.toggle('on',b.dataset.v===LIST_VIEW);
 }
 function tabbarGo(v){
-  if(v==='assist') return openAssistant();
   // 폰 웹 재개 화면에서 탭 막대로 나가는 것도 '‹ 목록'처럼 화면을 떠나는 것 — 재개(claude -p)를 끝낸다(응답 중이면 그 응답이 끝난 뒤,
   // 결정 7). 재개는 바로가기로 돌아갈 화면이 아니라 숨겨 두면 다음 상세 칸 화면이 열릴 때까지 돌았다
   if(PANE_NOW.kind==='resume'&&$('#app').getAttribute('data-view')==='detail') closeLiveResume();

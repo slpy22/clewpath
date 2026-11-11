@@ -41,10 +41,10 @@ const type = (ctx, v) => { const t = area(ctx); t.value = v; t.oninput(); };
 // ---- 목록·🔔
 test("머리 칩: 진행 상태 글자로 보이고 누르면 그 화면, 없으면 칩 없음", async () => {
   const ctx = await setup();
-  ev(ctx, `HANDOFFS = [{id:'ho1',agent_id:'ag1',agent_name:'가',status:'ready',at:1,session_id:${JSON.stringify(B)}}]; globalThis.__w = el('div'); agentBlock(__w, AGENTS[0], '');`);
+  ev(ctx, `HANDOFFS = [{id:'ho1',agent_id:'ag1',agent_name:'가',status:'ready',at:1,session_id:${JSON.stringify(B)}}]; globalThis.__w = el('div'); __w.appendChild(agentRowEl(AGENTS[0]));`);
   const chips = walk(ev(ctx, "__w")).filter((k) => String(k.className).includes("agho"));
   assert.equal(label(chips[0]), "🔁 검토 대기");
-  ev(ctx, `HANDOFFS = []; __w = el('div'); agentBlock(__w, AGENTS[0], '');`);
+  ev(ctx, `HANDOFFS = []; __w = el('div'); __w.appendChild(agentRowEl(AGENTS[0]));`);
   assert.equal(walk(ev(ctx, "__w")).filter((k) => String(k.className).includes("agho")).length, 0);
 });
 
