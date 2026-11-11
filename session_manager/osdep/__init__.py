@@ -43,8 +43,10 @@ hidden_dirs = _impl.hidden_dirs
 temp_claude_dir = _impl.temp_claude_dir
 update_runner_argv = _impl.update_runner_argv
 port_free = _impl.port_free             # 서버를 그 포트로 열 수 있나(POSIX 는 TIME_WAIT 를 '사용 중'으로 오판하지 않게)
+reveal_path = _impl.reveal_path         # 탐색기·Finder 에서 보기(파일 탐색 팝업 메뉴, PC 로컬 화면 전용)
+open_path = _impl.open_path             # 기본 프로그램으로 열기(같은 곳)
 
 __all__ = ["IS_WIN", "IS_MAC", "NAME", "NO_WINDOW", "START_SCRIPT", "UPDATE_RUNNER", "ADOPTER_PIDS", "CURL",
            "detached_popen_kwargs", "spawn_pty", "guard_child", "pid_alive", "kill", "kill_tree",
            "list_processes", "protect", "unprotect", "ensure_launcher", "open_resume_terminal",
-           "hidden_dirs", "temp_claude_dir", "update_runner_argv", "port_free"]
+           "hidden_dirs", "temp_claude_dir", "update_runner_argv", "port_free", "reveal_path", "open_path"]

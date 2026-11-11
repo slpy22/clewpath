@@ -32,6 +32,8 @@ GUARDED = frozenset({
     "/api/owner/agents/{agent_id}/handoff", "/api/owner/agents/{agent_id}/handoff-2fa", "/api/owner/handoffs/{hid}/draft",
     "/api/owner/handoffs/{hid}/pending", "/api/owner/handoffs/{hid}/resummary", "/api/owner/handoffs/{hid}/resummary-2fa",
     "/api/owner/handoffs/{hid}/cancel", "/api/owner/handoffs/{hid}/confirm-handoff",
+    # 이 PC 에서 열기(파일 탭 팝업 메뉴): 사람이 PC 화면에서 누르는 것 — Claude 세션이 부르면 PC 에 프로그램을 띄울 수 있다
+    "/api/sessions/{session_id}/file/open-external",
 })
 
 # 막지 않는 변경 라우트. ClewPath 자체 데이터, 자체 인증·승인이 있는 것, 스킬·훅이 쓰는 것.

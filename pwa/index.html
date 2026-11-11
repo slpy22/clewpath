@@ -5101,6 +5101,9 @@ function fbErrText(err){
   if(code==='no_cwd') return '이 세션의 작업 폴더가 PC 에 없습니다.';
   if(code==='no_session') return '세션을 찾지 못했습니다.';
   if(code==='2fa_required'||code==='2fa_invalid') return otpErrMsg(code);
+  if(code==='runnable') return '실행 파일(.exe·.bat·.ps1·.lnk 등)은 여기서 열지 않습니다 — 탐색기에서 보기로 확인하세요.';
+  if(code==='local_only') return '이 PC 화면에서만 쓸 수 있습니다.';
+  if(code==='open_failed') return '이 PC 에서 열지 못했습니다.';
   return '열지 못했습니다: '+(code||e.message||'오류'); }
 // T.api 예외 → {error, status, …}. 릴레이 2FA 거절은 응답 본문 없이 message 로만 온다.
 function fbApiErr(e){ const o=Object.assign({status:e&&e.status, message:e&&e.message}, (e&&e.json)||{});
@@ -5311,6 +5314,7 @@ function fbRootRow(r,id){
   if(all.length>1){ const b=el('span','rcount',String(all.length)); b.title='이 폴더'+((r.inner||[]).length?'와 하위 폴더':'')+'를 쓰는 세션 '+all.length+'개'; row.appendChild(b); }
   row.title=r.cwd+'\n'+all.slice(0,8).map(s=>'· '+sessLabel(s)+((s.cwd&&pathKey(s.cwd)!==pathKey(r.cwd))?' ('+relPath(r.cwd,s.cwd)+')':'')).join('\n')+(all.length>8?'\n…':'');
   row.onclick=()=>{ FB.sel=id; fbFocusTree(); return fbToggle(id); };
+  if(fbCanExternal()) row.oncontextmenu=(ev)=>fbMenuAt(id,ev,row);
   return row;
 }
 function fbRow(e,id,depth){
@@ -5328,9 +5332,38 @@ function fbRow(e,id,depth){
   r.title=dir?rel:(rel+(e.size!=null?' · '+fmtBytes(e.size):'')+(e.mtime?' · '+absTime(e.mtime):''));
   r.onclick=()=>{ FB.sel=id; fbFocusTree(); return dir?fbToggle(id):fbOpen(id,{pin:false}); };
   if(!dir) r.ondblclick=()=>fbOpen(id,{pin:true});
+  if(fbCanExternal()) r.oncontextmenu=(ev)=>fbMenuAt(id,ev,r);
   return r;
 }
-// 키보드: ↑↓ 이동, → 펼치기/첫 자식, ← 접기/부모, Enter 열기(고정), Space 미리보기, Home/End
+// ---- 이 PC 에서 열기(2026-11-11 사장님): 줄을 오른쪽 클릭(또는 메뉴 키)하면 팝업 — 탐색기에서 보기·기본 프로그램으로 열기 ----
+// PC 로컬 화면에서만(폰은 PC 화면에 창이 뜨는 일이라 메뉴 없음, 서버도 거절). 실행 파일·🔒 보호 파일은 기본 프로그램 열기를 안 한다(서버가 최종 판단).
+const FB_RUNNABLE=/\.(exe|com|bat|cmd|ps1|psm1|psd1|ps1xml|vbs|vbe|js|jse|wsf|wsh|msi|msp|mst|msc|scr|pif|cpl|hta|lnk|url|reg|inf|jar|appref-ms|application|appx|appxbundle|msix|msixbundle|gadget|scf|sct|chm|py|pyw|pyc|sh|command|app|pkg|dmg|workflow|tool|desktop|run)$/i;
+function fbCanExternal(){ return MODE==='local'; }
+async function fbExternal(id,action){
+  const [rk,rel]=fbSplit(id), sid=fbRootSid(rk);
+  if(!sid){ toast('세션을 찾지 못했습니다'); return; }
+  try{ await T.api('POST','/api/sessions/'+sid+'/file/open-external',{body:{path:rel,action}}); }
+  catch(err){ toast(fbErrText(fbApiErr(err))); }
+}
+function fbMenu(id,anchor){
+  const e=FB.ent[id]; if(!e||!fbCanExternal()) return null;
+  const dir=e.type==='dir', box=el('div');
+  if(dir) box.appendChild(popItem('📂','탐색기에서 열기',null,()=>fbExternal(id,'reveal')));
+  else {
+    box.appendChild(popItem('📂','탐색기에서 보기','이 파일이 있는 폴더를 열고 선택합니다',()=>fbExternal(id,'reveal')));
+    const why=e.blocked?'🔒 보호 파일은 열지 않습니다':FB_RUNNABLE.test(e.name)?'실행 파일은 열지 않습니다 — 탐색기에서 보기로':null;
+    box.appendChild(popItem('↗','기본 프로그램으로 열기',why,()=>why?toast(why):fbExternal(id,'open')));
+  }
+  return openPop(anchor,box,e.root?e.name:(fbSplit(id)[1]||e.name));
+}
+// 마우스 자리에 띄운다(openPop 은 기준 상자 오른쪽 끝에 맞추므로 오른쪽 끝 = 마우스 x + 상자 폭)
+function fbMenuAt(id,ev,row){ if(!fbCanExternal()) return;
+  if(ev&&ev.preventDefault) ev.preventDefault();
+  FB.sel=id; fbSelect(id);
+  const x=ev&&ev.clientX!=null?ev.clientX:null, y=ev&&ev.clientY!=null?ev.clientY:null;
+  const anchor=(x!=null&&y!=null)?{getBoundingClientRect:()=>({top:y,bottom:y,left:x,right:x+260})}:row;
+  return fbMenu(id,anchor); }
+// 키보드: ↑↓ 이동, → 펼치기/첫 자식, ← 접기/부모, Enter 열기(고정), Space 미리보기, Home/End, 메뉴 키·Shift+F10 = 이 PC 에서 열기 메뉴
 function fbVisiblePaths(){ return FB.tree?[...FB.tree.querySelectorAll('.fbrow')].map(r=>r.dataset.path):[]; }
 function fbSelect(id){ FB.sel=id; if(!FB.tree) return;
   FB.tree.querySelectorAll('.fbrow').forEach(r=>{ const on=r.dataset.path===id; r.classList.toggle('sel',on);
@@ -5347,6 +5380,8 @@ function fbTreeKey(ev){
   else if(k==='ArrowLeft'){ if(dir&&FB.open.has(p)) fbToggle(p); else if(parent!==null) fbSelect(parent); }
   else if(k==='Enter'&&e){ if(dir) fbToggle(p); else fbOpen(p,{pin:true}); }
   else if(k===' '&&e&&!dir) fbOpen(p,{pin:false});
+  else if((k==='ContextMenu'||(k==='F10'&&ev.shiftKey))&&e&&fbCanExternal()){
+    const row=FB.tree&&[...FB.tree.querySelectorAll('.fbrow')].find(r=>r.dataset.path===p); fbMenuAt(p,null,row); }
   else done=false;
   if(done&&ev.preventDefault) ev.preventDefault();
 }

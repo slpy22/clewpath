@@ -190,3 +190,93 @@ def test_guard_block_lists_stay():
     assert fb.is_protected(".env.local") and fb.is_protected("cp_credentials.json")
     assert fb.is_protected("a/id_rsa.pub") and fb.is_protected("ptyd.key")
     assert not fb.is_protected("docs/report.md")
+
+
+# ---- 이 PC 에서 열기(2026-11-11 사장님): 파일 탭 팝업 메뉴 — 탐색기에서 보기·기본 프로그램으로 열기 ----
+@pytest.fixture
+def opened(monkeypatch):
+    from session_manager import osdep
+    calls = []
+    monkeypatch.setattr(osdep, "reveal_path", lambda p, select: calls.append(("reveal", p, select)) or True)
+    monkeypatch.setattr(osdep, "open_path", lambda p: calls.append(("open", p)) or True)
+    return calls
+
+
+def test_open_external_reveal_and_open(proj, opened):
+    r = fb.open_external(SID, "docs/report.md", "reveal")
+    assert r == {"ok": True, "action": "reveal", "path": "docs/report.md", "type": "file"}
+    assert opened[-1] == ("reveal", os.path.realpath(proj / "docs" / "report.md"), True), "파일은 그 폴더를 열고 선택"
+    fb.open_external(SID, "docs", "reveal")
+    assert opened[-1] == ("reveal", os.path.realpath(proj / "docs"), False), "폴더는 그 폴더를 연다"
+    fb.open_external(SID, "", "reveal")
+    assert opened[-1] == ("reveal", os.path.realpath(proj), False), "뿌리 폴더도 된다"
+    fb.open_external(SID, "euckr.txt", "open")
+    assert opened[-1] == ("open", os.path.realpath(proj / "euckr.txt"))
+
+
+def test_open_external_refuses_runnable_protected_dirs_and_escape(proj, opened):
+    (proj / "setup.exe").write_bytes(b"MZ")
+    (proj / "run.BAT").write_text("echo", encoding="utf-8")
+    (proj / "link.lnk").write_bytes(b"L")
+    for name in ("setup.exe", "run.BAT", "link.lnk", "app.py"):
+        with pytest.raises(fb.FBError) as e:
+            fb.open_external(SID, name, "open")
+        assert e.value.code == "runnable" and e.value.status == 403, name
+        fb.open_external(SID, name, "reveal")              # 탐색기에서 보기는 된다(선택만)
+    with pytest.raises(fb.FBError) as e:
+        fb.open_external(SID, ".env", "open")
+    assert e.value.code == "protected"
+    with pytest.raises(fb.FBError) as e:
+        fb.open_external(SID, "ops/release-keys/readme.txt", "open")
+    assert e.value.code == "protected"
+    with pytest.raises(fb.FBError) as e:
+        fb.open_external(SID, "docs", "open")
+    assert e.value.code == "not_file", "폴더의 '기본 프로그램'은 없다(탐색기에서 보기로)"
+    for bad in ("../x", "C:/Windows/notepad.exe", ".ssh/id_rsa", ".claude"):
+        with pytest.raises(fb.FBError):
+            fb.open_external(SID, bad, "reveal")
+    with pytest.raises(fb.FBError) as e:
+        fb.open_external(SID, "nope.txt", "reveal")
+    assert e.value.code == "not_found"
+    with pytest.raises(fb.FBError) as e:
+        fb.open_external(SID, "docs/report.md", "run")
+    assert e.value.code == "bad_action"
+    assert all(c[0] == "reveal" for c in opened), "거절된 열기는 아무것도 띄우지 않았다"
+
+
+def test_runnable_list_stays():
+    """빠지면 실패 — 열면 실행되는 대표 종류(기본 프로그램 열기 거절 목록)."""
+    for n in ("a.exe", "b.CMD", "c.ps1", "d.vbs", "e.js", "f.msi", "g.lnk", "h.hta", "i.reg", "j.jar", "k.scr", "l.py", "m.sh"):
+        assert fb.runnable(n), n
+    for n in ("report.md", "data.xlsx", "photo.png", "README", "note.txt", "doc.pdf"):
+        assert not fb.runnable(n), n
+
+
+def test_open_external_route_local_only(proj, opened, monkeypatch):
+    from fastapi.testclient import TestClient
+    for k in ("SM_RELAY_URL", "SM_RELAY_ROOM", "SM_RELAY_AGENT_TOKEN", "SM_CP_URL"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("SM_HOST", "127.0.0.1")
+    from session_manager import server as S
+    monkeypatch.setattr(S, "_client_host", lambda r: "127.0.0.1")
+    url = f"/api/sessions/{SID}/file/open-external"
+    with TestClient(S.create_app()) as c:
+        r = c.post(url, json={"path": "docs/report.md", "action": "open"})
+        assert r.status_code == 200 and r.json()["ok"] and opened[-1][0] == "open"
+        assert c.post(url, json={"path": ".env", "action": "open"}).json()["error"] == "protected"
+        n = len(opened)
+        r = c.post(url, json={"path": "docs/report.md", "action": "open"}, headers={connector.VIA_HEADER: "relay"})
+        assert r.status_code == 403 and r.json()["error"] == "local_only", "폰·릴레이 경유는 거절"
+        assert len(opened) == n
+    from session_manager import outer_door
+    assert url.replace(SID, "{session_id}") in outer_door.GUARDED, "Claude 세션이 부르면 막힌다"
+
+
+def test_explorer_command_shape():
+    if sys.platform != "win32":
+        pytest.skip("Windows 전용")
+    from session_manager.osdep import _win
+    assert _win._explorer_cmd(r"C:\프로젝트 폴더\a b.txt", True) == r'explorer.exe /select,"C:\프로젝트 폴더\a b.txt"'
+    assert _win._explorer_cmd(r"C:\프로젝트 폴더", False) == r'explorer.exe "C:\프로젝트 폴더"'
+    with pytest.raises(ValueError):
+        _win._explorer_cmd('C:\a"b', False)

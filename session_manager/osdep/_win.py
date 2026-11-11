@@ -181,6 +181,30 @@ def open_resume_terminal(command: str, cwd: str) -> bool:
     return True
 
 
+def _explorer_cmd(path: str, select: bool) -> str:
+    """explorer.exe 명령줄. /select 는 `/select,"경로"` 모양이어야 한다(인자 전체를 따옴표로 싸면 탐색기가 경로를 못 읽는다).
+    Windows 경로에는 큰따옴표가 올 수 없어 그대로 싸도 안전하다."""
+    if '"' in path:
+        raise ValueError("bad_path")
+    return f'explorer.exe /select,"{path}"' if select else f'explorer.exe "{path}"'
+
+
+def reveal_path(path: str, select: bool) -> bool:
+    """탐색기에서 보기(파일 탐색 화면 팝업 메뉴, 2026-11-11). 파일이면 그 폴더를 열고 선택, 폴더면 그 폴더를 연다.
+
+    explorer.exe 에 넘기면 이미 떠 있는 바탕 탐색기가 창을 열고 이 프로세스는 곧 끝난다 — 열린 창이 Host 의
+    자식(잡·업데이트 재기동)에 묶이지 않는다. explorer.exe 는 성공해도 종료 코드가 1 이라 코드는 보지 않는다."""
+    subprocess.Popen(_explorer_cmd(path, select), close_fds=True)
+    return True
+
+
+def open_path(path: str) -> bool:
+    """기본 프로그램으로 열기 — explorer.exe 에 파일을 넘기면 연결 프로그램으로 연다(더블클릭과 같음).
+    os.startfile 은 그 프로그램을 Host 의 자식으로 띄워 Host 업데이트·종료에 휩쓸릴 수 있어 쓰지 않는다."""
+    subprocess.Popen(_explorer_cmd(path, False), close_fds=True)
+    return True
+
+
 def hidden_dirs() -> list[Path]:
     """파일 보기에서 늘 숨기는 OS 사용자 데이터 폴더."""
     out = [Path.home() / "AppData"]

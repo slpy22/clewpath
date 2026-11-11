@@ -1909,6 +1909,16 @@ def create_app() -> FastAPI:
         return _fb_call(request, "file_download", _fb.read_raw, session_id, (body or {}).get("path", ""),
                         relay=_via_relay(request), image_only=False)
 
+    # 이 PC 에서 열기(2026-11-11 사장님): 파일 탭 팝업 메뉴의 탐색기에서 보기·기본 프로그램으로 열기.
+    # PC 로컬 화면 전용(폰·릴레이 경유는 거절 — PC 화면에 창이 뜨는 일이라 원격에서 부를 이유가 없다). Claude 세션은 바깥문 GUARDED.
+    @app.post("/api/sessions/{session_id}/file/open-external")
+    def fb_open_external(request: Request, session_id: str, body: dict = Body(default={})):
+        from session_manager import filebrowser as _fb
+        if not _is_local(request):
+            return JSONResponse({"error": "local_only"}, status_code=403)
+        b = body or {}
+        return _fb_call(request, None, _fb.open_external, session_id, str(b.get("path") or ""), str(b.get("action") or ""))
+
     @app.post("/api/sessions/{session_id}/terminal/stop")
     def terminal_stop(session_id: str):
         from session_manager import webterm

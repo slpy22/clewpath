@@ -266,6 +266,38 @@ def open_resume_terminal(command: str, cwd: str) -> bool:
     return False                        # 3단계: Terminal.app. 그 전엔 명령어 안내
 
 
+def _open_argv(path: str, *, reveal: bool, select: bool) -> list[str] | None:
+    """맥 = Finder(open / open -R), 리눅스 = xdg-open(선택 표시는 못 해서 파일이면 그 폴더). 없으면 None."""
+    import shutil
+    if sys.platform == "darwin":
+        return ["open", "-R", path] if (reveal and select) else ["open", path]
+    if not shutil.which("xdg-open"):
+        return None
+    return ["xdg-open", os.path.dirname(path) if (reveal and select) else path]
+
+
+def _spawn(argv: list[str] | None) -> bool:
+    if not argv:
+        return False
+    import subprocess
+    try:
+        subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         close_fds=True, **detached_popen_kwargs())
+    except OSError:
+        return False
+    return True
+
+
+def reveal_path(path: str, select: bool) -> bool:
+    """Finder 에서 보기(파일 탐색 화면 팝업 메뉴, 2026-11-11). 파일이면 선택, 폴더면 그 폴더를 연다."""
+    return _spawn(_open_argv(path, reveal=True, select=select))
+
+
+def open_path(path: str) -> bool:
+    """기본 프로그램으로 열기."""
+    return _spawn(_open_argv(path, reveal=False, select=False))
+
+
 def hidden_dirs() -> list[Path]:
     return [Path.home() / "Library"] if sys.platform == "darwin" else []
 

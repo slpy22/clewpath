@@ -176,6 +176,47 @@ def list_dir(session_id: str, rel: str | None = "", sort: str = "name") -> dict:
     return {"root": str(root), "root_name": root.name, "path": rel, "entries": entries, "truncated": truncated}
 
 
+# ---- 이 PC 에서 열기(2026-11-11 사장님 요청): 파일 탭 줄의 팝업 메뉴 — 탐색기에서 보기·기본 프로그램으로 열기 ----
+# PC 로컬 화면에서만(서버 라우트가 원격을 거절), Claude 세션 호출은 바깥문 GUARDED. 경로 규칙은 보기와 같다(뿌리 밖·숨김 거부).
+# 기본 프로그램 열기는 '열면 실행되는' 종류와 🔒 보호 파일을 거절한다 — 그런 파일은 탐색기에서 보기만 된다.
+RUNNABLE_EXT = frozenset({
+    ".exe", ".com", ".bat", ".cmd", ".ps1", ".psm1", ".psd1", ".ps1xml", ".vbs", ".vbe", ".js", ".jse", ".wsf", ".wsh",
+    ".msi", ".msp", ".mst", ".msc", ".scr", ".pif", ".cpl", ".hta", ".lnk", ".url", ".reg", ".inf", ".jar",
+    ".appref-ms", ".application", ".appx", ".appxbundle", ".msix", ".msixbundle", ".gadget", ".scf", ".sct", ".chm",
+    ".py", ".pyw", ".pyc", ".sh", ".command", ".app", ".pkg", ".dmg", ".workflow", ".tool", ".desktop", ".run",
+})
+OPEN_ACTIONS = ("reveal", "open")
+
+
+def runnable(name: str) -> bool:
+    """열면 프로그램이 실행되는 종류인가(확장자, 대소문자 무시). 확장자 없는 파일은 아니다."""
+    return os.path.splitext(name.lower())[1] in RUNNABLE_EXT
+
+
+def open_external(session_id: str, rel: str | None, action: str) -> dict:
+    """reveal = 탐색기에서 보기(파일은 그 폴더를 열고 선택, 폴더는 그 폴더를 연다) · open = 기본 프로그램으로 열기(파일만)."""
+    if action not in OPEN_ACTIONS:
+        raise FBError("bad_action", 400)
+    root = session_root(session_id)
+    target, rel = resolve(root, rel)
+    if not target.exists():
+        raise FBError("not_found", 404)
+    is_dir = target.is_dir()
+    if action == "open":
+        if is_dir:
+            raise FBError("not_file", 400)
+        if is_protected(rel):
+            raise FBError("protected", 403)
+        if runnable(target.name):
+            raise FBError("runnable", 403)
+    from session_manager import osdep
+    path = os.path.realpath(str(target))
+    ok = osdep.reveal_path(path, select=not is_dir) if action == "reveal" else osdep.open_path(path)
+    if not ok:
+        raise FBError("open_failed", 500)
+    return {"ok": True, "action": action, "path": rel, "type": "dir" if is_dir else "file"}
+
+
 def _file(session_id: str, rel: str | None) -> tuple[Path, str, os.stat_result]:
     root = session_root(session_id)
     target, rel = resolve(root, rel)
